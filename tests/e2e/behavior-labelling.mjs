@@ -22,7 +22,8 @@
  *     moves them; a tracking pass on a labelled session asks first.
  *  7. The video boxes: each behavior's animals boxed (both for a social one),
  *     from 2D detections or reprojections; dashed while still being coded or
- *     waiting for a target; "On video" turns them off.
+ *     waiting for a target; in Label Behaviors mode a light numbered box on the
+ *     animal the keys label (viewer only); "On video" turns them off.
  *
  * Run: node tests/e2e/behavior-labelling.mjs   (spawns its own http.server; PORT= to move it)
  */
@@ -259,13 +260,25 @@ try {
         C.setFocalAnimal('id_1');
         await (await import('/pose/initialization.js')).navigateToFrame(1600);
         C.codeBehavior('b4');
-        const pend = C.behaviorBoxesAt(s, 1600);
+        const pend = C.behaviorBoxesAt(s, 1600, { live: true });
         out.pending = pend ? pend.items.filter(i => i.dashed && /\?/.test(i.parts.map(p => p[0]).join(''))).map(i => i.animals) : null;
         C.cancelPendingTarget();
         C.setBehaviorBoxesVisible(false);
         out.hidden = C.behaviorBoxesAt(s, 1420) === null;
         C.setBehaviorBoxesVisible(true);
         L.cancelRunning(s, 'b1', 'Alice', '');
+        // In Label Behaviors mode, a light box with its number on the animal the keys label —
+        // in the viewer only, never in an exported video, and gone once the mode is left.
+        const M = await import('/ui/behavior-mode.js');
+        M.enterBehaviorMode();
+        C.setFocalAnimal('id_2');
+        const liveSpec = C.behaviorBoxesAt(s, 1600, { live: true });
+        out.focal = liveSpec ? liveSpec.items.filter(i => i.light).map(i => ({ animals: i.animals, text: i.parts.map(p => p[0]).join('') })) : null;
+        const exportSpec = C.behaviorBoxesAt(s, 1600);
+        out.focalInExport = !!(exportSpec && exportSpec.items.some(i => i.light));
+        M.exitBehaviorMode();
+        const after = C.behaviorBoxesAt(s, 1600, { live: true });
+        out.focalAfterExit = !!(after && after.items.some(i => i.light));
         return out;
     });
     check(boxes.items.some(i => i.text === 'chase · id_1 → id_2' && !i.dashed && i.animals.join() === 'id_1,id_2'),
@@ -275,6 +288,9 @@ try {
     check(boxes.chaseLeft === 0 && boxes.rearLeft > 40, `and leaves out the animal not in it (${boxes.chaseLeft} px), which has its own box (${boxes.rearLeft} px)`);
     check(JSON.stringify(boxes.pending) === '[["id_1"]]', `a social behavior waiting for its target boxes its actor, asking (${JSON.stringify(boxes.pending)})`);
     check(boxes.hidden, 'the tab\'s "On video" switch turns the boxes off');
+    check(JSON.stringify(boxes.focal) === '[{"animals":["id_2"],"text":"3 · id_2"}]',
+        `in the mode, the animal the keys label gets a light box with its number (${JSON.stringify(boxes.focal)})`);
+    check(!boxes.focalInExport && !boxes.focalAfterExit, 'not in exported videos, and gone once the mode is left');
 
     check(errs.length === 0, `no page errors (${errs.join(' | ').slice(0, 300)})`);
     console.log(fails === 0 ? '\nPASS' : `\nFAIL — ${fails} check(s)`);

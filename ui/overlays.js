@@ -1511,12 +1511,13 @@ function animalBoxInView(group, viewName, mask) {
  * Boxes around the animals engaged in labelled behaviors (Behavior tab ▸ On
  * video). `spec` (ui/behavior-coding.js `behaviorBoxesAt`):
  *
- *   { items: [{ animals: [name, …], color, dashed, parts: [[text, color], …] }],
+ *   { items: [{ animals: [name, …], color, dashed, light?, parts: [[text, color], …] }],
  *     nodeMask: boolean[] | null }      // nodes the boxes enclose (Tracking Wizard weights > 0)
  *
  * One box per item enclosing all of its animals visible in this view, in the
  * behavior's color over a dark halo; dashed for a bout still being coded or a
- * target still to pick. Its label (`parts`, each in its own color) sits above
+ * target still to pick; `light` items (the animal Label Behaviors mode labels)
+ * a thin translucent outline. Its label (`parts`, each in its own color) sits above
  * the box's top-left corner, upright in a rotated view. A box whose animals
  * another box already enclosed is drawn wider, so nested boxes and their labels
  * do not sit on each other. Sizes are in screen pixels.
@@ -1577,14 +1578,20 @@ export function drawBehaviorBoxes(ctx, viewName, instanceGroups, session, frameI
         var x = Math.min(p0.x, p1.x) - pad, y = Math.min(p0.y, p1.y) - pad;
         var w = Math.abs(p1.x - p0.x) + 2 * pad, h = Math.abs(p1.y - p0.y) + 2 * pad;
         ctx.setLineDash([]);
-        ctx.lineWidth = 4 * ds;
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
-        ctx.strokeRect(x, y, w, h);                                   // dark halo: readable on any video
-        ctx.lineWidth = 2 * ds;
-        ctx.strokeStyle = it.color;
-        if (it.dashed) ctx.setLineDash([8 * ds, 5 * ds]);
-        ctx.strokeRect(x, y, w, h);
-        ctx.setLineDash([]);
+        if (it.light) {
+            ctx.lineWidth = 1.25 * ds;                                // a light marker, not a label
+            ctx.strokeStyle = it.color;
+            ctx.strokeRect(x, y, w, h);
+        } else {
+            ctx.lineWidth = 4 * ds;
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+            ctx.strokeRect(x, y, w, h);                               // dark halo: readable on any video
+            ctx.lineWidth = 2 * ds;
+            ctx.strokeStyle = it.color;
+            if (it.dashed) ctx.setLineDash([8 * ds, 5 * ds]);
+            ctx.strokeRect(x, y, w, h);
+            ctx.setLineDash([]);
+        }
         // The label, above the top-left corner, upright on screen.
         beginUprightFrame(ctx, rad, x, y);
         var ox = uprightOriginX(rad, x), oy = uprightOriginY(rad, y);
@@ -1594,7 +1601,7 @@ export function drawBehaviorBoxes(ctx, viewName, instanceGroups, session, frameI
         var tw = 0;
         it.parts.forEach(function (pt) { tw += ctx.measureText(pt[0]).width; });
         var ly = oy - 5 * ds;
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+        ctx.fillStyle = it.light ? 'rgba(0, 0, 0, 0.4)' : 'rgba(0, 0, 0, 0.65)';
         ctx.fillRect(ox, ly - fontPx, tw + 8 * ds, fontPx + 5 * ds);
         var lx = ox + 4 * ds;
         it.parts.forEach(function (pt) {

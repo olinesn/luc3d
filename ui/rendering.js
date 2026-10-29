@@ -372,8 +372,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
 
     var vis = getVisibilitySettings();
     // Boxes around the animals engaged in each labelled behavior on this
-    // frame; null when there is nothing to show.
-    var behaviorBoxes = behaviorBoxesAt(state.session, frameIdx);
+    // frame, and (live only) the animal Label Behaviors mode labels; null when
+    // there is nothing to show.
+    var behaviorBoxes = behaviorBoxesAt(state.session, frameIdx, { live: true });
 
     // Get interaction state — only show selection highlight if the
     // selected group belongs to the current frame

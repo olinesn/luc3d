@@ -28,7 +28,7 @@ import {
 import { setStatus } from '../import-export/save-load.js';
 import { idSwitchBoxNodeMask } from './id-switch-highlight.js';
 
-var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null };
+var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null, mode: false };
 
 /** The coding state (read-only for callers; use the setters). */
 export function behaviorUi() {
@@ -113,17 +113,33 @@ export function setBehaviorBoxesVisible(on) {
     requestBehaviorRepaint({ labels: true });
 }
 
+/** Label Behaviors mode tells the boxes whether it is on (ui/behavior-mode.js). */
+export function noteBehaviorMode(on) {
+    ui.mode = !!on;
+    requestBehaviorRepaint({ ui: true });
+}
+
 /**
  * The `behaviorBoxes` render option for one frame, or null when nothing would
  * be drawn: one item per behavior an animal (with its target) is doing there —
- * dashed while it is still being coded — plus, while a social behavior waits
- * for its target, a dashed box on the animal that will be its actor.
- * @returns {{items: Array<{animals:string[], color:string, dashed:boolean, parts:Array}>, nodeMask: ?boolean[]}|null}
+ * dashed while it is still being coded. With `opts.live` (the viewer, never an
+ * exported video) also the coding state: in Label Behaviors mode a light box
+ * with its number on the animal the keys label, and while a social behavior
+ * waits for its target a dashed box on the animal that will be its actor.
+ * @param {{live?: boolean}} [opts]
+ * @returns {{items: Array<{animals:string[], color:string, dashed:boolean, light?:boolean, parts:Array}>, nodeMask: ?boolean[]}|null}
  */
-export function behaviorBoxesAt(session, frame) {
+export function behaviorBoxesAt(session, frame, opts) {
     if (!session || !Number.isFinite(frame) || !behaviorBoxesVisible()) return null;
+    var live = !!(opts && opts.live) && session === state.session;
     var items = [];
     var who = function (name) { return [name, animalColor(session, name)]; };
+    var focal = live && ui.mode ? focalAnimal(session) : null;
+    if (focal) {
+        var num = sessionAnimals(session).indexOf(focal) + 1;
+        items.push({ animals: [focal], color: 'rgba(255, 255, 255, 0.75)', dashed: false, light: true,
+                     parts: (num >= 1 && num <= 9 ? [[num + ' · ', '#ffffff']] : []).concat([who(focal)]) });
+    }
     activeAt(session, frame).forEach(function (a) {
         var b = behaviorById(a.behaviorId);
         if (!b) return;
@@ -131,8 +147,8 @@ export function behaviorBoxesAt(session, frame) {
         if (a.target) parts.push([' → ', '#ffffff'], who(a.target));
         items.push({ animals: a.target ? [a.animal, a.target] : [a.animal], color: b.color, dashed: !!a.running, parts: parts });
     });
-    var p = ui.pending;
-    var pb = p && session === state.session ? behaviorById(p.behaviorId) : null;
+    var p = live ? ui.pending : null;
+    var pb = p ? behaviorById(p.behaviorId) : null;
     if (pb) {
         items.push({ animals: [p.animal], color: pb.color, dashed: true,
                      parts: [[pb.name, pb.color], [' · ', '#ffffff'], who(p.animal), [' → ? (press 1–9)', '#ffffff']] });

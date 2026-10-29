@@ -6222,7 +6222,7 @@ labels, occluded/null markers.
 
 ---
 
-**Behavior labels.** `drawBehaviorBoxes(ctx, viewName, instanceGroups, session, frameIdx, spec, options)` and the `behaviorBoxes` option of `drawFrameOverlays` (§4c): one box per labelled behavior around its animals (both for a social one) in every view, in the behavior's color over a dark halo, dashed while being coded or waiting for a target, labelled above its top-left corner (upright in rotated views); nested boxes widen so labels do not collide. An animal's extent is its 2D detection plus its reprojection over the spec's node mask, so the User / Predictions toggles do not hide it. The spec comes from `ui/behavior-coding.js` `behaviorBoxesAt`, so this module stays import-free.
+**Behavior labels.** `drawBehaviorBoxes(ctx, viewName, instanceGroups, session, frameIdx, spec, options)` and the `behaviorBoxes` option of `drawFrameOverlays` (§4c): one box per labelled behavior around its animals (both for a social one) in every view, in the behavior's color over a dark halo, dashed while being coded or waiting for a target, a thin translucent outline for `light` items (the animal Label Behaviors mode labels, live view only), labelled above its top-left corner (upright in rotated views); nested boxes widen so labels do not collide. An animal's extent is its 2D detection plus its reprojection over the spec's node mask, so the User / Predictions toggles do not hide it. The spec comes from `ui/behavior-coding.js` `behaviorBoxesAt`, so this module stays import-free.
 
 ### ui/rendering.js
 
@@ -6487,7 +6487,7 @@ re-triangulate, identity assignment, or visibility-toggle change.
 
 ---
 
-**Behavior labels.** Passes `behaviorBoxes: behaviorBoxesAt(state.session, frameIdx)` (ui/behavior-coding.js) to `drawFrameOverlays`, computed once per frame.
+**Behavior labels.** Passes `behaviorBoxes: behaviorBoxesAt(state.session, frameIdx, {live: true})` (ui/behavior-coding.js) to `drawFrameOverlays`, computed once per frame; `live` adds the coding state (the mode's selected animal, a pending target) that exports leave out.
 
 ### ui/plane-dialog.js
 
@@ -11553,9 +11553,11 @@ target — browser memory only), the coding actions, a repaint bus
 (requests coalesce into one animation frame), the frame navigator, and the
 video boxes (`behaviorBoxesAt`, the `behaviorBoxes` option of
 `drawFrameOverlays`: one item per behavior active on the frame — dashed while
-running — plus the actor of a social behavior waiting for its target, with the
-Tracking Wizard node mask of `ui/id-switch-highlight.js`; on/off is
-browser-local `lucid.behaviorOnVideo`).
+running — with the Tracking Wizard node mask of `ui/id-switch-highlight.js`;
+with `{live: true}` (the viewer, never an exported video) also the coding
+state: a light numbered box on the animal Label Behaviors mode labels, and the
+actor of a social behavior waiting for its target; on/off is browser-local
+`lucid.behaviorOnVideo`). `noteBehaviorMode(on)` is how the mode tells it.
 `codeBehavior` labels the armed or given range, else starts/stops a state or
 codes a point at the playhead; a social behavior takes its target from a
 running bout of its own, else the only other animal, else asks.
@@ -11563,7 +11565,7 @@ running bout of its own, else the only other animal, else asks.
 **Exports.** `behaviorUi`, `registerBehaviorRepaint`, `requestBehaviorRepaint`,
 `setBehaviorNavigator`, `goToBehaviorFrame`, `BOUT_LEAD_IN_SECONDS`,
 `openBehaviorTab`, `behaviorBoxesVisible`, `setBehaviorBoxesVisible`,
-`behaviorBoxesAt`, `sessionAnimals`, `animalColor`, `focalAnimal`,
+`noteBehaviorMode`, `behaviorBoxesAt`, `sessionAnimals`, `animalColor`, `focalAnimal`,
 `setFocalAnimal`, `selectedBehaviorId`, `selectBehavior`, `setRangeIn`,
 `setRangeOut`, `armRange`, `clearArmedRange`, `armedRange`, `codeBehavior`,
 `pickBehaviorTarget`, `cancelPendingTarget`, `clearBehaviorRange`,
@@ -11587,7 +11589,9 @@ on, only outside text fields and dialogs) takes: behavior letters (Shift+letter
 catalog), `1`–`9` (focal animal or pending target, instead of assigning an
 identity), `[` `]` (armed range; Option/AltGr allowed), `,` `.` (adjacent
 bout), `Mod+Z` / `Mod+Shift+Z` (behavior undo/redo), Esc (cancel, else
-leave). Everything else falls through. Also renders the mode bar.
+leave). Everything else falls through. Also renders the mode bar, and tells
+`ui/behavior-coding.js` (`noteBehaviorMode`) so the viewer draws a light
+numbered box on the animal the keys label.
 
 **Exports.** `isBehaviorModeActive`, `enterBehaviorMode`, `exitBehaviorMode`,
 `toggleBehaviorMode`.

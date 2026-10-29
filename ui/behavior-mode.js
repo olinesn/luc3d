@@ -31,7 +31,7 @@
 
 import { state } from './app-state.js';
 import {
-    behaviorUi, codeBehavior, pickBehaviorTarget, cancelPendingTarget, setFocalAnimal, sessionAnimals,
+    behaviorUi, codeBehavior, pickBehaviorTarget, cancelPendingTarget, setFocalAnimal, sessionAnimals, noteBehaviorMode,
     focalAnimal, setRangeIn, setRangeOut, clearArmedRange, armedRange, adjacentBout, goToBehaviorFrame,
     openBehaviorTab, requestBehaviorRepaint, registerBehaviorRepaint,
 } from './behavior-coding.js';
@@ -57,7 +57,7 @@ export function enterBehaviorMode() {
     document.addEventListener('keydown', onKey, true);
     openBehaviorTab();
     syncToolbarButton();
-    requestBehaviorRepaint({ ui: true });
+    noteBehaviorMode(true);         // the light box on the animal the keys label
     setStatus(behaviors().length
         ? 'Label Behaviors mode — behavior keys code the focal animal, 1–9 pick it, Esc leaves'
         : 'Label Behaviors mode — add behaviors first (Edit Ethogram… in the Behavior tab)', 'success');
@@ -74,7 +74,7 @@ export function exitBehaviorMode() {
     clearArmedRange();
     var closed = closeRunning(state.session, state.currentFrame);
     syncToolbarButton();
-    requestBehaviorRepaint({ ui: true });
+    noteBehaviorMode(false);
     setStatus(closed ? 'Left Label Behaviors mode — ' + closed + ' running behavior' + (closed === 1 ? '' : 's') +
         ' ended at this frame' : 'Left Label Behaviors mode', 'success');
 }
