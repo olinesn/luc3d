@@ -50,19 +50,26 @@ export function behaviorTimelineRows(session) {
     shown.forEach(function (id, i) { laneOf.set(id, i % MAX_LANES); });
     var lanes = Math.max(1, Math.min(MAX_LANES, shown.length));
     var byAnimal = new Map(names.map(function (n) { return [n, []]; }));
+    // A row shows the bouts its animal does — both animals' rows for a mutual pair.
+    var rowsOf = function (b, animal, target) { return b && b.mutual && target ? [animal, target] : [animal]; };
     bouts.forEach(function (bt) {
-        if (!laneOf.has(bt.behaviorId) || !byAnimal.has(bt.animal)) return;
+        if (!laneOf.has(bt.behaviorId)) return;
         var b = behaviorById(bt.behaviorId);
-        byAnimal.get(bt.animal).push({
-            start: bt.start, end: bt.end, lane: laneOf.get(bt.behaviorId),
-            color: bt.present ? b.color : ABSENT_COLOR, alpha: bt.present ? 0.85 : 0.22,
+        rowsOf(b, bt.animal, bt.target).forEach(function (a) {
+            if (!byAnimal.has(a)) return;
+            byAnimal.get(a).push({
+                start: bt.start, end: bt.end, lane: laneOf.get(bt.behaviorId),
+                color: bt.present ? b.color : ABSENT_COLOR, alpha: bt.present ? 0.85 : 0.22,
+            });
         });
     });
     var cursor = state.currentFrame;
     running.forEach(function (r) {
         var b = behaviorById(r.behaviorId);
-        if (!b || !laneOf.has(r.behaviorId) || !byAnimal.has(r.animal)) return;
-        byAnimal.get(r.animal).push({ start: r.start, end: Math.max(r.start, cursor), lane: laneOf.get(r.behaviorId), color: b.color, alpha: 1 });
+        if (!b || !laneOf.has(r.behaviorId)) return;
+        rowsOf(b, r.animal, r.target).forEach(function (a) {
+            if (byAnimal.has(a)) byAnimal.get(a).push({ start: r.start, end: Math.max(r.start, cursor), lane: laneOf.get(r.behaviorId), color: b.color, alpha: 1 });
+        });
     });
     return names.map(function (n) {
         return { animal: n, color: animalColor(session, n), lanes: lanes, segments: byAnimal.get(n) };

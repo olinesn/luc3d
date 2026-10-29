@@ -144,14 +144,14 @@ export function behaviorBoxesAt(session, frame, opts) {
         var b = behaviorById(a.behaviorId);
         if (!b) return;
         var parts = [[(a.running ? '● ' : '') + b.name, b.color], [' · ', '#ffffff'], who(a.animal)];
-        if (a.target) parts.push([' → ', '#ffffff'], who(a.target));
+        if (a.target) parts.push([pairGlyph(b), '#ffffff'], who(a.target));
         items.push({ animals: a.target ? [a.animal, a.target] : [a.animal], color: b.color, dashed: !!a.running, parts: parts });
     });
     var p = live ? ui.pending : null;
     var pb = p ? behaviorById(p.behaviorId) : null;
     if (pb) {
         items.push({ animals: [p.animal], color: pb.color, dashed: true,
-                     parts: [[pb.name, pb.color], [' · ', '#ffffff'], who(p.animal), [' → ? (press 1–9)', '#ffffff']] });
+                     parts: [[pb.name, pb.color], [' · ', '#ffffff'], who(p.animal), [pairGlyph(pb) + '? (press 1–9)', '#ffffff']] });
     }
     if (!items.length) return null;
     return { items: items, nodeMask: idSwitchBoxNodeMask(session.skeleton && session.skeleton.nodes) };
@@ -164,6 +164,11 @@ export function behaviorBoxesAt(session, frame, opts) {
 /** The session's animals: its identity names, in identity order (what digits 1–9 pick). */
 export function sessionAnimals(session) {
     return session && session.identities ? session.identities.map(function (i) { return i.name; }) : [];
+}
+
+/** How a pair reads: "↔" for a mutual behavior (no actor and target), "→" otherwise. */
+export function pairGlyph(behavior) {
+    return behavior && behavior.mutual ? ' ↔ ' : ' → ';
 }
 
 /** The identity color for an animal name, or a neutral gray. */
@@ -237,10 +242,17 @@ export function armedRange() {
 // Coding
 // ----------------------------------------------------------------------------
 
-/** The target of the one running bout of `behaviorId` by `animal`, or null (none, or several). */
+/**
+ * The partner in the one running bout of `behaviorId` by `animal` (as actor,
+ * or as either animal of a mutual pair), or null (none, or several).
+ */
 function runningTarget(session, behaviorId, animal) {
-    var mine = runningStates(session).filter(function (r) { return r.behaviorId === behaviorId && r.animal === animal; });
-    return mine.length === 1 ? mine[0].target : null;
+    var b = behaviorById(behaviorId);
+    var mine = runningStates(session).filter(function (r) {
+        return r.behaviorId === behaviorId && (r.animal === animal || (b && b.mutual && r.target === animal));
+    });
+    if (mine.length !== 1) return null;
+    return mine[0].animal === animal ? mine[0].target : mine[0].animal;
 }
 
 /** With exactly two animals the target of a social behavior is the other one. */
@@ -253,7 +265,7 @@ function nameOf(b) { return '"' + b.name + '"'; }
 
 function apply(session, b, animal, target, range, absent, frame) {
     noteBehaviorFps(session, state.fps);
-    var who = animal + (target ? ' → ' + target : '');
+    var who = animal + (target ? pairGlyph(b) + target : '');
     if (range) {
         var r = labelRange(session, b.id, animal, target, range.start, range.end, !absent);
         if (!r) { setStatus('Could not label ' + nameOf(b) + ' for ' + who, 'warning'); return null; }
@@ -339,7 +351,7 @@ export function clearBehaviorRange(session, animal, start, end, behaviorId) {
     listBouts(session, { animal: animal }).forEach(function (bt) {
         if (behaviorId && bt.behaviorId !== behaviorId) return;
         if (bt.end < start || bt.start > end) return;
-        if (clearRange(session, bt.behaviorId, animal, bt.target, start, end)) n++;
+        if (clearRange(session, bt.behaviorId, bt.animal, bt.target, start, end)) n++;
     });
     return n;
 }

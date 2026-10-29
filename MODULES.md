@@ -2569,9 +2569,11 @@ walked until the next run.
 to label (Behavior ▸ Edit Ethogram…). One per PROJECT, on a module singleton
 like the plane model, reset before every load
 (`import-export/behavior-metadata.js` `resetBehaviorState`). A behavior is
-`{id, name, key, color, kind: 'state'|'point', social, group, description}`.
+`{id, name, key, color, kind: 'state'|'point', social, mutual, group, description}`.
 `id` (`b<n>`, never reused) is what bouts reference, so a rename never touches
-a bout. `social` = has a target animal. Behaviors sharing a non-empty `group`
+a bout. `social` = has a target animal; `mutual` (social only; set implies
+social, cleared with it) = a pair with no actor and target (nose-to-nose
+sniffing), stored once per pair by `pose/behavior-labels.js`. Behaviors sharing a non-empty `group`
 are mutually exclusive for one animal. `key` is one lower-case letter (digits
 pick the animal in Label Behaviors mode). `BEHAVIOR_COLORS` is held to the
 palette test's §10. DOM-free.
@@ -2597,7 +2599,9 @@ class is untouched and an evicted lazy session keeps its labels). One sorted,
 non-overlapping interval list per (behavior id, animal NAME, target NAME);
 an interval is `{start, end (inclusive), present, source 'm'|'a'|'i', note}`.
 Present vs explicit absent vs unlabelled are distinct (training reads only
-labelled frames). Animals are identity NAMES because ids are renumbered on
+labelled frames). A MUTUAL behavior's pair is keyed in name order (`keyOf`),
+so either order is the same bout, either animal's key starts/stops it, and it
+lists, counts (`timeBudget`) and takes exclusive peers for both animals. Animals are identity NAMES because ids are renumbered on
 reopen; it registers on `pose/pose-data.js`'s `onIdentitySwap`, so every
 `Session.swapIdentitiesInRange` (ID-switch Fix and its Undo, identity
 reassignment) swaps the bouts on the same frames, splitting at the edges.
@@ -2609,7 +2613,9 @@ writes them as ending at the cursor without stopping them. DOM-free.
 undo step): `labelRange`, `clearRange`, `toggleState`, `closeRunning`,
 `closeRunningAtCursor`, `cancelRunning`, `markReviewed`, `deleteBout`,
 `editBout`, `deleteBehaviorBouts`, `reassignAnimal`; identity:
-`renameAnimal`, `swapAnimalsInRange`, `orphanedAnimals`; undo:
+`renameAnimal`, `swapAnimalsInRange`, `orphanedAnimals`, `rekeyBehavior`
+(after a behavior became mutual: both directions merge, present wins),
+`bothWayPairs` (what that would merge); undo:
 `undoBehaviorEdit`, `redoBehaviorEdit`, `canUndoBehaviorEdit`,
 `canRedoBehaviorEdit`; queries: `hasBehaviorData`, `boutIntervals`,
 `listBouts`, `runningStates`, `isRunning`, `activeAt`, `timeBudget`,
@@ -11565,7 +11571,7 @@ running bout of its own, else the only other animal, else asks.
 **Exports.** `behaviorUi`, `registerBehaviorRepaint`, `requestBehaviorRepaint`,
 `setBehaviorNavigator`, `goToBehaviorFrame`, `BOUT_LEAD_IN_SECONDS`,
 `openBehaviorTab`, `behaviorBoxesVisible`, `setBehaviorBoxesVisible`,
-`noteBehaviorMode`, `behaviorBoxesAt`, `sessionAnimals`, `animalColor`, `focalAnimal`,
+`noteBehaviorMode`, `behaviorBoxesAt`, `pairGlyph` (" ↔ " for mutual, " → " otherwise), `sessionAnimals`, `animalColor`, `focalAnimal`,
 `setFocalAnimal`, `selectedBehaviorId`, `selectBehavior`, `setRangeIn`,
 `setRangeOut`, `armRange`, `clearArmedRange`, `armedRange`, `codeBehavior`,
 `pickBehaviorTarget`, `cancelPendingTarget`, `clearBehaviorRange`,
@@ -11634,7 +11640,8 @@ states of a session just left (so `switchSession` needs no hook).
 **Purpose.** Behavior labels on the timeline. `behaviorTimelineRows` is the
 `Timeline` `behaviorRows` provider: one row per animal (plus orphaned names)
 in a synthetic "Behavior" group, showing the selected behavior or every
-behavior with bouts as stacked lanes (at most 5); present in the behavior's
+behavior with bouts as stacked lanes (at most 5; a mutual bout on both
+animals' rows); present in the behavior's
 color, "not" as faint gray (`ABSENT_COLOR`), a running state growing to the
 playhead; null (no group at all) without an ethogram or bouts.
 `onTimelineRangeSelect` is the timeline's `onRangeSelect`: with an ethogram
@@ -11652,7 +11659,10 @@ clears it; otherwise it reports the range as before.
 
 ### ui/behavior-ethogram-modal.js
 
-**Purpose.** Behavior ▸ Edit Ethogram… and Mark Range Reviewed…. The editor
+**Purpose.** Behavior ▸ Edit Ethogram… and Mark Range Reviewed…. Social is a
+three-way choice (— / → target / ↔ mutual); making an existing behavior mutual
+asks first (`confirmMakeMutual`) when bouts were labelled both ways round, then
+re-keys them in every session (`rekeyBehavior`). The editor
 applies each field on change (a refused change says why and reverts; the
 table is NOT re-rendered on a valid edit, which would steal focus); removing a
 behavior with bouts asks (`confirmRemoveBehavior`) and deletes its bouts in
@@ -11673,10 +11683,11 @@ chosen animals and behaviors. Both close on Esc; one scroller (the modal).
 dialog's shape (title, one sentence, counts; Esc cancels): before a pass that
 hands identity names out afresh on a labelled session (Track All, Track
 Frame Range — `runTrackingPass` — and Propagate Tracks → IDs; labels follow
-names), and before removing a behavior that has bouts.
+names), before removing a behavior that has bouts, and before making a
+behavior mutual when that merges bouts labelled both ways round.
 
 **Exports.** `behaviorConfirm`, `confirmRetrackWithBehaviorLabels`,
-`confirmRemoveBehavior`.
+`confirmRemoveBehavior`, `confirmMakeMutual`.
 
 **Imports.** `./app-state.js`, `../pose/behavior-labels.js`. **Imported by**
 `pose/tracker.js`, `ui/ui-wiring.js`, `ui/behavior-ethogram-modal.js`.

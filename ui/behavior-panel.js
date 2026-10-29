@@ -28,7 +28,7 @@ import {
     behaviorUi, codeBehavior, focalAnimal, setFocalAnimal, sessionAnimals, animalColor, selectedBehaviorId,
     selectBehavior, pickBehaviorTarget, cancelPendingTarget, clearArmedRange, armedRange, registerBehaviorRepaint,
     requestBehaviorRepaint, setBehaviorNavigator, goToBehaviorFrame, BOUT_LEAD_IN_SECONDS,
-    behaviorBoxesVisible, setBehaviorBoxesVisible,
+    behaviorBoxesVisible, setBehaviorBoxesVisible, pairGlyph,
 } from './behavior-coding.js';
 import { toggleBehaviorMode, exitBehaviorMode, isBehaviorModeActive } from './behavior-mode.js';
 import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-modal.js';
@@ -124,7 +124,7 @@ function renderCoding(session, disabled) {
             if (!b) return '';
             return '<div class="behavior-running-row" data-run="' + esc(r.behaviorId + '|' + r.animal + '|' + r.target) + '">' +
                 '<span class="behavior-swatch" style="background:' + esc(b.color) + '"></span>● ' + esc(b.name) + ' · ' +
-                esc(r.animal) + (r.target ? ' → ' + esc(r.target) : '') + ' since ' + fr(r.start) +
+                esc(r.animal) + (r.target ? esc(pairGlyph(b)) + esc(r.target) : '') + ' since ' + fr(r.start) +
                 ' <button class="panel-btn" data-act="stop-run">Stop here</button>' +
                 ' <button class="panel-btn" data-act="cancel-run" title="Drop it without labelling">Discard</button></div>';
         }).join('') + '</div>';
@@ -132,7 +132,7 @@ function renderCoding(session, disabled) {
     html += '<div class="behavior-buttons">' + behaviors().map(function (b) {
         return '<button class="behavior-chip-btn" data-behavior="' + esc(b.id) + '" title="' + esc(behaviorTitle(b)) + '">' +
             '<span class="behavior-swatch" style="background:' + esc(b.color) + '"></span>' + esc(b.name) +
-            (b.key ? ' <kbd>' + esc(b.key) + '</kbd>' : '') + (b.social ? ' <span class="behavior-tag">→</span>' : '') + '</button>';
+            (b.key ? ' <kbd>' + esc(b.key) + '</kbd>' : '') + (b.social ? ' <span class="behavior-tag">' + (b.mutual ? '↔' : '→') + '</span>' : '') + '</button>';
     }).join('') + '</div>';
     var sel = selectedBehaviorId();
     html += '<div class="behavior-tools">' +
@@ -162,7 +162,10 @@ function updateCodingNow(frame) {
     if (!host || !state.session) return;
     var focal = focalAnimal(state.session);
     var on = new Set();
-    activeAt(state.session, frame).forEach(function (a) { if (a.animal === focal) on.add(a.behaviorId); });
+    activeAt(state.session, frame).forEach(function (a) {
+        var b = behaviorById(a.behaviorId);
+        if (a.animal === focal || (b && b.mutual && a.target === focal)) on.add(a.behaviorId);
+    });
     host.querySelectorAll('.behavior-chip-btn').forEach(function (btn) {
         btn.classList.toggle('is-on', on.has(btn.dataset.behavior));
     });
@@ -208,7 +211,7 @@ function renderBouts(session) {
             '<div class="behavior-bout-main">' +
             '<span class="behavior-swatch" style="background:' + esc(bt.present && b ? b.color : ABSENT_COLOR) + '"></span>' +
             '<span class="behavior-bout-name">' + (bt.present ? '' : 'not ') + esc(b ? b.name : '?') + '</span>' +
-            '<span class="behavior-bout-who">' + esc(bt.animal) + (bt.target ? ' → ' + esc(bt.target) : '') + '</span>' +
+            '<span class="behavior-bout-who">' + esc(bt.animal) + (bt.target ? esc(pairGlyph(b)) + esc(bt.target) : '') + '</span>' +
             '<span class="behavior-bout-frames">' + (bt.start === bt.end ? fr(bt.start) : fr(bt.start) + '–' + fr(bt.end)) + '</span>' +
             '<span class="behavior-bout-dur">' + secs(bt.end - bt.start + 1) + ' s</span>' +
             (bt.source === 'a' ? '<span class="behavior-tag" title="Accepted from a prediction">acc</span>' : '') +
@@ -233,7 +236,7 @@ function selectedHtml(session, bt) {
         }).join('') + '</select>';
     if (b && b.social) {
         html += '<select data-act="set-target" title="Target">' + animals.filter(function (a) { return a !== bt.animal; }).map(function (a) {
-            return '<option value="' + esc(a) + '"' + (a === bt.target ? ' selected' : '') + '>→ ' + esc(a) + '</option>';
+            return '<option value="' + esc(a) + '"' + (a === bt.target ? ' selected' : '') + '>' + esc(pairGlyph(b).trim()) + ' ' + esc(a) + '</option>';
         }).join('') + '</select>';
     }
     html += '<input type="text" data-act="set-note" placeholder="Note" value="' + esc(bt.note || '') + '">' +
