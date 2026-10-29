@@ -9581,9 +9581,19 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
 - `collapseTimeline()` closes the timeline only if it is open (never opens
   it), via `toggleTimeline()` so the height cache and toolbar button match a
   manual collapse. Returns whether it collapsed anything.
+- `fitTimelineToData()` sets the height to exactly `min(preferred, 30%)`, so it
+  also SHRINKS a timeline left taller by a bigger project or a drag. The load
+  paths call it right after `timeline.setData` (whose own `_fitContainerToData`
+  only grows or caps), in the same task, so only the final height is painted.
+  Callers: `setupTimeline`, `handleLoadSlpFile`, `handleLoadSessionFolderPerCamera`,
+  and `toggleTimeline`'s expand when no height is cached.
+- `toggleTimeline()`'s expand does not call `resize()`: the Timeline's
+  ResizeObserver resizes the canvas before the first painted frame.
 
 **Imports from project modules.**
-- `./app-state.js` — `state` (for `state.timeline`).
+- `./app-state.js` — `timeline` (the live binding `setTimeline()` writes;
+  nothing sets `state.timeline`, and reading it made `fitTimelineToData()` a
+  silent no-op). Test: `tests/e2e/timeline-fit-on-load.mjs`.
 
 **Imported by.** `pose/initialization.js`, `pose/tracker.js`
 (`collapseTimeline`, after Track All), `ui/ui-wiring.js`
