@@ -39,8 +39,11 @@ import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
 import { renameAnimal } from '../pose/behavior-labels.js';
+import { renamePredictedAnimal } from '../pose/behavior-predictions.js';
 import { behaviors } from '../pose/behavior-ethogram.js';
 import { setupBehaviorUi, updateBehaviorFrame } from './behavior-panel.js';
+import { detectAllFrames, detectThisFrame } from './behavior-detect.js';
+import { showBehaviorRulesModal } from './behavior-rules-modal.js';
 import { confirmRetrackWithBehaviorLabels } from './behavior-confirm.js';
 // View ▸ Define Planes — "Defining Plane Mode".
 import { togglePlaneMode, syncPlanes3D } from './plane-definition.js';
@@ -225,6 +228,7 @@ function showRenameModal(kind) {
             idObj.name = newName;
             renameHiddenIdentity(state.session, oldIdName, newName);
             renameAnimal(state.session, oldIdName, newName);   // behavior labels are keyed by name
+            renamePredictedAnimal(state.session, oldIdName, newName);   // and so are predictions
             setStatus('Renamed identity to: ' + newName, 'success');
         }
         drawAllOverlays(state.currentFrame);
@@ -3146,6 +3150,17 @@ export function setupUI() {
         // viewer on the last frame the run actually tracked.
         range: function () { showTrackRangeModal({ onTracked: navigateToFrame }); },
         settings: function () { showSettingsModal('wizard'); },
+    });
+
+    // Behavior: the button (All frames) detects behaviors with each behavior's
+    // detector; This frame says what they find on the playhead's frame (the
+    // Behavior tab shows why). Label Behaviors mode, also in this menu, is
+    // wired by ui/behavior-panel.js. Blue while predictions stand
+    // (ui/run-buttons.js).
+    wireActionMenu('behaviorDropdown', {
+        all: function () { detectAllFrames(); },
+        frame: function () { detectThisFrame(); },
+        settings: function () { showBehaviorRulesModal(); },
     });
 
     wireAnimalCountField();

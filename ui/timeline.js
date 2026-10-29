@@ -3151,7 +3151,9 @@ export class Timeline {
 
     /**
      * One behavior row: each segment in its own color and alpha, in its lane
-     * (a row showing several behaviors stacks them as thin lanes). Same
+     * (a row showing several behaviors stacks them as thin lanes), over the
+     * part of the lane its `band` gives ([from, to] fractions of the lane's
+     * height: predicted bouts sit in a band under the labels). Same
      * minimum-width rule as the track bars, one fill per color.
      * @private
      */
@@ -3167,7 +3169,9 @@ export class Timeline {
             var list = byStyle.get(key);
             if (!list) { list = []; byStyle.set(key, list); }
             var lane = Math.min(lanes - 1, Math.max(0, seg.lane || 0));
-            list.push([rect.x, rowY + lane * laneH, rect.width, Math.max(1, laneH - (lanes > 1 ? 0.5 : 0))]);
+            var y = rowY + lane * laneH, h = Math.max(1, laneH - (lanes > 1 ? 0.5 : 0));
+            if (seg.band) { y += seg.band[0] * h; h = Math.max(1, (seg.band[1] - seg.band[0]) * h); }
+            list.push([rect.x, y, rect.width, h]);
         }
         byStyle.forEach(function (rects, key) {
             var bar = key.indexOf('|');

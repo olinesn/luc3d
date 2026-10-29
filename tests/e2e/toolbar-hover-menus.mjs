@@ -13,7 +13,7 @@
  *   4. after Sessions, one group holds manual labelling (Instance, Group) and
  *      the next proofreading in run order (Track, Triangulate, Smooth, then
  *      the triangulation badge); the Triangulate menu carries no smoothing
- *      item, the labels are short, and the toolbar fits a 1440px window;
+ *      item, then Behavior; the labels are short, and the toolbar fits a 1440px window;
  *   5. Track, Triangulate and Smooth share one menu shape: This
  *      frame, All frames, then settings ending in Settings…, and a click on
  *      the button runs All frames.
@@ -111,6 +111,8 @@ try {
             labellingName: groups[1].getAttribute('aria-label'),
             proofreading: ids(groups[2]),
             proofreadingName: groups[2].getAttribute('aria-label'),
+            behavior: ids(groups[3]),
+            behaviorLabel: label('tbBehavior'),
             nested: document.getElementById('triangulateDropdown').querySelectorAll('[id^="tbSmooth"]').length,
             labels: ['tbTrackAll', 'tbTriangulateAll', 'tbSmooth'].map(label),
             smoothTitle: document.getElementById('tbSmooth').title,
@@ -122,18 +124,38 @@ try {
     check(JSON.stringify(order.proofreading) ===
         '["trackDropdown","triangulateDropdown","smoothingDropdown","triangulationBadge"]' &&
         order.proofreadingName === 'Proofreading', `4. proofreading: Track, Triangulate, Smooth (${order.proofreading})`);
+    check(JSON.stringify(order.behavior) === '["behaviorDropdown"]' && order.behaviorLabel === 'Behavior',
+        `4. then Behavior, a menu of its own (${order.behavior})`);
     check(order.nested === 0, '4. the Triangulate menu holds no smoothing item');
     check(JSON.stringify(order.labels) === '["Track","Triangulate","Smooth"]', `4. short labels (${JSON.stringify(order.labels)})`);
     check(/^Temporal smoothing/.test(order.smoothTitle), `4. Smooth's tooltip names Temporal smoothing ("${order.smoothTitle}")`);
     const tb = await page.evaluate(() => {
         const t = document.getElementById('toolbar');
-        return { scroll: t.scrollWidth, client: t.clientWidth };
+        const right = Math.max(...Array.from(t.children).map(c => c.getBoundingClientRect().right));
+        return { scroll: t.scrollWidth, client: t.clientWidth, spare: Math.round(t.getBoundingClientRect().right - right) };
     });
-    check(tb.scroll <= tb.client, `4. the toolbar still fits a 1440px window (scrollWidth ${tb.scroll} <= ${tb.client})`);
+    check(tb.scroll <= tb.client, `4. the toolbar still fits a 1440px window (scrollWidth ${tb.scroll} <= ${tb.client}; ${tb.spare} px spare)`);
 
     // ---- 5. one menu shape for Triangulate / Temporal Smoothing / Track ----------------
     const MENUS = [['triangulateDropdown', 'tbTriangulateAll', 'triangulation'],
         ['smoothingDropdown', 'tbSmooth', 'smoothing'], ['trackDropdown', 'tbTrackAll', 'wizard']];
+    // Behavior has the same shape; its Settings… is the detection settings dialog.
+    {
+        const shape = await page.evaluate(() => [...document.querySelectorAll('#behaviorDropdown .tri-dropdown-menu > button.tri-dropdown-item')]
+            .map(b => b.childNodes[0].textContent.trim()));
+        check(shape[0] === 'This frame' && shape[1] === 'All frames' && shape[shape.length - 1] === 'Settings…',
+            `5. behaviorDropdown: This frame, All frames, …, Settings… (${JSON.stringify(shape)})`);
+        const forwarded = await page.evaluate(() => {
+            let n = 0;
+            const b = document.getElementById('tbBehavior');
+            const spy = (e) => { n++; e.stopImmediatePropagation(); e.preventDefault(); };
+            b.addEventListener('click', spy, true);
+            document.querySelector('#behaviorDropdown [data-scope="all"]').click();
+            b.removeEventListener('click', spy, true);
+            return n;
+        });
+        check(forwarded === 1, `5. behaviorDropdown: "All frames" runs the button's action (forwarded ${forwarded})`);
+    }
     for (const [dd, btn, panel] of MENUS) {
         const shape = await page.evaluate((dd) => {
             const items = [...document.querySelectorAll('#' + dd + ' .tri-dropdown-menu > button.tri-dropdown-item')];
