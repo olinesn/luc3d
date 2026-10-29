@@ -11,14 +11,18 @@
  *   - the ethogram goes into every session, bouts into their own;
  *   - a multi-session reopen ingests the ethogram once;
  *   - a session file added to an open project is merged by behavior name;
- *   - garbage is ignored.
+ *   - garbage is ignored;
+ *   - detectors, feature settings and predictions (Phase 2) are written only
+ *     once set, read back, and come in by name like the rest.
  */
 
 import { writeBehaviorMetadata, readBehaviorMetadata, resetBehaviorState, BEHAVIOR_METADATA_KEYS }
     from '../import-export/behavior-metadata.js';
-import { addBehavior, behaviors, behaviorByName } from '../pose/behavior-ethogram.js';
+import { addBehavior, behaviors, behaviorByName, setBehaviorDetector, setFeatureSettings, featureSettings }
+    from '../pose/behavior-ethogram.js';
 import { labelRange, toggleState, setBehaviorCursor, noteBehaviorFps, exportBoutRows, listBouts, isRunning }
     from '../pose/behavior-labels.js';
+import { setBehaviorRun, predictedBouts, runConfigPrint } from '../pose/behavior-predictions.js';
 
 let passed = 0, failed = 0;
 const check = (cond, msg) => {
@@ -33,7 +37,7 @@ console.log('\n1. Nothing to say, nothing written');
     const lucid = {};
     writeBehaviorMetadata(lucid, { name: 's' });
     check(Object.keys(lucid).length === 0, 'no ethogram, no bouts: no keys');
-    check(BEHAVIOR_METADATA_KEYS.join() === 'ethogram,behaviorLabels', 'the keys this module owns');
+    check(BEHAVIOR_METADATA_KEYS.join() === 'ethogram,behaviorLabels,behaviorPredictions', 'the keys this module owns');
 }
 
 console.log('\n2. Write and read back');
@@ -102,6 +106,51 @@ console.log('\n4. Garbage is ignored');
     check(readBehaviorMetadata(null, {}).kept === 0 && readBehaviorMetadata(s, null).kept === 0, 'no session / no dict');
     const r = readBehaviorMetadata(s, { behaviorLabels: { v: 1, bouts: [['b1', 'id_1', '', 0, 1, 1, 'm', '']] } });
     check(r.kept === 0 && r.dropped === 1, 'bouts naming no known behavior are skipped');
+}
+
+console.log('\n5. Detectors, feature settings and predictions');
+{
+    resetBehaviorState();
+    const rear = addBehavior({ name: 'rear' }).behavior;
+    const chase = addBehavior({ name: 'chase', social: true }).behavior;
+    const plain = {};
+    writeBehaviorMetadata(plain, { name: 's' });
+    check(!('detector' in plain.ethogram.behaviors[0]) && !('features' in plain.ethogram) && !('behaviorPredictions' in plain),
+        'no detector, default settings, no predictions: none of them written');
+    setBehaviorDetector(rear.id, { conditions: [{ feature: 'Nose height · mean ±0.1 s', op: '>', value: 0.5 }], minDuration: 0.3, maxGap: 0.2 });
+    setFeatureSettings({ nodeRoles: { head: 'Nose' }, floor: { source: 'plane', plane: 3 } });
+    const s = { name: 's' };
+    setBehaviorRun(s, { behaviorId: rear.id, cfg: runConfigPrint(rear, s, { fps: 30, mode: '3d' }), fps: 30, mode: '3d',
+        bouts: [{ animal: 'id_1', target: '', start: 5, end: 9, score: 0.8123 }] });
+    setBehaviorRun(s, { behaviorId: chase.id, cfg: 'x', fps: 30, mode: '3d', bouts: [] });
+    const lucid = roundTrip((() => { const o = {}; writeBehaviorMetadata(o, s); return o; })());
+    check(lucid.ethogram.behaviors[0].detector.conditions[0].feature === 'Nose height · mean ±0.1 s' && !lucid.ethogram.behaviors[1].detector,
+        'a detector is written with its behavior, only where set');
+    check(JSON.stringify(lucid.ethogram.features) === JSON.stringify({ nodeRoles: { head: 'Nose' }, floor: { source: 'plane', plane: 3 } }),
+        'feature settings: only what was changed');
+    check(lucid.behaviorPredictions.runs.length === 1 && JSON.stringify(lucid.behaviorPredictions.runs[0].bouts) === JSON.stringify([['id_1', '', 5, 9, 0.812]]),
+        'predictions: only runs with bouts, scores rounded');
+    resetBehaviorState();
+    const back = { name: 'back' };
+    readBehaviorMetadata(back, lucid);
+    check(JSON.stringify(behaviorByName('rear').detector) === JSON.stringify(lucid.ethogram.behaviors[0].detector) &&
+        JSON.stringify(featureSettings()) === JSON.stringify(lucid.ethogram.features), 'detector and settings read back');
+    check(JSON.stringify(predictedBouts(back).map(b => [b.behaviorId, b.animal, b.start, b.end, b.score])) === JSON.stringify([['b1', 'id_1', 5, 9, 0.812]]),
+        'predictions read back');
+    // A second session of the project brings nothing new; its own predictions come in.
+    const later = { name: 'later' };
+    readBehaviorMetadata(later, { ethogram: { v: 1, behaviors: [{ id: 'b1', name: 'rear', color: '#ffffff', kind: 'state' }],
+        features: { nodeRoles: { head: 'Snout' } } } });
+    check(featureSettings().nodeRoles.head === 'Nose', 'feature settings come from the first session ingested');
+    // An ethogram file whose detector is new to a behavior without one brings it.
+    resetBehaviorState();
+    addBehavior({ name: 'groom' });
+    readBehaviorMetadata({}, { ethogram: { v: 1, behaviors: [{ id: 'b7', name: 'groom', color: '#ffffff', kind: 'state',
+        detector: { conditions: [{ feature: 'centroid speed', op: '<', value: 0.1 }] } }] } });
+    check(behaviorByName('groom').detector && behaviorByName('groom').detector.conditions[0].feature === 'centroid speed',
+        'a known behavior without a detector takes the incoming one');
+    setFeatureSettings({});
+    check(featureSettings() === null, 'settings set back to nothing: null (never written)');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

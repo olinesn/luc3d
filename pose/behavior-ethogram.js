@@ -26,10 +26,19 @@
 //     (ui/behavior-mode.js). Optional: a behavior without a key is coded from
 //     the Behavior tab. Digits pick the animal in the mode, and `[ ] , .`, Space,
 //     Esc and the arrows keep their mode meanings, so keys are letters only.
+//   * `detector` (optional): the rule that detects it automatically
+//     (pose/behavior-rules.js), `{conditions, minDuration, maxGap}`.
+//
+// The ethogram also carries the project's behavior FEATURE settings
+// (`featureSettings`): the node roles, the excluded nodes and the floor the
+// features use (pose/behavior-tensor.js) — null until someone changes them,
+// and only what was changed is kept, so defaults are never written.
 //
 // DOM-free: Node tests import it directly.
 //
-// Depends on: nothing.
+// Depends on: pose/behavior-rules.js (`normalizeDetector`)
+
+import { normalizeDetector } from './behavior-rules.js';
 
 /** The behavior kinds. */
 export var BEHAVIOR_KINDS = ['state', 'point'];
@@ -49,11 +58,72 @@ var NAME_MAX = 40;
 var DESCRIPTION_MAX = 500;
 var GROUP_MAX = 40;
 
-var _model = { behaviors: [], nextId: 1 };
+var _model = { behaviors: [], nextId: 1, features: null };
 
-/** Drop every behavior (new project, or before a load). */
+/** Drop every behavior and the feature settings (new project, or before a load). */
 export function resetEthogram() {
-    _model = { behaviors: [], nextId: 1 };
+    _model = { behaviors: [], nextId: 1, features: null };
+}
+
+var FLOOR_SOURCES = ['origin', 'fit', 'plane'];
+
+/**
+ * Feature settings as kept: only the parts that differ from the defaults, or
+ * null when nothing does.
+ *   nodeRoles  {head?: node name, tailBase?: node name}
+ *   exclude    node names left out of features (replaces the default list)
+ *   floor      {source: 'origin'|'fit'|'plane', plane?: plane id}
+ */
+function cleanFeatureSettings(f) {
+    if (!f || typeof f !== 'object') return null;
+    var out = {};
+    if (f.nodeRoles && typeof f.nodeRoles === 'object') {
+        var nr = {};
+        ['head', 'tailBase'].forEach(function (r) {
+            if (typeof f.nodeRoles[r] === 'string' && f.nodeRoles[r]) nr[r] = f.nodeRoles[r];
+        });
+        if (Object.keys(nr).length) out.nodeRoles = nr;
+    }
+    if (Array.isArray(f.exclude)) {
+        out.exclude = f.exclude.filter(function (n, i, a) { return typeof n === 'string' && n && a.indexOf(n) === i; });
+    }
+    if (f.floor && typeof f.floor === 'object' && FLOOR_SOURCES.indexOf(f.floor.source) >= 0) {
+        var fl = { source: f.floor.source };
+        if (fl.source === 'plane') {
+            if (!Number.isFinite(f.floor.plane)) fl = null;
+            else fl.plane = f.floor.plane;
+        }
+        if (fl) out.floor = fl;
+    }
+    return Object.keys(out).length ? out : null;
+}
+
+/** The project's feature settings (null = every default). Do not mutate. */
+export function featureSettings() {
+    return _model.features;
+}
+
+/**
+ * Replace the feature settings. Pass only what differs from the defaults
+ * (`{nodeRoles: {head: 'Nose'}}`); null or {} restores every default.
+ */
+export function setFeatureSettings(f) {
+    _model.features = cleanFeatureSettings(f);
+    return _model.features;
+}
+
+/**
+ * Set (or with null, remove) a behavior's detector.
+ * @returns {{behavior?: Object, error?: string}}
+ */
+export function setBehaviorDetector(id, detector) {
+    var b = behaviorById(id);
+    if (!b) return { error: 'No such behavior' };
+    if (detector == null) { delete b.detector; return { behavior: b }; }
+    var d = normalizeDetector(detector);
+    if (!d) return { error: 'A detector needs at least one condition' };
+    b.detector = d;
+    return { behavior: b };
 }
 
 /** The behaviors, in ethogram order. Do not mutate; use the functions below. */
@@ -200,10 +270,13 @@ export function moveBehavior(id, delta) {
     return true;
 }
 
-/** The `metadata.lucid.ethogram` payload, or null for an empty ethogram (nothing is written). */
+/**
+ * The `metadata.lucid.ethogram` payload, or null for an empty ethogram with
+ * default feature settings (nothing is written).
+ */
 export function serializeEthogram() {
-    if (!_model.behaviors.length) return null;
-    return {
+    if (!_model.behaviors.length && !_model.features) return null;
+    var out = {
         v: 1,
         behaviors: _model.behaviors.map(function (b) {
             var o = { id: b.id, name: b.name, color: b.color, kind: b.kind };
@@ -212,9 +285,12 @@ export function serializeEthogram() {
             if (b.mutual) o.mutual = true;
             if (b.group) o.group = b.group;
             if (b.description) o.description = b.description;
+            if (b.detector) o.detector = JSON.parse(JSON.stringify(b.detector));
             return o;
         }),
     };
+    if (_model.features) out.features = JSON.parse(JSON.stringify(_model.features));
+    return out;
 }
 
 function idNumber(id) {
@@ -237,10 +313,19 @@ export function ingestEthogram(payload) {
     var idMap = new Map();
     if (!payload || typeof payload !== 'object' || payload.v !== 1 || !Array.isArray(payload.behaviors)) return idMap;
     var intoEmpty = _model.behaviors.length === 0;
+    // Feature settings are project-scoped: the first session ingested (or a
+    // project that has none yet) brings them; later ones map onto them.
+    if (!_model.features && payload.features) _model.features = cleanFeatureSettings(payload.features);
     payload.behaviors.forEach(function (e) {
         if (!e || typeof e !== 'object' || typeof e.id !== 'string' || typeof e.name !== 'string' || !e.name.trim()) return;
         var known = behaviorByName(e.name);
-        if (known) { idMap.set(e.id, known.id); return; }
+        if (known) {
+            idMap.set(e.id, known.id);
+            // A detector comes in with an imported ethogram for a behavior that has none.
+            var kd = !known.detector && normalizeDetector(e.detector);
+            if (kd) known.detector = kd;
+            return;
+        }
         var fields = {
             name: e.name, kind: e.kind === 'point' ? 'point' : 'state', social: !!e.social, mutual: !!(e.social && e.mutual),
             group: typeof e.group === 'string' ? e.group : '',
@@ -253,6 +338,8 @@ export function ingestEthogram(payload) {
         var b = clean(fields, { id: sameId ? e.id : 'b' + (_model.nextId++), name: '', key: '', color: '',
             kind: 'state', social: false, mutual: false, group: '', description: '' });
         if (sameId) _model.nextId = Math.max(_model.nextId, idNumber(e.id) + 1);
+        var det = normalizeDetector(e.detector);
+        if (det) b.detector = det;
         _model.behaviors.push(b);
         idMap.set(e.id, b.id);
     });

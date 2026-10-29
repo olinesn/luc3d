@@ -1,0 +1,622 @@
+// pose/behavior-predictions.js — predicted behavior bouts, per session: what
+// the rule detectors say each animal did (and, in later phases, classifiers,
+// keypoint-MoSeq states and discovery), kept for review.
+//
+// ## Storage
+//
+// Per session (a WeakMap, like the labels), one RUN per behavior — the last
+// time that behavior was detected:
+//
+//   { behaviorId, source: 'rule',
+//     cfg,               // a print of what produced it: the detector, the body
+//                        // and floor settings, the frame rate, 2D or 3D
+//     fps, mode, camera,
+//     bouts: [{animal, target, start, end (inclusive), score}],   sorted
+//     scores: Map<'animal\u0001target', Float32Array> | null }    per frame, in memory only
+//
+// Bouts are saved (`metadata.lucid.behaviorPredictions`, through
+// import-export/behavior-metadata.js, only when there are any); per-frame
+// scores are not — they are recomputed by running again. A MUTUAL behavior's
+// pair is stored in name order, as labels are.
+//
+// ## Stale
+//
+// A run is stale once what produced it changed:
+//   * settings — its detector, the body it measured (the head, tail base and
+//     nodes used, as resolved on the session's skeleton), the floor in effect
+//     (the caller's `floorKey`: the Set Origin frame or plane fit it used), or
+//     the frame rate (`runConfigPrint` differs from the run's `cfg`);
+//   * input — the poses it read: the session's identified 3D (or, for a 2D
+//     run, its camera's 2D) no longer has the print taken when it ran
+//     (`predictionInputPrint`: an order-free hash of every value, its frame and
+//     its identity, so any edit, re-solve, smoothing or identity fix shows).
+// Label edits do not make a rule run stale (rules do not read labels; a
+// classifier run will). Stale predictions stay visible, marked, until run
+// again. Checking the input costs one pass over the poses, so it is done only
+// when something may have changed (`notePossibleInputChange`, from markDirty)
+// and is cached in between.
+//
+// ## Review
+//
+// A predicted bout is reviewed by labelling it: Accept labels its frames
+// present (source 'a', accepted prediction), Reject labels them "not" — each
+// one `labelBouts` edit, so one undo step. Its review status is read back
+// from the labels, never stored.
+//
+// DOM-free.
+//
+// Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js, pose/behavior-tensor.js,
+//             pose/pose-data.js
+
+import { behaviorById, featureSettings } from './behavior-ethogram.js';
+import { boutIntervals, labelBouts } from './behavior-labels.js';
+import { resolveBody } from './behavior-tensor.js';
+import { POINT3D_STRIDE, points3dNodeCount } from './pose-data.js';
+
+var SEP = '\u0001';
+var SOURCES = ['rule'];
+
+var _stores = new WeakMap();
+var _listeners = [];
+
+function storeOf(session) {
+    if (!session) return null;
+    var st = _stores.get(session);
+    if (!st) {
+        st = { runs: new Map(), print: null, inputStale: false, checkPending: false };
+        _stores.set(session, st);
+    }
+    return st;
+}
+
+/** Be told after every change to a session's predictions (`fn(session, info)`). */
+export function onPredictionsChange(fn) {
+    if (typeof fn === 'function') _listeners.push(fn);
+}
+
+function emit(session, info) {
+    for (var i = 0; i < _listeners.length; i++) {
+        try { _listeners[i](session, info || {}); } catch (e) { console.error('[behavior] prediction listener failed', e); }
+    }
+}
+
+/** A pair as stored: a mutual behavior's in name order. */
+function orderPair(behaviorId, animal, target) {
+    var b = behaviorById(behaviorId);
+    if (b && b.mutual && target && target < animal) return [target, animal];
+    return [animal, target || ''];
+}
+
+function keyOf(animal, target) {
+    return animal + SEP + (target || '');
+}
+
+// ----------------------------------------------------------------------------
+// Prints
+// ----------------------------------------------------------------------------
+
+function fnv(str) {
+    var h = 0x811c9dc5;
+    for (var i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
+    return (h >>> 0).toString(16);
+}
+
+/** The body features are measured on, as resolved on the session's skeleton: [head, tail base, used nodes] by name. */
+function bodyPrint(session) {
+    var sk = session && session.skeleton;
+    var names = sk && sk.nodes ? sk.nodes.map(function (nd) { return typeof nd === 'string' ? nd : nd && nd.name; }) : [];
+    var edges = sk && sk.edges ? sk.edges : [];
+    var body = resolveBody(names, edges, featureSettings());
+    return [names[body.roles.head] || '', names[body.roles.tailBase] || '', body.used.map(function (i) { return names[i]; })];
+}
+
+/**
+ * What a run of `behavior` depends on besides the poses: its detector, the
+ * resolved body, the floor in effect, the frame rate, and 2D vs 3D.
+ * @param {Object} behavior
+ * @param {Session} session
+ * @param {{fps:number, mode?:string, camera?:string, floorKey?:string}} env
+ */
+export function runConfigPrint(behavior, session, env) {
+    env = env || {};
+    // The floor in effect (the caller's key); without one, the floor setting.
+    var fs = featureSettings();
+    var floor = env.mode === '2d' ? '' : env.floorKey != null ? env.floorKey : (fs && fs.floor ? JSON.stringify(fs.floor) : 'auto');
+    return fnv(JSON.stringify([behavior && behavior.detector || null, bodyPrint(session), floor,
+        Math.round((env.fps || 0) * 1000) / 1000, env.mode || '', env.camera || '',
+        behavior ? [behavior.kind, !!behavior.social, !!behavior.mutual] : null]));
+}
+
+function mix(a, b) {
+    var h = Math.imul(a ^ (a >>> 16), 0x85ebca6b) ^ Math.imul((b + 0x9e3779b9) | 0, 0xc2b2ae35);
+    h ^= h >>> 13;
+    return Math.imul(h, 0x27d4eb2f) >>> 0;
+}
+
+/** Groups (3D) or frames (2D) between the yields of the sliced print. */
+var PRINT_SLICE_GROUPS = 20000;
+var PRINT_SLICE_FRAMES = 4000;
+
+/**
+ * The print, as steps: yields between slices of the walk (the async check
+ * pauses there), returns the print. Every value folds into an order-free sum
+ * and xor, so the slices change nothing.
+ */
+function* printSteps(session, mode, camera) {
+    var sum = 0, xor = 0, n = 0;
+    var add = function (frame, id, k, v) {
+        var q = Math.round(v * 1000) | 0;
+        var h = mix(q, ((frame * 64 + (id & 63)) * 128 + k) | 0);
+        sum = (sum + h) >>> 0; xor = (xor ^ h) >>> 0; n++;
+    };
+    if (!session) return '';
+    if (mode !== '2d') {
+        var seen = 0;
+        for (var [frame, groups] of session.instanceGroups || []) {
+            if (!groups) continue;
+            for (var i = 0; i < groups.length; i++) {
+                var g = groups[i];
+                if (!g || !g.points3d || g.identityId == null || g.identityId < 0) continue;
+                var pts = g.points3d, cnt = points3dNodeCount(pts) * POINT3D_STRIDE;
+                for (var j = 0; j < cnt; j++) { var v = pts[j]; if (v === v) add(frame, g.identityId, j, v); }
+                if (++seen % PRINT_SLICE_GROUPS === 0) yield;
+            }
+        }
+        return 'p3:' + n + ':' + sum + ':' + xor;
+    }
+    var resident = session.frameGroups || new Map();
+    var k0 = 0;
+    for (var [f, fg] of resident) {
+        if (!fg) continue;
+        var memberId = new Map();
+        var gs = session.instanceGroups ? session.instanceGroups.get(f) : null;
+        if (gs) gs.forEach(function (gg) { var inst = gg && gg.getInstance(camera); if (inst && gg.identityId >= 0) memberId.set(inst, gg.identityId); });
+        var take = function (inst) {
+            if (!inst || !inst._xy) return;
+            var id = memberId.has(inst) ? memberId.get(inst)
+                : session.getIdentityIdForUnlinkedInstance ? session.getIdentityIdForUnlinkedInstance(camera, inst, f) : null;
+            if (id == null || id < 0) return;
+            for (var k = 0; k < inst._xy.length; k++) { var x = inst._xy[k]; if (x === x) add(f, id, k, x); }
+        };
+        fg.getInstances(camera).forEach(take);
+        fg.getUnlinkedInstances(camera).forEach(function (u) { take(u && u.instance); });
+        if (++k0 % PRINT_SLICE_FRAMES === 0) yield;
+    }
+    var loader = session.lazyLoader;
+    var labels = loader && loader.labelsByCam && loader.labelsByCam.get(camera);
+    var store = labels && labels._lazyDataStore;
+    var rowMap = loader && loader.frameRowByCam && loader.frameRowByCam.get(camera);
+    if (store && rowMap && typeof loader.forEachInstanceRow === 'function') {
+        var idn = store.instancesData || {}, pc = store.pointsData || {}, pp = store.predPointsData || {};
+        var N = session.skeleton && session.skeleton.nodes ? session.skeleton.nodes.length : 0;
+        var visit = function (cn, frameIdx, trk, info) {
+            if (resident.has(frameIdx) || trk < 0) return;
+            var id = session.getIdentityIdForTrack(camera, trk, frameIdx);
+            if (id == null || id < 0) return;
+            var r = info.instanceRow;
+            var cols = Number(idn.instance_type ? idn.instance_type[r] : 0) !== 0 ? pp : pc;
+            var p0 = Number(idn.point_id_start ? idn.point_id_start[r] : 0) || 0;
+            var p1 = Number(idn.point_id_end ? idn.point_id_end[r] : 0) || 0;
+            for (var k2 = 0; k2 < Math.min(p1 - p0, N); k2++) {
+                var x2 = cols.x ? Number(cols.x[p0 + k2]) : NaN, y2 = cols.y ? Number(cols.y[p0 + k2]) : NaN;
+                if (isFinite(x2) && isFinite(y2)) { add(frameIdx, id, 2 * k2, x2); add(frameIdx, id, 2 * k2 + 1, y2); }
+            }
+        };
+        var last = -1;
+        rowMap.forEach(function (row, fr) { if (fr > last) last = fr; });
+        for (var s0 = 0; s0 <= last; s0 += PRINT_SLICE_FRAMES) {
+            loader.forEachInstanceRow(visit, { camera: camera, start: s0, end: s0 + PRINT_SLICE_FRAMES });
+            yield;
+        }
+    }
+    return 'p2:' + camera + ':' + n + ':' + sum + ':' + xor;
+}
+
+/**
+ * An order-free print of the poses a run reads: every finite coordinate (to
+ * 1e-3 units), with its frame, identity and node, folded by sum and xor. The
+ * same poses always give the same print whatever order they are visited in
+ * (a lazy project's resident frames come and go). One pass over the poses
+ * (~0.8 s for an hour of 5 animals × 15 nodes in 3D): `predictionInputPrintAsync`
+ * spreads it over short slices.
+ * @param {Session} session
+ * @param {'3d'|'2d'} mode
+ * @param {string} [camera] the 2D run's camera
+ * @returns {string}
+ */
+export function predictionInputPrint(session, mode, camera) {
+    var it = printSteps(session, mode, camera);
+    var r = it.next();
+    while (!r.done) r = it.next();
+    return r.value;
+}
+
+/**
+ * `predictionInputPrint` in slices, awaiting `pause()` between them.
+ * @param {{pause: function(): Promise, isCancelled?: function(): boolean}} opts
+ * @returns {Promise<string|null>} null when cancelled
+ */
+export async function predictionInputPrintAsync(session, mode, camera, opts) {
+    var cancelled = (opts && opts.isCancelled) || function () { return false; };
+    var it = printSteps(session, mode, camera);
+    var r = it.next();
+    while (!r.done) {
+        await opts.pause();
+        if (cancelled()) return null;
+        r = it.next();
+    }
+    return r.value;
+}
+
+// ----------------------------------------------------------------------------
+// Runs
+// ----------------------------------------------------------------------------
+
+/**
+ * Store a behavior's run, replacing the last one.
+ * @param {Session} session
+ * @param {{behaviorId, source?, cfg, fps, mode, camera, bouts: Array<{animal,target,start,end,score}>,
+ *          scores?: Map<string, Float32Array>}} run
+ */
+export function setBehaviorRun(session, run) {
+    var st = storeOf(session);
+    if (!st || !run || !behaviorById(run.behaviorId)) return;
+    st.runs.set(run.behaviorId, normalizeRun(run));
+}
+
+function normalizeRun(run) {
+    var bouts = (run.bouts || []).map(function (b) {
+        var p = orderPair(run.behaviorId, b.animal, b.target);
+        return { animal: p[0], target: p[1], start: b.start, end: b.end, score: Number.isFinite(b.score) ? b.score : NaN };
+    }).filter(function (b) { return b.animal && b.end >= b.start && b.start >= 0; });
+    bouts.sort(function (a, b) { return a.start - b.start || a.end - b.end || (a.animal < b.animal ? -1 : a.animal > b.animal ? 1 : 0); });
+    return {
+        behaviorId: run.behaviorId, source: SOURCES.indexOf(run.source) >= 0 ? run.source : 'rule', cfg: run.cfg || '',
+        fps: run.fps > 0 ? run.fps : 0, mode: run.mode === '2d' ? '2d' : '3d', camera: run.camera || null,
+        bouts: bouts, scores: run.scores || null,
+    };
+}
+
+/**
+ * Note a finished detection pass (one or more runs set): the print of the
+ * poses it read becomes the session's reference, and the session is fresh.
+ */
+export function noteDetectionPass(session, inputPrint, info) {
+    var st = storeOf(session);
+    if (!st) return;
+    st.print = inputPrint || null;
+    st.inputStale = false;
+    emit(session, Object.assign({ run: true }, info || {}));
+}
+
+/** Forget a session's predictions (all, or some behaviors'). */
+export function clearBehaviorRuns(session, behaviorIds) {
+    var st = session && _stores.get(session);
+    if (!st || !st.runs.size) return 0;
+    var n = 0;
+    Array.from(st.runs.keys()).forEach(function (id) {
+        if (behaviorIds && behaviorIds.indexOf(id) < 0) return;
+        st.runs.delete(id);
+        n++;
+    });
+    if (!st.runs.size) { st.print = null; st.inputStale = false; }
+    if (n) emit(session, { cleared: true });
+    return n;
+}
+
+/** The session's runs, in ethogram-independent insertion order. */
+export function behaviorRuns(session) {
+    var st = session && _stores.get(session);
+    return st ? Array.from(st.runs.values()) : [];
+}
+
+/** One behavior's run, or null. */
+export function behaviorRunOf(session, behaviorId) {
+    var st = session && _stores.get(session);
+    return (st && st.runs.get(behaviorId)) || null;
+}
+
+/** True when the session has any predicted bout. */
+export function hasPredictions(session) {
+    var st = session && _stores.get(session);
+    if (!st) return false;
+    for (var r of st.runs.values()) if (r.bouts.length) return true;
+    return false;
+}
+
+/**
+ * Every predicted bout, as plain records sorted by start:
+ * `{behaviorId, animal, target, start, end, score, source}`.
+ * @param {{behaviorId?:string, animal?:string}} [filter] an animal matches as
+ *   actor, or as either animal of a mutual pair
+ */
+export function predictedBouts(session, filter) {
+    var st = session && _stores.get(session);
+    if (!st) return [];
+    filter = filter || {};
+    var out = [];
+    st.runs.forEach(function (run) {
+        if (filter.behaviorId != null && run.behaviorId !== filter.behaviorId) return;
+        var b = behaviorById(run.behaviorId);
+        if (!b) return;
+        run.bouts.forEach(function (bt) {
+            if (filter.animal != null && bt.animal !== filter.animal && !(b.mutual && bt.target === filter.animal)) return;
+            out.push({ behaviorId: run.behaviorId, animal: bt.animal, target: bt.target, start: bt.start, end: bt.end,
+                       score: bt.score, source: run.source });
+        });
+    });
+    out.sort(function (a, b) { return a.start - b.start || a.end - b.end || (a.animal < b.animal ? -1 : a.animal > b.animal ? 1 : 0); });
+    return out;
+}
+
+/** The per-frame score of a behavior for an animal (and target) at `frame`, or NaN (not run, not kept, unscored). */
+export function predictionScoreAt(session, behaviorId, animal, target, frame) {
+    var run = behaviorRunOf(session, behaviorId);
+    if (!run || !run.scores) return NaN;
+    var p = orderPair(behaviorId, animal, target);
+    var s = run.scores.get(keyOf(p[0], p[1]));
+    return s && frame >= 0 && frame < s.length ? s[frame] : NaN;
+}
+
+// ----------------------------------------------------------------------------
+// Stale
+// ----------------------------------------------------------------------------
+
+/**
+ * Something may have changed the poses (an edit marked the project dirty):
+ * the next `checkPredictionInput` re-prints them. Cheap.
+ */
+export function notePossibleInputChange(session) {
+    var st = session && _stores.get(session);
+    if (st && st.runs.size) { st.checkPending = true; st.checkGen = (st.checkGen || 0) + 1; }
+}
+
+/** Is a re-print due? */
+export function predictionCheckPending(session) {
+    var st = session && _stores.get(session);
+    return !!(st && st.runs.size && (st.checkPending || st.print == null));
+}
+
+/** Compare a fresh print with the reference; true when the stale flag changed. */
+function settleInput(session, st, now) {
+    if (st.print == null) { st.print = now; return false; }
+    var stale = now !== st.print;
+    if (stale === st.inputStale) return false;
+    st.inputStale = stale;
+    emit(session, { stale: stale });
+    return true;
+}
+
+/**
+ * Re-print the poses if something may have changed them (or no print exists
+ * yet: predictions read from a file take the poses as loaded as their
+ * reference). One pass over the poses, at once.
+ * @returns {boolean} whether the input stale flag changed
+ */
+export function checkPredictionInput(session) {
+    var st = session && _stores.get(session);
+    if (!st || !st.runs.size) return false;
+    if (!st.checkPending && st.print != null) return false;
+    st.checkPending = false;
+    var run = st.runs.values().next().value;
+    return settleInput(session, st, predictionInputPrint(session, run.mode, run.camera));
+}
+
+/**
+ * `checkPredictionInput` in slices, awaiting `pause()` between them; an edit
+ * during the walk (a newer `notePossibleInputChange`) abandons it, and the
+ * caller checks again later.
+ * @returns {Promise<boolean>} whether the input stale flag changed
+ */
+export async function checkPredictionInputAsync(session, pause) {
+    var st = session && _stores.get(session);
+    if (!st || !st.runs.size) return false;
+    if (!st.checkPending && st.print != null) return false;
+    var gen = st.checkGen || 0;
+    var run = st.runs.values().next().value;
+    var now = await predictionInputPrintAsync(session, run.mode, run.camera, {
+        pause: pause, isCancelled: function () { return (st.checkGen || 0) !== gen || !st.runs.size; },
+    });
+    if (now == null || (st.checkGen || 0) !== gen) return false;
+    st.checkPending = false;
+    return settleInput(session, st, now);
+}
+
+/**
+ * Why a session's predictions are stale.
+ * @param {{fps:number, floorKey?:string}} env the frame rate and floor now
+ * @returns {{input: boolean, settings: string[]}} settings: behavior ids whose
+ *   detector or settings changed since their run (or that no longer exist)
+ */
+export function predictionStaleness(session, env) {
+    var st = session && _stores.get(session);
+    if (!st || !st.runs.size) return { input: false, settings: [] };
+    var settings = [];
+    st.runs.forEach(function (run, id) {
+        var b = behaviorById(id);
+        var now = b && runConfigPrint(b, session, { fps: env && env.fps, mode: run.mode, camera: run.camera, floorKey: env && env.floorKey });
+        if (!b || now !== run.cfg) settings.push(id);
+    });
+    return { input: !!st.inputStale, settings: settings };
+}
+
+/** Is this behavior's run stale (input or settings)? */
+export function isRunStale(session, behaviorId, env) {
+    var s = predictionStaleness(session, env);
+    return s.input || s.settings.indexOf(behaviorId) >= 0;
+}
+
+/**
+ * Do the session's predictions stand — some predicted bout, none of it
+ * stale? Drives the blue toolbar button (pose/run-state.js). Cached input
+ * state only; never walks the poses.
+ * @param {{fps:number, floorKey?:string}} env
+ */
+export function predictionsStand(session, env) {
+    if (!hasPredictions(session)) return false;
+    var s = predictionStaleness(session, env);
+    if (s.input) return false;
+    return behaviorRuns(session).some(function (r) { return r.bouts.length && s.settings.indexOf(r.behaviorId) < 0; });
+}
+
+// ----------------------------------------------------------------------------
+// Identities
+// ----------------------------------------------------------------------------
+
+/** An identity was renamed: its predicted bouts (as actor and target) follow. */
+export function renamePredictedAnimal(session, oldName, newName) {
+    var st = session && _stores.get(session);
+    if (!st || !oldName || !newName || oldName === newName) return 0;
+    var moved = 0;
+    st.runs.forEach(function (run, id) {
+        var touched = false;
+        var bouts = run.bouts.map(function (b) {
+            if (b.animal !== oldName && b.target !== oldName) return b;
+            touched = true; moved++;
+            var p = orderPair(id, b.animal === oldName ? newName : b.animal, b.target === oldName ? newName : b.target);
+            return Object.assign({}, b, { animal: p[0], target: p[1] });
+        });
+        if (!touched) return;
+        var scores = null;
+        if (run.scores) {
+            scores = new Map();
+            run.scores.forEach(function (arr, k) {
+                var parts = k.split(SEP);
+                var p = orderPair(id, parts[0] === oldName ? newName : parts[0], parts[1] === oldName ? newName : parts[1]);
+                scores.set(keyOf(p[0], p[1]), arr);
+            });
+        }
+        st.runs.set(id, normalizeRun(Object.assign({}, run, { bouts: bouts, scores: scores })));
+    });
+    if (moved) emit(session, { identity: 'rename' });
+    return moved;
+}
+
+// ----------------------------------------------------------------------------
+// Review
+// ----------------------------------------------------------------------------
+
+/**
+ * How the labels have settled a predicted bout: 'accepted' (every frame
+ * labelled present), 'rejected' (every frame labelled "not"), 'mixed', or
+ * 'unreviewed' (no frame labelled). Also the share of its frames labelled
+ * "not" (`disagreement`).
+ */
+export function reviewStatus(session, bout) {
+    var list = boutIntervals(session, bout.behaviorId, bout.animal, bout.target);
+    var len = bout.end - bout.start + 1, pres = 0, abs = 0;
+    // The list is sorted and non-overlapping: start at the first interval
+    // ending at or after the bout's start.
+    var lo = 0, hi = list.length;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (list[mid].end < bout.start) lo = mid + 1; else hi = mid; }
+    for (var i = lo; i < list.length; i++) {
+        var iv = list[i];
+        if (iv.start > bout.end) break;
+        var n = Math.min(iv.end, bout.end) - Math.max(iv.start, bout.start) + 1;
+        if (iv.present) pres += n; else abs += n;
+    }
+    var status = pres === len ? 'accepted' : abs === len ? 'rejected' : pres + abs === 0 ? 'unreviewed' : 'mixed';
+    return { status: status, present: pres, absent: abs, disagreement: abs / len };
+}
+
+/** The review orders. */
+export var REVIEW_ORDERS = ['uncertainty', 'disagreement', 'time'];
+
+/**
+ * Predicted bouts in review order, each with its review status.
+ * @param {{order?:'uncertainty'|'disagreement'|'time', behaviorId?, animal?, unreviewedOnly?: boolean}} [opts]
+ *   uncertainty: scores nearest the 0.5 decision first; disagreement: most
+ *   frames labelled "not" first, then uncertainty; time: by start
+ */
+export function reviewQueue(session, opts) {
+    opts = opts || {};
+    var list = predictedBouts(session, { behaviorId: opts.behaviorId || undefined, animal: opts.animal || undefined }).map(function (b) {
+        var r = reviewStatus(session, b);
+        return Object.assign(b, { status: r.status, disagreement: r.disagreement, uncertainty: Number.isFinite(b.score) ? Math.abs(b.score - 0.5) : 1 });
+    });
+    if (opts.unreviewedOnly) list = list.filter(function (b) { return b.status !== 'accepted' && b.status !== 'rejected'; });
+    var order = REVIEW_ORDERS.indexOf(opts.order) >= 0 ? opts.order : 'uncertainty';
+    if (order === 'uncertainty') list.sort(function (a, b) { return a.uncertainty - b.uncertainty || a.start - b.start; });
+    else if (order === 'disagreement') list.sort(function (a, b) { return b.disagreement - a.disagreement || a.uncertainty - b.uncertainty || a.start - b.start; });
+    return list;
+}
+
+/**
+ * Accept predicted bouts: label their frames present, source 'a' (accepted
+ * prediction). One `labelBouts` edit — one undo step for all of them.
+ * @returns {{kept:number, dropped:number}}
+ */
+export function acceptPredictions(session, bouts) {
+    return labelBouts(session, (bouts || []).map(function (b) {
+        return { behaviorId: b.behaviorId, animal: b.animal, target: b.target, start: b.start, end: b.end, present: true };
+    }), { source: 'a' });
+}
+
+/** Reject predicted bouts: label their frames "not" (a manual label). One undo step. */
+export function rejectPredictions(session, bouts) {
+    return labelBouts(session, (bouts || []).map(function (b) {
+        return { behaviorId: b.behaviorId, animal: b.animal, target: b.target, start: b.start, end: b.end, present: false };
+    }), { source: 'm' });
+}
+
+// ----------------------------------------------------------------------------
+// Save / load
+// ----------------------------------------------------------------------------
+
+/**
+ * The `metadata.lucid.behaviorPredictions` payload, or null when there is no
+ * predicted bout (nothing is written).
+ */
+export function exportPredictionRuns(session) {
+    var st = session && _stores.get(session);
+    if (!st) return null;
+    var runs = [];
+    st.runs.forEach(function (run) {
+        if (!run.bouts.length || !behaviorById(run.behaviorId)) return;
+        var o = { behavior: run.behaviorId, source: run.source, cfg: run.cfg, mode: run.mode };
+        if (run.camera) o.camera = run.camera;
+        if (run.fps > 0) o.fps = run.fps;
+        o.bouts = run.bouts.map(function (b) {
+            return [b.animal, b.target, b.start, b.end, Number.isFinite(b.score) ? Math.round(b.score * 1000) / 1000 : null];
+        });
+        runs.push(o);
+    });
+    if (!runs.length) return null;
+    return { v: 1, runs: runs };
+}
+
+/**
+ * Replace a session's predictions with saved ones (a load). Runs naming a
+ * behavior the ethogram does not have are dropped. Their poses are taken as
+ * loaded (the first input check prints them). Does not notify.
+ * @param {Map<string,string>} [idMap] file behavior id -> project id
+ * @returns {{kept:number, dropped:number}} bouts
+ */
+export function importPredictionRuns(session, payload, idMap) {
+    var st = storeOf(session);
+    if (!st) return { kept: 0, dropped: 0 };
+    st.runs = new Map(); st.print = null; st.inputStale = false; st.checkPending = false;
+    if (!payload || typeof payload !== 'object' || payload.v !== 1 || !Array.isArray(payload.runs)) return { kept: 0, dropped: 0 };
+    var kept = 0, dropped = 0;
+    payload.runs.forEach(function (r) {
+        if (!r || typeof r.behavior !== 'string' || !Array.isArray(r.bouts)) return;
+        var id = idMap && idMap.has(r.behavior) ? idMap.get(r.behavior) : r.behavior;
+        if (!behaviorById(id)) { dropped += r.bouts.length; return; }
+        var bouts = [];
+        r.bouts.forEach(function (b) {
+            var s = Array.isArray(b) ? Math.round(Number(b[2])) : NaN, e = Array.isArray(b) ? Math.round(Number(b[3])) : NaN;
+            if (!Array.isArray(b) || typeof b[0] !== 'string' || !b[0] || !(s >= 0) || !(e >= s)) { dropped++; return; }
+            bouts.push({ animal: b[0], target: typeof b[1] === 'string' ? b[1] : '', start: s, end: e,
+                         score: b[4] == null ? NaN : Number(b[4]) });
+        });
+        kept += bouts.length;
+        st.runs.set(id, normalizeRun({ behaviorId: id, source: r.source, cfg: typeof r.cfg === 'string' ? r.cfg : '',
+            fps: r.fps > 0 ? r.fps : 0, mode: r.mode, camera: r.camera, bouts: bouts }));
+    });
+    return { kept: kept, dropped: dropped };
+}
+
+/** Forget a session's predictions entirely. */
+export function resetBehaviorPredictions(session) {
+    if (session) _stores.delete(session);
+}
