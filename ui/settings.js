@@ -98,6 +98,17 @@ const ACTION_CATALOG = [
     { id: 'toggleErrors', label: 'Toggle Errors', category: 'View', binding: 'e', editable: true, dispatched: true },
     { id: 'definePlanes', label: 'Toggle Defining Plane Mode', category: 'View', binding: 'Mod+Shift+P', editable: true, dispatched: true },
 
+    // --- Behavior (ui/behavior-mode.js) ---
+    // The mode toggle is dispatched. The keys below it work only while the
+    // mode is on and are handled by the mode itself (reference entries); each
+    // behavior's own letter is set in the ethogram and listed in Hot Keys help.
+    { id: 'behaviorMode', label: 'Toggle Label Behaviors mode', category: 'Behavior', binding: 'Mod+Shift+L', editable: true, dispatched: true },
+    { id: 'behaviorFocal', label: 'Pick the animal to label (in the mode)', category: 'Behavior', binding: '1 – 9', editable: false, dispatched: false },
+    { id: 'behaviorRange', label: 'Range start / end at the playhead (in the mode)', category: 'Behavior', binding: '[ / ]', editable: false, dispatched: false },
+    { id: 'behaviorNot', label: 'Label the range "not" a behavior (in the mode)', category: 'Behavior', binding: 'Shift+behavior key', editable: false, dispatched: false },
+    { id: 'behaviorBoutNav', label: 'Previous / next bout (in the mode)', category: 'Behavior', binding: ', / .', editable: false, dispatched: false },
+    { id: 'behaviorUndo', label: 'Undo / redo a behavior edit (in the mode)', category: 'Behavior', binding: 'Mod+Z / Mod+Shift+Z', editable: false, dispatched: false },
+
     // --- Help ---
     { id: 'showHotkeys', label: 'Show keyboard shortcuts help', category: 'Help', binding: '?', editable: true, dispatched: true },
 ];

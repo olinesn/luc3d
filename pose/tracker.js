@@ -44,6 +44,7 @@ import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary
 import { collapseTimeline } from '../ui/timeline-controller.js';
 import { collapseViewport3D } from '../ui/panel-visibility.js';
 import { noteTrackRun } from './run-state.js';
+import { confirmRetrackWithBehaviorLabels } from '../ui/behavior-confirm.js';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1533,6 +1534,10 @@ async function runTrackingPass(range) {
     if (!isRange && !numAnimalsAnswered(session)) {
         if (!(await askTrackSetup(session, human, true))) return bail;
     }
+    // Behavior labels follow identity NAMES, and a tracking pass hands names
+    // out afresh, so a labelled animal may come back under another one. Asked
+    // only when the session has labels.
+    if (!(await confirmRetrackWithBehaviorLabels(session, human))) return bail;
 
     // How long tracking took, for the summary box: from here (after the animal-count
     // dialog, so the user's typing is not counted) to the end of the identity pass.

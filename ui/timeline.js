@@ -37,6 +37,9 @@ function _parseFrameIdentityKey(key) {
     return { frameIdx: frameIdx, camName: camName, trackIdx: trackIdx };
 }
 
+/** The gutter name of the synthetic group the behavior rows sit in. */
+export var BEHAVIOR_GROUP_NAME = 'Behavior';
+
 // ============================================================================
 // Timeline class
 // ============================================================================
@@ -77,6 +80,12 @@ export class Timeline {
 
         /** @type {Function|null} */
         this._onRangeSelect = options.onRangeSelect || null;
+        // Behavior rows (ui/behavior-timeline.js): a function(session) returning
+        // [{animal, segments:[{start,end,color,alpha,lane}], lanes}] or null.
+        this._behaviorRowsProvider = typeof options.behaviorRows === 'function' ? options.behaviorRows : null;
+        // The behavior row a Shift+drag started on (its animal), handed to
+        // `onRangeSelect` so the range can be labelled for that animal.
+        this._rangeRowAnimal = null;
 
         /** @type {Function|null} */
         this._onDragEnd = options.onDragEnd || null;
@@ -1458,6 +1467,8 @@ export class Timeline {
         // hidden Sets. Runs unconditionally (no-op when all sets are
         // empty) and BEFORE `_finalizeTreeGrouping` so the tree roles
         // and camera groups reflect the filtered row list.
+        this._appendBehaviorRows(session);
+
         this._applyVisibilityFilter(session);
 
         // --- Group rows by camera and finalize tree roles + label strings.
@@ -1547,7 +1558,7 @@ export class Timeline {
                 // Real row — track its existence + apply track/identity hide.
                 hadReal = true;
                 var name = row.trackName;
-                if (row._isIdentity) {
+                if (row._isIdentity || row._isBehavior) {
                     if (hIds.has(name)) continue;
                 } else if (row._isTrack) {
                     if (hTracks.has(name)) continue;
@@ -2192,6 +2203,11 @@ export class Timeline {
                 continue;
             }
 
+            if (track._isBehavior) {
+                this._drawBehaviorSegments(ctx, track, rowY);
+                continue;
+            }
+
             // Draw segments. Accumulate every segment rect into a single path
             // and fill once at 0.7 alpha. A single fill paints each pixel only
             // once, so segments widened by the min-width floor (long videos,
@@ -2699,6 +2715,8 @@ export class Timeline {
         if (e.shiftKey) {
             // Range selection start
             this._isRangeSelecting = true;
+            var rowAt = this._rowAtY(y);
+            this._rangeRowAnimal = rowAt && rowAt._isBehavior ? rowAt.trackName : null;
             const frame = this._clampFrame(this._xToFrame(x));
             this._rangeStart = frame;
             this._rangeEnd = frame;
@@ -2811,7 +2829,7 @@ export class Timeline {
             if (this._rangeStart != null && this._rangeEnd != null && this._onRangeSelect) {
                 const s = Math.min(this._rangeStart, this._rangeEnd);
                 const e2 = Math.max(this._rangeStart, this._rangeEnd);
-                this._onRangeSelect(s, e2);
+                this._onRangeSelect(s, e2, { animal: this._rangeRowAnimal });
             }
             return;
         }
@@ -3071,6 +3089,113 @@ export class Timeline {
             if (row._trackColored) row.color = getTrackColor(row.trackIdx, on);
         }
         this.redraw();
+    }
+
+    // -----------------------------------------------------------------------
+    // Behavior rows
+    // -----------------------------------------------------------------------
+
+    /**
+     * Supply the behavior rows (ui/behavior-timeline.js). They are a synthetic
+     * "Behavior" group after the track / identity rows, one row per animal,
+     * hidden with their identity, drawn with each segment's own color.
+     * @param {function(Session): Array|null} fn
+     */
+    setBehaviorRowsProvider(fn) {
+        this._behaviorRowsProvider = typeof fn === 'function' ? fn : null;
+    }
+
+    /** @private */
+    _appendBehaviorRows(session) {
+        if (!this._behaviorRowsProvider || !session) return;
+        var rows = this._behaviorRowsProvider(session) || [];
+        for (var i = 0; i < rows.length; i++) {
+            this._trackSegments.push({
+                trackIdx: -1,
+                cameraName: BEHAVIOR_GROUP_NAME,
+                color: rows[i].color || null,
+                segments: rows[i].segments || [],
+                lanes: rows[i].lanes || 1,
+                trackName: rows[i].animal,
+                treeRole: 'middle',
+                _isBehavior: true,
+            });
+            this._trackNames.push('');
+        }
+    }
+
+    /**
+     * Repaint the behavior rows after a label edit, without walking the
+     * session's frames: when the same animals' rows are showing, only their
+     * segments are swapped in. A change in WHICH rows show (the first behavior
+     * labelled, an identity added) takes the full rebuild.
+     */
+    refreshBehaviorRows() {
+        var session = this._session;
+        if (!session) return;
+        var rows = this._behaviorRowsProvider ? (this._behaviorRowsProvider(session) || []) : [];
+        var hIds = session._hiddenIdentities;
+        var visible = rows.filter(function (r) { return !(hIds && hIds.has(r.animal)); });
+        var current = this._trackSegments.filter(function (r) { return r._isBehavior; });
+        var same = current.length === visible.length && current.every(function (r, i) { return r.trackName === visible[i].animal; });
+        if (!same) {
+            this.refreshTracks(session);
+            return;
+        }
+        for (var i = 0; i < current.length; i++) {
+            current[i].segments = visible[i].segments || [];
+            current[i].lanes = visible[i].lanes || 1;
+        }
+        this._requestRedraw();
+    }
+
+    /**
+     * One behavior row: each segment in its own color and alpha, in its lane
+     * (a row showing several behaviors stacks them as thin lanes). Same
+     * minimum-width rule as the track bars, one fill per color.
+     * @private
+     */
+    _drawBehaviorSegments(ctx, track, rowY) {
+        var lanes = Math.max(1, track.lanes || 1);
+        var laneH = this.TRACK_ROW_HEIGHT / lanes;
+        var byStyle = new Map();
+        for (var s = 0; s < track.segments.length; s++) {
+            var seg = track.segments[s];
+            var rect = this._computeSegmentDrawRect(seg);
+            if (!rect) continue;
+            var key = (seg.color || '#888888') + '|' + (seg.alpha != null ? seg.alpha : 0.85);
+            var list = byStyle.get(key);
+            if (!list) { list = []; byStyle.set(key, list); }
+            var lane = Math.min(lanes - 1, Math.max(0, seg.lane || 0));
+            list.push([rect.x, rowY + lane * laneH, rect.width, Math.max(1, laneH - (lanes > 1 ? 0.5 : 0))]);
+        }
+        byStyle.forEach(function (rects, key) {
+            var bar = key.indexOf('|');
+            ctx.fillStyle = key.slice(0, bar);
+            ctx.globalAlpha = parseFloat(key.slice(bar + 1));
+            ctx.beginPath();
+            for (var r = 0; r < rects.length; r++) ctx.rect(rects[r][0], rects[r][1], rects[r][2], rects[r][3]);
+            ctx.fill();
+        });
+        ctx.globalAlpha = 1.0;
+    }
+
+    /**
+     * The row under canvas y, or null (same row geometry as `_drawTrackBars`).
+     * @private
+     */
+    _rowAtY(y) {
+        var layout = this._layout;
+        if (!layout || !layout.showTracks) return null;
+        var cumY = layout.trackAreaTop, prevCam = null;
+        for (var i = 0; i < this._trackSegments.length; i++) {
+            var row = this._trackSegments[i];
+            if (prevCam != null && row.cameraName !== prevCam) cumY += this.VIEW_GROUP_GAP;
+            if (y >= cumY && y < cumY + this.TRACK_ROW_HEIGHT + this.TRACK_ROW_GAP) return row;
+            cumY += this.TRACK_ROW_HEIGHT + this.TRACK_ROW_GAP;
+            prevCam = row.cameraName;
+        }
+        return null;
     }
 
     /**

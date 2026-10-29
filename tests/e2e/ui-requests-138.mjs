@@ -54,7 +54,7 @@ try {
     const bar = await page.evaluate(() => [...document.querySelectorAll('.menu-bar > .menu-item')]
         .map(el => ({ text: el.firstChild.textContent.trim(), id: el.id, left: el.getBoundingClientRect().left })));
     const names = bar.map(b => b.text);
-    check(JSON.stringify(names) === JSON.stringify(['File', 'Edit', 'Calibrate', 'Tracks', 'View', 'Hot Keys', 'Help', 'Docs', 'Settings']),
+    check(JSON.stringify(names) === JSON.stringify(['File', 'Edit', 'Calibrate', 'Tracks', 'Behavior', 'View', 'Hot Keys', 'Help', 'Docs', 'Settings']),
         'menu bar reads ' + names.join(' | '));
     const help = bar.find(b => b.text === 'Help'), hot = bar.find(b => b.text === 'Hot Keys');
     const docs = bar.find(b => b.text === 'Docs');

@@ -80,14 +80,15 @@ Loaded via `index.html` script tags / importmap (mirrored in `tests/test-runner.
 
 **Memory rule behind #185–#193 and eager-save:** the renderer's V8 heap is hard-capped near 4 GB; big per-row data must live in typed arrays (outside the cage) or be flushed incrementally — never one boxed JS array per keypoint/row.
 
-## Project state in `metadata.lucid` (Visibility + Temporal Smoothing + Define Planes)
+## Project state in `metadata.lucid` (Visibility + Temporal Smoothing + Define Planes + Behavior labels)
 
-Per-session state, written to each session's dict by exactly three modules:
+Per-session state, written to each session's dict by exactly four modules:
 - `import-export/visibility-metadata.js` (`VISIBILITY_METADATA_KEYS`): `videoBrightness`/`videoContrast`/`videoRotation`, `hiddenCameras`/`hiddenTracks`/`hiddenIdentities`, `idSwitchReview`, `numAnimals` (a count or `"auto"`; absent until asked, so a reopened session asks again; changing it marks the project dirty).
 - `import-export/smoothing-metadata.js` (`SMOOTHING_METADATA_KEYS`): `temporalSmoothing` (last run's scope + windows), written only while something is smoothed. Each smoothed group's source 3D goes with the 3D instead (`/session_data/unsmoothed_points_3d`, the `(smoothing source)` patch); readers re-mark it with `adoptSmoothingSource` once `points3d` is final.
 - `import-export/plane-metadata.js` (`PLANE_METADATA_KEYS`, mapping in DOM-free `pose/plane-serialization.js`). `planeNodes`/`planes`/`meshObjects`/`planeOrigin` are project-scoped: the same in every session, read from the first one ingested. `planePlacements` is per session and must not leak.
+- `import-export/behavior-metadata.js` (`BEHAVIOR_METADATA_KEYS`): `ethogram` (project-scoped like the plane pool; a later session maps onto it by behavior name) and `behaviorLabels` (the session's bouts). See "Behavior labels" below.
 
-Writers: `file-io.js`, `slp-streaming-write.js`, `save-load.js`. Readers: `handleLoadSlpFile`, `handleLoadProjectSlpLazy`, `handleLoadSessionFolderSingleSlp` and the `save-load.js` reader. A new setting changes only its module. A new loader that builds a Session by hand must call ALL THREE readers (visibility, smoothing, plane), or settings, smoothing and planes silently reset to defaults.
+Writers: `file-io.js`, `slp-streaming-write.js`, `save-load.js`. Readers: `handleLoadSlpFile`, `handleLoadProjectSlpLazy`, `handleLoadSessionFolderSingleSlp` and the `save-load.js` reader. A new setting changes only its module. A new loader that builds a Session by hand must call ALL FOUR readers (visibility, smoothing, plane, behavior), or settings, smoothing, planes and behavior labels silently reset to defaults.
 
 `frameIdentityMap` (one entry per grouped detection after Track All: 101 MB of JSON on an 8-camera project) is written by `import-export/frame-identity-metadata.js` as only the entries the instance groups do not imply, plus `frameIdentityMapFromGroups: true` and `frameIdentityMapDropped`; the two `.slp` readers that rebuild groups call `readFrameIdentityMetadata` AFTER doing so. Never larger than the full list (falls back to it, without the marker); the project JSON keeps the full list. `Session._derivedFrameIdentity` (save) and `stampFrameIdentitiesFromGroups` (load) must keep the same rule. Test: e2e `frame-identity-compact-roundtrip`.
 
@@ -97,11 +98,26 @@ Rules:
 - **Never write defaults.** `tests/e2e/save-golden-digest.mjs` must not move.
 - **Never touch other `metadata.lucid` keys** (keeps files SLEAP-readable).
 - **Address plane points and membership by node ID, never by pool index**, and keep the file's IDs (`adoptNode`/`adoptPlane`).
-- **Call `resetPlaneState()` before every load** (`readPlaneMetadata` only fills an empty model). Exception: the single-SLP folder loader with a project open adds a session without resetting, and reads plane 2D only if `planeMetadataConflict` finds every node and plane matching by id and name (node IDs restart at 1 in every project).
+- **Call `resetPlaneState()` and `resetBehaviorState()` before every load** (`readPlaneMetadata` only fills an empty model; the ethogram is a project-scoped singleton too). Exception: the single-SLP folder loader with a project open adds a session without resetting, and reads plane 2D only if `planeMetadataConflict` finds every node and plane matching by id and name (node IDs restart at 1 in every project).
 - **Call `markDirty()` on every plane or node mutation** (not the browser-local size sliders).
 - Global appearance prefs stay in `localStorage.visibilitySettings`, never the `.slp`.
 
 Tests: `test-visibility-metadata.js`, `test-plane-serialization.mjs`, e2e `visibility-settings-roundtrip`, `plane-persistence-roundtrip`, `reopen-folder-session-settings`.
+
+## Behavior labels (ethogram, bouts, Label Behaviors mode)
+
+Manual behavior labelling: an ethogram per project (`pose/behavior-ethogram.js`), bouts per session (`pose/behavior-labels.js`), saved by `import-export/behavior-metadata.js`, labelled from Label Behaviors mode (`ui/behavior-mode.js`), the Behavior tab (`ui/behavior-panel.js`, last tab) and the timeline (`ui/behavior-timeline.js`).
+- **Frames are the truth.** Anything in seconds converts with the session's fps; fps is not saved in the `.slp`, so labels and exports record the fps they used.
+- **Animals are identity NAMES** (ids are renumbered on reopen, like `idSwitchReview`), so every identity change must carry the bouts: `Session.swapIdentitiesInRange` does through `onIdentitySwap` (`pose/pose-data.js`; ID-switch Fix/Undo and identity reassignment), Rename Identity calls `renameAnimal`. A pass that hands names out afresh asks first on a labelled session (`confirmRetrackWithBehaviorLabels`: `runTrackingPass`, Propagate Tracks → IDs). Delete Identity keeps the bouts as orphans (reassign or delete in Summary).
+- **Unlabelled is not absent.** A bout is present or explicitly "not"; "Mark reviewed" is the only way unlabelled frames become "not".
+- **Labels live on the session (a WeakMap), never on FrameGroups** — no eviction blocker, nothing to hydrate on lazy projects. Never mutate a stored interval (undo keeps list references).
+- **Enter/leave Label Behaviors mode only via `toggleBehaviorMode`** (it closes running states). It and Defining Plane Mode exclude each other. Its capture-phase listener takes only behavior letters (Shift+letter only with a range armed), `1`–`9`, `[ ] , .` (Alt allowed: non-US layouts), `Mod+Z`/`Mod+Shift+Z` and Esc; everything else must fall through. Behavior keys are letters only (digits pick the animal).
+- **Never write defaults:** no ethogram and no bouts write neither key. A running state is saved as ending at the cursor without being stopped.
+- **A label edit never walks frames:** the timeline's Behavior rows come only from the provider and repaint via `refreshBehaviorRows()`; panel/timeline/overlay repaints go through `requestBehaviorRepaint` (one animation frame). Video chips come in as `drawFrameOverlays`' `behaviorChips` option (overlays.js stays import-free) and are browser-local on/off.
+- `switchSession` has no behavior hook (brace-walked tests inject a fixed name list); `updateBehaviorFrame` closes a left session's running states.
+- Behavior colors: `BEHAVIOR_COLORS`, held by `tests/test-track-identity-palette.mjs` §10 — change the palette, never the thresholds.
+
+Tests: `test-behavior-labels.mjs`, `test-behavior-metadata.mjs`, e2e `behavior-labelling`, `behavior-label-roundtrip`.
 
 ## Lazy projects: resident frames are a window, and eviction must be lossless
 
@@ -219,7 +235,7 @@ Tests: `tests/test-campy-session.mjs`, `tests/e2e/campy-session-folder.mjs`.
 - **Modals close on `Esc`** (remove the listener on close); mid-operation, `Esc` cancels the operation. Example: `showExport3DVideoModal` in `ui/export-modals.js`.
 - **Display taste is browser-local** (`localStorage`), never the `.slp`: section open/closed (`persistSectionState`, `ui/section-state.js`, restored once at setup, not on repaint; best-effort storage; no stored value keeps the markup default, e.g. Danger Zone collapsed), slider sizes, plane visibility toggles, warning opt-outs. `save-golden-digest.mjs` must not move.
 - **Plane-mode toolbar lock:** `applyPlaneModeToolbarLock` in `ui/plane-toolbar-lock.js`. Add a pose-annotation button to `PLANE_LOCKED_TOOLBAR_IDS`; a hover-menu wrapper of actions only also to `PLANE_LOCKED_DROPDOWN_IDS`. Visibility controls and the Animals field stay live, so the Track / Triangulate / Smooth menus (which hold settings) are never wrapper-locked: each run item in them is a `<button>` in the id list.
-- **Toolbar layout:** Sessions, then manual labelling (Instance ▾, Group ▾), then proofreading in run order (Track ▾, Triangulate ▾, Smooth ▾ = Temporal Smoothing), each kind in its own `.toolbar-group`. Keep labels short (the method and full names go in tooltips); the toolbar must fit a 1440px window (`toolbar-hover-menus.mjs` §4).
+- **Toolbar layout:** Sessions, then manual labelling (Instance ▾, Group ▾), then proofreading in run order (Track ▾, Triangulate ▾, Smooth ▾ = Temporal Smoothing), then Behavior (Label Behaviors mode), each kind in its own `.toolbar-group`. Keep labels short (the method and full names go in tooltips); the toolbar must fit a 1440px window (`toolbar-hover-menus.mjs` §4).
 - **Toolbar action menus:** Track, Triangulate and Smooth share one shape (`wireActionMenu`, `ui/ui-wiring.js`): a click on the button runs all frames; the hover menu has This frame / All frames, the action's quick settings, then Settings…. Smooth also has a Remove smoothing / Restore smoothing toggle after All frames (`#tbSmoothToggle`, in `PLANE_LOCKED_TOOLBAR_IDS`): Remove keeps what it takes off; Restore puts it back with no recompute unless the settings or any 3D changed since (`removeSmoothing` / `restoreSmoothing`, `pose/temporal-smoothing.js`), and then smooths again. Each button is blue while its step's result stands: Smooth while anything is smoothed (`ui/smoothing-button.js`); Track and Triangulate once run in this session, until re-tracking or a re-solve replaces the result (`pose/run-state.js`, `ui/run-buttons.js`; a new Triangulate path must call `noteTriangulateRun`, a new Track path `noteTrackRun`). A new action with a this-frame / all-frames choice follows it. Keyboard shortcuts and menu items for these actions are still NOT gated.
 - **Enter/leave Define Planes only via `togglePlaneMode`** (View menu and `definePlanes`, `Mod+Shift+P`), which does the unwinding.
 - **`showHotkeysHelp` stays at module scope** in `ui/ui-wiring.js` (called from both `setupMenus` and `setupUI`).

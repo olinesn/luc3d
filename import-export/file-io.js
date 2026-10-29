@@ -21,6 +21,7 @@ import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { writePlaneMetadata } from './plane-metadata.js';
 import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js';
+import { writeBehaviorMetadata } from './behavior-metadata.js';
 
 // ============================================
 // Generic file picker
@@ -2290,6 +2291,9 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     writePlaneMetadata(sioSession.metadata.lucid, session);
     // Temporal Smoothing's last run, only while something is smoothed.
     writeSmoothingMetadata(sioSession.metadata.lucid, session);
+    // The ethogram (project-scoped, in every session) and this session's
+    // behavior bouts, only when there are any.
+    writeBehaviorMetadata(sioSession.metadata.lucid, session);
     session.cameras.forEach(function (cam, i) {
         sioSession.addVideo(sioVideos[i], sioCameras[i]);
     });

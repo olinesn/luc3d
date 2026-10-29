@@ -20,6 +20,8 @@ import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 import { rebuildVideoController } from '../loading/session-loader.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { resetPlaneState } from '../import-export/plane-metadata.js';
+import { resetBehaviorState } from '../import-export/behavior-metadata.js';
+import { behaviorTimelineRows, onTimelineRangeSelect } from '../ui/behavior-timeline.js';
 import { createDemoSession } from '../demo-data.js';
 import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js';
 import { installInfoTips } from '../ui/info-tip.js';
@@ -159,6 +161,7 @@ export async function loadDemoSession() {
         // only restores into an EMPTY model, so without this the previous
         // project's planes would survive and the new one's be dropped.
         resetPlaneState();
+        resetBehaviorState();   // the ethogram, likewise project-scoped
         paneManager.clearAll();
 
         // Load videos and create view objects (no grid cells needed - dockview creates them)
@@ -1091,9 +1094,11 @@ export function setupTimeline() {
             if (hasRealVideo()) videoController.seekToFrame(frameIdx);
             else navigateToFrame(frameIdx);
         },
-        onRangeSelect: function (startFrame, endFrame) {
-            setStatus('Selected range: ' + startFrame.toLocaleString('en-US') + '–' + endFrame.toLocaleString('en-US'));
-        },
+        // Shift+drag: with an ethogram, a menu that labels the range's behavior
+        // (ui/behavior-timeline.js); without one, just the range in the status.
+        onRangeSelect: onTimelineRangeSelect,
+        // The "Behavior" row group: one row per animal, its labelled bouts.
+        behaviorRows: behaviorTimelineRows,
     }));
 
     // Populate with session data. When tracks are loaded, resize

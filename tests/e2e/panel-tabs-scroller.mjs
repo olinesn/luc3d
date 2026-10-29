@@ -82,9 +82,9 @@ try {
         };
     });
     const expected = ['tabInstances', 'tabVisibility', 'tabIdSwitches', 'tabVideos',
-        'tabCameras', 'tabSkeleton', 'tabSession'];
+        'tabCameras', 'tabSkeleton', 'tabSession', 'tabBehavior'];
     check(JSON.stringify(inventory.names) === JSON.stringify(expected),
-        `all 7 tabs are in the bar, in markup order (${inventory.names.join(', ')})`);
+        `all 8 tabs are in the bar, in markup order (${inventory.names.join(', ')})`);
     check(inventory.hidden.length === 0,
         `no tab is hidden from the bar (was: 5 of 7 demoted into "More")`);
     check(inventory.more === 0, 'no "More ▾" control survives anywhere in the DOM');
@@ -160,21 +160,21 @@ try {
     await page.waitForTimeout(80);
     const offscreen = await page.evaluate(() => {
         const bar = document.querySelector('.panel-tabs').getBoundingClientRect();
-        const t = document.querySelector('.panel-tab[data-tab="tabSession"]').getBoundingClientRect();
+        const t = document.querySelector('.panel-tab[data-tab="tabBehavior"]').getBoundingClientRect();
         return t.right > bar.right + 1;
     });
-    check(offscreen, 'with the bar at the start, the Session tab is off the right edge');
-    // `.click()` on the button is exactly what `openIdSwitchPanel` does.
+    check(offscreen, 'with the bar at the start, the last tab (Behavior) is off the right edge');
+    // `.click()` on the button is exactly what `openIdSwitchPanel` / `openBehaviorTab` do.
     await page.evaluate(() => {
-        document.querySelector('.panel-tab[data-tab="tabSession"]').click();
+        document.querySelector('.panel-tab[data-tab="tabBehavior"]').click();
     });
     await page.waitForTimeout(150);
     const nowVisible = await page.evaluate(() => {
         const bar = document.querySelector('.panel-tabs').getBoundingClientRect();
-        const t = document.querySelector('.panel-tab[data-tab="tabSession"]').getBoundingClientRect();
+        const t = document.querySelector('.panel-tab[data-tab="tabBehavior"]').getBoundingClientRect();
         return t.left >= bar.left - 1 && t.right <= bar.right + 1;
     });
-    check(await activeTab() === 'tabSession' && nowVisible,
+    check(await activeTab() === 'tabBehavior' && nowVisible,
         'selecting it from code scrolls it fully into view rather than leaving the active tab off-screen');
     const sEnd = await barState();
     check(sEnd.left && !sEnd.right,

@@ -53,6 +53,7 @@ import {
 } from './overlay-export-layout.js';
 import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
 import { fileSystemAccessHint } from './browser-hints.js';
+import { behaviorChipsAt } from './behavior-coding.js';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
 // project modules, so this adds no cycle — and going through the SAME
 // `buildVideoFilter` the live canvases use is what stops the export drifting from
@@ -1122,6 +1123,8 @@ export function showOverlayExportModal() {
         var opts = overlayOptionsFrom(settings, view.videoWidth, view.videoHeight,
             fit.boxWidth, fit.boxHeight);
         opts.unlinkedInstances = collectUnlinked(frameGroup, view.name);
+        // Behavior chips on the animals, as the live view shows them.
+        opts.behaviorChips = behaviorChipsAt(session, ofg ? ofg.frameIdx : null);
         var wantLegend = opts.showLegend;
         opts.showLegend = false;              // drawn upright, below
         octx.save();

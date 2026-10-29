@@ -1457,6 +1457,62 @@ function drawNamePill(ctx, cp, text, color, fontSize, uprightRad) {
 }
 
 /**
+ * Behavior chips: small pills in each behavior's color, in a row just above
+ * where an instance's name pill sits (anchored on its first placed node, like
+ * the name), upright in a rotated view.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {Instance[]} instances
+ * @param {Array<Array<{text:string, color:string}>>} chipLists - per instance
+ * @param {Object} options - render options (geometry, `labelSize`)
+ */
+export function drawBehaviorChips(ctx, instances, chipLists, options) {
+    options = options || {};
+    const vw = options.videoWidth, vh = options.videoHeight;
+    const cw = options.canvasWidth != null ? options.canvasWidth : ctx.canvas.width;
+    const ch = options.canvasHeight != null ? options.canvasHeight : ctx.canvas.height;
+    const toCanvas = vw != null && vh != null ? makeVideoToCanvasTransform(vw, vh, cw, ch) : null;
+    const fontSize = Math.round((options.labelSize != null ? options.labelSize : 11) * resolveLabelDisplayScale(ctx, cw, options));
+    if (!(fontSize > 0)) return;
+    const chipFont = Math.max(8, Math.round(fontSize * 0.85));
+    const pad = 3;
+    const chipH = chipFont + pad * 2;
+    const rad = uprightLabelRadians(options);
+    for (let i = 0; i < instances.length; i++) {
+        const inst = instances[i];
+        let cp = null;
+        for (let k = 0; k < inst.numNodes; k++) {
+            if (!inst.hasPoint(k)) continue;
+            cp = toCanvas ? toCanvas(inst.getX(k), inst.getY(k)) : { x: inst.getX(k), y: inst.getY(k) };
+            break;
+        }
+        if (!cp) continue;
+        beginUprightFrame(ctx, rad, cp.x, cp.y);
+        const ox = uprightOriginX(rad, cp.x), oy = uprightOriginY(rad, cp.y);
+        // The name pill's top is at oy - 2.5 * fontSize - pad (drawNamePill).
+        const top = oy - fontSize * 2.5 - pad - 2 - chipH;
+        let x = ox - pad;
+        ctx.font = 'bold ' + chipFont + 'px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        for (let c = 0; c < chipLists[i].length; c++) {
+            const chip = chipLists[i][c];
+            const w = ctx.measureText(chip.text).width + pad * 2;
+            ctx.globalAlpha = 0.9;
+            ctx.fillStyle = chip.color;
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(x, top, w, chipH, 3); else ctx.rect(x, top, w, chipH);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = '#111111';
+            ctx.fillText(chip.text, x + pad, top + chipH / 2);
+            x += w + 3;
+        }
+        ctx.restore();
+    }
+}
+
+/**
  * The identity a LINKED instance's label should name, resolved in the same two
  * steps `getGroupColor` uses so the pill's text and its color can never name
  * different animals:
@@ -2829,6 +2885,28 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             session: session,
             frameIdx: _frameIdx,
         }));
+    }
+
+    // 4c. Behavior chips: what each animal is doing on this frame, one row
+    // above its name, on every linked instance shown — in Tracks mode too,
+    // where no name is drawn. `options.behaviorChips(identityName)` returns
+    // `[{text, color}]` or null (ui/behavior-coding.js `behaviorChipsAt`).
+    if (typeof options.behaviorChips === 'function' && viewInstances && session) {
+        var chipInsts = [], chipLists = [];
+        for (let i = 0; i < viewInstances.length; i++) {
+            const inst = viewInstances[i];
+            if ((inst.type || 'user') === 'predicted' ? !showPredicted : !showUser) continue;
+            var chipIdent = resolveLabelIdentity(session, inst, instToGroup.get(inst), viewName, _frameIdx);
+            var chips = chipIdent ? options.behaviorChips(chipIdent.name) : null;
+            if (!chips || !chips.length) continue;
+            chipInsts.push(inst);
+            chipLists.push(chips);
+        }
+        if (chipInsts.length) {
+            drawBehaviorChips(ctx, chipInsts, chipLists, Object.assign({}, userRender, {
+                labelSize: (userOpts && userOpts.labelSize) || 11,
+            }));
+        }
     }
 
     // 5. Selection highlight
