@@ -96,12 +96,14 @@ export function detectorProblems(detector, catalog, social) {
 /**
  * Starting points for common behaviors. `{head}` stands for the head node's
  * name. Thresholds are in body lengths (BL) and BL/s, set for mice and rats;
- * check them against the histogram in the settings.
+ * check them against the histogram in the settings. Rearing is 0.6 BL: on
+ * real recordings 0.5 also caught heads merely raised (it was the 78th
+ * percentile of nose height on a 5-mouse arena).
  */
 export var DETECTOR_TEMPLATES = [
     { id: 'rearing', name: 'rearing', social: false, mutual: false,
       description: 'The head is high above the floor',
-      detector: { conditions: [{ feature: '{head} height · mean ±0.1 s', op: '>', value: 0.5 }], minDuration: 0.3, maxGap: 0.2 } },
+      detector: { conditions: [{ feature: '{head} height · mean ±0.1 s', op: '>', value: 0.6 }], minDuration: 0.3, maxGap: 0.2 } },
     { id: 'immobile', name: 'immobile', social: false, mutual: false,
       description: 'The body hardly moves',
       detector: { conditions: [{ feature: 'centroid speed · mean ±0.3 s', op: '<', value: 0.1 }], minDuration: 1, maxGap: 0.2 } },

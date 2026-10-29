@@ -70,6 +70,7 @@ console.log('\n-- 1. detectors --');
         'templates: rearing, immobile, locomotion, contact, nose-to-nose, anogenital approach, following');
     const rear = instantiateTemplate(DETECTOR_TEMPLATES.find(t => t.id === 'rearing'), { head: 'Nose' });
     check(rear.detector && rear.detector.conditions[0].feature === 'Nose height · mean ±0.1 s', 'the rearing template takes the head node');
+    check(rear.detector.conditions[0].value === 0.6, 'rearing: the head more than 0.6 BL above the floor (0.5 caught raised heads on real recordings)');
     check(/head node/.test(instantiateTemplate(DETECTOR_TEMPLATES.find(t => t.id === 'rearing'), {}).error), 'without a head it says so');
     const every = DETECTOR_TEMPLATES.every(t => {
         const r = instantiateTemplate(t, { head: 'Nose' });
