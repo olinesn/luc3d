@@ -18,7 +18,8 @@
  *      missing, and window statistics use what is left;
  *   7. the features mean what they say (a rear's head height, a walking
  *      speed, a turn, a target straight ahead and getting closer);
- *   8. node roles, default exclusions, body lengths and the floor fit.
+ *   8. node roles, default exclusions, body lengths and the floor fit (its
+ *      tilt from the level bodies, which a tall cage's spread would get wrong).
  *
  * ESM, picked up by `tests/run-mjs-tests.mjs`.
  */
@@ -256,7 +257,9 @@ console.log('\n-- 5. invariance under world rotation and translation --');
     check(Math.max(...bl) < 1e-5, 'body lengths unchanged');
 
     const allNodes = NODES.map((n, i) => i);
-    const fitA = fitFloor(world, allNodes), fitB = fitFloor(moved, allNodes);
+    const roles = { head: 0, tailBase: 4 };
+    const fitA = fitFloor(world, allNodes, roles), fitB = fitFloor(moved, allNodes, roles);
+    check(fitA.tiltFrom === 'body axes' && fitB.tiltFrom === 'body axes', 'the floor takes its tilt from the level bodies');
     check(fitA && fitB, 'the floor is fitted in both worlds');
     const upB = R.map(row => row[0] * fitA.up[0] + row[1] * fitA.up[1] + row[2] * fitA.up[2]);
     check(Math.abs(upB[0] * fitB.up[0] + upB[1] * fitB.up[1] + upB[2] * fitB.up[2] - 1) < 1e-6, 'the fitted up direction moves with the world');
@@ -351,6 +354,33 @@ console.log('\n-- 8. body, floor --');
     check(bl.length === 3 && bl.every(v => Math.abs(v - 85) < 2), 'body lengths per animal');
     const flat = { mode: '3d', dim: 3, numFrames: 5, nodeNames: NODES, edges: EDGES, animals: ['x'], data: [new Float32Array(5 * 7 * 3).fill(NaN)] };
     check(fitFloor(flat, [0, 1, 2, 3, 4, 5, 6]) === null, 'no points: no fitted floor');
+    // A tall, narrow cage: three animals walking small circles on shelves at
+    // 0, 120 and 240 mm over one footprint. The points spread more up than
+    // across, so their least-spread direction is horizontal; the bodies stay level.
+    const T = 1500, N = NODES.length;
+    const shelves = [0, 1, 2].map((a) => {
+        const arr = new Float32Array(T * N * 3);
+        for (let t = 0; t < T; t++) {
+            const ang = (0.6 + 0.2 * a) * t / FPS + a, hd = ang + Math.PI / 2;
+            const cx = 20 * a + 30 * Math.cos(ang), cy = 30 * Math.sin(ang);
+            for (let n = 0; n < N; n++) {
+                const o = (t * N + n) * 3;
+                arr[o] = cx + ALONG[n] * Math.cos(hd) + gauss(); arr[o + 1] = cy + ALONG[n] * Math.sin(hd) + gauss();
+                arr[o + 2] = 120 * a + HEIGHT[n] + gauss() * 0.5;
+            }
+        }
+        return arr;
+    });
+    const tall = { mode: '3d', dim: 3, numFrames: T, nodeNames: NODES, edges: EDGES, animals: ['a', 'b', 'c'], data: shelves };
+    const cams = { cameraCenters: [[0, 0, 1500], [600, 0, 900], [-600, 0, 900], [0, 600, 900]] };
+    const bySpread = fitFloor(tall, [0, 1, 2, 3, 4, 5, 6], cams);
+    const byBodies = fitFloor(tall, [0, 1, 2, 3, 4, 5, 6], Object.assign({ head: 0, tailBase: 4 }, cams));
+    check(bySpread.tiltFrom === 'spread' && Math.abs(bySpread.up[2]) < 0.5,
+        'without node roles the spread alone tilts it wrong in a tall cage (up · z = ' + bySpread.up[2].toFixed(2) + ')');
+    check(byBodies.tiltFrom === 'body axes' && byBodies.up[2] > 0.99 && byBodies.confidence === 'ok',
+        'with them, the level bodies give the true floor (up · z = ' + byBodies.up[2].toFixed(4) + ')');
+    const lowest = byBodies.origin[0] * byBodies.up[0] + byBodies.origin[1] * byBodies.up[1] + byBodies.origin[2] * byBodies.up[2];
+    check(Math.abs(lowest) < 20, 'on the bottom shelf, not the ones at 120 or 240 mm (' + lowest.toFixed(1) + ' mm)');
 }
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

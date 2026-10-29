@@ -37,7 +37,7 @@ import {
     behaviorUi, codeBehavior, focalAnimal, setFocalAnimal, sessionAnimals, animalColor, selectedBehaviorId,
     selectBehavior, pickBehaviorTarget, cancelPendingTarget, clearArmedRange, armedRange, registerBehaviorRepaint,
     requestBehaviorRepaint, setBehaviorNavigator, goToBehaviorFrame, BOUT_LEAD_IN_SECONDS,
-    behaviorBoxesVisible, setBehaviorBoxesVisible, pairGlyph, openBehaviorTab,
+    behaviorBoxesVisible, setBehaviorBoxesVisible, pairGlyph, openBehaviorTab, setReviewFocus,
 } from './behavior-coding.js';
 import { toggleBehaviorMode, exitBehaviorMode, isBehaviorModeActive } from './behavior-mode.js';
 import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-modal.js';
@@ -342,6 +342,7 @@ function renderPredictions(session) {
         '</div>';
     var withDetector = behaviors().filter(function (b) { return !!b.detector; }).length;
     if (!hasPredictions(session)) {
+        setReviewFocus(null);
         html += '<p class="table-empty">' + (withDetector
             ? 'Nothing detected yet: Detect all frames, then review the bouts here.'
             : 'No detectors yet: Settings… gives a behavior one (templates for rearing, contact, following…).') + '</p>';
@@ -370,6 +371,10 @@ function renderPredictions(session) {
         '<label title="Hide bouts already accepted or rejected"><input type="checkbox" data-review="unreviewed"' + (review.unreviewedOnly ? ' checked' : '') + '> To review only</label>' +
         '</div>';
     var queue = reviewQueue(session, { order: review.order, behaviorId: review.behavior, animal: review.animal, unreviewedOnly: review.unreviewedOnly });
+    // The bout boxed on the video (set when one is selected) goes once it is
+    // no longer predicted (detected again, cleared).
+    var rf = behaviorUi().review;
+    if (rf && (rf.session !== session || !all.some(function (p) { return predKey(p) === predKey(rf); }))) setReviewFocus(null);
     html += '<div class="behavior-tools">' +
         '<button class="panel-btn" data-act="review-next"' + (queue.length ? '' : ' disabled') + ' title="Go to the next bout in this list">Next ▸</button>' +
         '<button class="panel-btn" data-act="accept-range"' + (queue.length ? '' : ' disabled') +
@@ -417,7 +422,7 @@ function landOn(p) {
     goToBehaviorFrame(Math.max(0, p.start - Math.round(BOUT_LEAD_IN_SECONDS * fps())));
 }
 
-/** Select row `i` of the list (wrapping), and go to its bout. */
+/** Select row `i` of the list (wrapping), box its bout on the video, and go to it. */
 function selectReviewRow(host, i) {
     var rows = Array.from(host.querySelectorAll('.behavior-pred'));
     if (!rows.length) return;
@@ -425,6 +430,7 @@ function selectReviewRow(host, i) {
     review.selectedKey = row.dataset.pkey;
     review.selectedIndex = rows.indexOf(row);
     var p = findPrediction(review.selectedKey);
+    setReviewFocus(state.session, p);
     renderPredictions(state.session);
     if (p) landOn(p);
 }
@@ -497,6 +503,7 @@ function wirePredictions(host) {
             review.selectedIndex = Array.from(host.querySelectorAll('.behavior-pred')).indexOf(row);
             renderPredictions(session);
         }
+        setReviewFocus(session, p);
         landOn(p);
     });
     host.addEventListener('change', function (e) {

@@ -101,8 +101,12 @@ console.log('\n-- 3. scores to bouts --');
     check(eq(scoresToBouts(on('0011100111000'), { maxGapFrames: 2 }).map(b => [b[0], b[1]]), [[2, 9]]), 'a gap of 2 joined (maxGap 2)');
     check(eq(scoresToBouts(on('0011?00111000'), { maxGapFrames: 3 }).map(b => [b[0], b[1]]), [[2, 9]]), 'unscored frames count as gap');
     check(eq(scoresToBouts(on('0100111110001'), { minFrames: 3 }).map(b => [b[0], b[1]]), [[4, 8]]), 'bouts shorter than minFrames dropped');
-    check(eq(scoresToBouts(on('0110100000'), { minFrames: 4, maxGapFrames: 1 }).map(b => [b[0], b[1]]), [[1, 4]]),
-        'joined first, then dropped: two short runs become one long enough');
+    check(eq(scoresToBouts(on('0111011100'), { minFrames: 6, maxGapFrames: 1 }).map(b => [b[0], b[1]]), [[1, 7]]),
+        'joined first: two runs of 3 make one bout of 6 detected frames (each alone too short)');
+    check(scoresToBouts(on('0111011100'), { minFrames: 7, maxGapFrames: 1 }).length === 0,
+        'the gap it bridged does not count toward the minimum (6 detected frames < 7, though it spans 7)');
+    check(scoresToBouts(on('01000001000001'), { minFrames: 4, maxGapFrames: 6 }).length === 0,
+        'scattered one-frame detections never add up to a bout');
     const peak = scoresToBouts(Float32Array.from([0.1, 0.6, 0.9, 0.7, 0.2]), { point: true });
     check(eq(peak, [[2, 2, Math.fround(0.9)]]), 'a point behavior: one frame, at the peak');
     const sc = scoresToBouts(Float32Array.from([0.6, 0.8, 1.0]));

@@ -11,9 +11,10 @@
  *     the predictions stand; This frame fills the Predictions section's
  *     readout (conditions against thresholds); Defining Plane Mode locks the
  *     run items.
- *  3. Review: the Predictions section lists the bouts; Accept labels one
- *     present (source "a") and Reject labels one "not", each one undo step;
- *     Accept all in range asks first.
+ *  3. Review: the Predictions section lists the bouts; the selected one is
+ *     boxed on the video (dashed, "rear?") while the playhead is in it; Accept
+ *     labels one present (source "a") and Reject labels one "not", each one
+ *     undo step; Accept all in range asks first.
  *  4. Stale: moving a pose (an edit that marks the project dirty) makes the
  *     predictions stale — banner, button no longer blue; detecting again
  *     clears it. Changing a detector makes that behavior stale.
@@ -163,6 +164,27 @@ try {
     const listed = await page.$$eval('.behavior-pred', rows => rows.length);
     check(listed === 2, 'the Predictions section lists both predicted bouts');
     await page.click('.behavior-pred[data-pkey^="b1|"] .behavior-bout-main');
+    const focusBox = await page.evaluate(async () => {
+        const C = await import('/ui/behavior-coding.js');
+        const s = (await import('/ui/app-state.js')).state.session;
+        const inside = C.behaviorBoxesAt(s, 550, { live: true });
+        const outside = C.behaviorBoxesAt(s, 700, { live: true });
+        const exported = C.behaviorBoxesAt(s, 550, {});
+        const it = inside && inside.items.find(i => i.review);
+        return { animals: it && it.animals, text: it && it.parts.map(p => p[0]).join(''), dashed: it && it.dashed,
+                 outside: !!(outside && outside.items.some(i => i.review)), exported: !!(exported && exported.items.some(i => i.review)) };
+    });
+    check(eq(focusBox.animals, ['id_0']) && focusBox.dashed && /^rear\? · id_0 · \d+%$/.test(focusBox.text),
+        'the selected bout is boxed on the video, dashed: "' + focusBox.text + '"');
+    check(!focusBox.outside && !focusBox.exported, 'only while the playhead is in it, and never in an exported video');
+    const kept = await page.evaluate(async () => {
+        const C = await import('/ui/behavior-coding.js');
+        const P = await import('/ui/behavior-panel.js');
+        P.refreshBehaviorPanel();
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        return !!C.behaviorUi().review;
+    });
+    check(kept, 'a repaint of the panel keeps it');
     await page.click('.behavior-pred[data-pkey^="b1|"] [data-act="accept"]');
     const afterAccept = await page.evaluate(async () => {
         const L = await import('/pose/behavior-labels.js');

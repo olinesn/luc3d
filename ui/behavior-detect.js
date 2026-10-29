@@ -135,13 +135,14 @@ export function resolveFloor(input, body, settings) {
         if (want === 'origin') warning = 'No origin is set: using the fitted floor';
     }
     var all = input.nodeNames.map(function (nm, i) { return i; });
-    var fitted = fitFloor(input, all, { cameraCenters: cameraCenters(state.session) });
+    var fitted = fitFloor(input, all, { cameraCenters: cameraCenters(state.session), head: body.roles.head, tailBase: body.roles.tailBase });
     if (!fitted) return { floor: null, source: 'none', label: 'No floor: too few 3D points to fit one', warning: warning };
     var why = { cameras: 'the cameras are above it', heights: 'the bodies rise from it', flatness: 'it is the flatter side', 'one envelope': 'only one side could be fitted' }[fitted.upFrom] || '';
     return {
         floor: fitted, source: 'fit',
-        label: 'Fitted to the animals’ lowest points' + (why ? ' (up: ' + why + ')' : ''),
-        warning: warning || (fitted.confidence === 'low' ? 'The fitted floor is uncertain (the animals barely moved): choose a plane or set an origin' : ''),
+        label: 'Fitted to the animals’ lowest points, level with ' + (fitted.tiltFrom === 'body axes' ? 'their bodies' : 'their spread') +
+            (why ? ' (up: ' + why + ')' : ''),
+        warning: warning || (fitted.confidence === 'low' ? 'The fitted floor is uncertain: choose a plane or set an origin' : ''),
     };
 }
 

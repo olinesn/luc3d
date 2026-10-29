@@ -4,10 +4,13 @@
 //
 // A frame is detected when its score is at least the threshold. Detected runs
 // separated by at most `maxGapFrames` undetected (or unscored) frames are
-// joined first, then runs shorter than `minFrames` are dropped — the order
-// that keeps a bout with one noisy frame in the middle whole. A bout's score
-// is the mean of its frames' finite scores. A POINT behavior keeps one frame
-// per bout: the one where its score peaks.
+// joined first — so a bout with one noisy frame in the middle stays whole —
+// and a joined bout is kept only when its DETECTED frames number at least
+// `minFrames`: the gaps it bridged do not count, so scattered one-frame
+// detections never add up to a bout (on real recordings they made bouts that
+// were mostly undetected). A bout's score is the mean of its frames' finite
+// scores, the bridged ones included. A POINT behavior keeps one frame per
+// bout: the one where its score peaks.
 //
 // Pure and import-free (the behavior worker loads it).
 //
@@ -17,7 +20,7 @@
  * Bouts from per-frame scores.
  * @param {ArrayLike<number>} scores NaN = unscored
  * @param {{threshold?:number, minFrames?:number, maxGapFrames?:number, point?:boolean, start?:number, end?:number}} [opts]
- *   threshold default 0.5; minFrames default 1; maxGapFrames default 0;
+ *   threshold default 0.5; minFrames (detected frames a bout needs) default 1; maxGapFrames default 0;
  *   [start, end) limits the frames read (default all)
  * @returns {Array<number[]>} `[start, end (inclusive), score]`, sorted
  */
@@ -38,17 +41,18 @@ export function scoresToBouts(scores, opts) {
         if (!on && runStart >= 0) { runs.push([runStart, t - 1]); runStart = -1; }
     }
     if (runStart >= 0) runs.push([runStart, e0 - 1]);
-    // Join across short gaps.
+    // Join across short gaps, counting the detected frames each bout holds.
     var joined = [];
     for (var i = 0; i < runs.length; i++) {
         var last = joined[joined.length - 1];
-        if (last && runs[i][0] - last[1] - 1 <= maxGap) last[1] = runs[i][1];
-        else joined.push([runs[i][0], runs[i][1]]);
+        var len = runs[i][1] - runs[i][0] + 1;
+        if (last && runs[i][0] - last[1] - 1 <= maxGap) { last[1] = runs[i][1]; last[2] += len; }
+        else joined.push([runs[i][0], runs[i][1], len]);
     }
     var out = [];
     for (var j = 0; j < joined.length; j++) {
         var s = joined[j][0], e = joined[j][1];
-        if (e - s + 1 < minFrames) continue;
+        if (joined[j][2] < minFrames) continue;
         var sum = 0, n = 0, peak = s, best = -Infinity;
         for (var f = s; f <= e; f++) {
             var x = scores[f];

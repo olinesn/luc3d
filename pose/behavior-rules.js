@@ -6,7 +6,7 @@
 // the ethogram only when set):
 //
 //   { conditions: [{ feature: 'Nose height · mean ±0.1 s', op: '>', value: 0.5 }, …],
-//     minDuration: 0.3,   // seconds; shorter bouts are dropped
+//     minDuration: 0.3,   // seconds of DETECTED frames a bout needs
 //     maxGap: 0.2 }       // seconds; detected runs this close are joined first
 //
 // Features are named as pose/behavior-features.js names them. A social

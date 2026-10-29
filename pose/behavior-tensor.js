@@ -448,6 +448,44 @@ export function floorFrame(origin, up, extra) {
     return Object.assign({ origin: origin.slice(0, 3), up: u, e1: e1, e2: e2 }, extra || {});
 }
 
+/**
+ * The body-axis cue for up: the second moments of the unit head → tail base
+ * vectors (sampled frames, every animal); level bodies make their smallest
+ * eigenvector vertical. `ratio` is the smallest eigenvalue over the middle
+ * one (small = clear).
+ * @returns {{normal:number[], ratio:number, samples:number}|null}
+ */
+function bodyAxisNormal(input, head, tail) {
+    if (!(head >= 0) || !(tail >= 0) || head === tail || input.dim !== 3) return null;
+    var N = input.nodeNames.length, T = input.numFrames;
+    var step = Math.max(1, Math.floor(T * input.data.length / 60000));
+    var M = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], n = 0, k = 0;
+    input.data.forEach(function (arr) {
+        for (var t = 0; t < T; t++, k++) {
+            if (k % step) continue;
+            var h = (t * N + head) * 3, b = (t * N + tail) * 3;
+            var u = [arr[h] - arr[b], arr[h + 1] - arr[b + 1], arr[h + 2] - arr[b + 2]];
+            var len = Math.sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+            if (!(len > 0)) continue;
+            for (var r = 0; r < 3; r++) for (var c = 0; c < 3; c++) M[r][c] += u[r] * u[c] / (len * len);
+            n++;
+        }
+    });
+    if (n < 30) return null;
+    M = M.map(function (row) { return row.map(function (v) { return v / n; }); });
+    var eig = jacobiEigen(M);
+    var idx = [0, 1, 2].sort(function (a, b) { return eig.eigenvalues[a] - eig.eigenvalues[b]; });
+    var normal = norm(eig.eigenvectors[idx[0]]);
+    if (!normal) return null;
+    return { normal: normal, ratio: eig.eigenvalues[idx[0]] / Math.max(1e-30, eig.eigenvalues[idx[1]]), samples: n };
+}
+
+/**
+ * The body-axis cue is used when its smallest eigenvalue is at most this
+ * share of the middle one (bodies level most of the time; rearing raises it).
+ */
+var BODY_AXIS_MAX_RATIO = 0.6;
+
 /** Sampled used-node points of every animal (up to `max`), as a flat Float64Array. */
 function samplePoints(input, used, max) {
     var N = input.nodeNames.length, T = input.numFrames;
@@ -539,8 +577,14 @@ function fitEnvelope(cells) {
  * — all of them, excluded tail nodes included: the lowest points are often the
  * tail and the paws, which are what touch the floor.
  *
- * The animals move about on the floor, so their points spread most along it:
- * the direction of least spread is roughly up (PCA). The points' extent along
+ * Its tilt comes first from the BODIES: quadrupeds spend most of their time
+ * roughly level, so the direction most perpendicular to their head–tail base
+ * axes is up, whatever the arena's shape (`opts.head` / `opts.tailBase`; the
+ * smallest eigenvector of the axes' second moments, used when clearly the
+ * smallest). Without both roles, or when the bodies point every way, it falls
+ * back to the points' least spread (PCA) — which a small or tall cage can
+ * fool: on a proofread SLAP home cage, where the mice spread about as much
+ * up as across, it put "up" 75° off. The points' extent along
  * the other two is cut into a grid, and in each cell the 5th percentile of
  * height on each side gives two envelopes, each fitted with a plane
  * (trimmed least squares). The floor is the flatter one — the lowest points
@@ -555,9 +599,9 @@ function fitEnvelope(cells) {
  *
  * @param {Object} input from `collectBehaviorInput` (3D)
  * @param {number[]} nodes node indices to read
- * @param {{cameraCenters?: number[][]}} [opts]
+ * @param {{cameraCenters?: number[][], head?: number, tailBase?: number}} [opts]
  * @returns {{origin, up, e1, e2, source:'fit', confidence:'ok'|'low', points:number,
- *            upFrom:'cameras'|'heights'|'flatness'|'one envelope'}|null}
+ *            tiltFrom:'body axes'|'spread', upFrom:'cameras'|'heights'|'flatness'|'one envelope'}|null}
  */
 export function fitFloor(input, nodes, opts) {
     if (input.mode !== '3d') return null;
@@ -577,7 +621,16 @@ export function fitFloor(input, nodes, opts) {
     C = C.map(function (row) { return row.map(function (v) { return v / tr; }); });
     var eig = jacobiEigen(C);
     var idx = [0, 1, 2].sort(function (a, b) { return eig.eigenvalues[a] - eig.eigenvalues[b]; });
-    var n0 = norm(eig.eigenvectors[idx[0]]), e1 = norm(eig.eigenvectors[idx[2]]);
+    var n0 = norm(eig.eigenvectors[idx[0]]);
+    var spreadRatio = eig.eigenvalues[idx[0]] / Math.max(1e-30, eig.eigenvalues[idx[1]]);
+    var tiltFrom = 'spread';
+    var axes = bodyAxisNormal(input, opts && opts.head, opts && opts.tailBase);
+    if (axes && axes.ratio < BODY_AXIS_MAX_RATIO) { n0 = axes.normal; tiltFrom = 'body axes'; }
+    // The grid's first axis: the points' widest direction along the floor.
+    var wide = eig.eigenvectors[idx[2]];
+    var dw = wide[0] * n0[0] + wide[1] * n0[1] + wide[2] * n0[2];
+    var e1 = norm([wide[0] - dw * n0[0], wide[1] - dw * n0[1], wide[2] - dw * n0[2]]);
+    if (!e1) { var mid = eig.eigenvectors[idx[1]], dm = mid[0] * n0[0] + mid[1] * n0[1] + mid[2] * n0[2]; e1 = norm([mid[0] - dm * n0[0], mid[1] - dm * n0[1], mid[2] - dm * n0[2]]); }
     if (!n0 || !e1) return null;
     var e2 = cross(n0, e1);
     var A = new Float64Array(n), B = new Float64Array(n), H = new Float64Array(n);
@@ -641,9 +694,9 @@ export function fitFloor(input, nodes, opts) {
         sd * n0[2] - f.alpha * e1[2] - f.beta * e2[2]];
     var ww = dot(w, w);
     var origin = [mu[0] + f.gamma / ww * w[0], mu[1] + f.gamma / ww * w[1], mu[2] + f.gamma / ww * w[2]];
-    var spread = Math.sqrt(eig.eigenvalues[idx[1]] / Math.max(1e-30, eig.eigenvalues[idx[0]]));
-    var confidence = pick.cells >= 6 && spread >= 2 ? 'ok' : 'low';
-    return floorFrame(origin, w, { source: 'fit', confidence: confidence, points: n, upFrom: why });
+    var clear = tiltFrom === 'body axes' || spreadRatio <= 0.25;
+    var confidence = pick.cells >= 6 && clear ? 'ok' : 'low';
+    return floorFrame(origin, w, { source: 'fit', confidence: confidence, points: n, upFrom: why, tiltFrom: tiltFrom });
 }
 
 // ----------------------------------------------------------------------------

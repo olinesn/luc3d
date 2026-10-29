@@ -2673,8 +2673,11 @@ for head–paw band power), `bodyLengths` (median head–tail base distance, ≤
 sampled frames). Floor: `floorFrame(origin, up)` builds the horizontal axes from
 `up` alone (no feature may read them); `floorFromPlane(fit)` turns the normal
 toward the animals; `floorFromOrigin(frame)` (+Z up); `fitFloor(input, nodes,
-{cameraCenters})` fits the animals' lower envelope — PCA's least-spread
-direction, a grid over the other two, per cell the 5th height percentile on
+{cameraCenters, head, tailBase})` fits the animals' lower envelope — its tilt
+from the level BODIES (the smallest eigenvector of the head → tail base axes'
+second moments, when clearly smallest: `tiltFrom: 'body axes'`), else the
+points' least spread (PCA, which a small or tall cage can fool: 75° off on a
+SLAP home cage), a grid over the other two, per cell the 5th height percentile on
 each side, trimmed least-squares planes — and picks the floor side by the
 cameras (≥ 70% on one side), else the heights' skew (bodies rise from the floor),
 else the flatter envelope; all from data, so it moves with the world.
@@ -2734,8 +2737,10 @@ NaN masking, meaning).
 **Purpose.** Per-frame scores to bouts, for every prediction source:
 `scoresToBouts(scores, {threshold, minFrames, maxGapFrames, point})` — detected
 runs (score ≥ threshold) joined across gaps of up to `maxGapFrames` (unscored
-frames count as gap) FIRST, then runs shorter than `minFrames` dropped; a bout
-scores the mean of its finite frames; a point behavior keeps its peak frame.
+frames count as gap) FIRST, then a joined bout is kept only when its DETECTED
+frames (not the gaps it bridged) number at least `minFrames`, so scattered
+one-frame detections never make a bout; a bout scores the mean of its finite
+frames; a point behavior keeps its peak frame.
 `secondsToFrames`. Pure, import-free (the worker loads it).
 
 **Imports.** None. **Imported by** `pose/behavior-rules.js`. **Tests.**
@@ -11790,8 +11795,11 @@ video boxes (`behaviorBoxesAt`, the `behaviorBoxes` option of
 `drawFrameOverlays`: one item per behavior active on the frame — dashed while
 running — with the Tracking Wizard node mask of `ui/id-switch-highlight.js`;
 with `{live: true}` (the viewer, never an exported video) also the coding
-state: a light numbered box on the animal Label Behaviors mode labels, and the
-actor of a social behavior waiting for its target; on/off is browser-local
+state: a light numbered box on the animal Label Behaviors mode labels, the
+actor of a social behavior waiting for its target, and — while the playhead
+is in it — the predicted bout selected in the Predictions list
+(`setReviewFocus(session, bout|null)`), dashed, labelled "behavior? · animal ·
+score%"; on/off is browser-local
 `lucid.behaviorOnVideo`). `noteBehaviorMode(on)` is how the mode tells it.
 `codeBehavior` labels the armed or given range, else starts/stops a state or
 codes a point at the playhead; a social behavior takes its target from a
@@ -11800,7 +11808,7 @@ running bout of its own, else the only other animal, else asks.
 **Exports.** `behaviorUi`, `registerBehaviorRepaint`, `requestBehaviorRepaint`,
 `setBehaviorNavigator`, `goToBehaviorFrame`, `BOUT_LEAD_IN_SECONDS`,
 `openBehaviorTab`, `behaviorBoxesVisible`, `setBehaviorBoxesVisible`,
-`noteBehaviorMode`, `behaviorBoxesAt`, `pairGlyph` (" ↔ " for mutual, " → " otherwise), `sessionAnimals`, `animalColor`, `focalAnimal`,
+`noteBehaviorMode`, `setReviewFocus`, `behaviorBoxesAt`, `pairGlyph` (" ↔ " for mutual, " → " otherwise), `sessionAnimals`, `animalColor`, `focalAnimal`,
 `setFocalAnimal`, `selectedBehaviorId`, `selectBehavior`, `setRangeIn`,
 `setRangeOut`, `armRange`, `clearArmedRange`, `armedRange`, `codeBehavior`,
 `pickBehaviorTarget`, `cancelPendingTarget`, `clearBehaviorRange`,
@@ -11811,7 +11819,7 @@ running bout of its own, else the only other animal, else asks.
 `../import-export/save-load.js`. **Imported by**
 `ui/behavior-mode.js`, `ui/behavior-panel.js`, `ui/behavior-timeline.js`,
 `ui/behavior-ethogram-modal.js`, `ui/rendering.js`, `ui/overlay-export-modal.js`.
-**Tests.** `tests/e2e/behavior-labelling.mjs`.
+**Tests.** `tests/e2e/behavior-labelling.mjs`, `tests/e2e/behavior-rules.mjs` §3 (the review box).
 
 ### ui/behavior-mode.js
 
@@ -11849,7 +11857,8 @@ question, timeline behavior, Undo, Mark reviewed…, On video), Bouts
 (filterable list, capped at 500 rows; a click lands
 `BOUT_LEAD_IN_SECONDS` early; set start/end to the playhead, behavior,
 target, note, delete), Predictions (the detectors' bouts to review: filters,
-order — most uncertain / most contradicted / time —, "To review only"; Accept
+order — most uncertain / most contradicted / time —, "To review only"; the
+selected bout is boxed on the video (`setReviewFocus`); Accept
 labels a bout present, source "a", Reject labels it "not", and on the
 selected bout either moves on to the next; Next ▸; Accept all in range… (the
 armed range, else every listed bout) asks first (`behaviorConfirm`) and is one

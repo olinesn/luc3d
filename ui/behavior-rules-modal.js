@@ -49,8 +49,9 @@ var INFO = {
         'Excluded nodes take no part; by default, the tail past its base.',
     floor: 'Heights are measured above the floor and turning in its plane. By default the Set Origin frame (+Z up) when ' +
         'one is set, else a plane fitted to the animals’ lowest points.',
-    detectors: 'A behavior is detected on the frames where all its conditions hold, for at least the shortest bout, ' +
-        'with shorter gaps joined. Scores near 0.5 are the borderline frames the Predictions review lists first.',
+    detectors: 'A behavior is detected on the frames where all its conditions hold. Detections closer than the gap are ' +
+        'joined, and a bout needs at least the shortest bout of detected frames. Scores near 0.5 are the borderline ' +
+        'frames the Predictions review lists first.',
 };
 
 function esc(s) {
@@ -163,7 +164,7 @@ function cardHtml(ctx, b) {
         return conditionRow(Object.assign({ social: !!b.social }, c), i, r ? r.feature.unit : '', i === focus);
     }).join('') + '</tbody></table>' +
         '<div class="bd-row"><button class="panel-btn" data-act="add-cond">+ Condition</button>' +
-        '<label title="Detected runs shorter than this are dropped">Shortest bout <input type="number" min="0" step="0.05" data-f="minDuration" value="' +
+        '<label title="A bout needs at least this long detected (the gaps it joined do not count)">Shortest bout <input type="number" min="0" step="0.05" data-f="minDuration" value="' +
         esc(d.minDuration) + '"> s</label>' +
         '<label title="Detected runs this close are joined into one bout first">Join gaps up to <input type="number" min="0" step="0.05" data-f="maxGap" value="' +
         esc(d.maxGap) + '"> s</label></div>' +
