@@ -2024,15 +2024,24 @@ export class Timeline {
     }
 
     /**
-     * Set the timeline display mode and refresh.
+     * Set the timeline display mode and refresh. The Tracks / IDs / Both
+     * buttons are not touched here: go through `setTimelineDisplayMode`
+     * (`ui/timeline-controller.js`), which keeps them in step.
      * @param {'tracks'|'identities'|'both'} mode
+     * @param {{refresh?: boolean}} [opts]  `refresh: false` leaves the rows for
+     *   the caller's own `refreshTracks` to rebuild (once, not twice)
      */
-    setDisplayMode(mode) {
+    setDisplayMode(mode, opts) {
         this._displayMode = mode;
-        if (this._session) {
+        if (this._session && !(opts && opts.refresh === false)) {
             this._rebuildSegments(this._session);
             this.resize();  // resize recalculates canvas height for new row count + redraws
         }
+    }
+
+    /** @returns {'tracks'|'identities'|'both'} the display mode */
+    getDisplayMode() {
+        return this._displayMode;
     }
 
     /**

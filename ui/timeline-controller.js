@@ -9,6 +9,8 @@
  *                                capped at 30% of window.innerHeight.
  *   - syncTimelineToggleButton() — keep the toolbar button's `.active` class
  *                                in sync with the container's collapsed state.
+ *   - get/setTimelineDisplayMode() — the Tracks / IDs / Both toggle: its
+ *                                buttons and the Timeline's rows together.
  *   - installTimelineShortcuts() — register the Ctrl/Cmd+J (toggle) and
  *                                Ctrl/Cmd+Shift+J (legacy "Change Frame
  *                                Number") keyboard shortcuts. Idempotent.
@@ -25,7 +27,7 @@
  * the test runner.
  */
 
-import { state } from './app-state.js';
+import { state, timeline } from './app-state.js';
 
 // ----------------------------------------------------------------------------
 // Module-level state
@@ -119,6 +121,45 @@ export function collapseTimeline() {
     if (!container || container.classList.contains('collapsed')) return false;
     toggleTimeline();
     return true;
+}
+
+/**
+ * The timeline's display mode: what the Tracks / IDs / Both toggle
+ * (`#timelineModeToggle`) shows. Read from the Timeline instance, or from the
+ * highlighted button before one exists.
+ *
+ * @returns {'tracks'|'identities'|'both'}
+ */
+export function getTimelineDisplayMode() {
+    if (timeline && typeof timeline.getDisplayMode === 'function') return timeline.getDisplayMode();
+    var btn = (typeof document !== 'undefined' && document.querySelector)
+        ? document.querySelector('#timelineModeToggle .timeline-mode-btn.active')
+        : null;
+    return (btn && btn.getAttribute('data-mode')) || 'tracks';
+}
+
+/**
+ * Show the timeline's rows by track, identity or both. The one setter for that
+ * choice, used by the toggle's own buttons (`pose/initialization.js`) and by
+ * Track All (`pose/tracker.js`), so the highlighted button and the rows always
+ * agree. Not stored anywhere (a reload starts on Tracks), never in the `.slp`.
+ *
+ * @param {'tracks'|'identities'|'both'} mode
+ * @param {{refresh?: boolean}} [opts]  passed to `Timeline.setDisplayMode`
+ * @returns {boolean} whether the mode changed
+ */
+export function setTimelineDisplayMode(mode, opts) {
+    var changed = getTimelineDisplayMode() !== mode;
+    var toggle = (typeof document !== 'undefined' && document.getElementById)
+        ? document.getElementById('timelineModeToggle')
+        : null;
+    if (toggle) {
+        toggle.querySelectorAll('.timeline-mode-btn').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+        });
+    }
+    if (timeline && typeof timeline.setDisplayMode === 'function') timeline.setDisplayMode(mode, opts);
+    return changed;
 }
 
 /**
