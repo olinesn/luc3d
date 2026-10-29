@@ -13827,7 +13827,9 @@ column per behavior and per partner of a social one; 1 / 0 / blank = doing it
 / "not" / unlabelled; a mutual pair in both tables), the time budget (every
 animal × behavior; unlabelled frames counted), and BORIS 8's tabular (START /
 STOP / POINT; SimBA imports it) and aggregated layouts — present bouts only,
-the target as `Modifier #1`. Imports, in two steps that change nothing:
+the target as `Modifier #1`. Their `Image index` columns hold the bout's first
+and LAST frame (times keep BORIS's `(end + 1) / fps` stop): SimBA takes frames
+from `Image index` and labels START to STOP inclusive. Imports, in two steps that change nothing:
 `parseBehaviorFile` reads a BORIS project (ethogram with kinds, keys, colors,
 exclusions; a behavior whose events all name another subject in a modifier is
 social; untyped events toggle), BORIS tabular/aggregated tables (BORIS 7 or 8,

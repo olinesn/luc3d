@@ -10,7 +10,10 @@
 // frame index 0 as frame 1). A bout's end time is when its last frame ends,
 // (end + 1) / fps — what BORIS records for a state stopped on the next frame —
 // so frames survive the trip through seconds: start = round(t × fps),
-// end = round(t_stop × fps) − 1.
+// end = round(t_stop × fps) − 1. BORIS tables' `Image index` columns hold the
+// bout's first and LAST frame: SimBA takes frames from them and labels START
+// to STOP inclusive (`BORIS_appender.py`, `range(start, stop + 1)`), so the
+// frame after the bout would give every bout one frame too many there.
 //
 // Exports take one `info` per session — { session, name, fps, frames,
 // animals, media } — which ui/behavior-io-modal.js builds from app state, so
@@ -317,10 +320,12 @@ function anyTarget(all) {
 
 /**
  * BORIS 8's tabular events layout (Export events ▸ Tabular events): a START
- * and a STOP row per state bout, a POINT row per point, at frame / fps; the
- * target of a social behavior is its modifier (a mutual pair under its first
- * animal). Only present bouts: BORIS has no "not" labels. SimBA's BORIS import
- * reads this layout (as CSV).
+ * and a STOP row per state bout, a POINT row per point; the target of a social
+ * behavior is its modifier (a mutual pair under its first animal). Only present
+ * bouts: BORIS has no "not" labels. START's Time is start / fps and STOP's is
+ * (end + 1) / fps, as BORIS times them; `Image index` is the first and the last
+ * frame, which is what SimBA's BORIS import (it reads this layout as CSV)
+ * turns back into exactly the bout.
  * @returns {Array<Array>} rows, header first
  */
 export function borisTabularTable(infos) {
@@ -333,18 +338,19 @@ export function borisTabularTable(infos) {
     all.forEach(function (x) {
         var info = x.info, events = [];
         x.bouts.forEach(function (bt) {
-            if (bt.b.kind === 'point') { events.push({ bt: bt, type: 'POINT', frame: bt.start, order: 2, note: bt.note }); return; }
-            events.push({ bt: bt, type: 'START', frame: bt.start, order: 1, note: bt.note });
-            events.push({ bt: bt, type: 'STOP', frame: bt.end + 1, order: 0, note: '' });
+            // `at`: the frame whose start is the event's time; `index`: its Image index.
+            if (bt.b.kind === 'point') { events.push({ bt: bt, type: 'POINT', at: bt.start, index: bt.start, order: 2, note: bt.note }); return; }
+            events.push({ bt: bt, type: 'START', at: bt.start, index: bt.start, order: 1, note: bt.note });
+            events.push({ bt: bt, type: 'STOP', at: bt.end + 1, index: bt.end, order: 0, note: '' });
         });
         // A bout stopping where another starts is closed first, as BORIS lists them.
-        events.sort(function (a, b) { return a.frame - b.frame || a.order - b.order; });
+        events.sort(function (a, b) { return a.at - b.at || a.order - b.order; });
         events.forEach(function (ev) {
             var bt = ev.bt;
             rows.push([info.name, '', '', x.duration, 'Media file', info.media || '', 0, x.duration, fpsCell(info.fps),
                 bt.subject, bt.b.name, bt.b.group || '']
                 .concat(mod ? [bt.target || ''] : [])
-                .concat([ev.type, seconds(ev.frame, info.fps), info.media || '', ev.frame, '', ev.note]));
+                .concat([ev.type, seconds(ev.at, info.fps), info.media || '', ev.index, '', ev.note]));
         });
     });
     return rows;
@@ -353,7 +359,8 @@ export function borisTabularTable(infos) {
 /**
  * BORIS 8's aggregated events layout (Export events ▸ Aggregated events): one
  * row per present bout, Start (s) to Stop (s) — a point has Stop = Start and
- * no duration, as BORIS writes it.
+ * no duration, as BORIS writes it. `Image index start` / `stop` are the first
+ * and last frame, as in the tabular layout.
  * @returns {Array<Array>} rows, header first
  */
 export function borisAggregatedTable(infos) {
@@ -369,12 +376,12 @@ export function borisAggregatedTable(infos) {
         var info = x.info;
         x.bouts.forEach(function (bt) {
             var point = bt.b.kind === 'point';
-            var stop = point ? bt.start : bt.end + 1;
+            var stop = point ? bt.start : bt.end + 1;               // the time's frame; the Image index is bt.end
             rows.push([info.name, '', '', 'Media file', info.media || '', 0, x.duration, x.duration, fpsCell(info.fps),
                 bt.subject, x.duration, bt.b.name, bt.b.group || '']
                 .concat(mod ? [bt.target || ''] : [])
                 .concat([point ? 'POINT' : 'STATE', seconds(bt.start, info.fps), seconds(stop, info.fps),
-                    point ? 'NA' : seconds(bt.end - bt.start + 1, info.fps), info.media || '', bt.start, stop, '', '', bt.note, '']));
+                    point ? 'NA' : seconds(bt.end - bt.start + 1, info.fps), info.media || '', bt.start, bt.end, '', '', bt.note, '']));
         });
     });
     return rows;
