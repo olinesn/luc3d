@@ -15,6 +15,10 @@
  *  5. Ctrl+J collapses, Ctrl+J restores the same height; the canvas matches it
  *     on the first painted frame, with one Timeline.resize().
  *  6. Expanding with no remembered height fits the rows (not the CSS default).
+ *  7-9. The other project-open paths fit too, each opened while the timeline
+ *     is at the 30% cap: the lazy .slp open (`handleLoadProjectSlpLazy`), the
+ *     single-SLP session folder (`handleLoadSessionFolderSingleSlp`) and the
+ *     JSON project (`handleLoadProject`).
  *
  * Run: node tests/e2e/timeline-fit-on-load.mjs   (PORT= to move it)
  */
@@ -84,7 +88,22 @@ try {
         }
         const slps = {};
         for (const nTracks of [2, 6]) for (let c = 0; c < 4; c++) slps['Cam' + c + '_' + nTracks] = await camSlp('Cam' + c, nTracks);
-        return { video, slps };
+        // A 3-camera x 2-track project .slp (all views in one file).
+        const camNames = ['Cam0', 'Cam1', 'Cam2'];
+        const cameras = camNames.map((n, i) => new Camera(n, [[150, 0, 80], [0, 150, 60], [0, 0, 1]], [0, 0, 0, 0, 0],
+            [0, 0.1 * i, 0], [-30 * i, 0, 0], [160, 120]));
+        const proj = new Session(cameras, new Skeleton('sk', nodes, [[0, 1], [1, 2]]), ['track_0', 'track_1'], 'Project');
+        for (let f = 0; f < 20; f++) {
+            const fg = new FrameGroup(f);
+            camNames.forEach(cn => {
+                for (let t = 0; t < 2; t++) fg.addInstance(cn, new Instance(nodes.map((_, k) => [10 + t * 20 + k * 3, 30 + k * 4 + f]), t, 'predicted', 0.9));
+            });
+            proj.addFrameGroup(fg);
+        }
+        const projSlp = b64(await window.SleapIO.saveSlpToBytes(fileio.buildSlpLabelsAllViews(proj,
+            camNames.map(n => ({ name: n, videoWidth: 160, videoHeight: 120, frameCount: 20 })),
+            camNames.map(n => ({ name: n, assignedCamera: n, videoPath: 'videos/' + n + '.mp4' })))));
+        return { video, slps, projSlp };
     });
     const video = Buffer.from(fixtures.video, 'base64');
     function writeFolder(name, nCams, nTracks) {
@@ -101,6 +120,12 @@ try {
     }
     const small = writeFolder('small', 3, 2);   // 6 rows: fits under the cap
     const big = writeFolder('big', 4, 6);       // 24 rows: taller than the cap
+    // Single-SLP session folder: calibration + one project .slp + videos/.
+    const single = path.join(tmpRoot, 'single');
+    fs.mkdirSync(path.join(single, 'videos'), { recursive: true });
+    fs.writeFileSync(path.join(single, 'calibration.toml'), calibToml(['Cam0', 'Cam1', 'Cam2']));
+    fs.writeFileSync(path.join(single, 'project.slp'), Buffer.from(fixtures.projSlp, 'base64'));
+    for (const c of ['Cam0', 'Cam1', 'Cam2']) fs.writeFileSync(path.join(single, 'videos', c + '.mp4'), video);
 
     // Count Timeline.resize() calls, and record the timeline height on every frame.
     await page.evaluate(async () => {
@@ -152,6 +177,16 @@ try {
     check(s.preferred < s.cap, `precondition: the rows fit under the cap (${s.preferred} < ${s.cap}px)`);
     check(near(s.height, s.preferred), `the timeline is the rows' height (${s.height} vs ${s.preferred}px)`);
     const smallH = s.height;
+    // Keep this project as a JSON project file for section 9 (saveProject()
+    // downloads it; capture the Blob instead).
+    await page.evaluate(async () => {
+        const saveLoad = await import('/import-export/save-load.js');
+        const origCreate = URL.createObjectURL;
+        let blob = null;
+        URL.createObjectURL = (b) => { blob = b; return 'blob:stub'; };
+        try { saveLoad.saveProject(); } finally { URL.createObjectURL = origCreate; }
+        window.__projectJson = blob ? await blob.text() : null;
+    });
 
     // ---- 2. bigger project: capped --------------------------------------------------------
     console.log('\n2. 4 cameras x 6 tracks');
@@ -216,6 +251,58 @@ try {
     await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
     s = await tl();
     check(!s.collapsed && near(s.height, s.fit), `it opens at the rows' height (${s.height} vs ${s.fit}px), not the CSS default`);
+
+    // ---- 7-9. the other project-open paths, each from the 30% cap -------------------------
+    // Starts a load without awaiting it, then answers any prompt the way a user
+    // with no videos to hand would (Escape the video picker, Skip / Later).
+    async function runLoad(kind) {
+        await page.evaluate((kind) => {
+            window.__loadDone = false;
+            (async () => {
+                try {
+                    if (kind === 'lazy') {
+                        const bytes = Uint8Array.from(atob(window.__projSlp), c => c.charCodeAt(0));
+                        await (await import('/loading/session-loader.js')).handleLoadProjectSlpLazy(new File([bytes], 'project.slp'));
+                    } else if (kind === 'single') {
+                        await (await import('/loading/session-loader.js')).handleLoadSessionFolderSingleSlp();
+                    } else {
+                        await (await import('/import-export/save-load.js')).handleLoadProject(
+                            new File([window.__projectJson], 'project.json', { type: 'application/json' }));
+                    }
+                    window.__loadDone = true;
+                } catch (e) { window.__loadDone = 'ERR ' + String(e && e.stack || e).slice(0, 400); }
+            })();
+        }, kind);
+        for (let i = 0; i < 240; i++) {
+            const st = await page.evaluate(() => {
+                const b = [...document.querySelectorAll('button')].find(x => x.offsetParent && /^(Skip|Later)\b/i.test((x.textContent || '').trim()));
+                if (b) b.click();
+                return { done: window.__loadDone, prompt: !!document.getElementById('videoSelectOverlay') };
+            });
+            if (st.prompt) await page.keyboard.press('Escape');
+            if (st.done) return st.done;
+            await page.waitForTimeout(250);
+        }
+        return 'timeout';
+    }
+    await page.evaluate((b64) => { window.__projSlp = b64; }, fixtures.projSlp);
+    for (const [n, label, kind] of [[7, 'Lazy .slp open', 'lazy'], [8, 'Single-SLP session folder', 'single'],
+        [9, 'JSON project', 'json']]) {
+        console.log(`\n${n}. ${label}, opened while the timeline is at the cap`);
+        if (kind === 'json' && !(await page.evaluate(() => !!window.__projectJson))) {
+            check(false, 'saveProject() produced the JSON project'); continue;
+        }
+        await loadFolder(big);
+        s = await tl();
+        check(near(s.height, s.cap), `precondition: the timeline is at the cap (${s.height}px)`);
+        if (kind === 'single') page.once('filechooser', async (fc) => { await fc.setFiles(single); });
+        const r = await runLoad(kind);
+        check(r === true, `the load finished (${r})`);
+        await page.evaluate(() => new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res))));
+        s = await tl();
+        check(s.fit < s.cap - 10, `precondition: its rows need less than the cap (${s.rows} rows, ${s.fit}px)`);
+        check(near(s.height, s.fit), `the timeline fits its rows (${s.height} vs ${s.fit}px)`);
+    }
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

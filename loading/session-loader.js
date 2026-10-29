@@ -2511,7 +2511,10 @@ export async function handleLoadSessionFolderSingleSlp() {
 
         hideLoading();
         updateInfoPanel();
-        if (timeline) timeline.setData(session);
+        if (timeline) {
+            timeline.setData(session);
+            fitTimelineToData();
+        }
         if (videoController) await videoController.seekToFrame(0);
         var finalMsg, finalKind;
         if (failedVideos.length > 0 && state.views.length === 0) {
@@ -2970,6 +2973,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
             // setData does not propagate the frame span (other load paths pair
             // it with setTotalFrames) — without this the timeline clamps to 1.
             timeline.setTotalFrames(state.totalFrames);
+            // Fit to the rows: setData only grows or caps, so a taller
+            // height left by a bigger project would otherwise stay.
+            fitTimelineToData();
         }
 
         // Land on the first grouped frame + render it (hydrates its 2D).

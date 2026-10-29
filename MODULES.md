@@ -9585,8 +9585,14 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
   also SHRINKS a timeline left taller by a bigger project or a drag. The load
   paths call it right after `timeline.setData` (whose own `_fitContainerToData`
   only grows or caps), in the same task, so only the final height is painted.
-  Callers: `setupTimeline`, `handleLoadSlpFile`, `handleLoadSessionFolderPerCamera`,
-  and `toggleTimeline`'s expand when no height is cached.
+  Callers: every project open — `setupTimeline`, `handleLoadSlpFile`,
+  `handleLoadProjectSlpLazy`, `handleLoadSessionFolderPerCamera`,
+  `handleLoadSessionFolderSingleSlp`, `handleLoadProject` (JSON) — and
+  `toggleTimeline`'s expand when no height is cached. A new project-open path
+  must call it too. Edits to the open project (Add SLP, Load 3D Points, a new
+  empty session, video changes) call `setData` alone, so a height the user
+  dragged stays; session switching restores or fits per session itself
+  (`ui/sessions-panes.js`).
 - `toggleTimeline()`'s expand does not call `resize()`: the Timeline's
   ResizeObserver resizes the canvas before the first painted frame.
 
@@ -9596,7 +9602,8 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
   silent no-op). Test: `tests/e2e/timeline-fit-on-load.mjs`.
 
 **Imported by.** `pose/initialization.js`, `pose/tracker.js`
-(`collapseTimeline`, after Track All), `ui/ui-wiring.js`
+(`collapseTimeline`, after Track All), `import-export/save-load.js`
+(`fitTimelineToData`, JSON project open), `ui/ui-wiring.js`
 (re-exports the same surface so legacy `import { toggleTimeline, … } from
 './ui-wiring.js'` keeps working).
 
@@ -13892,6 +13899,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `../ui/loading-overlay.js` (`showLoading`/`hideLoading`, re-exported),
   `../ui/loading-progress-modal.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`,
+  `../ui/timeline-controller.js` (`fitTimelineToData`, after the JSON project
+  open's `timeline.setData`),
   `./slp-import.js`, `./visibility-metadata.js`
   (`writeVisibilityMetadata`/`readVisibilityMetadata` for the session-scoped
   settings in the legacy v2/v3 project JSON — same keys and omit-the-defaults

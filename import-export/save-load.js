@@ -37,6 +37,7 @@ import {
 } from '../pose/initialization.js';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
+import { fitTimelineToData } from '../ui/timeline-controller.js';
 import { handleLoadSlpFile } from './slp-import.js';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
@@ -1876,7 +1877,10 @@ export async function handleLoadProject(prePickedFile) {
         }
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
-        if (timeline) timeline.setData(state.session);
+        if (timeline) {
+            timeline.setData(state.session);
+            fitTimelineToData();
+        }
 
         hideLoading();
 
