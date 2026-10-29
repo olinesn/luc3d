@@ -17,7 +17,8 @@
 // `requestBehaviorRepaint` here.
 //
 // Depends on: ui/app-state.js, pose/behavior-ethogram.js,
-//             pose/behavior-labels.js, import-export/save-load.js
+//             pose/behavior-labels.js, import-export/save-load.js,
+//             ui/id-switch-highlight.js (the node mask boxes share)
 
 import { state } from './app-state.js';
 import { behaviorById } from '../pose/behavior-ethogram.js';
@@ -25,6 +26,7 @@ import {
     labelRange, clearRange, toggleState, noteBehaviorFps, listBouts, activeAt, hasBehaviorData, runningStates,
 } from '../pose/behavior-labels.js';
 import { setStatus } from '../import-export/save-load.js';
+import { idSwitchBoxNodeMask } from './id-switch-highlight.js';
 
 var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null };
 
@@ -93,39 +95,50 @@ export function openBehaviorTab() {
 }
 
 // ----------------------------------------------------------------------------
-// Chips on the video (ui/overlays.js `drawBehaviorChips`): a browser-local
-// display choice, on by default, never saved in the project.
+// Boxes on the video (ui/overlays.js `drawBehaviorBoxes`): around the animals
+// engaged in each behavior on the frame — both animals of a social one — so
+// who is labelled with what is visible while coding. A browser-local display
+// choice ("On video" in the Behavior tab), on by default, never saved.
 // ----------------------------------------------------------------------------
 
-var CHIPS_KEY = 'lucid.behaviorChips';
+var ON_VIDEO_KEY = 'lucid.behaviorOnVideo';
 
-/** Are behavior chips drawn on the animals? */
-export function behaviorChipsVisible() {
-    try { return localStorage.getItem(CHIPS_KEY) !== '0'; } catch (e) { return true; }
+/** Are behavior boxes drawn on the videos? */
+export function behaviorBoxesVisible() {
+    try { return localStorage.getItem(ON_VIDEO_KEY) !== '0'; } catch (e) { return true; }
 }
 
-export function setBehaviorChipsVisible(on) {
-    try { localStorage.setItem(CHIPS_KEY, on ? '1' : '0'); } catch (e) { /* storage unavailable: session only */ }
+export function setBehaviorBoxesVisible(on) {
+    try { localStorage.setItem(ON_VIDEO_KEY, on ? '1' : '0'); } catch (e) { /* storage unavailable: session only */ }
     requestBehaviorRepaint({ labels: true });
 }
 
 /**
- * The `behaviorChips` render option for one frame: identity name -> the
- * behaviors that animal is doing there (`[{text, color}]`), or null when
- * nothing would be drawn.
- * @returns {function(string): Array|null}|null
+ * The `behaviorBoxes` render option for one frame, or null when nothing would
+ * be drawn: one item per behavior an animal (with its target) is doing there —
+ * dashed while it is still being coded — plus, while a social behavior waits
+ * for its target, a dashed box on the animal that will be its actor.
+ * @returns {{items: Array<{animals:string[], color:string, dashed:boolean, parts:Array}>, nodeMask: ?boolean[]}|null}
  */
-export function behaviorChipsAt(session, frame) {
-    if (!session || !Number.isFinite(frame) || !behaviorChipsVisible() || !hasBehaviorData(session)) return null;
-    var byName = new Map();
+export function behaviorBoxesAt(session, frame) {
+    if (!session || !Number.isFinite(frame) || !behaviorBoxesVisible()) return null;
+    var items = [];
+    var who = function (name) { return [name, animalColor(session, name)]; };
     activeAt(session, frame).forEach(function (a) {
         var b = behaviorById(a.behaviorId);
         if (!b) return;
-        if (!byName.has(a.animal)) byName.set(a.animal, []);
-        byName.get(a.animal).push({ text: b.name + (a.target ? ' → ' + a.target : ''), color: b.color });
+        var parts = [[(a.running ? '● ' : '') + b.name, b.color], [' · ', '#ffffff'], who(a.animal)];
+        if (a.target) parts.push([' → ', '#ffffff'], who(a.target));
+        items.push({ animals: a.target ? [a.animal, a.target] : [a.animal], color: b.color, dashed: !!a.running, parts: parts });
     });
-    if (!byName.size) return null;
-    return function (name) { return byName.get(name) || null; };
+    var p = ui.pending;
+    var pb = p && session === state.session ? behaviorById(p.behaviorId) : null;
+    if (pb) {
+        items.push({ animals: [p.animal], color: pb.color, dashed: true,
+                     parts: [[pb.name, pb.color], [' · ', '#ffffff'], who(p.animal), [' → ? (press 1–9)', '#ffffff']] });
+    }
+    if (!items.length) return null;
+    return { items: items, nodeMask: idSwitchBoxNodeMask(session.skeleton && session.skeleton.nodes) };
 }
 
 // ----------------------------------------------------------------------------

@@ -35,7 +35,7 @@ import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
 } from './frame-counters.js';
-import { behaviorChipsAt } from './behavior-coding.js';
+import { behaviorBoxesAt } from './behavior-coding.js';
 
 // ============================================
 // Reproj/Error visibility
@@ -371,9 +371,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     fillLazyReprojections(frameIdx, instanceGroups);
 
     var vis = getVisibilitySettings();
-    // What each animal is doing on this frame (behavior labels), for the
-    // chips above its name; null when there is nothing to show.
-    var behaviorChips = behaviorChipsAt(state.session, frameIdx);
+    // Boxes around the animals engaged in each labelled behavior on this
+    // frame; null when there is nothing to show.
+    var behaviorBoxes = behaviorBoxesAt(state.session, frameIdx);
 
     // Get interaction state — only show selection highlight if the
     // selected group belongs to the current frame
@@ -622,7 +622,7 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             selectedUnlinkedId: selectedUnlinked ? selectedUnlinked.id : null,
             editGroupTarget: editGroupTarget,
             trackingExcluded: !isCameraTracked(view.name),
-            behaviorChips: behaviorChips,
+            behaviorBoxes: behaviorBoxes,
         });
 
         // Annotated planes (View ▸ Define Planes). Frame-independent, so they

@@ -28,7 +28,7 @@ import {
     behaviorUi, codeBehavior, focalAnimal, setFocalAnimal, sessionAnimals, animalColor, selectedBehaviorId,
     selectBehavior, pickBehaviorTarget, cancelPendingTarget, clearArmedRange, armedRange, registerBehaviorRepaint,
     requestBehaviorRepaint, setBehaviorNavigator, goToBehaviorFrame, BOUT_LEAD_IN_SECONDS,
-    behaviorChipsVisible, setBehaviorChipsVisible,
+    behaviorBoxesVisible, setBehaviorBoxesVisible,
 } from './behavior-coding.js';
 import { toggleBehaviorMode, exitBehaviorMode, isBehaviorModeActive } from './behavior-mode.js';
 import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-modal.js';
@@ -142,8 +142,8 @@ function renderCoding(session, disabled) {
         }).join('') + '</select></label>' +
         '<button class="panel-btn" data-act="undo"' + (canUndoBehaviorEdit(session) ? '' : ' disabled') + '>Undo</button>' +
         '<button class="panel-btn" data-act="reviewed" title="Turn the unlabelled frames of a range into &quot;not&quot; labels">Mark reviewed…</button>' +
-        '<label title="Show what each animal is doing above its name in the videos (this browser only)"><input type="checkbox" data-act="chips"' +
-        (behaviorChipsVisible() ? ' checked' : '') + '> On video</label>' +
+        '<label title="Box the animals engaged in each behavior in the videos, labelled (this browser only)"><input type="checkbox" data-act="on-video"' +
+        (behaviorBoxesVisible() ? ' checked' : '') + '> On video</label>' +
         '</div>';
     host.innerHTML = html;
     updateCodingNow(state.currentFrame);
@@ -315,7 +315,7 @@ function wireCoding(host) {
     });
     host.addEventListener('change', function (e) {
         if (e.target.dataset.act === 'timeline-behavior') selectBehavior(e.target.value || null);
-        else if (e.target.dataset.act === 'chips') setBehaviorChipsVisible(e.target.checked);
+        else if (e.target.dataset.act === 'on-video') setBehaviorBoxesVisible(e.target.checked);
     });
 }
 
@@ -454,6 +454,7 @@ export function setupBehaviorUi(deps) {
     });
     registerBehaviorRepaint(function (info) {
         if (info.labels || info.ui || info.ethogram) refreshBehaviorPanel();
-        if ((info.labels || info.ethogram) && state.session) drawAllOverlays(state.currentFrame);
+        // The video boxes follow the labels and the target question (`ui`).
+        if ((info.labels || info.ethogram || info.ui) && state.session) drawAllOverlays(state.currentFrame);
     });
 }

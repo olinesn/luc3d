@@ -33,7 +33,7 @@ export var BEHAVIOR_KINDS = ['state', 'point'];
 
 /**
  * Default colors, handed out in order to new behaviors: vivid, light enough
- * for a chip's dark text (L* >= 62), and chosen one at a time to stay as far
+ * to read on the dark timeline and video (L* >= 62), and chosen one at a time to stay as far
  * as possible (CIEDE2000) from the ones before and from the gray of "not"
  * labels — closest pair 18.2 (tests/test-track-identity-palette.mjs §10).
  */

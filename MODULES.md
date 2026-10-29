@@ -5890,7 +5890,7 @@ leaves the export range *unchanged*.
 
 ---
 
-**Behavior labels.** Passes `behaviorChips` for each exported frame, so overlay videos show behavior chips as the live view does.
+**Behavior labels.** Passes `behaviorBoxes` (`behaviorBoxesAt`) for each exported frame, so overlay videos show the behavior boxes as the live view does.
 
 ### ui/video-encode.js
 
@@ -6222,7 +6222,7 @@ labels, occluded/null markers.
 
 ---
 
-**Behavior labels.** `drawBehaviorChips(ctx, instances, chipLists, options)` and the `behaviorChips` option of `drawFrameOverlays` (§4c): chips in each behavior's color one row above an animal's name pill, on every linked instance shown (Tracks mode too), upright in rotated views. The option is a function of the identity name (`ui/behavior-coding.js` `behaviorChipsAt`), so this module stays import-free.
+**Behavior labels.** `drawBehaviorBoxes(ctx, viewName, instanceGroups, session, frameIdx, spec, options)` and the `behaviorBoxes` option of `drawFrameOverlays` (§4c): one box per labelled behavior around its animals (both for a social one) in every view, in the behavior's color over a dark halo, dashed while being coded or waiting for a target, labelled above its top-left corner (upright in rotated views); nested boxes widen so labels do not collide. An animal's extent is its 2D detection plus its reprojection over the spec's node mask, so the User / Predictions toggles do not hide it. The spec comes from `ui/behavior-coding.js` `behaviorBoxesAt`, so this module stays import-free.
 
 ### ui/rendering.js
 
@@ -6487,7 +6487,7 @@ re-triangulate, identity assignment, or visibility-toggle change.
 
 ---
 
-**Behavior labels.** Passes `behaviorChips: behaviorChipsAt(state.session, frameIdx)` (ui/behavior-coding.js) to `drawFrameOverlays`, computed once per frame.
+**Behavior labels.** Passes `behaviorBoxes: behaviorBoxesAt(state.session, frameIdx)` (ui/behavior-coding.js) to `drawFrameOverlays`, computed once per frame.
 
 ### ui/plane-dialog.js
 
@@ -11551,23 +11551,27 @@ timeline rows share: the coding state (focal animal, the behavior the
 timeline shows, the `[` `]` armed range, a social behavior waiting for its
 target — browser memory only), the coding actions, a repaint bus
 (requests coalesce into one animation frame), the frame navigator, and the
-video chips (`behaviorChipsAt`, the `behaviorChips` option of
-`drawFrameOverlays`; on/off is browser-local `lucid.behaviorChips`).
+video boxes (`behaviorBoxesAt`, the `behaviorBoxes` option of
+`drawFrameOverlays`: one item per behavior active on the frame — dashed while
+running — plus the actor of a social behavior waiting for its target, with the
+Tracking Wizard node mask of `ui/id-switch-highlight.js`; on/off is
+browser-local `lucid.behaviorOnVideo`).
 `codeBehavior` labels the armed or given range, else starts/stops a state or
 codes a point at the playhead; a social behavior takes its target from a
 running bout of its own, else the only other animal, else asks.
 
 **Exports.** `behaviorUi`, `registerBehaviorRepaint`, `requestBehaviorRepaint`,
 `setBehaviorNavigator`, `goToBehaviorFrame`, `BOUT_LEAD_IN_SECONDS`,
-`openBehaviorTab`, `behaviorChipsVisible`, `setBehaviorChipsVisible`,
-`behaviorChipsAt`, `sessionAnimals`, `animalColor`, `focalAnimal`,
+`openBehaviorTab`, `behaviorBoxesVisible`, `setBehaviorBoxesVisible`,
+`behaviorBoxesAt`, `sessionAnimals`, `animalColor`, `focalAnimal`,
 `setFocalAnimal`, `selectedBehaviorId`, `selectBehavior`, `setRangeIn`,
 `setRangeOut`, `armRange`, `clearArmedRange`, `armedRange`, `codeBehavior`,
 `pickBehaviorTarget`, `cancelPendingTarget`, `clearBehaviorRange`,
 `adjacentBout`.
 
-**Imports.** `./app-state.js`, `../pose/behavior-ethogram.js`,
-`../pose/behavior-labels.js`, `../import-export/save-load.js`. **Imported by**
+**Imports.** `./app-state.js`, `./id-switch-highlight.js` (`idSwitchBoxNodeMask`),
+`../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+`../import-export/save-load.js`. **Imported by**
 `ui/behavior-mode.js`, `ui/behavior-panel.js`, `ui/behavior-timeline.js`,
 `ui/behavior-ethogram-modal.js`, `ui/rendering.js`, `ui/overlay-export-modal.js`.
 **Tests.** `tests/e2e/behavior-labelling.mjs`.

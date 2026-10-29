@@ -20,6 +20,9 @@
  *     range menu for THAT animal, and a behavior button labels the range.
  *  6. Rename Identity renames the animal's bouts; an ID-switch-style range swap
  *     moves them; a tracking pass on a labelled session asks first.
+ *  7. The video boxes: each behavior's animals boxed (both for a social one),
+ *     from 2D detections or reprojections; dashed while still being coded or
+ *     waiting for a target; "On video" turns them off.
  *
  * Run: node tests/e2e/behavior-labelling.mjs   (spawns its own http.server; PORT= to move it)
  */
@@ -223,33 +226,55 @@ try {
     await page.keyboard.press('Escape');
     check((await ask) === false, 'Esc cancels it');
 
-    console.log('\n-- 7. chips on the video --');
-    const chips = await page.evaluate(async () => {
+    console.log('\n-- 7. boxes on the video --');
+    const boxes = await page.evaluate(async () => {
         const ov = await import('/ui/overlays.js'); const C = await import('/ui/behavior-coding.js');
         const AS = await import('/ui/app-state.js'); const pd = await import('/pose/pose-data.js');
-        const eth = await import('/pose/behavior-ethogram.js');
-        const at = C.behaviorChipsAt(AS.state.session, 1020);       // Alice grooms 1001–1049 (after the swap)
-        const forAlice = at && at('Alice'), forId1 = at && at('id_1');
-        const canvas = document.createElement('canvas'); canvas.width = 240; canvas.height = 240;
+        const eth = await import('/pose/behavior-ethogram.js'); const L = await import('/pose/behavior-labels.js');
+        const s = AS.state.session;
+        L.labelRange(s, 'b4', 'id_1', 'id_2', 1400, 1450, true);       // chase id_1 → id_2
+        L.toggleState(s, 'b1', 'Alice', '', 1410);                     // rear, still being coded
+        const spec = C.behaviorBoxesAt(s, 1420);
+        const items = spec ? spec.items.map(i => ({ animals: i.animals, dashed: i.dashed, text: i.parts.map(p => p[0]).join('') })) : [];
+        // Draw it over three animals in one view: Alice and id_1 detected in 2D, id_2 only a reprojection.
+        const groups = ['Alice', 'id_1', 'id_2'].map((n, k) => {
+            const g = new pd.InstanceGroup(900 + k, s.identities.find(i => i.name === n).id);
+            const pts = [[40 + 120 * k, 120], [70 + 120 * k, 140], [90 + 120 * k, 170]];
+            if (n === 'id_2') g.reprojections = { cam0: pts };
+            else g.addInstance('cam0', new pd.Instance(pts, null, 'predicted', 0.9));
+            return g;
+        });
+        const canvas = document.createElement('canvas'); canvas.width = 420; canvas.height = 300;
         const ctx = canvas.getContext('2d');
-        const inst = new pd.Instance([[120, 200], [130, 200]], 0, 'predicted', 0.9);
-        ov.drawBehaviorChips(ctx, [inst], [forAlice], { labelSize: 11, canvasWidth: 240, canvasHeight: 240, labelDisplayScale: 1 });
-        const want = eth.behaviorById('b2').color;
-        const rgb = [1, 3, 5].map(i => parseInt(want.slice(i, i + 2), 16));
-        let hits = 0;
-        const px = ctx.getImageData(0, 0, 240, 200).data;
-        for (let i = 0; i < px.length; i += 4) {
-            if (Math.abs(px[i] - rgb[0]) < 30 && Math.abs(px[i + 1] - rgb[1]) < 30 && Math.abs(px[i + 2] - rgb[2]) < 30) hits++;
-        }
-        C.setBehaviorChipsVisible(false);
-        const hidden = C.behaviorChipsAt(AS.state.session, 1020);
-        C.setBehaviorChipsVisible(true);
-        return { forAlice, forId1, hits, hidden: hidden === null };
+        ov.drawBehaviorBoxes(ctx, 'cam0', groups, s, 1420, spec, { canvasWidth: 420, canvasHeight: 300, labelDisplayScale: 1 });
+        const count = (hex, x0, x1) => {
+            const rgb = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+            const px = ctx.getImageData(x0, 0, x1 - x0, 300).data; let n = 0;
+            for (let i = 0; i < px.length; i += 4) if (Math.abs(px[i] - rgb[0]) < 24 && Math.abs(px[i + 1] - rgb[1]) < 24 && Math.abs(px[i + 2] - rgb[2]) < 24) n++;
+            return n;
+        };
+        const chase = eth.behaviorById('b4').color, rear = eth.behaviorById('b1').color;
+        const out = { items, chaseRight: count(chase, 230, 420), chaseLeft: count(chase, 0, 110), rearLeft: count(rear, 0, 160) };
+        // A social behavior waiting for its target: a dashed box on the actor, asking.
+        C.setFocalAnimal('id_1');
+        await (await import('/pose/initialization.js')).navigateToFrame(1600);
+        C.codeBehavior('b4');
+        const pend = C.behaviorBoxesAt(s, 1600);
+        out.pending = pend ? pend.items.filter(i => i.dashed && /\?/.test(i.parts.map(p => p[0]).join(''))).map(i => i.animals) : null;
+        C.cancelPendingTarget();
+        C.setBehaviorBoxesVisible(false);
+        out.hidden = C.behaviorBoxesAt(s, 1420) === null;
+        C.setBehaviorBoxesVisible(true);
+        L.cancelRunning(s, 'b1', 'Alice', '');
+        return out;
     });
-    check(chips.forAlice && chips.forAlice.length === 1 && chips.forAlice[0].text === 'groom' && chips.forId1 === null,
-        `the frame's chips name what each animal is doing (${JSON.stringify(chips.forAlice)})`);
-    check(chips.hits > 50, `a chip is drawn above the animal in its behavior's color (${chips.hits} px)`);
-    check(chips.hidden, 'the tab\'s "On video" switch turns them off');
+    check(boxes.items.some(i => i.text === 'chase · id_1 → id_2' && !i.dashed && i.animals.join() === 'id_1,id_2'),
+        `a social bout boxes both animals, labelled with who does it to whom (${JSON.stringify(boxes.items)})`);
+    check(boxes.items.some(i => i.text === '● rear · Alice' && i.dashed), 'a bout still being coded is dashed and marked ●');
+    check(boxes.chaseRight > 40, `the chase box reaches the animal seen only as a reprojection (${boxes.chaseRight} px)`);
+    check(boxes.chaseLeft === 0 && boxes.rearLeft > 40, `and leaves out the animal not in it (${boxes.chaseLeft} px), which has its own box (${boxes.rearLeft} px)`);
+    check(JSON.stringify(boxes.pending) === '[["id_1"]]', `a social behavior waiting for its target boxes its actor, asking (${JSON.stringify(boxes.pending)})`);
+    check(boxes.hidden, 'the tab\'s "On video" switch turns the boxes off');
 
     check(errs.length === 0, `no page errors (${errs.join(' | ').slice(0, 300)})`);
     console.log(fails === 0 ? '\nPASS' : `\nFAIL — ${fails} check(s)`);
