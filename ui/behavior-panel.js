@@ -18,7 +18,7 @@
 // labelled in the middle of proofreading.
 //
 // Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-mode.js,
-//             ui/behavior-ethogram-modal.js, ui/behavior-timeline.js,
+//             ui/behavior-ethogram-modal.js, ui/behavior-io-modal.js, ui/behavior-timeline.js,
 //             ui/panel-visibility.js, ui/section-state.js, ui/settings.js,
 //             ui/rendering.js, pose/behavior-ethogram.js, pose/behavior-labels.js,
 //             import-export/save-load.js
@@ -32,6 +32,7 @@ import {
 } from './behavior-coding.js';
 import { toggleBehaviorMode, exitBehaviorMode, isBehaviorModeActive } from './behavior-mode.js';
 import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-modal.js';
+import { showBehaviorImportModal, showBehaviorExportModal } from './behavior-io-modal.js';
 import { ABSENT_COLOR } from './behavior-timeline.js';
 import { isInfoPanelVisible } from './panel-visibility.js';
 import { persistSectionStates } from './section-state.js';
@@ -261,7 +262,7 @@ function renderSummary(session) {
         var b = behaviorById(r.behaviorId);
         var labelled = r.presentFrames + r.absentFrames;
         html += '<tr><td>' + esc(r.animal) + '</td><td>' + esc(b ? b.name : '?') + '</td><td class="num">' + n(r.bouts) + '</td>' +
-            '<td class="num">' + secs(r.presentFrames) + '</td><td class="num">' + (r.bouts ? secs(r.presentFrames / r.bouts) : '–') + '</td>' +
+            '<td class="num">' + secs(r.presentFrames) + '</td><td class="num">' + (r.bouts ? secs(r.boutFrames / r.bouts) : '–') + '</td>' +
             '<td class="num">' + (labelled ? Math.round(100 * r.presentFrames / labelled) + '%' : '–') + '</td></tr>';
     });
     html += '</tbody></table>';
@@ -435,6 +436,8 @@ export function setupBehaviorUi(deps) {
     on('menuBehaviorMode', toggleBehaviorMode);
     on('menuBehaviorEthogram', showEthogramModal);
     on('menuBehaviorReviewed', showMarkReviewedModal);
+    on('menuBehaviorImport', showBehaviorImportModal);
+    on('menuBehaviorExport', showBehaviorExportModal);
     on('tbBehaviorMode', toggleBehaviorMode);
     on('behaviorModeBtn', toggleBehaviorMode);
     on('behaviorModeExit', exitBehaviorMode);
