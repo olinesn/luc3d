@@ -10,7 +10,8 @@
  *      behavior, a mutual pair in both animals' tables.
  *   4. The time budget counts a frame once however many bouts cover it.
  *   5. BORIS tabular and aggregated layouts (BORIS 8 headers, START/STOP/POINT,
- *      the target as the modifier, no "not" labels).
+ *      the target as the modifier, no "not" labels), and SimBA's reading of the
+ *      tabular one: Image index START..STOP inclusive gives back exactly the bout.
  *   6. Round trips: BORIS aggregated and tabular, and LUC3D's bouts table, back
  *      into a fresh session give the same frames at 30, 29.97, 120 and 1000 fps.
  *   7. A BORIS project: kinds, keys, colors, exclusions as groups (a clique
@@ -153,8 +154,9 @@ console.log('\n5. BORIS layouts');
     const col = (name) => h.indexOf(name);
     const rear = tab.filter(r => r[col('Behavior')] === 'rear' && r[col('Subject')] === 'id_1');
     check(rear.length === 2 && rear[0][col('Behavior type')] === 'START' && rear[0][col('Time')] === '0.333' &&
-        rear[1][col('Behavior type')] === 'STOP' && rear[1][col('Time')] === '0.667' && rear[1][col('Image index')] === 20,
+        rear[1][col('Behavior type')] === 'STOP' && rear[1][col('Time')] === '0.667',
         'a state is START at start/fps and STOP at (end + 1)/fps — no row for its "not" labels');
+    check(rear[0][col('Image index')] === 10 && rear[1][col('Image index')] === 19, 'Image index: the first and the last frame');
     check(tab.filter(r => r[col('Behavior type')] === 'POINT').length === 2, 'points are POINT rows');
     const chase = tab.filter(r => r[col('Behavior')] === 'chase');
     check(chase.length === 4 && eq(chase.map(r => r[col('Modifier #1')]).sort(), ['id_2', 'id_2', 'id_3', 'id_3']), 'the target is the modifier');
@@ -169,8 +171,43 @@ console.log('\n5. BORIS layouts');
     check(ar[ac('Behavior type')] === 'STATE' && ar[ac('Start (s)')] === '0.333' && ar[ac('Stop (s)')] === '0.667' && ar[ac('Duration (s)')] === '0.333',
         'a state bout: Start, Stop = (end + 1)/fps, Duration');
     check(ar[ac('Comment start')] === 'tall, "very"', 'the note is the start comment');
+    check(ar[ac('Image index start')] === 10 && ar[ac('Image index stop')] === 19, 'Image index start / stop: the first and last frame');
     const jp = agg.find(r => r[ac('Behavior')] === 'jump');
-    check(jp[ac('Behavior type')] === 'POINT' && jp[ac('Start (s)')] === jp[ac('Stop (s)')] && jp[ac('Duration (s)')] === 'NA', 'a point: Stop = Start, no duration');
+    check(jp[ac('Behavior type')] === 'POINT' && jp[ac('Start (s)')] === jp[ac('Stop (s)')] && jp[ac('Duration (s)')] === 'NA' &&
+        jp[ac('Image index start')] === jp[ac('Image index stop')], 'a point: Stop = Start, no duration, one Image index');
+    // SimBA's BORIS import, as its source does it (simba/utils/read_write.py read_boris_file, and
+    // third_party_label_appenders/BORIS_appender.py): frames come from Image index when every value is a
+    // number (else int(Time × FPS)); START and STOP rows pair in order; a bout is labelled
+    // range(start, stop + 1), STOP inclusive; POINT rows are dropped. SimBA pairs per behavior within one
+    // video, so this pairs per (subject, behavior, modifier) to read a multi-animal file the same way.
+    const simbaFrames = (csvText) => {
+        const t = parseDelimited(csvText, ',');
+        const h = t[0], at = (n) => h.indexOf(n), body = t.slice(1);
+        const useIndex = at('Image index') >= 0 && body.every(r => r[at('Image index')] !== '' && Number.isFinite(Number(r[at('Image index')])));
+        const frameOf = (r) => useIndex ? Number(r[at('Image index')]) : Math.trunc(Number(r[at('Time')]) * Number(r[at('FPS')]));
+        const open = new Map(), got = new Set();
+        body.forEach(r => {
+            const k = [r[at('Subject')], r[at('Behavior')], at('Modifier #1') >= 0 ? r[at('Modifier #1')] : ''].join('|');
+            const type = r[at('Behavior type')];
+            if (type === 'START') open.set(k, frameOf(r));
+            else if (type === 'STOP' && open.has(k)) {
+                for (let f = open.get(k); f <= frameOf(r); f++) got.add(k + '@' + f);
+                open.delete(k);
+            }
+        });
+        return got;
+    };
+    const want = new Set();
+    exportBoutRows(info(30).session).forEach(r => {
+        const b = behaviors().find(x => x.id === r[0]);
+        if (!r[5] || b.kind === 'point') return;
+        for (let f = r[3]; f <= r[4]; f++) want.add([r[1], b.name, r[2]].join('|') + '@' + f);
+    });
+    for (const fps of [30, 29.97, 120]) {
+        const got = simbaFrames(toDelimited(borisTabularTable([info(fps)]), ','));
+        check(got.size === want.size && [...want].every(k => got.has(k)),
+            `SimBA reads the tabular CSV back as exactly the bouts' frames at ${fps} fps (${got.size} of ${want.size} frames)`);
+    }
     resetEthogram();
     addBehavior({ name: 'rear' });
     const s2 = { name: 'x' };
