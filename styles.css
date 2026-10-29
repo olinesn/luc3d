@@ -5399,6 +5399,92 @@ kbd {
 .tri-methods .tm-arrowhead { fill: var(--text-secondary); }
 .tri-methods .tm-leader { stroke: var(--text-muted); stroke-width: 0.8; }
 
+/* The reprojection error threshold card: each camera's image, in the first
+   solve and the solve again without the dropped camera. */
+.tri-thr {
+  margin-top: 10px;
+}
+
+.tri-thr-ctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 440px;
+  margin: 10px 0 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tri-thr-ctl input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.tri-thr-ctl output {
+  min-width: 48px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.tri-thr-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px 20px;
+  margin-top: 10px;
+}
+
+.tri-thr-step[hidden] {
+  display: none;
+}
+
+.tri-thr-step-name {
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.tri-thr-views {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tri-thr .tri-thr-view svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: none;
+  margin: 0 0 4px;
+  overflow: hidden;
+}
+
+.tri-thr-view-name,
+.tri-thr-view-err {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.tri-thr-view-err { font-variant-numeric: tabular-nums; }
+.tri-thr-view.is-in .tri-thr-view-err { color: var(--success-color); }
+.tri-thr-view.is-over .tri-thr-view-err { color: var(--warning-color); }
+.tri-thr-view.is-drop .tri-thr-view-err { color: var(--error-color); }
+.tri-thr-view.is-out .tri-thr-view-err { color: var(--text-muted); }
+.tri-thr-view.is-out svg { opacity: 0.35; }
+
+.tri-methods-col p.tri-thr-result {
+  margin-top: 12px;
+  color: var(--text-primary);
+}
+
+.tri-methods-col p.tri-thr-result.tri-thr-lost { color: var(--error-color); }
+
+.tri-methods .tm-frame { fill: var(--bg-secondary); stroke: var(--border-color); stroke-width: 1; }
+.tri-methods .is-drop .tm-frame { stroke: var(--error-color); }
+.tri-methods .tm-thr { fill: none; stroke: var(--text-secondary); stroke-width: 1.2; stroke-dasharray: 3 2.5; }
+.tri-methods .tm-key-thr { border: 1.5px dashed var(--text-secondary); width: 8px; height: 8px; }
+
 /* Settings ▸ Temporal Smoothing: what the Median and Gaussian windows do
    (ui/smoothing-windows-figure.js). */
 .smooth-fig {

@@ -358,9 +358,19 @@ export function showSettingsModal(initialPanel) {
     triPanel.appendChild(triTitle);
 
     // The two methods are chosen by clicking their diagram cards
-    // (`ui/triangulation-methods-figure.js`), not separate rows.
-    const triFigure = buildTriangulationMethodsFigure();
-    const methodCards = Array.from(triFigure.querySelectorAll('.tri-method-choice'));
+    // (`ui/triangulation-methods-figure.js`), not separate rows. Its third card
+    // shows the Tracking Wizard's reprojection error threshold for the picked
+    // method; its slider sets the same working value and the wizard's field.
+    const reprojThresholdDef = thresholdDefs.find(function (d) { return d.id === 'reprojErrorThreshold'; });
+    const triFigure = buildTriangulationMethodsFigure({
+        onThreshold: function (value) {
+            working.thresholds.reprojErrorThreshold = value;
+            const field = reprojThresholdDef && panelContainer.querySelector(
+                '.settings-panel[data-panel="wizard"] input[aria-label="' + reprojThresholdDef.label + '"]');
+            if (field) field.value = String(value);
+        },
+    });
+    const methodCards = Array.from(triFigure.el.querySelectorAll('.tri-method-choice'));
     function pickMethod(method) {
         working.method = method;
         methodCards.forEach(function (c) {
@@ -368,14 +378,16 @@ export function showSettingsModal(initialPanel) {
             c.classList.toggle('checked', on);
             c.setAttribute('aria-checked', on ? 'true' : 'false');
         });
+        triFigure.update({ method: method });
     }
     // Enter/Space on a focused card is handled in `onDocKeyDown`: it stops
     // every keydown in the capture phase, so a listener on the card never runs.
     methodCards.forEach(function (c) {
         c.addEventListener('click', function () { pickMethod(c.dataset.method); });
     });
+    triFigure.update({ threshold: working.thresholds.reprojErrorThreshold });
     pickMethod(working.method);
-    triPanel.appendChild(triFigure);
+    triPanel.appendChild(triFigure.el);
 
     // Docs link for additional information on triangulation methods.
     const triDocsNote = document.createElement('div');
@@ -691,8 +703,11 @@ export function showSettingsModal(initialPanel) {
     thresholdDefs.forEach(function (def) {
         const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore' ||
             def.id === 'filterMinMeanNodeScore';
-        thSection.body.appendChild(buildParamRow(def, working.thresholds,
-            isFilter ? function () { filterPreview.update(); } : null));
+        const onEdit = isFilter ? function () { filterPreview.update(); }
+            : def.id === 'reprojErrorThreshold'
+                ? function () { triFigure.update({ threshold: working.thresholds.reprojErrorThreshold }); }
+                : null;
+        thSection.body.appendChild(buildParamRow(def, working.thresholds, onEdit));
         // The readout goes right under the last of the three filter fields.
         if (def.id === 'filterMinMeanNodeScore') thSection.body.appendChild(filterPreview.root);
     });

@@ -9289,7 +9289,11 @@ Wizard, Default Triangulation, Temporal Smoothing, then Keyboard Shortcuts):
 clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
 DLT or "Refined (Ref)" = bundle adjustment — no separate rows; Enter/Space on a
 focused card is handled in `onDocKeyDown`, which stops every keydown in the
-capture phase, so a listener on the card would never run), **Keyboard Shortcuts** (the
+capture phase, so a listener on the card would never run; the figure's third
+card draws the wizard's reprojection error threshold for the picked method:
+`pickMethod` and the wizard field's `onEdit` redraw it, and its slider sets
+`working.thresholds.reprojErrorThreshold` and the wizard field through
+`onThreshold`), **Keyboard Shortcuts** (the
 `getActions()` catalog by category; an editable entry's key chip captures a
 **chord or multi-key sequence** — keys accumulate, Ctrl/Cmd normalized to `Mod`
 via `chordFromEvent`, until a click sets it or Esc cancels; duplicates are
@@ -11289,6 +11293,19 @@ entirely, so it gets no line, landing spot or error (a `null` landing). Captions
 so they wrap; the sketches are inline SVG coloured by theme variables
 (`.tri-methods` in `styles.css`).
 
+A third, full-width card (`.tri-thr`, not a choice) shows the Tracking Wizard's
+**reprojection error threshold** (`reprojErrorThreshold`) on the same three
+cameras, as each camera's image: its 2D detection, where the 3D answer lands,
+the error between them and a dashed circle of the threshold's radius. Step 1 is
+the first solve with the picked method (DLT misses the cameras by 17 / 24 /
+30 px, Refined by 3 / 3 / 65), step 2 the solve again without the dropped
+camera (3 / 3 px; the 3 px is the miss a top-down view cannot show). Which
+camera is dropped, and whether the node keeps its 3D, comes from
+`thresholdPasses`, the rule `triangulateAndReproject` applies; the pixel
+errors are made up, in proportion to the sketches'. `update({ method,
+threshold })` redraws it; at 0 (off, the default) it is drawn with a 15 px
+example, labelled as one. Its slider reports through `opts.onThreshold`.
+
 **The coordinates are an illustration, not solver output.** They were computed
 once for this layout (an equal-weight least-squares point for DLT, a robust
 pixel-error minimum for Refined) and are hard-coded; the real solvers are
@@ -11301,9 +11318,21 @@ step leaves everyday points slightly worse. Its "never worse than DLT" guard is
 on the in-sample reprojection error only. The caption (and the toolbar's Ref
 tooltip in `index.html`) say just that.
 
-**Key exports.** `buildTriangulationMethodsFigure()` → a `<figure>`.
+**Keep the threshold card's rule the solver's.** `thresholdPasses(cameras,
+solve, threshold)` restates the loop in `triangulateAndReproject` (drop only the
+worst view over the threshold per pass, never below 2 views, an error equal to
+the threshold is not over it, a node whose last views still miss is cleared).
+`tests/test-triangulation-threshold-figure.mjs` feeds it the solver's own
+errors on noisy scenes and checks it predicts the solver node for node; change
+both together. The card also says the threshold is not used by Track All's
+matching (`pose/cross-view-tracker.js` solves plain DLT on every view).
 
-**Imports.** None. **Imported by** `ui/settings-modal.js`.
+**Key exports.** `buildTriangulationMethodsFigure(opts)` → `{ el, update }`
+(`opts.onThreshold(px)`); `thresholdPasses` (pure, Node-importable).
+
+**Imports.** None. **Imported by** `ui/settings-modal.js`,
+`tests/test-triangulation-threshold-figure.mjs`. e2e:
+`tests/e2e/triangulation-threshold-figure.mjs`.
 
 ### ui/smoothing-windows-figure.js
 
