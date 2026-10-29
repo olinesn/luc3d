@@ -2772,7 +2772,10 @@ inclusive) plus `minDuration` and `maxGap` in seconds (`normalizeDetector`).
 `detectorProblems` says why one cannot run (unknown feature, a height in 2D, a
 pair feature on a non-social behavior). `DETECTOR_TEMPLATES` (rearing,
 immobile, locomotion, contact ↔, nose-to-nose ↔, anogenital approach →,
-following →; `{head}` filled by `instantiateTemplate`). Scores
+following →; `{head}` filled by `instantiateTemplate`); their values come
+from four real recordings, as the comment above them explains: rearing 0.7 BL,
+immobile 0.1 BL/s (raise it for jittery tracking), nose-to-nose ≥ 0.2 s with
+0.2 s gaps joined, following also needs the two headed within 60°. Scores
 (`scoreConditions`): each condition σ(margin / scale), scale = 10% of the
 threshold with a floor per unit (`conditionScale`), the frame's score the
 lowest — but the decision is exact: every condition met ⇒ ≥ 0.5, else < 0.5,

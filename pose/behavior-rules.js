@@ -96,16 +96,29 @@ export function detectorProblems(detector, catalog, social) {
 /**
  * Starting points for common behaviors. `{head}` stands for the head node's
  * name. Thresholds are in body lengths (BL) and BL/s, set for mice and rats;
- * check them against the histogram in the settings. Rearing is 0.6 BL: on
- * real recordings 0.5 also caught heads merely raised (it was the 78th
- * percentile of nose height on a 5-mouse arena).
+ * check them against the histogram in the settings. Set from four real
+ * recordings (a 5-mouse arena, three SLAP home cages), looking at bouts just
+ * above and below each value:
+ *   - rearing 0.7 BL: bouts peaking at 0.7–0.9 BL were rears in 13 of 16
+ *     pictures, those at 0.5–0.7 clearly so in 3 of 16 (raised heads, a
+ *     raised tail, a mouse on all fours);
+ *   - immobile 0.1 BL/s: speed has no natural break, and a resting animal
+ *     reads faster when tracking jitters (the stillest 1% of frames: 0.056
+ *     BL/s on the 5-mouse arena, 0.012–0.021 in the cages) — raise it for
+ *     crowded or noisy recordings;
+ *   - nose-to-nose 0.2 s with gaps of 0.2 s joined, like the other social
+ *     templates: the same time in contact, 7–41% fewer bouts; shorter ones
+ *     were mostly noses passing near each other;
+ *   - following needs the two headed within 60° of each other: without it,
+ *     half the bouts on the 5-mouse arena were mice crossing or meeting
+ *     head-on.
  */
 export var DETECTOR_TEMPLATES = [
     { id: 'rearing', name: 'rearing', social: false, mutual: false,
       description: 'The head is high above the floor',
-      detector: { conditions: [{ feature: '{head} height · mean ±0.1 s', op: '>', value: 0.6 }], minDuration: 0.3, maxGap: 0.2 } },
+      detector: { conditions: [{ feature: '{head} height · mean ±0.1 s', op: '>', value: 0.7 }], minDuration: 0.3, maxGap: 0.2 } },
     { id: 'immobile', name: 'immobile', social: false, mutual: false,
-      description: 'The body hardly moves',
+      description: 'The body hardly moves (raise the speed for jittery tracking)',
       detector: { conditions: [{ feature: 'centroid speed · mean ±0.3 s', op: '<', value: 0.1 }], minDuration: 1, maxGap: 0.2 } },
     { id: 'locomotion', name: 'locomotion', social: false, mutual: false,
       description: 'The body moves along the floor',
@@ -115,15 +128,16 @@ export var DETECTOR_TEMPLATES = [
       detector: { conditions: [{ feature: 'min node distance', op: '<', value: 0.15 }], minDuration: 0.2, maxGap: 0.2 } },
     { id: 'nose-to-nose', name: 'nose-to-nose', social: true, mutual: true,
       description: 'The two heads are close together',
-      detector: { conditions: [{ feature: 'head–head distance', op: '<', value: 0.2 }], minDuration: 0.1, maxGap: 0.1 } },
+      detector: { conditions: [{ feature: 'head–head distance', op: '<', value: 0.2 }], minDuration: 0.2, maxGap: 0.2 } },
     { id: 'anogenital', name: 'anogenital approach', social: true, mutual: false,
       description: "The actor's head is at the target's tail base",
       detector: { conditions: [{ feature: 'head–tail base distance', op: '<', value: 0.25 }], minDuration: 0.2, maxGap: 0.2 } },
     { id: 'following', name: 'following', social: true, mutual: false,
-      description: 'The target is ahead (within ±45°), close, and both are moving',
+      description: 'The target is ahead (within ±45°), close, headed the same way (within 60°), and both are moving',
       detector: { conditions: [
           { feature: 'target bearing', op: '<', value: 45 },
           { feature: 'centroid distance', op: '<', value: 2 },
+          { feature: 'relative heading', op: '<', value: 60 },
           { feature: 'centroid speed · mean ±0.3 s', op: '>', value: 0.5 },
           { feature: TARGET_PREFIX + 'centroid speed · mean ±0.3 s', op: '>', value: 0.5 },
       ], minDuration: 0.5, maxGap: 0.3 } },

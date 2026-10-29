@@ -70,7 +70,13 @@ console.log('\n-- 1. detectors --');
         'templates: rearing, immobile, locomotion, contact, nose-to-nose, anogenital approach, following');
     const rear = instantiateTemplate(DETECTOR_TEMPLATES.find(t => t.id === 'rearing'), { head: 'Nose' });
     check(rear.detector && rear.detector.conditions[0].feature === 'Nose height · mean ±0.1 s', 'the rearing template takes the head node');
-    check(rear.detector.conditions[0].value === 0.6, 'rearing: the head more than 0.6 BL above the floor (0.5 caught raised heads on real recordings)');
+    check(rear.detector.conditions[0].value === 0.7, 'rearing: the head more than 0.7 BL above the floor (below it, few bouts on real recordings were clear rears)');
+    const n2n = DETECTOR_TEMPLATES.find(t => t.id === 'nose-to-nose').detector;
+    check(n2n.minDuration === 0.2 && n2n.maxGap === 0.2, 'nose-to-nose: at least 0.2 s, gaps of 0.2 s joined (like contact and anogenital approach)');
+    const fol = DETECTOR_TEMPLATES.find(t => t.id === 'following').detector.conditions;
+    check(fol.some(c => c.feature === 'relative heading' && c.op === '<' && c.value === 60),
+        'following: the two headed within 60° of each other (crossing or meeting head-on is not following)');
+    check(DETECTOR_TEMPLATES.find(t => t.id === 'immobile').detector.conditions[0].value === 0.1, 'immobile: still below 0.1 BL/s');
     check(/head node/.test(instantiateTemplate(DETECTOR_TEMPLATES.find(t => t.id === 'rearing'), {}).error), 'without a head it says so');
     const every = DETECTOR_TEMPLATES.every(t => {
         const r = instantiateTemplate(t, { head: 'Nose' });
