@@ -214,6 +214,14 @@ try {
         b.spec = T.featureSpec(b.input, b.body, b.floorInfo.floor, det.detectionFps());
         return { info: { fps: b.spec.fps, bodyLength: b.spec.bodyLength.map((v) => +v.toFixed(1)) } };
     }));
+    await stage('broken tracking check', () => page.evaluate(async () => {
+        const T = await import('./pose/behavior-tensor.js');
+        const b = window.__bi;
+        b.broken = T.brokenPoseFrames(b.input, b.body, b.spec.bodyLength, b.spec.fps);
+        const tracked = b.input.frames.reduce((s, x) => s + x, 0);
+        return { info: { skipped: b.broken.total, pctOfTracked: +(100 * b.broken.total / Math.max(1, tracked)).toFixed(2),
+                         nodeOffBody: b.broken.far.reduce((s, x) => s + x, 0), jumps: b.broken.jumps.reduce((s, x) => s + x, 0) } };
+    }));
     await page.evaluate(async () => {
         const eth = await import('./pose/behavior-ethogram.js');
         const rules = await import('./pose/behavior-rules.js');
@@ -241,7 +249,7 @@ try {
             const whole = {};
             const jobs0 = window.__bw.jobs;
             const r = await pool.runBehaviorChunks(chunks.length, (i) => ({ kind: 'scores', spec: x.spec, chunk: chunks[i],
-                data: F.sliceChunkData(input.data, chunks[i], N * D), plan: { request: plan.request, plans: plan.plans } }),
+                data: F.sliceChunkData(input.data, chunks[i], N * D, x.broken.masks), plan: { request: plan.request, plans: plan.plans } }),
             (i, res) => {
                 const sc = res.scores[b.id];
                 for (const k of Object.keys(sc)) { if (!whole[k]) whole[k] = new Float32Array(T).fill(NaN); whole[k].set(sc[k], chunks[i].start); }
@@ -259,7 +267,7 @@ try {
         const det = await import('./ui/behavior-detect.js');
         const eth = await import('./pose/behavior-ethogram.js');
         const x = window.__bi;
-        const ctx = { input: x.input, spec: x.spec, catalog: F.catalogFor(x.spec) };
+        const ctx = { input: x.input, spec: x.spec, catalog: F.catalogFor(x.spec), broken: x.broken };
         const names = [];
         for (const b of eth.behaviors()) for (const c of (b.detector ? b.detector.conditions : [])) if (!names.includes(c.feature)) names.push(c.feature);
         const cols = await det.computeFeatureColumns(ctx, names);

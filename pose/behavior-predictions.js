@@ -50,7 +50,7 @@
 
 import { behaviorById, featureSettings } from './behavior-ethogram.js';
 import { boutIntervals, labelBouts } from './behavior-labels.js';
-import { resolveBody } from './behavior-tensor.js';
+import { resolveBody, POSE_CHECK_VERSION } from './behavior-tensor.js';
 import { POINT3D_STRIDE, points3dNodeCount } from './pose-data.js';
 
 var SEP = '\u0001';
@@ -112,7 +112,9 @@ function bodyPrint(session) {
 
 /**
  * What a run of `behavior` depends on besides the poses: its detector, the
- * resolved body, the floor in effect, the frame rate, and 2D vs 3D.
+ * resolved body, the floor in effect, the frame rate, 2D vs 3D, and which
+ * frames count as broken tracking (`POSE_CHECK_VERSION`, so runs from before
+ * a change to that check go stale).
  * @param {Object} behavior
  * @param {Session} session
  * @param {{fps:number, mode?:string, camera?:string, floorKey?:string}} env
@@ -124,7 +126,7 @@ export function runConfigPrint(behavior, session, env) {
     var floor = env.mode === '2d' ? '' : env.floorKey != null ? env.floorKey : (fs && fs.floor ? JSON.stringify(fs.floor) : 'auto');
     return fnv(JSON.stringify([behavior && behavior.detector || null, bodyPrint(session), floor,
         Math.round((env.fps || 0) * 1000) / 1000, env.mode || '', env.camera || '',
-        behavior ? [behavior.kind, !!behavior.social, !!behavior.mutual] : null]));
+        behavior ? [behavior.kind, !!behavior.social, !!behavior.mutual] : null, POSE_CHECK_VERSION]));
 }
 
 function mix(a, b) {

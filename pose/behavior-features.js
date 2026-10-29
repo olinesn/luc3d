@@ -778,9 +778,20 @@ export function planChunks(numFrames, pad, chunkFrames) {
 /**
  * Slice animal data for one chunk: `data[a]` (whole session, N × dim per
  * frame) -> a copy covering [padStart, padEnd), safe to transfer to a worker.
+ * `skip[a][t]` set (pose/behavior-tensor.js `brokenPoseFrames`) blanks that
+ * frame in the copy, so every feature reads it as missing.
  */
-export function sliceChunkData(data, chunk, framesStride) {
-    return data.map(function (arr) { return arr.slice(chunk.padStart * framesStride, chunk.padEnd * framesStride); });
+export function sliceChunkData(data, chunk, framesStride, skip) {
+    return data.map(function (arr, a) {
+        var out = arr.slice(chunk.padStart * framesStride, chunk.padEnd * framesStride);
+        var m = skip && skip[a];
+        if (m) {
+            for (var t = chunk.padStart; t < chunk.padEnd; t++) {
+                if (m[t]) out.fill(NaN, (t - chunk.padStart) * framesStride, (t - chunk.padStart + 1) * framesStride);
+            }
+        }
+        return out;
+    });
 }
 
 /**

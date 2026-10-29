@@ -40,12 +40,21 @@
 // The two horizontal axes are built from `up` alone (`floorFrame`), since no
 // feature may depend on them.
 //
+// ## Broken tracking
+//
+// `brokenPoseFrames` marks the animal-frames whose tracking is clearly broken
+// — a used node far off the body, or the body jumping faster than an animal
+// can move — and the features skip them (`sliceChunkData`'s masks: those
+// frames read as missing). Without it a 3D point triangulated from the wrong
+// detections reads as a rear, and a jump to another animal as a run.
+//
 // DOM-free.
 //
-// Depends on: pose/pose-data.js, pose/plane-fit.js
+// Depends on: pose/pose-data.js, pose/plane-fit.js, pose/behavior-features.js
 
 import { POINT3D_STRIDE, points3dNodeCount } from './pose-data.js';
 import { jacobiEigen } from './plane-fit.js';
+import { halfFrames, SPEED_HALF_SECONDS } from './behavior-features.js';
 
 // ----------------------------------------------------------------------------
 // Node roles
@@ -415,6 +424,121 @@ export function bodyLengths(input, body) {
         bl = median(vals);
         return bl > 0 ? bl : 1;
     });
+}
+
+// ----------------------------------------------------------------------------
+// Broken tracking
+// ----------------------------------------------------------------------------
+
+/**
+ * Bumped whenever what `brokenPoseFrames` skips changes: a run records it
+ * (pose/behavior-predictions.js `runConfigPrint`), so runs made before go stale.
+ */
+export var POSE_CHECK_VERSION = 1;
+
+/**
+ * A used node farther than this from the body's middle, in body lengths, is
+ * off the body. On four real recordings the farthest used node of 99% of
+ * poses sat within 0.86–1.88 BL of the middle, with a thin tail of broken
+ * poses running out to hundreds.
+ */
+export var BROKEN_NODE_BL = 1.2;
+
+/**
+ * The middle moving more than this many body lengths between frames, and
+ * faster than `BROKEN_SPEED_BL_S`, is a jump no animal makes (a mouse
+ * sprinting covers about 10 BL/s). The step limit keeps jitter at high frame
+ * rates from counting.
+ */
+export var BROKEN_STEP_BL = 0.5;
+export var BROKEN_SPEED_BL_S = 20;
+
+/** Past this gap (seconds) between two frames with a middle, no jump is judged. */
+var BROKEN_GAP_S = 1;
+
+/** The median of the first `n` values of `vals`, sorted in place (n is small). */
+function medianFirst(vals, n) {
+    for (var i = 1; i < n; i++) {
+        var v = vals[i], j = i - 1;
+        while (j >= 0 && vals[j] > v) { vals[j + 1] = vals[j]; j--; }
+        vals[j + 1] = v;
+    }
+    var h = n >> 1;
+    return n % 2 ? vals[h] : (vals[h - 1] + vals[h]) / 2;
+}
+
+/**
+ * The animal-frames whose tracking is clearly broken, for the features to
+ * skip. A frame is broken when a used node sits more than `BROKEN_NODE_BL`
+ * body lengths from the body's middle — the per-axis median of the used nodes,
+ * so one stray node cannot drag it; it needs at least half of them — or when
+ * that middle jumps more than `BROKEN_STEP_BL` body lengths, faster than
+ * `BROKEN_SPEED_BL_S`, from the last frame that had one. Around a jump, every
+ * frame a speed's central difference (± `SPEED_HALF_SECONDS`) could span
+ * across it is skipped too, so no speed straddles it.
+ * @param {Object} input from `collectBehaviorInput`
+ * @param {Object} body from `resolveBody`
+ * @param {number[]} bodyLength per animal, in data units (`bodyLengths`)
+ * @param {number} fps
+ * @returns {{masks: Uint8Array[], far: number[], jumps: number[], frames: number[], total: number}}
+ *   `masks[a][t]` is 1 to skip; per animal, the frames with a node off the
+ *   body, the jumps, and the frames skipped in all
+ */
+export function brokenPoseFrames(input, body, bodyLength, fps) {
+    var N = input.nodeNames.length, D = input.dim, T = input.numFrames;
+    var used = (body && body.used) || [];
+    var rate = fps > 0 ? fps : 30;
+    var k = halfFrames(SPEED_HALF_SECONDS, rate);
+    var maxGap = Math.max(1, Math.round(BROKEN_GAP_S * rate));
+    var need = Math.max(3, Math.ceil(used.length / 2));
+    var present = new Int32Array(used.length), vals = new Float64Array(used.length);
+    var mid = new Float64Array(D), prev = new Float64Array(D);
+    var out = { masks: [], far: [], jumps: [], frames: [], total: 0 };
+    input.data.forEach(function (arr, a) {
+        var mask = new Uint8Array(T);
+        var BL = bodyLength ? bodyLength[a] : NaN;
+        var far = 0, jumps = 0, prevT = -1;
+        if (BL > 0 && used.length >= 3) {
+            var lim2 = BROKEN_NODE_BL * BL * BROKEN_NODE_BL * BL;
+            for (var t = 0; t < T; t++) {
+                var base = t * N * D, m = 0;
+                for (var i = 0; i < used.length; i++) {
+                    var o = base + used[i] * D;
+                    if (arr[o] === arr[o]) present[m++] = used[i];
+                }
+                if (m < need) continue;
+                for (var d = 0; d < D; d++) {
+                    for (var j = 0; j < m; j++) vals[j] = arr[base + present[j] * D + d];
+                    mid[d] = medianFirst(vals, m);
+                }
+                // A node off the body.
+                for (var q = 0; q < m; q++) {
+                    var s = 0;
+                    for (var d2 = 0; d2 < D; d2++) { var u = arr[base + present[q] * D + d2] - mid[d2]; s += u * u; }
+                    if (s > lim2) { mask[t] = 1; far++; break; }
+                }
+                // A jump of the middle from the last frame that had one: skip
+                // [prevT − k + 1, t + k − 1], every frame a central difference
+                // over ±k could pair across it.
+                if (prevT >= 0 && t - prevT <= maxGap) {
+                    var s2 = 0;
+                    for (var d3 = 0; d3 < D; d3++) { var w = mid[d3] - prev[d3]; s2 += w * w; }
+                    var step = Math.sqrt(s2);
+                    if (step > BROKEN_STEP_BL * BL && step > BROKEN_SPEED_BL_S * BL * (t - prevT) / rate) {
+                        jumps++;
+                        for (var f = Math.max(0, prevT - k + 1); f <= Math.min(T - 1, t + k - 1); f++) mask[f] = 1;
+                    }
+                }
+                prevT = t;
+                for (var d4 = 0; d4 < D; d4++) prev[d4] = mid[d4];
+            }
+        }
+        var frames = 0;
+        for (var g = 0; g < T; g++) frames += mask[g];
+        out.masks.push(mask); out.far.push(far); out.jumps.push(jumps); out.frames.push(frames);
+        out.total += frames;
+    });
+    return out;
 }
 
 // ----------------------------------------------------------------------------

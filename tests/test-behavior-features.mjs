@@ -26,10 +26,11 @@
 
 import {
     featureCatalog, windowStat, bandPower, computeFeatureChunk, planChunks, sliceChunkData, featurePadFrames,
-    halfFrames, resolveFeatureName, TARGET_PREFIX,
+    halfFrames, resolveFeatureName, TARGET_PREFIX, SPEED_HALF_SECONDS,
 } from '../pose/behavior-features.js';
 import {
     guessNodeRoles, defaultExcludedNodes, resolveBody, bodyLengths, fitFloor, floorFrame, featureSpec, floorFromPlane,
+    brokenPoseFrames,
 } from '../pose/behavior-tensor.js';
 
 let passed = 0, failed = 0;
@@ -381,6 +382,101 @@ console.log('\n-- 8. body, floor --');
         'with them, the level bodies give the true floor (up · z = ' + byBodies.up[2].toFixed(4) + ')');
     const lowest = byBodies.origin[0] * byBodies.up[0] + byBodies.origin[1] * byBodies.up[1] + byBodies.origin[2] * byBodies.up[2];
     check(Math.abs(lowest) < 20, 'on the bottom shelf, not the ones at 120 or 240 mm (' + lowest.toFixed(1) + ' mm)');
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n-- 9. broken tracking is skipped --');
+{
+    const N = NODES.length, D = 3;
+    const copyWorld = (w) => Object.assign({}, w, { data: w.data.map((arr) => arr.slice()) });
+    const shift = (w, a, t, dx, dy, dz, nodes) => {
+        for (const n of nodes || NODES.map((_, i) => i)) {
+            const o = (t * N + n) * D;
+            if (w.data[a][o] !== w.data[a][o]) continue;
+            w.data[a][o] += dx; w.data[a][o + 1] += dy; w.data[a][o + 2] += dz;
+        }
+    };
+    const flagged = (mask) => { const out = []; for (let t = 0; t < mask.length; t++) if (mask[t]) out.push(t); return out; };
+    const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+    const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);
+    const bl = bodyLengths(world, body);
+    const k = halfFrames(SPEED_HALF_SECONDS, FPS);
+
+    const clean = brokenPoseFrames(world, body, bl, FPS);
+    check(clean.total === 0, 'sound poses — walking, a rear, a node missing for 10 frames — skip nothing (' + clean.total + ')');
+
+    // A stray nose 3 BL above animal 1 on frames 300–304.
+    const stray = copyWorld(world);
+    for (let t = 300; t <= 304; t++) shift(stray, 1, t, 0, 0, 3 * bl[1], [0]);
+    const s1 = brokenPoseFrames(stray, body, bl, FPS);
+    check(same(flagged(s1.masks[1]), range(300, 304)) && s1.far[1] === 5 && s1.jumps[1] === 0 && s1.total === 5,
+        'a node 3 BL off the body: exactly its 5 frames (' + flagged(s1.masks[1]).join(',') + ')');
+
+    // Animal 2's whole body 2 BL away for one frame (500), then back.
+    const blip = copyWorld(world);
+    shift(blip, 2, 500, 2 * bl[2], 0, 0);
+    const s2 = brokenPoseFrames(blip, body, bl, FPS);
+    check(same(flagged(s2.masks[2]), range(500 - k, 500 + k)) && s2.jumps[2] === 2 && s2.far[2] === 0,
+        'a one-frame excursion: the frame and the ±' + k + ' a speed could span across it (' + flagged(s2.masks[2]).join(',') + ')');
+
+    // From frame 700 on, animal 1's track carries on 2 BL away (a switch to another animal).
+    const swap = copyWorld(world);
+    for (let t = 700; t < swap.numFrames; t++) shift(swap, 1, t, 0, 2 * bl[1], 0);
+    const s3 = brokenPoseFrames(swap, body, bl, FPS);
+    check(same(flagged(s3.masks[1]), range(700 - k, 700 + k - 1)) && s3.jumps[1] === 1,
+        'a lasting jump: only the frames a speed could span across it (' + flagged(s3.masks[1]).join(',') + ')');
+
+    // Fast but possible: 12 BL/s for a second, at 60 and at 30 fps.
+    const run = (fps) => {
+        const w = copyWorld(world);
+        for (let t = 800; t < w.numFrames; t++) shift(w, 0, t, Math.min(t - 800, fps) * 12 * bl[0] / fps, 0, 0);
+        return brokenPoseFrames(w, body, bl, fps).total;
+    };
+    check(run(60) === 0 && run(30) === 0, 'a sprint at 12 BL/s is never a jump, at 60 or 30 fps');
+
+    // Lengths scale with the body: the same scene 3× larger (and its body lengths).
+    const big = Object.assign({}, blip, { data: blip.data.map((arr) => arr.map((v) => v * 3)) });
+    const s4 = brokenPoseFrames(big, body, bodyLengths(big, body), FPS);
+    check(same(flagged(s4.masks[2]), flagged(s2.masks[2])) && s4.total === s2.total, 'scaled 3×: the same frames');
+
+    // No jump is judged across a gap over a second.
+    const gap = copyWorld(world);
+    gap.data[0].fill(NaN, 900 * N * D, 980 * N * D);
+    for (let t = 980; t < gap.numFrames; t++) shift(gap, 0, t, 3 * bl[0], 0, 0);
+    check(brokenPoseFrames(gap, body, bl, FPS).total === 0, 'reappearing 3 BL away after 1.3 s missing is not a jump');
+
+    // Slicing blanks the skipped frames in the copy only.
+    const ch = { start: 290, end: 310, padStart: 280, padEnd: 320 };
+    const sl = sliceChunkData(stray.data, ch, N * D, s1.masks);
+    const plain = sliceChunkData(stray.data, ch, N * D);
+    let blanks = true, kept = true;
+    for (let t = ch.padStart; t < ch.padEnd; t++) {
+        const o = (t - ch.padStart) * N * D;
+        const isNaN_ = sl[1][o] !== sl[1][o];
+        if (s1.masks[1][t] ? !isNaN_ : sl[1][o] !== plain[1][o]) { blanks = false; }
+    }
+    for (let i = 0; i < plain[0].length; i++) if (sl[0][i] !== plain[0][i] && !(sl[0][i] !== sl[0][i] && plain[0][i] !== plain[0][i])) kept = false;
+    const sourceKept = Number.isFinite(stray.data[1][302 * N * D]);
+    check(blanks && kept && sourceKept, 'slicing blanks only the skipped frames, in the copy');
+
+    // Through the features: the stray nose no longer reads as a raised head, chunked or not.
+    const floor = floorFrame([0, 0, 0], [0, 0, 1]);
+    const spec = featureSpec(stray, body, floor, FPS);
+    const names = ['Nose height · mean ±0.1 s', 'centroid speed · mean ±0.3 s'];
+    const maxOf = (arr, a0, a1) => { let m = -Infinity; for (let t = a0; t <= a1; t++) if (arr[t] > m) m = arr[t]; return m; };
+    const raw = computeFeatureChunk(spec, wholeChunk(spec, stray), { animal: names, pair: [], pairs: [] });
+    const skipped = computeFeatureChunk(spec, Object.assign(wholeChunk(spec, stray), { data: sliceChunkData(stray.data, { padStart: 0, padEnd: stray.numFrames }, N * D, s1.masks) }),
+        { animal: names, pair: [], pairs: [] });
+    check(maxOf(raw.animal[1][names[0]], 295, 310) > 1 && maxOf(skipped.animal[1][names[0]], 295, 310) < 0.5,
+        'nose height around the stray frames: ' + maxOf(raw.animal[1][names[0]], 295, 310).toFixed(2) + ' BL raw, ' +
+        maxOf(skipped.animal[1][names[0]], 295, 310).toFixed(2) + ' BL with them skipped');
+    const merged = {};
+    for (const c2 of planChunks(stray.numFrames, featurePadFrames(spec), 257)) {
+        const r = computeFeatureChunk(spec, Object.assign({}, c2, { data: sliceChunkData(stray.data, c2, N * D, s1.masks) }), { animal: names, pair: [], pairs: [] });
+        names.forEach((nm) => { if (!merged[nm]) merged[nm] = new Float32Array(stray.numFrames); merged[nm].set(r.animal[1][nm], c2.start); });
+    }
+    const c3 = compareResults({ animal: [skipped.animal[1]], pair: {} }, { animal: [merged], pair: {} }, names, []);
+    check(c3.worst < 1e-5, 'with skipped frames, chunks still give the one-pass values (worst ' + c3.worst.toExponential(2) + ')');
 }
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

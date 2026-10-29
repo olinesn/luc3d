@@ -314,7 +314,7 @@ function readoutHtml() {
         html += '<div class="behavior-readout-row' + (row.detected ? ' is-on' : '') + '">' +
             '<span class="behavior-swatch" style="background:' + esc(b.color) + '"></span>' +
             '<b>' + (row.detected ? '' : 'not ') + esc(b.name) + '</b> · ' + esc(row.animal) + (row.target ? esc(pairGlyph(b)) + esc(row.target) : '') +
-            ' <span class="behavior-pred-score">' + (Number.isFinite(row.score) ? scorePct(row.score) : 'missing data') + '</span>' +
+            ' <span class="behavior-pred-score">' + (Number.isFinite(row.score) ? scorePct(row.score) : row.broken ? 'tracking broken here: skipped' : 'missing data') + '</span>' +
             '<div class="behavior-readout-conds">' + row.conditions.map(function (c) {
                 var ok = Number.isFinite(c.actual) && (c.op === '<' ? c.actual <= c.value : c.actual >= c.value);
                 return '<div class="' + (ok ? 'is-ok' : 'is-no') + '">' + (ok ? '✓ ' : '✗ ') + esc(c.feature) + ' = ' +

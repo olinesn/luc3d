@@ -16,6 +16,10 @@
 // lowest points. A choice that cannot be honoured (the plane has no fit, the
 // origin was cleared) falls back to the fit and says so.
 //
+// Frames whose tracking is clearly broken (a node off the body, a jump no
+// animal makes: pose/behavior-tensor.js `brokenPoseFrames`) are skipped by
+// every feature, here and in the settings' histograms; a run says how many.
+//
 // Predictions go stale when their poses change: every markDirty notes that
 // they may have, and a check (one pass over the poses) runs shortly after the
 // edits stop, never on a draw.
@@ -30,7 +34,7 @@ import { planeModel, getPlanes } from './plane-definition.js';
 import { originState } from './origin-definition.js';
 import { behaviors, behaviorById, featureSettings } from '../pose/behavior-ethogram.js';
 import {
-    collectBehaviorInput, resolveBody, fitFloor, floorFromPlane, floorFromOrigin, featureSpec,
+    collectBehaviorInput, resolveBody, fitFloor, floorFromPlane, floorFromOrigin, featureSpec, brokenPoseFrames,
 } from '../pose/behavior-tensor.js';
 import { featurePadFrames, planChunks, sliceChunkData, catalogFor, TARGET_PREFIX } from '../pose/behavior-features.js';
 import { planDetectors, detectorBouts, orderedPairs, combineMutual } from '../pose/behavior-rules.js';
@@ -148,10 +152,10 @@ export function resolveFloor(input, body, settings) {
 
 /**
  * Everything a run reads, for the active session: the poses, the body, the
- * floor and the feature spec.
+ * floor, the feature spec and the frames to skip (broken tracking).
  * @param {Session} session
  * @param {{mode?: '3d'|'2d'}} [opts]
- * @returns {{session, input, body, floorInfo, spec, catalog, fps}}
+ * @returns {{session, input, body, floorInfo, spec, catalog, fps, broken}}
  */
 export function buildBehaviorContext(session, opts) {
     var settings = featureSettings();
@@ -160,7 +164,22 @@ export function buildBehaviorContext(session, opts) {
     var floorInfo = resolveFloor(input, body, settings);
     var fps = detectionFps();
     var spec = featureSpec(input, body, floorInfo.floor, fps);
-    return { session: session, input: input, body: body, floorInfo: floorInfo, spec: spec, catalog: catalogFor(spec), fps: fps };
+    return { session: session, input: input, body: body, floorInfo: floorInfo, spec: spec, catalog: catalogFor(spec), fps: fps,
+             broken: brokenPoseFrames(input, body, spec.bodyLength, fps) };
+}
+
+/** A context's frames to skip, as `sliceChunkData` takes them. */
+function skipOf(ctx) {
+    return ctx.broken ? ctx.broken.masks : null;
+}
+
+/** "skipped broken tracking on 0.9% of frames" for a status line ('' when nothing was). */
+function brokenNote(ctx) {
+    var b = ctx.broken;
+    if (!b || !b.total) return '';
+    var tracked = ctx.input.frames.reduce(function (s, x) { return s + x; }, 0);
+    var pct = tracked > 0 ? 100 * b.total / tracked : 0;
+    return 'skipped broken tracking on ' + (pct < 0.1 ? 'under 0.1' : pct.toFixed(1)) + '% of frames';
 }
 
 // The last context, kept a minute for This frame and the settings dialog
@@ -204,7 +223,8 @@ export function refreshBehaviorContext(ctx) {
     var floorInfo = resolveFloor(ctx.input, body, settings);
     var fps = detectionFps();
     var spec = featureSpec(ctx.input, body, floorInfo.floor, fps);
-    return Object.assign({}, ctx, { body: body, floorInfo: floorInfo, spec: spec, catalog: catalogFor(spec), fps: fps });
+    return Object.assign({}, ctx, { body: body, floorInfo: floorInfo, spec: spec, catalog: catalogFor(spec), fps: fps,
+                                    broken: brokenPoseFrames(ctx.input, body, spec.bodyLength, fps) });
 }
 
 // ----------------------------------------------------------------------------
@@ -286,7 +306,7 @@ export async function detectAllFrames() {
             input.animals.length + ' animal' + (input.animals.length === 1 ? '' : 's') + ' · ' + (input.mode === '3d' ? '3D' : '2D, ' + input.camera);
         var doneFrames = 0;
         await runBehaviorChunks(chunks.length, function (i) {
-            return { kind: 'scores', spec: ctx.spec, chunk: chunks[i], data: sliceChunkData(input.data, chunks[i], N * D), plan: jobPlan };
+            return { kind: 'scores', spec: ctx.spec, chunk: chunks[i], data: sliceChunkData(input.data, chunks[i], N * D, skipOf(ctx)), plan: jobPlan };
         }, function (i, res) {
             var ch = chunks[i];
             if (!res) return;
@@ -333,7 +353,8 @@ export async function detectAllFrames() {
         markDirty();
         // That edit was this run's own: the poses it read are still current.
         if (_ctxCache && _ctxCache.ctx === ctx) _ctxCache.gen = _editGen;
-        setStatus('Detected ' + n(total) + ' bout' + (total === 1 ? '' : 's') + ': ' + counts.join(', ') +
+        var broken = brokenNote(ctx);
+        setStatus('Detected ' + n(total) + ' bout' + (total === 1 ? '' : 's') + ': ' + counts.join(', ') + (broken ? ' · ' + broken : '') +
             (ctx.floorInfo.warning ? ' · ' + ctx.floorInfo.warning : '') + (notes.length ? ' · Skipped ' + notes.join(' · ') : ''),
             notes.length || ctx.floorInfo.warning ? 'warning' : 'success');
         return { bouts: total };
@@ -396,13 +417,15 @@ export function detectThisFrame() {
             if (into.indexOf(c.name) < 0) into.push(c.name);
         });
     });
-    var res = runJob({ kind: 'scores', spec: ctx.spec, chunk: chunk, data: sliceChunkData(input.data, chunk, input.nodeNames.length * input.dim),
+    var skip = skipOf(ctx);
+    var res = runJob({ kind: 'scores', spec: ctx.spec, chunk: chunk, data: sliceChunkData(input.data, chunk, input.nodeNames.length * input.dim, skip),
         plan: { request: plan.request, plans: plan.plans }, extra: { columns: names } });
     var rows = [];
     plan.plans.forEach(function (p) {
         Object.keys(res.scores[p.behaviorId]).forEach(function (k) {
             var nm = namesOfKey(input, k);
             var parts = String(k).split('>');
+            var broken = !!skip && parts.some(function (x) { return x !== '' && skip[+x] && skip[+x][f]; });
             var score = res.scores[p.behaviorId][k][0];
             var conds = p.conditions.map(function (c) {
                 var col;
@@ -411,7 +434,7 @@ export function detectThisFrame() {
                 return { feature: (c.who === 'target' ? TARGET_PREFIX : '') + c.name, op: c.op, value: c.value, unit: c.unit,
                          actual: col ? col[0] : NaN };
             });
-            rows.push({ behaviorId: p.behaviorId, animal: nm[0], target: nm[1], score: score, detected: score >= 0.5, conditions: conds });
+            rows.push({ behaviorId: p.behaviorId, animal: nm[0], target: nm[1], score: score, detected: score >= 0.5, broken: broken, conditions: conds });
         });
     });
     rows.sort(function (a, b) { return (b.detected - a.detected) || ((b.score || 0) - (a.score || 0)); });
@@ -460,7 +483,7 @@ export async function computeFeatureColumns(ctx, names, opts) {
     if (!animalNames.length && !pairs.length) return out;
     var chunks = planChunks(T, featurePadFrames(ctx.spec), CHUNK_FRAMES);
     await runBehaviorChunks(chunks.length, function (i) {
-        return { kind: 'features', spec: ctx.spec, chunk: chunks[i], data: sliceChunkData(input.data, chunks[i], N * D),
+        return { kind: 'features', spec: ctx.spec, chunk: chunks[i], data: sliceChunkData(input.data, chunks[i], N * D, skipOf(ctx)),
                  request: { animal: animalNames, pair: pairNames, pairs: pairs } };
     }, function (i, res) {
         if (!res) return;

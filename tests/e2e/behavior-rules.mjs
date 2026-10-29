@@ -54,7 +54,8 @@ try {
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // Two mice walking circles on the floor (z = 0); mouse 0 rears on 500–620;
-    // on 1500–1560 they stand nose to nose.
+    // on 1500–1560 they stand nose to nose, having walked there over the 2 s
+    // before and walking back after (a teleport would read as broken tracking).
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js');
         const AS = await import('/ui/app-state.js');
@@ -64,18 +65,29 @@ try {
         const session = new pd.Session([], new pd.Skeleton('m', NODES, [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5]]), [], 'Rules');
         for (let i = 0; i < 2; i++) session.addIdentity('id_' + i);
         let gid = 1;
+        const walk = (k, t) => { const ang = 0.5 * t / 30 + k * 3; return [700 * k + 200 * Math.cos(ang), 200 * Math.sin(ang), ang + Math.PI / 2]; };
+        // Where they meet, and the step before (noses 0.47 BL apart, one 30 mm step away).
+        const MEET = [[0, 0, 0], [100, 0, Math.PI]], NEAR = [[0, 0, 0], [130, 0, Math.PI]];
         for (let t = 0; t < T; t++) {
             session.instanceGroups.set(t, [0, 1].map(k => {
                 const g = new pd.InstanceGroup(gid++, session.identities[k].id);
                 const p = new Float64Array(NODES.length * 3);
                 let cx, cy, hd;
-                if (t >= 1500 && t <= 1560) { cx = k === 0 ? 0 : 100; cy = 0; hd = k === 0 ? 0 : Math.PI; }
-                else { const ang = 0.5 * t / 30 + k * 3; cx = 700 * k + 200 * Math.cos(ang); cy = 200 * Math.sin(ang); hd = ang + Math.PI / 2; }
+                if (t >= 1500 && t <= 1560) [cx, cy, hd] = MEET[k];
+                else if (t >= 1440 && t < 1500) {
+                    const f = (t - 1440) / 59, w = walk(k, 1440);
+                    cx = w[0] + f * (NEAR[k][0] - w[0]); cy = w[1] + f * (NEAR[k][1] - w[1]); hd = NEAR[k][2];
+                } else if (t > 1560 && t <= 1620) {
+                    const f = (t - 1561) / 59, w = walk(k, 1620);
+                    cx = NEAR[k][0] + f * (w[0] - NEAR[k][0]); cy = NEAR[k][1] + f * (w[1] - NEAR[k][1]); hd = NEAR[k][2];
+                } else [cx, cy, hd] = walk(k, t);
                 const rear = k === 0 && t >= 500 && t <= 620;
                 for (let n = 0; n < NODES.length; n++) {
                     p[3 * n] = cx + ALONG[n] * Math.cos(hd); p[3 * n + 1] = cy + ALONG[n] * Math.sin(hd);
                     p[3 * n + 2] = rear && n <= 2 ? [95, 85, 65][n] : H[n];
                 }
+                // Broken tracking: mouse 1's nose 400 mm up (≈ 4.7 BL) on 2000–2010.
+                if (k === 1 && t >= 2000 && t <= 2010) p[2] = 400;
                 g.points3d = p;
                 return g;
             }));
@@ -114,7 +126,10 @@ try {
     await page.click('#tbBehavior');
     await page.waitForFunction(() => document.getElementById('tbBehavior').classList.contains('active'), null, { timeout: 30000 });
     const inline = await predicted();
-    check(eq(inline.filter(b => b[0] === 'b1'), [['b1', 'id_0', '', 500, 620]]), 'rear: exactly frames 500–620, mouse 0 only');
+    check(eq(inline.filter(b => b[0] === 'b1'), [['b1', 'id_0', '', 500, 620]]),
+        'rear: exactly frames 500–620, mouse 0 only (mouse 1\'s stray nose on 2000–2010 is skipped, not a rear)');
+    const detectStatus = await page.evaluate(() => document.getElementById('statusText').textContent);
+    check(/skipped broken tracking on [\d.]+% of frames/.test(detectStatus), 'the status says what it skipped (' + (detectStatus.match(/skipped[^·]*/) || [''])[0].trim() + ')');
     check(eq(inline.filter(b => b[0] === 'b2'), [['b2', 'id_0', 'id_1', 1500, 1560]]), 'nose-to-nose (mutual, 0.5 s minimum): the meeting, once per pair ' +
         JSON.stringify(inline.filter(b => b[0] === 'b2')));
     const hInline = await scoresHash();
@@ -140,6 +155,13 @@ try {
     check(readout.length >= 1 && /rear/.test(readout[0]) && /id_0/.test(readout[0]) && /✓ Nose height = /.test(readout[0]),
         'This frame (560): rear · id_0, with its condition met (' + (readout[0] || '').slice(0, 70) + ')');
     check(readout.some(r => /not rear/.test(r) && /id_1/.test(r) && /✗ Nose height/.test(r)), 'and mouse 1: not rear, condition not met');
+    await goTo(2005);
+    await page.click('#tbBehaviorFrame').catch(async () => { await page.hover('#tbBehavior'); await page.click('#tbBehaviorFrame'); });
+    await page.waitForFunction(() => /2,006|2006/.test((document.querySelector('.behavior-readout-head') || {}).textContent || ''), null, { timeout: 10000 });
+    const strayRows = await page.evaluate(() => Array.from(document.querySelectorAll('.behavior-readout-row')).map(r => r.textContent));
+    check(strayRows.some(r => /rear/.test(r) && /id_1/.test(r) && /tracking broken here/.test(r)),
+        'This frame on the stray nose (2005): mouse 1 is skipped, said so');
+    await goTo(560);
     check(await page.evaluate(() => document.querySelector('.panel-tab[data-tab="tabBehavior"]').classList.contains('active')),
         'the Behavior tab opens to show it');
     const lock = await page.evaluate(async () => {

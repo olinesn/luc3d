@@ -2681,16 +2681,31 @@ SLAP home cage), a grid over the other two, per cell the 5th height percentile o
 each side, trimmed least-squares planes — and picks the floor side by the
 cameras (≥ 70% on one side), else the heights' skew (bodies rise from the floor),
 else the flatter envelope; all from data, so it moves with the world.
-`featureSpec(input, body, floor, fps)` is what the feature engine takes. DOM-free.
+`featureSpec(input, body, floor, fps)` is what the feature engine takes.
+Broken tracking: `brokenPoseFrames(input, body, bodyLength, fps)` →
+`{masks: Uint8Array[] (1 = skip), far, jumps, frames, total}` marks an
+animal-frame broken when a used node is more than `BROKEN_NODE_BL` (1.2) body
+lengths from the body's middle (per-axis median of the used nodes, at least
+half of them present), or when that middle jumps more than `BROKEN_STEP_BL`
+(0.5) BL and faster than `BROKEN_SPEED_BL_S` (20 BL/s) from the last frame that
+had one (not across a gap over 1 s); around a jump it skips every frame a
+central-difference speed could span across it, so no speed straddles it. The
+features skip masked frames (`sliceChunkData`'s `skip`). On four real
+recordings: 0.8–1.7% of tracked animal-frames, and most of the 100%-score
+locomotion bouts (tracking errors) go. `POSE_CHECK_VERSION` is in every run's
+config print. DOM-free.
 
 **Exports.** `guessNodeRoles`, `defaultExcludedNodes`, `resolveBody`,
 `hasIdentified3d`, `pick2dCamera`, `collectBehaviorInput`, `bodyLengths`,
-`floorFrame`, `floorFromPlane`, `floorFromOrigin`, `fitFloor`, `featureSpec`.
+`POSE_CHECK_VERSION`, `BROKEN_NODE_BL`, `BROKEN_STEP_BL`, `BROKEN_SPEED_BL_S`,
+`brokenPoseFrames`, `floorFrame`, `floorFromPlane`, `floorFromOrigin`,
+`fitFloor`, `featureSpec`.
 
 **Imports.** `./pose-data.js` (`POINT3D_STRIDE`, `points3dNodeCount`),
-`./plane-fit.js` (`jacobiEigen`). **Imported by** `ui/behavior-detect.js`,
-`pose/behavior-predictions.js` (`resolveBody`). **Tests.**
-`tests/test-behavior-features.mjs` §5, §8, `tests/e2e/behavior-rules.mjs` §7 (2D).
+`./plane-fit.js` (`jacobiEigen`), `./behavior-features.js` (`halfFrames`,
+`SPEED_HALF_SECONDS`). **Imported by** `ui/behavior-detect.js`,
+`pose/behavior-predictions.js` (`resolveBody`, `POSE_CHECK_VERSION`). **Tests.**
+`tests/test-behavior-features.mjs` §5, §8, §9 (broken tracking), `tests/e2e/behavior-rules.mjs` §7 (2D).
 
 ### pose/behavior-features.js
 
@@ -2717,6 +2732,9 @@ depend on fps). `computeFeatureChunk` computes only the REQUESTED features over
 a chunk padded by `featurePadFrames`, so chunks equal one pass and the frames ×
 features matrix is never built. In a social behavior a name may be relational,
 the actor's own, or the target's (`TARGET_PREFIX`, `resolveFeatureName`).
+`sliceChunkData(data, chunk, stride, skip)` copies a chunk's poses and blanks
+the frames `skip[a]` marks (broken tracking), so every feature reads them as
+missing.
 
 **Exports.** `FEATURE_SPEC_VERSION`, `WINDOW_SECONDS`, `WINDOW_STATS`, `BANDS`,
 `SPEED_HALF_SECONDS`, `BAND_HALF_SECONDS`, `VIEW_HALF_ANGLE`, `STAT_SEP`,
@@ -2730,7 +2748,7 @@ the actor's own, or the target's (`TARGET_PREFIX`, `resolveFeatureName`).
 `ui/behavior-rules-modal.js`. **Tests.** `tests/test-behavior-features.mjs`
 (catalog, window stats vs brute force, band power, chunked = one pass,
 invariance under rotation + translation with an explicit and a fitted floor,
-NaN masking, meaning).
+NaN masking, meaning, skipped frames §9).
 
 ### pose/behavior-postprocess.js
 
@@ -2786,8 +2804,9 @@ bouts: [{animal, target, start, end, score}], scores: Map<'animal\u0001target',
 Float32Array> (in memory only)}`, a mutual pair in name order. STALE when the
 settings changed — `runConfigPrint(behavior, session, {fps, mode, camera,
 floorKey})` = detector + resolved body (head, tail base, used nodes, on the
-session's skeleton) + the floor in effect + fps + 2D/3D, compared with the
-run's `cfg` — or the poses changed: `predictionInputPrint` is an order-free
+session's skeleton) + the floor in effect + fps + 2D/3D + `POSE_CHECK_VERSION`
+(which frames count as broken tracking), compared with the run's `cfg` — or
+the poses changed: `predictionInputPrint` is an order-free
 sum/xor hash of every coordinate (to 1e-3) with its frame, identity and node
 (3D from groups; 2D from resident frames plus a lazy project's store rows, so
 residency changes nothing). Edits only `notePossibleInputChange` (cheap); the
@@ -2813,7 +2832,7 @@ DOM-free.
 `importPredictionRuns`, `resetBehaviorPredictions`.
 
 **Imports.** `./behavior-ethogram.js`, `./behavior-labels.js`,
-`./behavior-tensor.js` (`resolveBody`), `./pose-data.js`. **Imported by**
+`./behavior-tensor.js` (`resolveBody`, `POSE_CHECK_VERSION`), `./pose-data.js`. **Imported by**
 `import-export/behavior-metadata.js`, `pose/run-state.js`, `ui/behavior-detect.js`,
 `ui/behavior-panel.js`, `ui/behavior-timeline.js`, `ui/ui-wiring.js` (Rename
 Identity). **Tests.** `tests/test-behavior-rules.mjs` §6–7,
@@ -11863,7 +11882,8 @@ labels a bout present, source "a", Reject labels it "not", and on the
 selected bout either moves on to the next; Next ▸; Accept all in range… (the
 armed range, else every listed bout) asks first (`behaviorConfirm`) and is one
 undo step; a stale banner says why, with Detect again; the This frame readout,
-each condition against its threshold) and Summary (time budget, orphaned labels of a deleted
+each condition against its threshold, "tracking broken here: skipped" when the
+frame is skipped for that animal) and Summary (time budget, orphaned labels of a deleted
 identity to reassign or delete). Skips rendering while hidden.
 `setupBehaviorUi` (from `setupMenus`) binds the menu (including Import Labels… /
 Export Labels…, `ui/behavior-io-modal.js`, Detect Behaviors and Detection
@@ -11971,20 +11991,25 @@ fps, frame count, animals, video path).
 resolves the body (`resolveBody` on `featureSettings()`) and the floor
 (`resolveFloor`: the plane chosen as the floor, else the Set Origin frame — the
 default when one is set —, else `fitFloor` with the cameras' centers; a choice
-that cannot be honoured falls back to the fit and says so) and builds the
-feature spec; `cachedBehaviorContext` keeps the last one a minute, dropped by
-any edit (markDirty), another session or other settings / fps / floor.
+that cannot be honoured falls back to the fit and says so), builds the
+feature spec and marks the broken-tracking frames to skip (`ctx.broken` from
+`brokenPoseFrames`, recomputed by `refreshBehaviorContext`; every slice of
+poses here passes its masks); `cachedBehaviorContext` keeps the last one a
+minute, dropped by any edit (markDirty), another session or other settings /
+fps / floor.
 `detectAllFrames` (the toolbar button, Behavior ▸ Detect Behaviors): plans
 every behavior with a detector, runs `scoreDetectorsChunk` over 8,192-frame
 chunks on the pool behind a progress card, turns scores into bouts, stores one
 run per behavior (`setBehaviorRun`, `cfg` from `runConfigPrint`), prints the
-poses read (sliced) as the stale reference, marks dirty, and reports counts
-and what it skipped (unknown features, social with one animal). No detector →
-opens the settings. `detectThisFrame`: the detectors at the playhead only (a
-padded window, inline), a readout of each animal / pair, score and condition
-values (`frameReadout`, `onFrameReadout`), writing nothing.
+poses read (sliced) as the stale reference, marks dirty, and reports counts,
+the share of frames skipped as broken tracking, and what it skipped (unknown
+features, social with one animal). No detector → opens the settings.
+`detectThisFrame`: the detectors at the playhead only (a padded window,
+inline), a readout of each animal / pair, score and condition values, and
+`broken` when the frame is skipped for its animal(s) (`frameReadout`,
+`onFrameReadout`), writing nothing.
 `computeFeatureColumns(ctx, names)`: whole-session columns for the settings
-dialog. `floorKey()` / `detectionEnv()`: the floor in effect and fps, what
+dialog, broken frames skipped too. `floorKey()` / `detectionEnv()`: the floor in effect and fps, what
 staleness is checked against. `setupBehaviorDetection` registers the markDirty
 hook: every edit notes the poses may have changed, and 600 ms after the edits
 stop a SLICED re-print runs between tasks (abandoned and rescheduled by a newer
