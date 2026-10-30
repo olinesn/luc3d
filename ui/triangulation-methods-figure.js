@@ -149,8 +149,8 @@ var SKETCH_LEGEND = '<svg viewBox="8 137 102 69" class="tm-legend" aria-hidden="
         + '<text x="25" y="3" class="tm-note tm-legend-text">' + row[1] + '</text></g>';
 }).join('') + '</svg>';
 
-var TOTAL_BAR_X = 58, TOTAL_BAR_SCALE = 0.44;   // units per pixel: one scale for every sketch
-var TRUTH_BAR_SCALE = 0.85;                         // units per sketch unit, likewise
+var TOTAL_BAR_X = 58, TOTAL_BAR_SCALE = 0.38;   // units per pixel: one scale for every sketch
+var TRUTH_BAR_SCALE = 0.8;                         // units per sketch unit, likewise
 
 /** How far a solve's projection is from the target, in 3D. */
 function groundTruthError(solve) {
