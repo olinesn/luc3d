@@ -81,7 +81,7 @@ export var FIGURE_SCENE = {
 };
 var CAMS = FIGURE_SCENE.cameras;
 var ALL = [0, 1, 2, 3];
-var STRAY_LABELS = { 2: [229, 70], 3: [160, 8] };    // where each stray's label starts
+var STRAY_LABELS = { 2: [229, 70], 3: [168, 6] };    // where each stray's label starts
 
 function fmt(v) { return Math.round(v * 10) / 10; }
 
@@ -478,9 +478,9 @@ export function buildTriangulationMethodsFigure(opts) {
 
         var kind = !run.kept ? 'lost' : run.passes.length === 1 ? 'first' : run.passes.length === 2 ? 'three' : 'two';
         var res = thr.querySelector('.tri-thr-result');
-        res.innerHTML = stack(RESULT_KINDS.map(function (k) {
-            return resultText(k, k === kind ? fmt(t) : WIDEST_ERROR);
-        }), RESULT_KINDS.indexOf(kind));
+        // Every kind at its widest number, then the one shown.
+        res.innerHTML = stack(RESULT_KINDS.map(function (k) { return resultText(k, WIDEST_ERROR); })
+            .concat(resultText(kind, fmt(t))), RESULT_KINDS.length);
         res.classList.toggle('tri-thr-lost', !run.kept);
         res.dataset.kind = kind;
         res.dataset.method = methodName;
