@@ -6,7 +6,9 @@
 // Wizard, and Temporal Smoothing (the post-triangulation 3D filter's
 // hyperparameters, luc3d #134). All edits are kept in a local working
 // state object and the visual DOM only — nothing is committed to settings.js
-// until the user clicks Apply. Cancel / close / backdrop / Escape discard.
+// until the user clicks Apply. Apply keeps the modal open and its button reads
+// "Applied ✓" until the next edit. Cancel / × / backdrop / Escape discard what
+// has not been applied; with nothing pending, Cancel reads "Close".
 //
 // Styling lives in a separate CSS file; this module only assigns the agreed
 // class names. Only one modal instance may exist at a time.
@@ -239,15 +241,23 @@ export function showSettingsModal(initialPanel) {
     const existing = document.querySelector('.settings-overlay');
     if (existing) existing.remove();
 
-    // --- Working state: all edits mutate this, never settings.js directly. ---
-    const working = {
-        method: getDefaultTriangulationMethod(),
-        keyMap: {},
-        nodeWeights: {},
-        cameraWeights: {},
-        thresholds: {},
-        smoothing: {},
+    // Set once the footer exists: every write to `working` repaints its buttons.
+    let onWorkingEdit = function () {};
+    const watched = function (obj) {
+        return new Proxy(obj, {
+            set: function (target, key, value) { target[key] = value; onWorkingEdit(); return true; },
+        });
     };
+
+    // --- Working state: all edits mutate this, never settings.js directly. ---
+    const working = watched({
+        method: getDefaultTriangulationMethod(),
+        keyMap: watched({}),
+        nodeWeights: watched({}),
+        cameraWeights: watched({}),
+        thresholds: watched({}),
+        smoothing: watched({}),
+    });
     const actions = getActions();
     // Only editable actions are user-rebindable; the working map tracks those.
     actions.forEach(function (a) { if (a.editable) working.keyMap[a.id] = a.binding; });
@@ -306,9 +316,12 @@ export function showSettingsModal(initialPanel) {
     const title = document.createElement('div');
     title.className = 'settings-modal-title';
     title.textContent = 'Settings';
-    const closeBtn = document.createElement('div');
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
     closeBtn.className = 'settings-modal-close';
     closeBtn.textContent = '×';
+    closeBtn.setAttribute('aria-label', 'Close Settings');
+    closeBtn.title = 'Close Settings';
     header.appendChild(title);
     header.appendChild(closeBtn);
     card.appendChild(header);
@@ -802,6 +815,20 @@ export function showSettingsModal(initialPanel) {
     footer.appendChild(applyBtn);
     card.appendChild(footer);
 
+    // The buttons follow `working` against what is stored: an edit undone by hand
+    // has nothing to apply. "Applied" is only said once Apply has been clicked.
+    let storedSnapshot = JSON.stringify(working);
+    let appliedOnce = false;
+    function paintFooter() {
+        const pending = JSON.stringify(working) !== storedSnapshot;
+        applyBtn.disabled = !pending;
+        applyBtn.classList.toggle('is-applied', !pending && appliedOnce);
+        applyBtn.textContent = !pending && appliedOnce ? 'Applied ✓' : 'Apply';
+        cancelBtn.textContent = pending ? 'Cancel' : 'Close';
+    }
+    onWorkingEdit = paintFooter;
+    paintFooter();
+
     // --- Nav behavior -----------------------------------------------------
     function selectPanel(name) {
         Object.keys(navItems).forEach(function (key) {
@@ -844,7 +871,12 @@ export function showSettingsModal(initialPanel) {
         setCameraWeights(working.cameraWeights);
         setTrackingThresholds(working.thresholds);
         setSmoothingParams(working.smoothing);
-        teardown();
+        storedSnapshot = JSON.stringify(working);
+        appliedOnce = true;
+        paintFooter();
+        // The figures' "not saved until you click Apply" notes measure from here now.
+        triFigure.update({ saved: working.thresholds.reprojErrorThreshold });
+        smFigure.update(working.smoothing, Object.assign({}, working.smoothing));
         // Reflect committed camera-inclusion changes immediately: excluded views
         // grey out in both the video overlays and the timeline.
         try { drawAllOverlays(state.currentFrame); } catch (e) { /* no active render yet */ }

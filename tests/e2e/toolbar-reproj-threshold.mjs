@@ -11,7 +11,7 @@
  *     drops a stray camera at 25 and keeps it when the field is blank.
  *  3. Settings shows the field's value (wizard field and figure card), and
  *     Settings ▸ Apply updates the field.
- *  4. Blank and 0 both mean off. A bad entry (-3, 501, a stray "e") reverts with
+ *  4. Blank and 0 both mean off. A bad entry (-3, 641, a stray "e") reverts with
  *     an error status and changes nothing. Esc throws away what was typed.
  *  5. App shortcuts do not fire while typing in it.
  *
@@ -107,6 +107,7 @@ try {
         const i = document.querySelector(w);
         i.value = '40'; i.dispatchEvent(new Event('input'));
         document.querySelector('.settings-btn-apply').click();
+        document.querySelector('.settings-modal-close').click();
         return out;
     }, WIZARD);
     check(settings.field === '25' && /^25 px/.test(settings.tag), `Settings shows it (${settings.field}, ${settings.tag})`);
@@ -119,10 +120,10 @@ try {
     await enter('');
     check(await stored() === 0 && await value() === '', 'blank is off');
     await enter('30');
-    for (const bad of ['-3', '501', 'e']) {
+    for (const bad of ['-3', '641', 'e']) {
         await enter(bad);
         const st = await page.evaluate(() => (document.getElementById('statusText') || document.querySelector('.status-bar') || document.body).textContent);
-        check(await stored() === 30 && await value() === '30' && /must be 0 to 500 px/.test(st), `"${bad}" is refused and reverts`);
+        check(await stored() === 30 && await value() === '30' && /must be 0 to 640 px/.test(st), `"${bad}" is refused and reverts`);
     }
     await enter('77', 'Escape');
     check(await stored() === 30 && await value() === '30', 'Esc throws away what was typed');

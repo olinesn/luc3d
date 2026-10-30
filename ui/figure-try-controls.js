@@ -23,15 +23,29 @@ export function tryStrip(controlsHtml) {
 
 /**
  * A slider with a text box. `o`: `name` (the label), `aria` (what it sets),
- * `min`, `max`, `step` (the text box's range), `sliderMin`, `sliderMax` (the
- * slider's, a typed value past them leaves it at its end), `unit`, `extra` (HTML
- * after the unit), `sliderStart` (a word marking the slider's left end).
+ * `min`, `max`, `step` (the text box's range), `sliderMin`, `sliderMax`, `sliderStep`
+ * (the slider's, a typed value past them leaves it at its end), `unit`, `extra` (HTML
+ * after the unit). A slider whose positions are not the values themselves also gives
+ * `toSlider(value)`, `fromSlider(position)`, and optionally `ticks` ([[position,
+ * label], …], under the track) and `zone` ({ from, to, label }, positions, a band
+ * behind the track).
  */
 export function tryControl(key, o) {
     var sMin = o.sliderMin != null ? o.sliderMin : o.min, sMax = o.sliderMax != null ? o.sliderMax : o.max;
-    return '<div class="fig-ctl" data-try="' + key + '"><span class="fig-ctl-name">' + o.name + '</span>'
-        + (o.sliderStart ? '<span class="fig-ctl-end">' + o.sliderStart + '</span>' : '')
-        + '<input type="range" min="' + sMin + '" max="' + sMax + '" step="' + o.step + '" aria-label="' + o.aria + ' to try (slider)">'
+    function at(pos) { return ((pos - sMin) / (sMax - sMin)).toFixed(4); }
+    var input = '<input type="range" min="' + sMin + '" max="' + sMax + '" step="' + (o.sliderStep || o.step)
+        + '" aria-label="' + o.aria + ' to try (slider)">';
+    if (o.ticks || o.zone) {
+        input = '<span class="fig-slider">'
+            + (o.zone ? '<span class="fig-zone" style="--a:' + at(o.zone.from) + ';--b:' + at(o.zone.to) + '"></span>'
+                + '<span class="fig-zone-label" style="--a:' + at((o.zone.from + o.zone.to) / 2) + '">' + o.zone.label + '</span>' : '')
+            + input
+            + (o.ticks || []).map(function (t) {
+                return '<span class="fig-tick" style="--a:' + at(t[0]) + '">' + t[1] + '</span>';
+            }).join('')
+            + '</span>';
+    }
+    return '<div class="fig-ctl" data-try="' + key + '"><span class="fig-ctl-name">' + o.name + '</span>' + input
         + '<input type="number" class="fig-num" min="' + o.min + '" max="' + o.max + '" step="' + o.step + '" aria-label="' + o.aria + ' to try">'
         + '<span class="fig-ctl-unit">' + (o.unit || '') + '</span>' + (o.extra || '') + '</div>';
 }
@@ -48,7 +62,7 @@ export function wireTryControl(root, key, o, onValue) {
     var el = root.querySelector('[data-try="' + key + '"]');
     var range = el.querySelector('input[type="range"]'), num = el.querySelector('input[type="number"]');
     var last = null;
-    range.addEventListener('input', function () { onValue(+range.value); });
+    range.addEventListener('input', function () { onValue(o.fromSlider ? o.fromSlider(+range.value) : +range.value); });
     num.addEventListener('input', function () {
         var v = parseFloat(num.value);
         if (isFinite(v) && v >= o.min && v <= o.max) onValue(v);
@@ -57,7 +71,8 @@ export function wireTryControl(root, key, o, onValue) {
     return {
         set: function (value, sliderValue) {
             last = value;
-            range.value = String(sliderValue != null ? sliderValue : value);
+            range.value = String(sliderValue != null ? sliderValue : o.toSlider ? o.toSlider(value) : value);
+            if (o.toSlider) range.setAttribute('aria-valuetext', value > 0 ? value + ' ' + (o.unit || '') : 'off');
             if (document.activeElement !== num) num.value = String(value);
         },
     };

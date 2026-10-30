@@ -47,6 +47,8 @@
 // slider's left end is off: every camera counts, no band is drawn and nothing is
 // dropped.
 //
+// In a re-solve, each camera dropped so far is drawn faded (`.tm-dropped`).
+//
 // The card never changes size: every step keeps its place (a faded scene when not
 // reached), and each line whose wording changes is a `stack`.
 //
@@ -116,23 +118,25 @@ function line(a, b, cls) {
 var CAMERA_NUMBERS = CAMS.map(function (c, i) {
     return '<text x="' + fmt(c.at[0] - FORWARD[i][0] * 6) + '" y="' + fmt(c.at[1] - FORWARD[i][1] * 6 + 3.2)
         + '" text-anchor="middle" class="tm-camera-number">' + i + '</text>';
-}).join('');
+});
 
 // Shared by every sketch: each camera's line of sight through its detection and
 // on, then the cameras.
-var RAYS = DETECTIONS.map(function (d, i) {
+var RAY_LIST = DETECTIONS.map(function (d, i) {
     var at = CAMS[i].at, dx = d[0] - at[0], dy = d[1] - at[1], len = Math.hypot(dx, dy);
     // Only as far as just past the target (the stray's, which misses it, as far as the
     // target), to keep the middle of the sketch clear.
     var reach = Math.hypot(FIGURE_SCENE.truth[0] - at[0], FIGURE_SCENE.truth[1] - at[1]) + (STRAY_LABELS[i] ? 0 : 40);
     return line(at, [at[0] + dx / len * reach, at[1] + dy / len * reach], 'tm-ray' + (STRAY_LABELS[i] ? ' tm-ray-stray' : ''));
-}).join('');
+});
+var RAYS = RAY_LIST.join('');
 var CAMERA_BODY = '<rect x="-13" y="-7" width="14" height="14" rx="2" class="tm-cam"/>'
     + '<path d="M1 -4 L7 -7 L7 7 L1 4 Z" class="tm-cam"/>';
-var CAMERA_MARKS = CAMS.map(function (c, i) {
+var CAMERA_LIST = CAMS.map(function (c, i) {
     return line(onPlane(i, -PLANE_HALF * PX_PER_UNIT), onPlane(i, PLANE_HALF * PX_PER_UNIT), 'tm-plane')
-        + '<g transform="translate(' + c.at[0] + ' ' + c.at[1] + ') rotate(' + c.rot + ')">' + CAMERA_BODY + '</g>';
-}).join('') + CAMERA_NUMBERS;
+        + '<g transform="translate(' + c.at[0] + ' ' + c.at[1] + ') rotate(' + c.rot + ')">' + CAMERA_BODY + '</g>' + CAMERA_NUMBERS[i];
+});
+var CAMERA_MARKS = CAMERA_LIST.join('');
 var TRUE_MARK = (function () {
     var t = FIGURE_SCENE.truth, s = 5;
     return line([t[0] - s, t[1]], [t[0] + s, t[1]], 'tm-true') + line([t[0], t[1] - s], [t[0], t[1] + s], 'tm-true');
@@ -205,15 +209,17 @@ function errorTotals(solve, counted) {
  * `overlay` (optional) is drawn over the image planes, under the points.
  */
 function sketch(solve, counted, extra, strayLabel, overlay) {
-    var p = solve.point, s = RAYS;
+    // A camera the solve no longer counts is drawn faded: it is out of the math.
+    function faded(i, html) { return counted.indexOf(i) >= 0 ? html : '<g class="tm-dropped">' + html + '</g>'; }
+    var p = solve.point, s = RAY_LIST.map(function (ray, i) { return faded(i, ray); }).join('');
     counted.forEach(function (i) { s += line(CAMS[i].at, p, 'tm-back'); });
-    s += CAMERA_MARKS + (overlay || '') + extra;
+    s += CAMERA_LIST.map(function (mark, i) { return faded(i, mark); }).join('') + (overlay || '') + extra;
     counted.forEach(function (i) { s += line(DETECTIONS[i], onPlane(i, solve.x[i]), 'tm-gap'); });
     // Over every other line, under the markers.
     s += line(p, FIGURE_SCENE.truth, 'tm-truth-gap') + TRUE_MARK;
     DETECTIONS.forEach(function (d, i) {
         var used = counted.indexOf(i) >= 0, q = used ? onPlane(i, solve.x[i]) : null;
-        s += '<circle cx="' + fmt(d[0]) + '" cy="' + fmt(d[1]) + '" r="3" class="tm-det"/>';
+        s += faded(i, '<circle cx="' + fmt(d[0]) + '" cy="' + fmt(d[1]) + '" r="3" class="tm-det"/>');
         if (q) s += '<circle cx="' + fmt(q[0]) + '" cy="' + fmt(q[1]) + '" r="3.6" class="tm-proj"/>';
     });
     s += '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="5" class="tm-point"/>' + strayLabel;
@@ -274,8 +280,25 @@ function card(method, name, tagline, sketchSvg, caption, cardNote) {
 
 // --- The reprojection error threshold card ------------------------------
 
-var THRESHOLD_SLIDER_MAX = 80;   // a larger value still shows; the slider sits at its end
-var THRESHOLD_MAX = 500;         // the setting's own top (`ui/settings.js`)
+var THRESHOLD_MAX = 640;         // px, half of a 1280 px monitor; the setting's own top (`ui/settings.js`)
+var THRESHOLD_MIN = 1;           // px, the slider's right end
+var SLIDER_POSITIONS = 1000;     // the slider's right end, as a position
+var SLIDER_HIGHEST = 100;        // where off ends and THRESHOLD_MAX starts
+
+// The slider runs from off, then from THRESHOLD_MAX down to THRESHOLD_MIN on a log
+// scale, so moving it right makes the check stricter.
+/** The slider position of a threshold in px (0 = off). */
+export function thresholdSliderPos(px) {
+    if (!(px > 0)) return 0;
+    var v = Math.min(THRESHOLD_MAX, Math.max(THRESHOLD_MIN, px));
+    return Math.round(SLIDER_HIGHEST + (SLIDER_POSITIONS - SLIDER_HIGHEST) * Math.log(THRESHOLD_MAX / v) / Math.log(THRESHOLD_MAX / THRESHOLD_MIN));
+}
+/** The threshold in px at a slider position (0 = off). */
+export function thresholdFromSliderPos(pos) {
+    if (pos < SLIDER_HIGHEST / 2) return 0;
+    if (pos <= SLIDER_HIGHEST) return THRESHOLD_MAX;
+    return Math.max(THRESHOLD_MIN, Math.round(THRESHOLD_MAX * Math.pow(THRESHOLD_MIN / THRESHOLD_MAX, (pos - SLIDER_HIGHEST) / (SLIDER_POSITIONS - SLIDER_HIGHEST))));
+}
 var WIDEST_ERROR = 88.8;         // stands in for the error in the hidden wordings
 var STEP_METHODS = ['DLT', 'Refined'];
 
@@ -401,8 +424,12 @@ function verdictList(pass, states) {
 }
 
 var THRESHOLD_CONTROL = {
-    name: 'Threshold', aria: 'Reprojection error threshold (px)',
-    min: 0, max: THRESHOLD_MAX, step: 1, sliderMax: THRESHOLD_SLIDER_MAX, unit: 'px', sliderStart: 'off',
+    name: 'Threshold', aria: 'Reprojection error threshold (px)', min: 0, max: THRESHOLD_MAX, step: 1, unit: 'px',
+    sliderMin: 0, sliderMax: SLIDER_POSITIONS, sliderStep: 1,
+    toSlider: thresholdSliderPos, fromSlider: thresholdFromSliderPos,
+    ticks: [[0, 'off'], [thresholdSliderPos(THRESHOLD_MAX), String(THRESHOLD_MAX)], [thresholdSliderPos(100), '100'],
+        [thresholdSliderPos(10), '10'], [thresholdSliderPos(THRESHOLD_MIN), String(THRESHOLD_MIN)]],
+    zone: { from: thresholdSliderPos(100), to: thresholdSliderPos(10), label: 'recommended' },
 };
 
 var RESULT_KINDS = ['lost', 'far', 'close', 'one', 'two', 'offFar', 'offClose'];
@@ -482,7 +509,8 @@ export function buildTriangulationMethodsFigure(opts) {
         + 'drawn as a band on the camera\'s image plane: the reprojection must land within that many pixels either side '
         + 'of the prediction. If it lands outside any band, the camera that misses by most is dropped for this '
         + 'node and the node is solved again from the rest; this repeats while more than two cameras are left. A '
-        + 'node whose last two cameras still miss gets no 3D point in this frame.</p>'
+        + 'node whose last two cameras still miss gets no 3D point in this frame. Moving the slider right makes the check '
+        + 'stricter. Past the recommended zone (100 to 10 px) it can start dropping good views too.</p>'
         + tryStrip(tryControl('threshold', THRESHOLD_CONTROL)
             + '<div class="tri-thr-demo-method" role="group" aria-label="First solve to try in the sketch">'
             + '<span>First solve</span>'
@@ -557,7 +585,7 @@ export function buildTriangulationMethodsFigure(opts) {
         var methodName = current.tryMethod === 'ba' ? 'Refined' : 'DLT';
         var table = FIGURE_SCENE.solves[current.tryMethod];
 
-        control.set(fmt(t), Math.min(Math.round(t), THRESHOLD_SLIDER_MAX));
+        control.set(fmt(t));
         thr.querySelector('.fig-big').textContent = off ? 'off' : fmt(t) + ' px';
         demoButtons.forEach(function (b) {
             b.setAttribute('aria-pressed', b.getAttribute('data-demo-method') === current.tryMethod ? 'true' : 'false');

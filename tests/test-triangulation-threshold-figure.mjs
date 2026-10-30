@@ -38,7 +38,7 @@ function group(name) { console.log('\n• ' + name); }
 
 const pd = await import(pathToFileURL(path.join(ROOT, 'pose', 'pose-data.js')).href);
 const core = await import(pathToFileURL(path.join(ROOT, 'pose', 'triangulation-core.js')).href);
-const { thresholdPasses, FIGURE_SCENE } = await import(pathToFileURL(path.join(ROOT, 'ui', 'triangulation-methods-figure.js')).href);
+const { thresholdPasses, FIGURE_SCENE, thresholdSliderPos, thresholdFromSliderPos } = await import(pathToFileURL(path.join(ROOT, 'ui', 'triangulation-methods-figure.js')).href);
 
 // ---------------------------------------------------------------------------
 group('1. the rule on hand-made numbers');
@@ -60,6 +60,19 @@ group('1. the rule on hand-made numbers');
     ok(r.passes.length === 1 && r.passes[0].drop === -1 && !r.kept, 'two cameras from the start: none dropped, the node loses its 3D');
     r = thresholdPasses([0, 1, 2, 3], (cams) => ({ '0,1,2,3': [9, 40, 30, 2], '0,2,3': [8, NaN, 25, 2], '0,3': [1, NaN, NaN, 1] })[cams.join(',')], 10);
     ok(r.passes.map((p) => p.drop).join() === '1,2,-1' && r.kept, 'four cameras: the worst goes first, then the next worst after the re-solve');
+}
+
+// ---------------------------------------------------------------------------
+group('1b. the threshold slider: off, then 640 px down to 1 px on a log scale');
+{
+    ok(thresholdFromSliderPos(0) === 0 && thresholdSliderPos(0) === 0, 'its left end is off');
+    ok(thresholdFromSliderPos(100) === 640 && thresholdFromSliderPos(1000) === 1, 'then 640 px, then 1 px at its right end');
+    let down = true;
+    for (let pos = 101; pos <= 1000; pos++) if (thresholdFromSliderPos(pos) > thresholdFromSliderPos(pos - 1)) down = false;
+    ok(down, 'moving right never raises the threshold');
+    const a = thresholdSliderPos(640), b = thresholdSliderPos(320), c = thresholdSliderPos(160);
+    ok(Math.abs((b - a) - (c - b)) <= 1, 'equal ratios take equal distances (log scale)');
+    for (const px of [1, 2, 7, 10, 25, 50, 53, 100, 300, 640]) ok(Math.abs(thresholdFromSliderPos(thresholdSliderPos(px)) - px) <= Math.max(1, px * 0.01), `${px} px survives the round trip`);
 }
 
 // ---------------------------------------------------------------------------

@@ -152,6 +152,7 @@ try {
         out.paused = +slider('gaussian', 'pos').value === p1;
         // Apply after only trying: the working values typed above, nothing tried.
         document.querySelector('.settings-btn-apply').click();
+        document.querySelector('.settings-modal-close').click();
         const S = await import('/ui/settings.js');
         out.storedTried = S.getSmoothingParam('smoothGaussianWindow');
         // Use.
@@ -166,6 +167,7 @@ try {
         out.offField = field('Median window (frames)').value;
         out.offNow = card('median').querySelector('.fig-setting-now strong').textContent;
         document.querySelector('.settings-btn-apply').click();
+        document.querySelector('.settings-modal-close').click();
         out.stored = S.getSmoothingParam('smoothGaussianWindow');
         out.storedMedian = S.getSmoothingParam('smoothMedianWindow');
         return out;
@@ -207,6 +209,7 @@ try {
         out.usedGap = field('Max gap to smooth across (frames)').value;
         out.usedSeg = field('Minimum segment length (frames)').value;
         document.querySelector('.settings-btn-apply').click();
+        document.querySelector('.settings-modal-close').click();
         const S = await import('/ui/settings.js');
         out.stored = [S.getSmoothingParam('smoothMaxGap'), S.getSmoothingParam('smoothMinSegment')];
         return out;
