@@ -11,11 +11,13 @@
  *     more, only the worst (right) is dropped, the other two are checked again
  *     and land within it after the second solve.
  *  2. Typing 20 in the Tracking Wizard's field redraws it: the left camera is
- *     within, the middle over but kept, the right dropped; circles are 20 px.
+ *     within, the middle over but kept, the right dropped; each step is a
+ *     top-down sketch, with a band 20 px either side of each detection.
  *  3. Picking Refined: the first solve already fits the left and middle
  *     cameras, so only the right is over. At 40 px Refined still drops it but
  *     DLT drops nothing (step 2 hidden). At 2 px the last two cameras still
- *     miss and the node loses its 3D.
+ *     miss and the node loses its 3D. The card and both steps keep one size
+ *     whatever the threshold and method (step 2 keeps its place).
  *  4. The card's slider sets the wizard field, and Apply stores the value.
  *  5. The method cards still pick the method; the threshold card is not one of
  *     them.
@@ -58,20 +60,28 @@ try {
     const read = () => page.evaluate(() => {
         const card = document.querySelector('.tri-methods .tri-thr');
         const step = (n) => card.querySelector(`.tri-thr-step[data-step="${n}"]`);
-        const states = (n) => Array.from(step(n).querySelectorAll('.tri-thr-view'))
-            .map(v => (v.className.match(/is-(\w+)/) || [])[1]).join(',');
+        const rows = (n) => Array.from(step(n).querySelectorAll('.tri-thr-verdicts li'));
+        const states = (n) => rows(n).map(li => (li.className.match(/is-(\w+)/) || [])[1]).join(',');
         const res = card.querySelector('.tri-thr-result');
+        const shown = (el) => { const on = el.querySelector('.tri-thr-stack > .on'); return (on || el).textContent; };
+        // The middle camera's band in step 1 (its image plane is the level one, y = 108).
+        const mid = Array.from(step(1).querySelectorAll('line.tm-band')).find(l => l.getAttribute('y1') === '108');
+        const box = (el) => { const r = el.getBoundingClientRect(); return Math.round(r.width) + 'x' + Math.round(r.height); };
         return {
-            tag: card.querySelector('.tri-thr-tag').textContent,
-            name1: step(1).querySelector('.tri-thr-step-name').textContent,
+            tag: shown(card.querySelector('.tri-thr-tag')),
+            name1: shown(step(1).querySelector('.tri-thr-step-name')),
             s1: states(1),
-            step2: !step(2).hidden,
-            s2: step(2).hidden ? '' : states(2),
-            result: res.textContent,
+            step2: !step(2).classList.contains('is-idle'),
+            s2: step(2).classList.contains('is-idle') ? '' : states(2),
+            result: shown(res),
             lost: res.classList.contains('tri-thr-lost'),
-            radius: +card.querySelector('circle.tm-thr').getAttribute('r'),
-            outCircles: card.querySelectorAll('.tri-thr-view.is-out circle.tm-thr').length,
-            errText: Array.from(step(1).querySelectorAll('.tri-thr-view-err')).map(e => e.textContent),
+            midBand: mid ? Math.abs(+mid.getAttribute('x2') - +mid.getAttribute('x1')) : null,
+            bands2: step(2).querySelectorAll('line.tm-band').length,
+            // Visible text in step 2's verdict rows (none while it shows no second solve).
+            rows2Visible: rows(2).some(li => Array.from(li.querySelectorAll('span')).some(sp => getComputedStyle(sp).visibility === 'visible' && sp.textContent && !sp.children.length && sp.parentElement.classList.contains('tri-thr-stack'))),
+            errText: rows(1).map(li => shown(li)),
+            sketches: card.querySelectorAll('.tri-thr-sketch svg').length,
+            size: box(card) + ' ' + Array.from(card.querySelectorAll('.tri-thr-step')).map(box).join(' '),
             inRadio: !!card.closest('[role="radiogroup"]') || card.classList.contains('tri-method-choice'),
         };
     });
@@ -82,7 +92,8 @@ try {
     check(r.name1.includes('DLT') && r.s1 === 'over,over,drop', `DLT first solve: all over, only the worst dropped (${r.s1})`);
     check(/^17 px/.test(r.errText[0]) && /^24 px/.test(r.errText[1]) && /^30 px.*dropped/.test(r.errText[2]), `errors 17 / 24 / 30 px (${r.errText.join(' | ')})`);
     check(r.step2 && r.s2 === 'in,in,out', `solved again without it: the other two within (${r.s2})`);
-    check(r.outCircles === 0, 'no threshold circle on the camera that no longer counts');
+    check(r.sketches === 2, 'each step is a top-down sketch of the three cameras');
+    check(r.bands2 === 2, `step 2 draws a band only on the two cameras still counted (${r.bands2})`);
     check(/^With 15 px, the right camera is left out/.test(r.result) && !r.lost, `result says so (${r.result.slice(0, 60)}…)`);
     check(!r.inRadio, 'the threshold card is not one of the method choices');
 
@@ -91,7 +102,7 @@ try {
     r = await read();
     check(r.tag === '20 px · DLT', `tag follows (${r.tag})`);
     check(r.s1 === 'in,over,drop' && /checked again/.test(r.errText[1]), `left within, middle over and checked again, right dropped (${r.s1})`);
-    check(Math.abs(r.radius - 25) < 0.01, `circles drawn at 20 px (r ${r.radius})`);
+    check(Math.abs(r.midBand - 20) < 0.11, `bands drawn 20 px either side of the detection (middle camera: ${r.midBand} units at 2 px per unit)`);
 
     console.log('3. Refined, and other thresholds');
     await page.click('.tri-method-choice[data-method="ba"]');
@@ -103,11 +114,21 @@ try {
     check(r.s1 === 'in,in,drop', `Refined at 40 px still drops the stray (65 px) (${r.s1})`);
     await page.click('.tri-method-choice[data-method="dlt"]');
     r = await read();
-    check(r.s1 === 'in,in,in' && !r.step2 && /nothing is dropped/.test(r.result), `DLT at 40 px drops nothing; step 2 hidden (${r.s1})`);
+    check(r.s1 === 'in,in,in' && !r.step2 && /nothing is dropped/.test(r.result), `DLT at 40 px drops nothing; step 2 shows no second solve (${r.s1})`);
+    check(!r.rows2Visible, 'no step-2 verdict shows through while there is no second solve');
     await type(2);
     r = await read();
     check(r.s1 === 'over,over,drop' && r.s2 === 'over,over,out', `2 px: the last two still miss (${r.s1} → ${r.s2})`);
     check(r.lost && /No 3D point for this node/.test(r.result), `the node loses its 3D (${r.result.slice(0, 50)}…)`);
+
+    console.log('3b. the card keeps its size whatever the threshold and method');
+    const sizes = new Set();
+    for (const m of ['dlt', 'ba']) {
+        await page.click(`.tri-method-choice[data-method="${m}"]`);
+        for (const t of [0, 1, 2, 3, 15, 17, 20, 24, 29, 30, 40, 64, 65, 80]) { await type(t); sizes.add((await read()).size); }
+    }
+    await page.click('.tri-method-choice[data-method="dlt"]');
+    check(sizes.size === 1, `one size for the card and both steps across 28 states (${[...sizes].join(' | ')})`);
 
     console.log('4. the slider sets the wizard field; Apply stores it');
     const sl = await page.evaluate(async ([l]) => {
@@ -115,7 +136,7 @@ try {
         range.value = '25'; range.dispatchEvent(new Event('input'));
         const out = {
             field: document.querySelector(`.settings-panel[data-panel="wizard"] input[aria-label="${l}"]`).value,
-            tag: document.querySelector('.tri-thr .tri-thr-tag').textContent,
+            tag: document.querySelector('.tri-thr .tri-thr-tag .on').textContent,
             val: document.querySelector('.tri-thr .tri-thr-val').textContent,
         };
         document.querySelector('.settings-btn-apply').click();

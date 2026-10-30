@@ -11294,17 +11294,28 @@ so they wrap; the sketches are inline SVG coloured by theme variables
 (`.tri-methods` in `styles.css`).
 
 A third, full-width card (`.tri-thr`, not a choice) shows the Tracking Wizard's
-**reprojection error threshold** (`reprojErrorThreshold`) on the same three
-cameras, as each camera's image: its 2D detection, where the 3D answer lands,
-the error between them and a dashed circle of the threshold's radius. Step 1 is
-the first solve with the picked method (DLT misses the cameras by 17 / 24 /
-30 px, Refined by 3 / 3 / 65), step 2 the solve again without the dropped
-camera (3 / 3 px; the 3 px is the miss a top-down view cannot show). Which
-camera is dropped, and whether the node keeps its 3D, comes from
-`thresholdPasses`, the rule `triangulateAndReproject` applies; the pixel
-errors are made up, in proportion to the sketches'. `update({ method,
-threshold })` redraws it; at 0 (off, the default) it is drawn with a 15 px
-example, labelled as one. Its slider reports through `opts.onThreshold`.
+**reprojection error threshold** (`reprojErrorThreshold`) in two more top-down
+sketches of the same scene, drawn by the same `sketch()`: step 1 is the first
+solve with the picked method (DLT misses the cameras by 17 / 24 / 30 px,
+Refined by 3 / 3 / 65), step 2 the solve again without the dropped camera
+(3 / 3 px; the 3 px is the miss a view from above cannot show, said in the
+sketch). On every image plane still checked, a band `threshold` px either side
+of the detection (2 px per sketch unit, cut at the plane's ends) is where the
+answer may land, green / orange / red as that camera is within / over / over
+and dropped; a verdict line per camera sits under each sketch. Which camera is
+dropped, and whether the node keeps its 3D, comes from `thresholdPasses`, the
+rule `triangulateAndReproject` applies; the pixel errors are the sketches'
+gaps. `update({ method, threshold })` redraws it; at 0 (off, the default) it is
+drawn with a 15 px example, labelled as one. Its slider reports through
+`opts.onThreshold`.
+
+**The card never changes size as the threshold moves.** Step 2 keeps its place
+when nothing is dropped (a faded scene under "No second solve", its verdict rows
+kept but hidden), and every line whose wording changes is a `stack()`: all its
+wordings in one grid cell, only the current one visible, so it is always as tall
+as its longest wording at any width. Keep new changing text in a `stack()`;
+`tests/e2e/triangulation-threshold-figure.mjs` §3b checks one size across 28
+states.
 
 **The coordinates are an illustration, not solver output.** They were computed
 once for this layout (an equal-weight least-squares point for DLT, a robust

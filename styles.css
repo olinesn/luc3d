@@ -5399,8 +5399,10 @@ kbd {
 .tri-methods .tm-arrowhead { fill: var(--text-secondary); }
 .tri-methods .tm-leader { stroke: var(--text-muted); stroke-width: 0.8; }
 
-/* The reprojection error threshold card: each camera's image, in the first
-   solve and the solve again without the dropped camera. */
+/* The reprojection error threshold card: two more sketches of the same scene,
+   the first solve and the solve again without the dropped camera. Step 2 keeps
+   its place and the text under each sketch has a fixed height, so the card
+   does not change size as the threshold moves. */
 .tri-thr {
   margin-top: 10px;
 }
@@ -5429,49 +5431,65 @@ kbd {
 
 .tri-thr-steps {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px 20px;
   margin-top: 10px;
 }
 
-.tri-thr-step[hidden] {
-  display: none;
-}
-
 .tri-thr-step-name {
-  margin-bottom: 6px;
   font-size: 13px;
   color: var(--text-primary);
 }
 
-.tri-thr-views {
+/* Taller than the method sketches: the bands are narrow at small thresholds. */
+.tri-thr .tri-thr-sketch svg { max-height: 250px; }
+
+.tri-thr-step.is-idle .tri-thr-step-name { color: var(--text-muted); }
+
+/* Every wording of a changing line in one grid cell, only the current one
+   shown, so the line keeps the height of its longest wording. */
+.tri-thr-stack { display: grid; }
+.tri-thr-stack > span { grid-area: 1 / 1; visibility: hidden; }
+.tri-thr-stack > span.on { visibility: visible; }
+
+.tri-thr-verdict-box { position: relative; }
+
+.tri-thr-verdicts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The rows stay for their height; their shown wording must hide too
+   (a child's `visibility: visible` would override the list's). */
+.tri-thr-step.is-idle .tri-thr-verdicts,
+.tri-thr-step.is-idle .tri-thr-verdicts .tri-thr-stack > span.on { visibility: hidden; }
+
+.tri-methods-col p.tri-thr-idle-note {
+  display: none;
+  position: absolute;
+  inset: 0 0 auto 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.tri-thr-step.is-idle p.tri-thr-idle-note { display: block; }
+
+.tri-thr-verdicts li {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: 7.5em minmax(0, 1fr);
   gap: 8px;
 }
 
-.tri-thr .tri-thr-view svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  max-height: none;
-  margin: 0 0 4px;
-  overflow: hidden;
-}
-
-.tri-thr-view-name,
-.tri-thr-view-err {
-  font-size: 12px;
-  line-height: 1.35;
-  color: var(--text-secondary);
-}
-
-.tri-thr-view-err { font-variant-numeric: tabular-nums; }
-.tri-thr-view.is-in .tri-thr-view-err { color: var(--success-color); }
-.tri-thr-view.is-over .tri-thr-view-err { color: var(--warning-color); }
-.tri-thr-view.is-drop .tri-thr-view-err { color: var(--error-color); }
-.tri-thr-view.is-out .tri-thr-view-err { color: var(--text-muted); }
-.tri-thr-view.is-out svg { opacity: 0.35; }
+.tri-thr-verdicts li > span:first-child { color: var(--text-secondary); }
+.tri-thr-verdicts li.is-in > span:last-child { color: var(--success-color); }
+.tri-thr-verdicts li.is-over > span:last-child { color: var(--warning-color); }
+.tri-thr-verdicts li.is-drop > span:last-child { color: var(--error-color); }
+.tri-thr-verdicts li.is-out > span:last-child { color: var(--text-muted); }
 
 .tri-methods-col p.tri-thr-result {
   margin-top: 12px;
@@ -5480,10 +5498,13 @@ kbd {
 
 .tri-methods-col p.tri-thr-result.tri-thr-lost { color: var(--error-color); }
 
-.tri-methods .tm-frame { fill: var(--bg-secondary); stroke: var(--border-color); stroke-width: 1; }
-.tri-methods .is-drop .tm-frame { stroke: var(--error-color); }
-.tri-methods .tm-thr { fill: none; stroke: var(--text-secondary); stroke-width: 1.2; stroke-dasharray: 3 2.5; }
-.tri-methods .tm-key-thr { border: 1.5px dashed var(--text-secondary); width: 8px; height: 8px; }
+.tri-methods .tm-band { stroke-width: 7; stroke-linecap: butt; opacity: 0.4; }
+.tri-methods .tm-band-end { stroke-width: 1.5; stroke-linecap: round; }
+.tri-methods .is-in.tm-band, .tri-methods .is-in.tm-band-end { stroke: var(--success-color); }
+.tri-methods .is-over.tm-band, .tri-methods .is-over.tm-band-end { stroke: var(--warning-color); }
+.tri-methods .is-drop.tm-band, .tri-methods .is-drop.tm-band-end { stroke: var(--error-color); }
+.tri-methods .tm-idle { opacity: 0.3; }
+.tri-methods .tm-key-band { width: 14px; height: 6px; border-radius: 1px; background: var(--success-color); opacity: 0.6; }
 
 /* Settings ▸ Temporal Smoothing: what the Median and Gaussian windows do
    (ui/smoothing-windows-figure.js). */
@@ -5647,6 +5668,7 @@ kbd {
 .smooth-fig .sf-note-spike { fill: var(--error-color); }
 .tri-methods .tm-note { fill: var(--text-secondary); font-size: 10px; }
 .tri-methods .tm-note-stray { fill: var(--warning-color); }
+.tri-methods .tm-note-drop { fill: var(--error-color); }
 
 .settings-docs-note a {
   color: var(--accent);

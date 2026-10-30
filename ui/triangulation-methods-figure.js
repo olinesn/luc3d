@@ -21,17 +21,21 @@
 // layout. Colours come from the theme variables in `styles.css` (`.tri-methods`).
 //
 // A third, full-width card shows the reprojection error threshold (Tracking
-// Wizard ▸ "Reprojection error threshold (px)", `reprojErrorThreshold`) on the
-// same three cameras, as each camera's IMAGE: its 2D detection, where the 3D
-// answer lands, the pixel error between them and a dashed circle of the
-// threshold's radius around the detection. Step 1 is the first solve (DLT or
-// Refined, whichever card is picked), step 2 the solve again without the
-// dropped camera. Which camera is dropped, and whether the node keeps its 3D,
-// is decided by `thresholdPasses`, the rule `triangulateAndReproject` applies
-// (`tests/test-triangulation-threshold-figure.mjs` holds the two together); the
-// pixel errors are made up, in proportion to the sketches' (2 px per unit), plus
-// a 3 px miss the top-down view cannot show (two lines of sight rarely meet in
-// 3D). `update({ method, threshold })` redraws it for the picked method and the
+// Wizard ▸ "Reprojection error threshold (px)", `reprojErrorThreshold`) in two
+// more sketches of the same scene, in the same style: step 1 is the first
+// solve (DLT or Refined, whichever card is picked), step 2 the solve again
+// without the dropped camera. On each image plane still checked, a band
+// `threshold` px either side of the detection (2 px per unit, cut at the
+// plane's ends) is where the answer may land; it is green, orange or red as
+// that camera is within, over, or over and dropped. Which camera is dropped,
+// and whether the node keeps its 3D, is decided by `thresholdPasses`, the rule
+// `triangulateAndReproject` applies (`tests/test-triangulation-threshold-figure.mjs`
+// holds the two together); the pixel errors are the sketches' gaps at 2 px per
+// unit, plus a 3 px miss for the two cameras that agree, which a view from
+// above cannot show (two lines of sight rarely meet in 3D). Step 2 keeps its
+// place when nothing is dropped, and the text below each sketch has a fixed
+// height, so the card does not change size as the threshold moves.
+// `update({ method, threshold })` redraws it for the picked method and the
 // working threshold; its slider reports through `onThreshold(value)`. At 0
 // (off, the default) it is drawn with an example threshold, labelled as one.
 //
@@ -57,14 +61,15 @@ var CAMERA_CENTRES = [[22, 118], [150, 180], [278, 118]];
  * One sketch: shared scene, the 3D answer `point`, and for each camera it uses
  * the line back to it and the landing spot `landings[i]` with its pixel error.
  * A camera whose landing is null is left out: only its detection is drawn.
+ * `overlay` (optional) is drawn over the image planes, under the points.
  */
-function sketch(point, landings, extra, strayLabel) {
+function sketch(point, landings, extra, strayLabel, overlay) {
     var s = RAYS;
     CAMERA_CENTRES.forEach(function (c, i) {
         if (!landings[i]) return;
         s += '<line x1="' + c[0] + '" y1="' + c[1] + '" x2="' + point[0] + '" y2="' + point[1] + '" class="tm-back"/>';
     });
-    s += CAMERAS;
+    s += CAMERAS + (overlay || '');
     DETECTIONS.forEach(function (d, i) {
         var q = landings[i];
         if (q) s += '<line x1="' + d[0] + '" y1="' + d[1] + '" x2="' + q[0] + '" y2="' + q[1] + '" class="tm-gap"/>';
@@ -111,23 +116,37 @@ function card(method, name, tagline, sketchSvg, caption, note) {
 var CAMERA_NAMES = ['Left camera', 'Middle camera', 'Right camera'];
 var THRESHOLD_EXAMPLE = 15;      // px, drawn while the setting is off (0)
 var THRESHOLD_SLIDER_MAX = 80;   // a larger typed value still shows; the slider sits at its end
-var INSET_SCALE = 1.25;          // inset units per pixel
+var PX_PER_UNIT = 2;             // sketch units to pixels, for the errors and the bands
 
-// Where the 3D answer lands in each camera's image, relative to that camera's
-// 2D detection: [pixel error, direction in degrees (0 = right, 90 = down)] per
-// camera, after the first solve with every camera (`all`) and after the solve
-// without the right-hand camera (`0,1`, the only other set the rule reaches
-// here: the stray is always the worst). That solve still lands somewhere in the
-// right camera's image, but the camera no longer counts. Horizontal parts are
-// the sketches' errors at 2 px per unit; DLT also misses the left and middle
-// cameras because the stray pulls it. With the two cameras that agree, both
-// methods land 3 px off (above / below): from above their lines cross, but in
-// 3D they pass a little apart.
-var TWO_AGREE = [[3, 270], [3, 90], [65, 180]];
-var LANDINGS = {
-    dlt: { all: [[17, 190], [24, 7], [30, 180]], '0,1': TWO_AGREE },
+// Each camera's pixel error (by camera index) after the first solve with every
+// camera (`all`) and after the solve without the right-hand camera (`0,1`, the
+// only other set the rule reaches here: the stray is always the worst). They
+// are the sketches' gaps at 2 px per unit (DLT 8.4 / 12 / 15 units, Refined's
+// stray 32.4), plus a 3 px miss for the two cameras that agree: from above
+// their lines of sight cross, but in 3D they pass a little apart. The `0,1`
+// solve still lands 65 px off in the right camera, which no longer counts.
+var TWO_AGREE = [3, 3, 65];
+var ERRORS = {
+    dlt: { all: [17, 24, 30], '0,1': TWO_AGREE },
     ba: { all: TWO_AGREE, '0,1': TWO_AGREE },
 };
+
+// Where each step's sketch puts the 3D answer and its landing in each camera
+// (null: not drawn, the camera no longer counts).
+var REFINED_POINT = [148.4, 81.3];
+var STEP_SKETCHES = {
+    dlt: { point: [168.5, 56.2], landings: [[88.6, 89.9], [160.7, 108], [213.9, 81.8]] },
+    ba: { point: REFINED_POINT, landings: [DETECTIONS[0], DETECTIONS[1], [208.7, 98.4]] },
+    '0,1': { point: REFINED_POINT, landings: [DETECTIONS[0], DETECTIONS[1], null] },
+};
+var IMAGE_PLANES = [[[101.5, 130.9], [80, 62.2]], [[186, 108], [114, 108]], [[220, 62.2], [198.5, 130.9]]];
+
+var PULLED_NOTE = '<line x1="132" y1="44" x2="162" y2="54" class="tm-leader"/>'
+    + '<text x="128" y="38" text-anchor="end" class="tm-note">pulled toward</text>'
+    + '<text x="128" y="49" text-anchor="end" class="tm-note">the stray line</text>';
+var APART_NOTE = '<line x1="132" y1="44" x2="145" y2="77" class="tm-leader"/>'
+    + '<text x="128" y="38" text-anchor="end" class="tm-note">cross from above,</text>'
+    + '<text x="128" y="49" text-anchor="end" class="tm-note">3 px apart in 3D</text>';
 
 /**
  * The reprojection-error-threshold rule of `triangulateAndReproject`
@@ -166,37 +185,93 @@ export function thresholdPasses(cameras, solve, threshold) {
 function fmt(v) { return Math.round(v * 10) / 10; }
 
 /**
- * One camera's image: detection, landing, the gap between and, for a camera
- * still checked, the threshold circle. The detection sits right of centre: the
- * long misses (the stray's) point left.
+ * The threshold on camera `i`'s image plane: where the 3D answer may land and
+ * be within `threshold` px of the detection, that far either side of it (cut at
+ * the plane's ends, with an end mark where it is not cut), coloured by the
+ * camera's verdict (`state`).
  */
-function inset(landing, threshold, checked) {
-    var cx = 92, cy = 30, a = landing[1] * Math.PI / 180;
-    var qx = fmt(cx + landing[0] * INSET_SCALE * Math.cos(a)), qy = fmt(cy + landing[0] * INSET_SCALE * Math.sin(a));
-    return '<svg viewBox="0 0 140 60" aria-hidden="true">'
-        + '<rect x="1" y="1" width="138" height="58" rx="5" class="tm-frame"/>'
-        + (checked ? '<circle cx="' + cx + '" cy="' + cy + '" r="' + fmt(threshold * INSET_SCALE) + '" class="tm-thr"/>' : '')
-        + '<line x1="' + cx + '" y1="' + cy + '" x2="' + qx + '" y2="' + qy + '" class="tm-gap"/>'
-        + '<circle cx="' + cx + '" cy="' + cy + '" r="3" class="tm-det"/>'
-        + '<circle cx="' + qx + '" cy="' + qy + '" r="3.6" class="tm-proj"/>'
-        + '</svg>';
+function band(i, threshold, state) {
+    var a = IMAGE_PLANES[i][0], b = IMAGE_PLANES[i][1], d = DETECTIONS[i];
+    var len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    var ux = (b[0] - a[0]) / len, uy = (b[1] - a[1]) / len;
+    var at = (d[0] - a[0]) * ux + (d[1] - a[1]) * uy, half = threshold / PX_PER_UNIT;
+    var t0 = Math.max(0, at - half), t1 = Math.min(len, at + half);
+    function x(t) { return a[0] + ux * t; }
+    function y(t) { return a[1] + uy * t; }
+    function end(t) {
+        return '<line x1="' + fmt(x(t) - uy * 5) + '" y1="' + fmt(y(t) + ux * 5) + '" x2="' + fmt(x(t) + uy * 5)
+            + '" y2="' + fmt(y(t) - ux * 5) + '" class="tm-band-end is-' + state + '"/>';
+    }
+    return '<line x1="' + fmt(x(t0)) + '" y1="' + fmt(y(t0)) + '" x2="' + fmt(x(t1)) + '" y2="' + fmt(y(t1))
+        + '" class="tm-band is-' + state + '"/>'
+        + (at - half >= 0 ? end(t0) : '') + (at + half <= len ? end(t1) : '');
 }
 
-/** A step's three camera images (`landings` per camera), each with its name and verdict. */
-function views(pass, landings, threshold) {
-    return [0, 1, 2].map(function (c) {
-        var used = pass.cameras.indexOf(c) >= 0;
-        var err = pass.errors[c], over = used && err > threshold;
-        var state = !used ? 'out' : pass.drop === c ? 'drop' : over ? 'over' : 'in';
-        var verdict = state === 'out' ? 'left out: no longer counts'
-            : state === 'drop' ? err + ' px · over, the worst: dropped'
-            : state === 'over' ? err + ' px · over' + (pass.drop >= 0 ? ', not the worst: checked again' : ', only two left')
-            : err + ' px · within';
-        return '<div class="tri-thr-view is-' + state + '" data-camera="' + c + '">'
-            + inset(landings[c], threshold, used)
-            + '<div class="tri-thr-view-name">' + CAMERA_NAMES[c] + '</div>'
-            + '<div class="tri-thr-view-err">' + verdict + '</div></div>';
+/** Camera `c`'s verdict in a pass: 'in', 'over', 'drop', or 'out' (no longer counts). */
+function verdict(pass, c, threshold) {
+    if (pass.cameras.indexOf(c) < 0) return 'out';
+    if (pass.drop === c) return 'drop';
+    return pass.errors[c] > threshold ? 'over' : 'in';
+}
+
+/** A step's sketch: the scene, the step's 3D answer and a band on every image plane still checked. */
+function stepSketch(geometry, states, threshold, note) {
+    var bands = '';
+    states.forEach(function (st, i) { if (st !== 'out') bands += band(i, threshold, st); });
+    var stray = states[2] === 'drop' ? ['stray,', 'dropped'] : states[2] === 'out' ? ['stray,', 'left out'] : ['stray'];
+    return sketch(geometry.point, geometry.landings, note, stray.map(function (line, i) {
+        return '<text x="226" y="' + (77 + 11 * i) + '" class="tm-note '
+            + (i && states[2] === 'drop' ? 'tm-note-drop' : 'tm-note-stray') + '">' + line + '</text>';
+    }).join(''), bands);
+}
+
+// Step 2's place while nothing is dropped: the bare scene, faded.
+var IDLE_SKETCH = '<svg viewBox="5 25 290 172" class="tm-idle" aria-hidden="true">' + RAYS + CAMERAS
+    + DETECTIONS.map(function (d) { return '<circle cx="' + d[0] + '" cy="' + d[1] + '" r="3" class="tm-det"/>'; }).join('')
+    + '</svg>';
+
+/**
+ * Text that keeps the size of its longest wording, so the card does not grow or
+ * shrink as the threshold moves: every wording in `variants` is laid in the
+ * same grid cell and only the one at `on` is visible (`.tri-thr-stack`).
+ */
+function stack(variants, on) {
+    return '<span class="tri-thr-stack">' + variants.map(function (v, i) {
+        return '<span' + (i === on ? ' class="on"' : '') + '>' + v + '</span>';
+    }).join('') + '</span>';
+}
+
+var VERDICT_STATES = ['in', 'over', 'two', 'drop', 'out'];
+var WIDEST_ERROR = 88;           // stands in for the error in the hidden wordings
+
+/** The three cameras' verdicts under a step's sketch. */
+function verdictList(pass, states) {
+    return states.map(function (st, c) {
+        var shown = st === 'over' && pass.drop < 0 ? 'two' : st;
+        var say = VERDICT_STATES.map(function (v) {
+            var err = (v === shown ? pass.errors[c] : WIDEST_ERROR) + ' px · ';
+            return v === 'in' ? err + 'within'
+                : v === 'over' ? err + 'over; not the worst, checked again'
+                : v === 'two' ? err + 'over; only two left'
+                : v === 'drop' ? err + 'over, the worst: dropped'
+                : 'left out';
+        });
+        return '<li class="is-' + st + '"><span>' + CAMERA_NAMES[c] + '</span>'
+            + stack(say, VERDICT_STATES.indexOf(shown)) + '</li>';
     }).join('');
+}
+
+/** What becomes of the node: `kind` is 'lost', 'stands', 'moves' (DLT) or 'stays' (Refined). */
+function resultText(kind, threshold, dropped) {
+    return kind === 'lost'
+        ? 'No 3D point for this node in this frame: only two cameras are left and they still miss by more than '
+            + threshold + ' px, and a node is never solved from fewer than two.'
+        : kind === 'stands'
+            ? 'Every camera lands within ' + threshold + ' px: nothing is dropped, and the first solve stands.'
+            : 'The ' + dropped + ' is left out for this node; its 3D point comes from the other two, '
+                + (kind === 'stays'
+                    ? 'and stays where it was: Refined had already left the stray out.'
+                    : 'and moves to where their lines of sight cross (the Refined sketch\'s point).');
 }
 
 /**
@@ -233,20 +308,23 @@ export function buildTriangulationMethodsFigure(opts) {
         + '</div>'
         + '<div class="tri-methods-col tri-thr">'
         + '<div class="tri-methods-name">Reprojection error threshold<small class="tri-thr-tag"></small></div>'
-        + '<p>Optional, for either method, and off (0) by default: the Tracking Wizard\'s "Reprojection error '
-        + 'threshold". After the solve, each camera\'s pixel error for the node is compared with it, drawn as '
-        + 'the dashed circle around the camera\'s 2D detection. If the 3D answer lands outside any circle, the '
-        + 'camera that misses by most is dropped for this node and the node is solved again from the rest; '
-        + 'this repeats while more than two cameras are left. A node whose last two cameras still miss gets '
-        + 'no 3D point in this frame. Below, what the three cameras sketched above see (pixel errors made up '
-        + 'for this sketch).</p>'
+        + '<p>Optional, for either method; set in the Tracking Wizard, off (0) by default. After the solve, each '
+        + 'camera\'s pixel error for the node is compared with the threshold, drawn as a band on the camera\'s '
+        + 'image plane: the 3D answer must land within that many pixels either side of the 2D detection. If it '
+        + 'lands outside any band, the camera that misses by most is dropped for this node and the node is solved '
+        + 'again from the rest; this repeats while more than two cameras are left. A node whose last two cameras '
+        + 'still miss gets no 3D point in this frame. The same cameras as above; pixel errors made up for this '
+        + 'sketch.</p>'
         + '<label class="tri-thr-ctl"><span>Threshold</span>'
         + '<input type="range" class="tri-thr-range" min="0" max="' + THRESHOLD_SLIDER_MAX + '" step="1"'
         + ' aria-label="Reprojection error threshold (px), 0 = off">'
         + '<output class="tri-thr-val"></output></label>'
         + '<div class="tri-thr-steps">'
-        + '<div class="tri-thr-step" data-step="1"><div class="tri-thr-step-name"></div><div class="tri-thr-views"></div></div>'
-        + '<div class="tri-thr-step" data-step="2"><div class="tri-thr-step-name"></div><div class="tri-thr-views"></div></div>'
+        + [1, 2].map(function (n) {
+            return '<div class="tri-thr-step" data-step="' + n + '"><div class="tri-thr-step-name"></div>'
+                + '<div class="tri-thr-sketch"></div><div class="tri-thr-verdict-box"><ul class="tri-thr-verdicts"></ul>'
+                + '<p class="tri-thr-idle-note">No camera is over the threshold, so nothing is dropped.</p></div></div>';
+        }).join('')
         + '</div>'
         + '<p class="tri-thr-result"></p>'
         + '<p class="tri-methods-note"><strong>Per node:</strong> a dropped camera still counts for every '
@@ -259,7 +337,7 @@ export function buildTriangulationMethodsFigure(opts) {
         + '<span><i class="tm-key-point"></i>3D answer</span>'
         + '<span><i class="tm-key-proj"></i>where the 3D answer lands in that camera</span>'
         + '<span><i class="tm-key-gap"></i>pixel error</span>'
-        + '<span><i class="tm-key-thr"></i>reprojection error threshold</span>'
+        + '<span><i class="tm-key-band"></i>threshold: where the answer may land in that camera</span>'
         + '</div>';
 
     var thr = fig.querySelector('.tri-thr');
@@ -278,45 +356,48 @@ export function buildTriangulationMethodsFigure(opts) {
         if (next.threshold != null) current.threshold = Math.max(0, +next.threshold || 0);
         var set = current.threshold, example = !(set > 0);
         var t = example ? THRESHOLD_EXAMPLE : set;
-        var table = LANDINGS[current.method];
         var methodName = current.method === 'ba' ? 'Refined' : 'DLT';
 
-        thr.querySelector('.tri-thr-tag').textContent = example
-            ? 'off (0) · drawn with an example of ' + THRESHOLD_EXAMPLE + ' px'
-            : fmt(set) + ' px · ' + methodName;
+        thr.querySelector('.tri-thr-tag').innerHTML = stack(['off (0) · drawn with an example of '
+            + THRESHOLD_EXAMPLE + ' px', fmt(set) + ' px · ' + methodName], example ? 0 : 1);
         range.value = String(Math.min(Math.round(set), THRESHOLD_SLIDER_MAX));
         thr.querySelector('.tri-thr-val').textContent = example ? 'off' : fmt(set) + ' px';
 
-        var landingsFor = function (cams) { return table[cams.length === 3 ? 'all' : cams.join(',')]; };
+        var table = ERRORS[current.method];
         var run = thresholdPasses([0, 1, 2], function (cams) {
-            return landingsFor(cams).map(function (l) { return l[0]; });
+            return table[cams.length === 3 ? 'all' : cams.join(',')];
         }, t);
+        var dropName = run.passes.length > 1 ? CAMERA_NAMES[run.passes[0].drop].toLowerCase() : 'middle camera';
         var steps = thr.querySelectorAll('.tri-thr-step');
-        run.passes.forEach(function (pass, i) {
-            steps[i].querySelector('.tri-thr-step-name').textContent = i === 0
-                ? '1 · First solve (' + methodName + '), all three cameras'
-                : '2 · Solved again without the ' + CAMERA_NAMES[run.passes[0].drop].toLowerCase();
-            steps[i].querySelector('.tri-thr-views').innerHTML = views(pass, landingsFor(pass.cameras), t);
+        [0, 1].forEach(function (i) {
+            var pass = run.passes[i], el = steps[i];
+            var idle = !pass;
+            // Step 2's place while nothing is dropped: its rows stay (hidden),
+            // so the step keeps its height, under a one-line note.
+            if (idle) pass = { cameras: [0, 1], errors: table['0,1'], drop: -1 };
+            var states = [0, 1, 2].map(function (c) { return verdict(pass, c, t); });
+            el.classList.toggle('is-idle', idle);
+            el.querySelector('.tri-thr-step-name').innerHTML = i === 0
+                ? stack(['1 · First solve (DLT), all three cameras', '1 · First solve (Refined), all three cameras'],
+                    current.method === 'ba' ? 1 : 0)
+                : stack(['2 · Solved again without the ' + dropName, '2 · No second solve'], idle ? 1 : 0);
+            el.querySelector('.tri-thr-sketch').innerHTML = idle ? IDLE_SKETCH
+                : stepSketch(i === 0 ? STEP_SKETCHES[current.method] : STEP_SKETCHES[pass.cameras.join(',')],
+                    states, t, i === 0 && current.method === 'dlt' ? PULLED_NOTE : APART_NOTE);
+            el.querySelector('.tri-thr-verdicts').innerHTML = verdictList(pass, states);
         });
-        steps[1].hidden = run.passes.length < 2;
 
-        var result;
-        if (!run.kept) {
-            result = 'No 3D point for this node in this frame: only two cameras are left and they still miss '
-                + 'by more than ' + fmt(t) + ' px, and a node is never solved from fewer than two.';
-        } else if (run.passes.length === 1) {
-            result = 'Every camera lands within ' + fmt(t) + ' px: nothing is dropped, and the first solve stands.';
-        } else {
-            var dropped = CAMERA_NAMES[run.passes[0].drop].toLowerCase();
-            result = 'The ' + dropped + ' is left out for this node; its 3D point comes from the other two, '
-                + (current.method === 'ba'
-                    ? 'and stays where it was: Refined had already left the stray out.'
-                    : 'and moves to where their lines of sight cross (the Refined sketch\'s point).');
-        }
+        var kind = !run.kept ? 'lost' : run.passes.length === 1 ? 'stands' : current.method === 'ba' ? 'stays' : 'moves';
+        var kinds = ['lost', 'stands', 'moves', 'stays'];
+        var variants = [];
+        [false, true].forEach(function (ex) {
+            kinds.forEach(function (k) {
+                var text = resultText(k, k === kind ? fmt(t) : WIDEST_ERROR, dropName);
+                variants.push(ex ? 'With ' + THRESHOLD_EXAMPLE + ' px, ' + text.charAt(0).toLowerCase() + text.slice(1) : text);
+            });
+        });
         var res = thr.querySelector('.tri-thr-result');
-        res.textContent = example
-            ? 'With ' + THRESHOLD_EXAMPLE + ' px, ' + result.charAt(0).toLowerCase() + result.slice(1)
-            : result;
+        res.innerHTML = stack(variants, (example ? kinds.length : 0) + kinds.indexOf(kind));
         res.classList.toggle('tri-thr-lost', !run.kept);
     }
 
