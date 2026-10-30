@@ -68,8 +68,12 @@ console.log('\n-- 1. detectors --');
     const ids = DETECTOR_TEMPLATES.map(t => t.id);
     check(['rearing', 'immobile', 'locomotion', 'contact', 'nose-to-nose', 'anogenital', 'following'].every(id => ids.includes(id)),
         'templates: rearing, immobile, locomotion, contact, nose-to-nose, anogenital approach, following');
-    const rear = instantiateTemplate(DETECTOR_TEMPLATES.find(t => t.id === 'rearing'), { head: 'Nose' });
+    const rear = instantiateTemplate(DETECTOR_TEMPLATES.find(t => t.id === 'rearing'), { head: 'Nose', tailBase: 'TTI' });
     check(rear.detector && rear.detector.conditions[0].feature === 'Nose height · mean ±0.1 s', 'the rearing template takes the head node');
+    check(rear.detector.conditions[1].feature === 'TTI height · mean ±0.1 s' && rear.detector.conditions[1].op === '<' && rear.detector.conditions[1].value === 0.45,
+        'and the tail base below 0.45 BL: a mouse climbing the wall is not rearing');
+    check(/needs a tail base node/.test(instantiateTemplate(DETECTOR_TEMPLATES.find(t => t.id === 'rearing'), { head: 'Nose' }).error),
+        'without a tail base it says so, in words');
     check(rear.detector.conditions[0].value === 0.7, 'rearing: the head more than 0.7 BL above the floor (below it, few bouts on real recordings were clear rears)');
     const n2n = DETECTOR_TEMPLATES.find(t => t.id === 'nose-to-nose').detector;
     check(n2n.minDuration === 0.2 && n2n.maxGap === 0.2, 'nose-to-nose: at least 0.2 s, gaps of 0.2 s joined (like contact and anogenital approach)');
@@ -79,7 +83,7 @@ console.log('\n-- 1. detectors --');
     check(DETECTOR_TEMPLATES.find(t => t.id === 'immobile').detector.conditions[0].value === 0.1, 'immobile: still below 0.1 BL/s');
     check(/head node/.test(instantiateTemplate(DETECTOR_TEMPLATES.find(t => t.id === 'rearing'), {}).error), 'without a head it says so');
     const every = DETECTOR_TEMPLATES.every(t => {
-        const r = instantiateTemplate(t, { head: 'Nose' });
+        const r = instantiateTemplate(t, { head: 'Nose', tailBase: 'TTI' });
         return r.detector && detectorProblems(r.detector, cat, t.social).length === 0;
     });
     check(every, 'every template is valid on a 3D skeleton');

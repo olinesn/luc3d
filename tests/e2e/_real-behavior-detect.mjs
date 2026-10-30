@@ -20,7 +20,10 @@
  * browser lock. Usage:
  *   DATASET=<folder> NANIMALS=5 LABEL=05mice node tests/e2e/_real-behavior-detect.mjs
  *   env: PORT=8770  EXCLUDE=<regex of files to leave out>  OUT=<dir> (default verify/behavior-real)
- *        SHOTS=3  TRI=dlt
+ *        SHOTS=3  TRI=dlt  REPROJ=25 (Tracking Wizard reprojection error threshold, px, for
+ *        Triangulate All: a node's view that far off is dropped and the node re-solved, or
+ *        dropped from 3D below two good views; 0 = off. Without it, real recordings keep
+ *        large tracking errors that read as behavior.)
  */
 import { chromium } from 'playwright';
 import { spawn, execSync } from 'node:child_process';
@@ -41,6 +44,7 @@ const EXCLUDE = process.env.EXCLUDE || '(^|/)\\.|/troubleshooting/';
 const OUT = process.env.OUT || path.join(repoRoot, 'verify', 'behavior-real');
 const SHOTS = Number(process.env.SHOTS ?? 3);
 const TRI = process.env.TRI || 'dlt';
+const REPROJ = Number(process.env.REPROJ ?? 25);
 if (!DATASET) { console.error('set DATASET'); process.exit(2); }
 fs.mkdirSync(OUT, { recursive: true });
 const log = (m) => process.stdout.write(`[${new Date().toISOString().slice(11, 19)}] ${m}\n`);
@@ -117,14 +121,15 @@ try {
     });
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 60000 });
-    await page.evaluate(async () => {
+    await page.evaluate(async (reproj) => {
         const st = await import('./ui/settings.js');
-        st.setTrackingThresholds({ autoSwitchCheck: 0, autoImageSwitchCheck: 0 });
+        st.setTrackingThresholds({ autoSwitchCheck: 0, autoImageSwitchCheck: 0, reprojErrorThreshold: reproj });
         const inp = document.createElement('input');
         inp.type = 'file'; inp.multiple = true; inp.webkitdirectory = true; inp.id = '__dir';
         inp.style.cssText = 'position:fixed;left:-9999px'; document.body.appendChild(inp);
         setInterval(() => { for (const b of document.querySelectorAll('button')) { const t = b.textContent.trim(); if ((t === 'Continue' || t === 'OK') && b.offsetParent !== null) b.click(); } }, 300);
-    });
+    }, REPROJ);
+    log('Triangulate All with a reprojection error threshold of ' + REPROJ + ' px' + (REPROJ > 0 ? '' : ' (off)'));
 
     /** One measured stage: wall time, heap peak, long tasks, Chrome's memory. */
     const stage = async (name, fn) => {
@@ -225,10 +230,10 @@ try {
     await page.evaluate(async () => {
         const eth = await import('./pose/behavior-ethogram.js');
         const rules = await import('./pose/behavior-rules.js');
-        const head = window.__bi.body.roleNames.head;
+        const roleNames = window.__bi.body.roleNames;
         rules.DETECTOR_TEMPLATES.forEach((t) => {
             const b = eth.behaviorByName(t.name) || eth.addBehavior({ name: t.name, social: t.social, mutual: t.mutual, description: t.description }).behavior;
-            eth.setBehaviorDetector(b.id, rules.instantiateTemplate(t, { head }).detector);
+            eth.setBehaviorDetector(b.id, rules.instantiateTemplate(t, roleNames).detector);
         });
         (await import('./ui/behavior-coding.js')).requestBehaviorRepaint({ ethogram: true });
     });

@@ -60,7 +60,7 @@ try {
         AS.timeline.setTotalFrames(T); AS.timeline.setData(s);
         rules.DETECTOR_TEMPLATES.forEach(t => {
             const b = eth.addBehavior({ name: t.name, social: t.social, mutual: t.mutual }).behavior;
-            eth.setBehaviorDetector(b.id, rules.instantiateTemplate(t, { head: 'nose' }).detector);
+            eth.setBehaviorDetector(b.id, rules.instantiateTemplate(t, { head: 'nose', tailBase: 'tail_base' }).detector);
         });
         if (window.gc) window.gc();
         const heap0 = performance.memory.usedJSHeapSize;

@@ -94,14 +94,19 @@ export function detectorProblems(detector, catalog, social) {
 // ----------------------------------------------------------------------------
 
 /**
- * Starting points for common behaviors. `{head}` stands for the head node's
- * name. Thresholds are in body lengths (BL) and BL/s, set for mice and rats;
- * check them against the histogram in the settings. Set from four real
- * recordings (a 5-mouse arena, three SLAP home cages), looking at bouts just
- * above and below each value:
+ * Starting points for common behaviors. `{head}` and `{tailBase}` stand for
+ * those nodes' names. Thresholds are in body lengths (BL) and BL/s, set for
+ * mice and rats; check them against the histogram in the settings. Set from
+ * four real recordings (a 5-mouse arena, three SLAP home cages), looking at
+ * bouts just above and below each value:
  *   - rearing 0.7 BL: bouts peaking at 0.7–0.9 BL were rears in 13 of 16
  *     pictures, those at 0.5–0.7 clearly so in 3 of 16 (raised heads, a
- *     raised tail, a mouse on all fours);
+ *     raised tail, a mouse on all fours); and the tail base below 0.45 BL,
+ *     so a mouse climbing the wall is not rearing: while the head is up, the
+ *     tail base dips at 0.4–0.5 BL between rears (median 0.18) and climbs
+ *     (0.5–0.7). With Triangulate All at a 25 px reprojection error
+ *     threshold, all 7 bouts it dropped were climbs (6) or a mouse on the
+ *     bedding mound; a 0.3 line would cut into real rears;
  *   - immobile 0.1 BL/s: speed has no natural break, and a resting animal
  *     reads faster when tracking jitters (the stillest 1% of frames: 0.056
  *     BL/s on the 5-mouse arena, 0.012–0.021 in the cages) — raise it for
@@ -115,8 +120,11 @@ export function detectorProblems(detector, catalog, social) {
  */
 export var DETECTOR_TEMPLATES = [
     { id: 'rearing', name: 'rearing', social: false, mutual: false,
-      description: 'The head is high above the floor',
-      detector: { conditions: [{ feature: '{head} height · mean ±0.1 s', op: '>', value: 0.7 }], minDuration: 0.3, maxGap: 0.2 } },
+      description: 'The head is high above the floor while the tail base stays near it (climbing is not rearing)',
+      detector: { conditions: [
+          { feature: '{head} height · mean ±0.1 s', op: '>', value: 0.7 },
+          { feature: '{tailBase} height · mean ±0.1 s', op: '<', value: 0.45 },
+      ], minDuration: 0.3, maxGap: 0.2 } },
     { id: 'immobile', name: 'immobile', social: false, mutual: false,
       description: 'The body hardly moves (raise the speed for jittery tracking)',
       detector: { conditions: [{ feature: 'centroid speed · mean ±0.3 s', op: '<', value: 0.1 }], minDuration: 1, maxGap: 0.2 } },
@@ -146,7 +154,7 @@ export var DETECTOR_TEMPLATES = [
 /**
  * A template's detector with `{head}` filled in.
  * @param {Object} template one of DETECTOR_TEMPLATES
- * @param {{head?: string}} roleNames node names of the roles
+ * @param {{head?: string, tailBase?: string}} roleNames node names of the roles
  * @returns {{detector?: Object, error?: string}}
  */
 export function instantiateTemplate(template, roleNames) {
@@ -156,13 +164,16 @@ export function instantiateTemplate(template, roleNames) {
     d.conditions.forEach(function (c) {
         c.feature = c.feature.replace(/\{(\w+)\}/g, function (m, role) {
             var nm = roleNames && roleNames[role];
-            if (!nm) missing = role;
+            if (!nm && !missing) missing = role;
             return nm || m;
         });
     });
-    if (missing) return { error: 'The template needs a ' + missing + ' node: set it under Body' };
+    if (missing) return { error: 'The template needs a ' + (ROLE_WORDS[missing] || missing) + ' node: set it under Body' };
     return { detector: normalizeDetector(d) };
 }
+
+/** How a node role reads in a message. */
+var ROLE_WORDS = { head: 'head', tailBase: 'tail base' };
 
 // ----------------------------------------------------------------------------
 // Scoring
