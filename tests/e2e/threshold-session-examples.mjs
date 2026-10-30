@@ -151,6 +151,12 @@ try {
     }, cam);
     const droppedCam = r.tiles.find(t => t.state === 'drop').cam, keptCam = r.tiles.find(t => t.state !== 'drop').cam;
     check(await centre(droppedCam) === '243,156,18', `its prediction turns orange: no longer used (${await centre(droppedCam)})`);
+    const dropHues = await page.evaluate((c) => {
+        const t = document.querySelector(`.thr-ex-tile[data-camera="${c}"]`);
+        return [getComputedStyle(t.querySelector('canvas')).borderTopColor, getComputedStyle(t.querySelector('.thr-ex-err')).color];
+    }, droppedCam);
+    await page.waitForTimeout(250);
+    check(dropHues.every(v => v === 'rgb(243, 156, 18)'), `and its border and text are the same orange (${dropHues})`);
     check(await centre(keptCam) === '255,255,255', `a camera still used stays white (${await centre(keptCam)})`);
     await tryBox(0);
     await page.waitForTimeout(40);

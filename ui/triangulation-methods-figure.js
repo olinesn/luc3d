@@ -34,7 +34,7 @@
 // `reprojErrorThreshold`) has up to three more sketches of the scene: the first
 // solve, then the solve again after each dropped camera. On each image plane
 // still checked, a band `threshold` px either side of the detection is where the
-// answer may land; it is green, orange or red as that camera is within, over, or
+// answer may land; it is green, grey or orange as that camera is within, over, or
 // over and dropped. `thresholdPasses` decides what is dropped: it restates the
 // rule in `triangulateAndReproject`, and the test holds the two together.
 //

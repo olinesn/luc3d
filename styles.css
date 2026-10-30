@@ -5686,10 +5686,10 @@ kbd {
 
 .thr-ex-tile:hover canvas { border-color: var(--text-muted); }
 .thr-ex-tile[aria-pressed="true"] canvas { outline: 2px solid var(--accent); outline-offset: -2px; }
-.thr-ex-tile[data-state="drop"] canvas { border-color: var(--error-color); opacity: 0.6; }
+.thr-ex-tile[data-state="drop"] canvas { border-color: var(--warning-color); opacity: 0.6; }
 .thr-ex-tile[data-state="over"] canvas { border-color: var(--warning-color); }
 .thr-ex-tile[data-state="out"] canvas { opacity: 0.35; }
-.thr-ex-large[data-state="drop"] canvas { border-color: var(--error-color); }
+.thr-ex-large[data-state="drop"] canvas { border-color: var(--warning-color); }
 .thr-ex-large[data-state="over"] canvas { border-color: var(--warning-color); }
 .thr-ex-cam, .thr-ex-err { display: block; overflow: hidden; font-size: 11px; line-height: 15px; white-space: nowrap; text-overflow: ellipsis; }
 .thr-ex-large-caption { display: flex; justify-content: space-between; gap: 10px; margin-top: 2px; }
@@ -5698,7 +5698,7 @@ kbd {
 .thr-ex-err { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 [data-state="in"] > .thr-ex-err, [data-state="in"] .thr-ex-large-caption .thr-ex-err { color: var(--success-color); }
 [data-state="over"] > .thr-ex-err, [data-state="over"] .thr-ex-large-caption .thr-ex-err { color: var(--warning-color); }
-[data-state="drop"] > .thr-ex-err, [data-state="drop"] .thr-ex-large-caption .thr-ex-err { color: var(--error-color); }
+[data-state="drop"] > .thr-ex-err, [data-state="drop"] .thr-ex-large-caption .thr-ex-err { color: var(--warning-color); }
 .tri-methods-col p.thr-ex-others { margin: 0; min-height: 16px; overflow: hidden; font-size: 11px; line-height: 16px; white-space: nowrap; text-overflow: ellipsis; color: var(--text-muted); }
 .tri-methods-col p.thr-ex-result { margin: 2px 0 0; min-height: 3em; font-size: 12px; line-height: 1.5; color: var(--text-primary); }
 .tri-methods-col p.thr-ex-summary { margin: 0; min-height: 3em; font-size: 11px; line-height: 1.5; color: var(--text-muted); }
@@ -5800,8 +5800,10 @@ kbd {
 
 .tri-thr-verdicts li > span:first-child { color: var(--text-secondary); }
 .tri-thr-verdicts li.is-in > span:last-child { color: var(--success-color); }
-.tri-thr-verdicts li.is-over > span:last-child { color: var(--warning-color); }
-.tri-thr-verdicts li.is-drop > span:last-child { color: var(--error-color); }
+/* Orange means one thing here: a stray or dropped camera. Over the threshold but not
+   dropped yet stays neutral, and red is kept for errors and a node with no 3D. */
+.tri-thr-verdicts li.is-over > span:last-child { color: var(--text-primary); }
+.tri-thr-verdicts li.is-drop > span:last-child { color: var(--warning-color); }
 .tri-thr-verdicts li.is-out > span:last-child { color: var(--text-muted); }
 .tri-thr-verdicts li.is-off > span:last-child { color: var(--text-secondary); }
 
@@ -5815,8 +5817,8 @@ kbd {
 .tri-methods .tm-band { stroke-width: 7; stroke-linecap: butt; opacity: 0.4; }
 .tri-methods .tm-band-end { stroke-width: 1.5; stroke-linecap: round; }
 .tri-methods .is-in.tm-band, .tri-methods .is-in.tm-band-end { stroke: var(--success-color); }
-.tri-methods .is-over.tm-band, .tri-methods .is-over.tm-band-end { stroke: var(--warning-color); }
-.tri-methods .is-drop.tm-band, .tri-methods .is-drop.tm-band-end { stroke: var(--error-color); }
+.tri-methods .is-over.tm-band, .tri-methods .is-over.tm-band-end { stroke: var(--text-secondary); }
+.tri-methods .is-drop.tm-band, .tri-methods .is-drop.tm-band-end { stroke: var(--warning-color); }
 .tri-methods .tm-idle { opacity: 0.3; }
 /* A camera a re-solve no longer counts: out of the math. */
 .tri-methods .tm-dropped { opacity: 0.35; }
@@ -5954,7 +5956,7 @@ kbd {
 .smooth-fig .sf-note-spike { fill: var(--error-color); }
 .tri-methods .tm-note { fill: var(--text-secondary); font-size: 10px; }
 .tri-methods .tm-note-stray { fill: var(--warning-color); }
-.tri-methods .tm-note-drop { fill: var(--error-color); }
+.tri-methods .tm-note-drop { fill: var(--warning-color); }
 .tri-methods .tm-legend-text { font-size: 9px; }
 .tri-methods .tm-camera-number { fill: #fff; font-size: 9px; font-weight: 700; }
 .tri-methods .tm-total-bar { fill: var(--error-color); stroke: var(--bg-primary); stroke-width: 0.5; }

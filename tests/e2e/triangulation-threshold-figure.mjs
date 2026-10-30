@@ -153,6 +153,18 @@ try {
     check(/^2 · Second solve \(Refined\), without camera 3$/.test(r.name2), `every solve's title names the method (${r.name2})`);
     check(r.s2 === 'in,in,in,out' && r.kind === 'one' && /near the target, but still a little wrong/.test(r.result), `dropping it lands near the target (${r.result.slice(0, 60)}…)`);
     const outs = await page.evaluate(() => [1, 2, 3].map(n => document.querySelectorAll(`.tri-thr-step[data-step="${n}"] .tm-det-out`).length));
+    const hues = await page.evaluate(() => {
+        const list = document.querySelector('.tri-thr-step[data-step="1"]');
+        const colour = (sel, prop) => { const e = list.querySelector(sel); return e ? getComputedStyle(e)[prop] : null; };
+        const sample = document.createElement('span');
+        return {
+            stray: colour('.tm-ray-head.tm-ray-stray', 'fill'),
+            dropText: colour('.tri-thr-verdicts li.is-drop > span:last-child', 'color'),
+            dropNote: colour('.tm-note-drop', 'fill'),
+            dropBand: colour('.is-drop.tm-band', 'stroke'),
+        };
+    });
+    check(hues.stray && new Set(Object.values(hues)).size === 1, `stray and dropped are one colour (${JSON.stringify(hues)})`);
     check(outs[0] === 0 && outs[1] === 1, `in the second solve the dropped camera's prediction is orange, none in the first (${outs})`);
     check(r.dropped[0] === '' && r.dropped[1] === '3' && r.droppedOpacity < 0.5, `in the second solve the dropped camera 3 is faded, none in the first (${JSON.stringify(r.dropped)}, opacity ${r.droppedOpacity})`);
     check(/tm-ray/.test(r.droppedParts) && /tm-plane/.test(r.droppedParts) && /tm-det/.test(r.droppedParts), `its line of sight, image plane and prediction fade too (${r.droppedParts})`);
