@@ -322,6 +322,8 @@ try {
     check(totals.numberStyle === 'rgb(255, 255, 255) 700', `the numbers are bold and white (${totals.numberStyle})`);
     const titles = await page.evaluate(() => Array.from(document.querySelectorAll('.tri-methods .tri-methods-name')).map(n => n.firstChild.textContent).join(' | '));
     check(titles === 'Direct Linear Transformation (DLT), per node | Refined (Bundle adjustment), per node | Reprojection error threshold (RPE), per node', `each card's title says it is per node (${titles})`);
+    const planes = await page.evaluate(() => Array.from(document.querySelector('.tri-method-choice[data-method="dlt"] svg').querySelectorAll('line.tm-plane')).map(l => Math.round(Math.hypot(+l.getAttribute('x2') - +l.getAttribute('x1'), +l.getAttribute('y2') - +l.getAttribute('y1')))));
+    check(planes.length === 4 && new Set(planes).size === 1, `every camera's image plane is the same width (${planes})`);
     const legend = await page.evaluate(() => {
         const sketches = Array.from(document.querySelectorAll('.tri-methods .tm-sketch')).filter(s => !s.querySelector('.tm-idle'));
         const wrap = sketches[0], svg = wrap.querySelector('svg');

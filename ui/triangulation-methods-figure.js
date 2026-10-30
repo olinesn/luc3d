@@ -57,7 +57,7 @@
 import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js';
 
 var PX_PER_UNIT = 3;             // image pixels per sketch unit on an image plane
-var PLANE_HALF = 24;             // unless a camera says otherwise (`half`)             // image plane half-width, sketch units
+var PLANE_HALF = 29;             // image plane half-width, sketch units
 
 /**
  * The scene and the real solvers' answers for it (see the header). Cameras:
@@ -71,7 +71,7 @@ export var FIGURE_SCENE = {
         { name: 'Camera 0', at: [24, 22], rot: 32.8, plane: 44 },
         { name: 'Camera 1', at: [14, 132], rot: -13.7, plane: 44 },
         { name: 'Camera 2', at: [145, 232], rot: -90, plane: 44 },
-        { name: 'Camera 3', at: [278, 112], rot: -174.8, plane: 44, half: 30 },
+        { name: 'Camera 3', at: [278, 112], rot: -174.8, plane: 44 },
     ],
     detections: [[-15.98, 2], [13.94, 3], [14, -3], [-84, 0]],
     truth: [145, 100],
@@ -107,8 +107,6 @@ function onPlane(i, imageX) {
 }
 var DETECTIONS = FIGURE_SCENE.detections.map(function (d, i) { return onPlane(i, d[0]); });
 
-function planeHalf(i) { return CAMS[i].half || PLANE_HALF; }
-
 function line(a, b, cls) {
     return '<line x1="' + fmt(a[0]) + '" y1="' + fmt(a[1]) + '" x2="' + fmt(b[0]) + '" y2="' + fmt(b[1]) + '" class="' + cls + '"/>';
 }
@@ -132,8 +130,7 @@ var RAYS = DETECTIONS.map(function (d, i) {
 var CAMERA_BODY = '<rect x="-13" y="-7" width="14" height="14" rx="2" class="tm-cam"/>'
     + '<path d="M1 -4 L7 -7 L7 7 L1 4 Z" class="tm-cam"/>';
 var CAMERA_MARKS = CAMS.map(function (c, i) {
-    var half = planeHalf(i);
-    return line(onPlane(i, -half * PX_PER_UNIT), onPlane(i, half * PX_PER_UNIT), 'tm-plane')
+    return line(onPlane(i, -PLANE_HALF * PX_PER_UNIT), onPlane(i, PLANE_HALF * PX_PER_UNIT), 'tm-plane')
         + '<g transform="translate(' + c.at[0] + ' ' + c.at[1] + ') rotate(' + c.rot + ')">' + CAMERA_BODY + '</g>';
 }).join('') + CAMERA_NUMBERS;
 var TRUE_MARK = (function () {
@@ -339,7 +336,7 @@ export function thresholdPasses(cameras, solve, threshold) {
  * camera's verdict (`state`).
  */
 function band(i, threshold, state) {
-    var at = FIGURE_SCENE.detections[i][0] / PX_PER_UNIT, half = threshold / PX_PER_UNIT, edge = planeHalf(i);
+    var at = FIGURE_SCENE.detections[i][0] / PX_PER_UNIT, half = threshold / PX_PER_UNIT, edge = PLANE_HALF;
     var u0 = Math.max(-edge, at - half), u1 = Math.min(edge, at + half), r = RIGHT[i];
     function end(u) {
         var p = onPlane(i, u * PX_PER_UNIT);
