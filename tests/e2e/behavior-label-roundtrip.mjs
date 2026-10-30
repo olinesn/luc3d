@@ -18,7 +18,8 @@
  *     projects keep their bytes (`tests/e2e/save-golden-digest.mjs`).
  *  Both writers also carry the detection settings and predictions (Phase 2):
  *  a behavior's detector, the changed feature settings, and each session's
- *  predicted bouts with their scores.
+ *  predicted bouts with their scores; and each session's behavioral states
+ *  (Phase 4: a keypoint-MoSeq layer's runs and syllable names).
  *
  * Run: node tests/e2e/behavior-label-roundtrip.mjs   (spawns its own http.server; PORT= to move it)
  */
@@ -57,6 +58,7 @@ try {
         const eth = await import('/pose/behavior-ethogram.js');
         const L = await import('/pose/behavior-labels.js');
         const P = await import('/pose/behavior-predictions.js');
+        const S = await import('/pose/behavior-states.js');
         const { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } = pd;
         const SioLazyLoader = lazyMod.SioLazyLoader || lazyMod.default;
         const NODES = 4;
@@ -110,11 +112,14 @@ try {
             L.noteBehaviorFps(s, 50);
             L.toggleState(s, b.groom.id, 'mouseA', '', 52);          // still running at save time
             L.setBehaviorCursor(s, 57);
+            S.setStateLayer(s, { name: 'keypoint-MoSeq', source: 'keypoint-MoSeq', stateNames: { 2: 'groom' },
+                animals: { mouseA: [[0, 9, 2], [10, 59, 0]], mouseB: [[5, 30, 1]] } });
         }
         function labelB(s, b) {
             L.labelRange(s, b.groom.id, 'mouseA', '', 0, 9, true);
             P.setBehaviorRun(s, { behaviorId: b.chase.id, cfg: 'c', fps: 30, mode: '3d',
                 bouts: [{ animal: 'mouseB', target: 'mouseA', start: 3, end: 8, score: 0.66 }] });
+            S.setStateLayer(s, { name: 'kpms B', source: 'keypoint-MoSeq', animals: { mouseA: [[0, 39, 7]] } });
         }
         function predictA(s, b) {
             P.setBehaviorRun(s, { behaviorId: b.rear.id, cfg: 'r', fps: 30, mode: '3d',
@@ -136,6 +141,8 @@ try {
                     fps: lucid.behaviorLabels ? lucid.behaviorLabels.fps : null,
                     rows: L.exportBoutRows(fresh),
                     predictions: predRows(fresh),
+                    states: S.exportStateLayers(fresh),
+                    hasStatesKey: Object.prototype.hasOwnProperty.call(lucid, 'behaviorStates'),
                     otherKeys: ['sessionName', 'identities', 'skeleton', 'tracks'].every(k => Object.prototype.hasOwnProperty.call(lucid, k)),
                 });
             }
@@ -151,6 +158,7 @@ try {
             predictA(s, b);
             res.expectedA = L.exportBoutRows(s);
             res.expectedPredA = predRows(s);
+            res.expectedStatesA = S.exportStateLayers(s);
             res.expectedEthogram = eth.serializeEthogram();
             res.stillRunning = L.isRunning(s, b.groom.id, 'mouseA', '');
             AS.state.sessions = [s]; AS.state.session = s; AS.state.activeSessionIdx = 0;
@@ -181,6 +189,7 @@ try {
             labelB(sessions[1], b);
             res.expectedStream = sessions.map(s => L.exportBoutRows(s));
             res.expectedStreamPred = sessions.map(predRows);
+            res.expectedStreamStates = sessions.map(s => S.exportStateLayers(s));
             for (let i = 0; i < sessions.length; i++) {
                 const loader = new SioLazyLoader();
                 for (let ci = 0; ci < SPECS[i].cams.length; ci++) await loader.open(SPECS[i].cams[ci], await perCamFixture(SPECS[i], SPECS[i].cams[ci], ci));
@@ -216,6 +225,8 @@ try {
     check(eq(e0.predictions, rt.expectedPredA) && e0.predictions.length === 2, 'the predicted bouts and their scores read back (eager)');
     check(rt.eager.ethogram.behaviors[0].detector && eq(rt.eager.features, { nodeRoles: { head: 'n0', tailBase: 'n3' } }),
         'and so do the detector and the changed feature settings');
+    check(e0.hasStatesKey && eq(e0.states, rt.expectedStatesA) && rt.expectedStatesA.layers[0].stateNames[2] === 'groom',
+        'and the behavioral states: every run and syllable name (eager)');
 
     console.log('\n-- 2. streaming writer --');
     if (rt.streamErr) {
@@ -226,11 +237,13 @@ try {
         check(eq(rt.streaming.sessions.map(s => s.rows), rt.expectedStream), 'each session reopens with its own bouts');
         check(eq(rt.streaming.sessions.map(s => s.predictions), rt.expectedStreamPred) && rt.expectedStreamPred[1].length === 1,
             'and its own predicted bouts (streaming)');
+        check(eq(rt.streaming.sessions.map(s => s.states), rt.expectedStreamStates) && rt.expectedStreamStates[1].layers[0].name === 'kpms B',
+            'and its own behavioral states (streaming)');
     }
 
     console.log('\n-- 3. untouched project --');
     const u = rt.untouched.sessions[0];
-    check(!!u && !u.hasEthogramKey && !u.hasLabelsKey, 'no ethogram and no bouts: neither key is written');
+    check(!!u && !u.hasEthogramKey && !u.hasLabelsKey && !u.hasStatesKey, 'no ethogram, bouts or states: none of their keys is written');
     check(!!u && u.otherKeys, 'and the file still carries the other metadata.lucid keys');
 
     check(errs.length === 0, `no page errors (${errs.join(' | ').slice(0, 300)})`);
