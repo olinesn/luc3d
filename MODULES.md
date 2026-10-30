@@ -11467,7 +11467,7 @@ and Turn off change the threshold, through `opts.onThreshold`; Apply saves it.
 the sketch jumps to a value set elsewhere, and opens at the setting. The slider runs from
 off (every camera counts, no band, nothing dropped), then from 640 px (half of a 1280 px
 monitor, also the setting's top) down to 1 px on a log scale (`thresholdSliderPos`,
-`thresholdFromSliderPos`), with a recommended zone from 100 to 10 px. In the scene DLT
+`thresholdFromSliderPos`), with a recommended zone from 100 to 15 px. In the scene DLT
 drops camera 3 at 53 px, inside the zone, and a good camera only at 8 px, past it. The large value (`.fig-big`) is what the sketch shows.
 
 **The card never changes size as the value moves.** Every step keeps its place (a

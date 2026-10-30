@@ -5420,6 +5420,8 @@ kbd {
 
 .tri-methods .tm-ray { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .tri-methods .tm-ray-stray { stroke: var(--warning-color); opacity: 0.7; }
+.tri-methods .tm-ray-head { fill: var(--text-muted); stroke: none; }
+.tri-methods .tm-ray-head.tm-ray-stray { fill: var(--warning-color); stroke: none; }
 .tri-methods .tm-back { stroke: var(--accent); stroke-width: 1; opacity: 0.35; }
 .tri-methods .tm-plane { stroke: var(--text-secondary); stroke-width: 2; stroke-linecap: round; }
 .tri-methods .tm-cam { fill: var(--bg-button); stroke: var(--text-secondary); stroke-width: 1; }

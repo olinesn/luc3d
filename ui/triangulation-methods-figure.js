@@ -122,12 +122,20 @@ var CAMERA_NUMBERS = CAMS.map(function (c, i) {
 
 // Shared by every sketch: each camera's line of sight through its detection and
 // on, then the cameras.
+var RAY_HEAD_LEN = 5, RAY_HEAD_HALF = 2.2;
 var RAY_LIST = DETECTIONS.map(function (d, i) {
     var at = CAMS[i].at, dx = d[0] - at[0], dy = d[1] - at[1], len = Math.hypot(dx, dy);
     // Only as far as just past the target (the stray's, which misses it, as far as the
     // target), to keep the middle of the sketch clear.
     var reach = Math.hypot(FIGURE_SCENE.truth[0] - at[0], FIGURE_SCENE.truth[1] - at[1]) + (STRAY_LABELS[i] ? 0 : 40);
-    return line(at, [at[0] + dx / len * reach, at[1] + dy / len * reach], 'tm-ray' + (STRAY_LABELS[i] ? ' tm-ray-stray' : ''));
+    // An arrowhead at the tip gives the line its direction, away from the camera.
+    var ux = dx / len, uy = dy / len, tip = [at[0] + ux * reach, at[1] + uy * reach];
+    var base = [tip[0] - ux * RAY_HEAD_LEN, tip[1] - uy * RAY_HEAD_LEN];
+    var stray = STRAY_LABELS[i] ? ' tm-ray-stray' : '';
+    return line(at, base, 'tm-ray' + stray)
+        + '<polygon points="' + fmt(tip[0]) + ',' + fmt(tip[1]) + ' '
+        + fmt(base[0] - uy * RAY_HEAD_HALF) + ',' + fmt(base[1] + ux * RAY_HEAD_HALF) + ' '
+        + fmt(base[0] + uy * RAY_HEAD_HALF) + ',' + fmt(base[1] - ux * RAY_HEAD_HALF) + '" class="tm-ray-head' + stray + '"/>';
 });
 var RAYS = RAY_LIST.join('');
 var CAMERA_BODY = '<rect x="-13" y="-7" width="14" height="14" rx="2" class="tm-cam"/>'
@@ -428,8 +436,8 @@ var THRESHOLD_CONTROL = {
     sliderMin: 0, sliderMax: SLIDER_POSITIONS, sliderStep: 1,
     toSlider: thresholdSliderPos, fromSlider: thresholdFromSliderPos,
     ticks: [[0, 'off'], [thresholdSliderPos(THRESHOLD_MAX), String(THRESHOLD_MAX)], [thresholdSliderPos(100), '100'],
-        [thresholdSliderPos(10), '10'], [thresholdSliderPos(THRESHOLD_MIN), String(THRESHOLD_MIN)]],
-    zone: { from: thresholdSliderPos(100), to: thresholdSliderPos(10), label: 'recommended' },
+        [thresholdSliderPos(15), '15'], [thresholdSliderPos(THRESHOLD_MIN), String(THRESHOLD_MIN)]],
+    zone: { from: thresholdSliderPos(100), to: thresholdSliderPos(15), label: 'recommended' },
 };
 
 var RESULT_KINDS = ['lost', 'far', 'close', 'one', 'two', 'offFar', 'offClose'];
@@ -513,7 +521,7 @@ export function buildTriangulationMethodsFigure(opts) {
         + 'of the prediction. If it lands outside any band, the camera that misses by most is dropped for this '
         + 'node and the node is solved again from the rest; this repeats while more than two cameras are left. A '
         + 'node whose last two cameras still miss gets no 3D point in this frame. Moving the slider right makes the check '
-        + 'stricter. Past the recommended zone (100 to 10 px) it can start dropping good views too.</p>'
+        + 'stricter. Past the recommended zone (100 to 15 px) it can start dropping good views too.</p>'
         + '</div></div>'
         // Between the session's examples and the sketches, since it drives both.
         + '<div class="tri-thr-controls">'

@@ -229,14 +229,25 @@ try {
 
     console.log('5b. the slider: off, 640 px, a log scale, a recommended zone');
     await open();
+    const heads = await page.evaluate(() => Array.from(document.querySelectorAll('.tri-methods svg')).filter(v => v.querySelector('.tm-ray')).map(v => {
+        const rays = v.querySelectorAll('.tm-ray').length, all = v.querySelectorAll('.tm-ray-head').length, orange = v.querySelectorAll('.tm-ray-head.tm-ray-stray').length;
+        return rays + '/' + all + '/' + orange;
+    }));
+    check(heads.length >= 5 && heads.every(h => h === '4/4/1'), `every line of sight ends in an arrowhead, the stray's orange (${heads})`);
+    const headTip = await page.evaluate(() => {
+        const v = document.querySelector('.tri-method-choice svg');
+        const c = window.getComputedStyle(v.querySelector('.tm-ray-head.tm-ray-stray')).fill, g = window.getComputedStyle(v.querySelector('.tm-ray-head:not(.tm-ray-stray)')).fill;
+        return { c, g };
+    });
+    check(headTip.c !== headTip.g, `in the two colours (${headTip.c}, ${headTip.g})`);
     const scale = await page.evaluate(() => {
         const c = document.querySelector('.tri-thr [data-try="threshold"]'), zone = c.querySelector('.fig-zone');
         return { ticks: Array.from(c.querySelectorAll('.fig-tick')).map(t => t.textContent).join(), label: c.querySelector('.fig-zone-label').textContent,
             from: +getComputedStyle(zone).getPropertyValue('--a'), to: +getComputedStyle(zone).getPropertyValue('--b') };
     });
-    check(scale.ticks === 'off,640,100,10,1', `marked off, 640, 100, 10, 1 (${scale.ticks})`);
-    const [p100, p10] = [await sliderPos(100), await sliderPos(10)];
-    check(scale.label === 'recommended' && Math.abs(scale.from * 1000 - p100) < 1 && Math.abs(scale.to * 1000 - p10) < 1, `a recommended zone from 100 to 10 px (${scale.from}-${scale.to})`);
+    check(scale.ticks === 'off,640,100,15,1', `marked off, 640, 100, 15, 1 (${scale.ticks})`);
+    const [p100, p15] = [await sliderPos(100), await sliderPos(15)];
+    check(scale.label === 'recommended' && Math.abs(scale.from * 1000 - p100) < 1 && Math.abs(scale.to * 1000 - p15) < 1, `a recommended zone from 100 to 15 px (${scale.from}-${scale.to})`);
     // Moving the slider right with DLT: nothing, then camera 3 drops, in the zone.
     await page.click('.tri-thr [data-demo-method="dlt"]');
     const sweep = [];
@@ -250,8 +261,8 @@ try {
     }
     check(sweep.map(x => x.kind).join() === 'offFar,far,one,two,lost', `moving right with DLT: off, nothing, camera 3 drops, then a good camera, then no 3D (${JSON.stringify(sweep)})`);
     const dropAt = sweep[2].pos, goodAt = sweep[3].pos;
-    check(dropAt > p100 && dropAt < p10, `camera 3 drops inside the recommended zone (position ${dropAt})`);
-    check(goodAt > p10, `a good camera only goes past it (position ${goodAt})`);
+    check(dropAt > p100 && dropAt < p15, `camera 3 drops inside the recommended zone (position ${dropAt})`);
+    check(goodAt > p15, `a good camera only goes past it (position ${goodAt})`);
     await page.click('.settings-btn-cancel');
 
     console.log('6. Use, Apply, Turn off');

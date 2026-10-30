@@ -232,7 +232,7 @@ group('8. a representative set');
     ok(new Set(set).size === set.length, 'none twice');
     ok(set[set.length - 1].worst > 500, `it reaches the largest errors (${set[set.length - 1].worst})`);
     ok(set[0].worst < 2, `and the smallest (${set[0].worst})`);
-    const inZone = set.filter(e => e.worst >= 10 && e.worst <= 100).length;
+    const inZone = set.filter(e => e.worst >= 15 && e.worst <= 100).length;
     ok(inZone >= 3, `the recommended range has several, though it is 3% of the nodes (${inZone})`);
     ok(new Set(set.map(e => e.node)).size >= 6, `body parts vary (${new Set(set.map(e => e.node)).size})`);
     ok(JSON.stringify(ex.pickRepresentativeExamples(list)) === JSON.stringify(set), 'the same every time');
