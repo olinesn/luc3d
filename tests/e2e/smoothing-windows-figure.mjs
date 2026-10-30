@@ -325,7 +325,7 @@ try {
     const wants = (got, list) => list.every(k => got.includes(k));
     check(wants(lay.medKeys, ['true', 'raw', 'spike', 'med', 'band', 'rank', 'rank-mid']) && !lay.medKeys.includes('out'), `median legend (${lay.medKeys})`);
     check(wants(lay.gauKeys, ['true', 'med', 'out', 'band', 'weight']) && !lay.gauKeys.includes('raw'), `Gaussian legend (${lay.gauKeys})`);
-    check(wants(lay.gapKeys, ['true', 'raw', 'out', 'left', 'hole', 'split', 'seg', 'seg-short']), `gaps legend (${lay.gapKeys})`);
+    check(wants(lay.gapKeys, ['true', 'raw', 'out-line', 'left', 'hole', 'split', 'seg', 'seg-short']), `gaps legend (${lay.gapKeys})`);
     check(!lay.pickedBefore && lay.pickedAfter, 'the ring is in the legend only while a frame is picked');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));

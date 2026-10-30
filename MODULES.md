@@ -11533,8 +11533,9 @@ sets both through `onParam`.
 
 **Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`;
 `stageSketch(stage, window, { medianWindow, frame })` → `{ svg, keys, truth, raw, medOut, out }`,
-one card's sketch with no controls, DOM-free, which `scripts/smoothing-wiki-figures.mjs`
-draws the docs' step figures from.
+one card's sketch with no controls, DOM-free, and `gapSketch({ median, gaussian, maxGap, minSegment })`
+→ `{ svg, keys, segments, truth, raw, out }`, the gaps card's; `scripts/smoothing-wiki-figures.mjs`
+draws the docs' step figures from them.
 
 **Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
 `sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`,

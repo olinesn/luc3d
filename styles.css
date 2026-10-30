@@ -5946,6 +5946,7 @@ kbd {
 .smooth-fig .sf-key-seg,
 .smooth-fig .sf-key-seg-short { width: 14px; height: 5px; border-radius: 2px; background: var(--accent); }
 .smooth-fig .sf-key-seg-short { background: var(--text-muted); }
+.smooth-fig .sf-key-out-line { width: 16px; height: 2px; border-radius: 1px; background: var(--accent); }
 .smooth-fig .sf-key-left { width: 14px; height: 2px; border-radius: 1px; background: var(--text-muted); }
 
 /* Card 3 (gaps and segments) spans both columns, with a wider, shorter chart. */

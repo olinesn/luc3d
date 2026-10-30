@@ -3,7 +3,7 @@
  * made-up trace (`scripts/smoothing-wiki-figures.mjs`). These hold them to what the
  * real filter does to it, so a change to the trace cannot quietly make them false.
  */
-import { stageSketch, TRACE_FRAMES } from '../ui/smoothing-windows-figure.js';
+import { stageSketch, gapSketch, TRACE_FRAMES } from '../ui/smoothing-windows-figure.js';
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
@@ -38,6 +38,18 @@ const m3Stray = stray(m3);
 check(stray(g5) < m3Stray, `5 frames reduce the jitter (${m3Stray.toFixed(2)} → ${stray(g5).toFixed(2)} mm)`);
 check(lost(g5) < 8, `5 frames keep the fast move (${lost(g5).toFixed(1)} of 30 mm lost)`);
 check(lost(g15) > 15, `15 frames damp the fast move by over half (${lost(g15).toFixed(1)} of 30 mm lost)`);
+
+console.log('Gaps, at a 3-frame median and a 9-frame Gaussian');
+const gaps = (maxGap, minSegment) => gapSketch({ median: 3, gaussian: 9, maxGap, minSegment });
+const sizes = (s) => s.segments.map((g) => g.end - g.start).join('+');
+const d55 = gaps(5, 5), d52 = gaps(5, 2), d75 = gaps(7, 5);
+check(sizes(d55) === '20+3+24', `the defaults cut three segments (${sizes(d55)})`);
+check(same(d55.out.subarray(27, 30), d55.raw.subarray(27, 30)), 'the 3-frame segment is left as it is');
+check(sizes(d52) === '20+3+24', `minimum segment 2 keeps them (${sizes(d52)})`);
+check(d52.out[27] === d52.raw[27] && d52.out[29] === d52.raw[29], 'its ends have no room for a window');
+check(d52.out[28] !== d52.raw[28] && Math.abs(d52.out[28] - d52.raw[28]) < 1, `its middle frame changes, barely (${Math.abs(d52.out[28] - d52.raw[28]).toFixed(3)} mm)`);
+check(sizes(d75) === '60', `max gap 7 makes one segment (${sizes(d75)})`);
+check(d75.out.every((v, t) => Number.isNaN(v) === Number.isNaN(d75.raw[t])), 'the missing frames are still not filled in');
 
 console.log(fails ? `\n${fails} FAILED` : '\nPASS');
 process.exit(fails ? 1 : 0);

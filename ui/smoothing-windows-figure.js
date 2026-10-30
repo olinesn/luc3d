@@ -358,9 +358,10 @@ function gaussianKeys(on, rawInput) {
 var PICKED_KEY = '<span class="sf-picked-key" hidden><i class="sf-key-current"></i>value at the picked frame</span>';
 
 var STAGE_LEGEND = '<div class="smooth-fig-legend"><span class="sf-legend-items"></span>' + PICKED_KEY + '</div>';
-var GAP_LEGEND = '<div class="smooth-fig-legend">' + legendItems([KEY_TRUE, KEY_RAW, ['out', 'after both stages'],
+var GAP_KEYS = [KEY_TRUE, KEY_RAW, ['out-line', 'after both stages'],
     ['left', 'too short, left as is'], ['hole', 'no 3D, stays a hole'], ['split', 'no 3D, splits the trace'],
-    ['seg', 'segment'], ['seg-short', 'segment too short']]) + '</div>';
+    ['seg', 'segment'], ['seg-short', 'segment too short']];
+var GAP_LEGEND = '<div class="smooth-fig-legend">' + legendItems(GAP_KEYS) + '</div>';
 
 var SIZE_OFF = -1;     // the Window sliders' off position (step 2, then 1, 3, 5…)
 var SIZE_MAX = 31;     // the Window sliders' top; a longer typed window still shows, the slider sits at its end
@@ -411,6 +412,21 @@ export function stageSketch(stage, window, opts) {
         svg: median ? medianChart(window, out, t, null) : gaussianChart(window, input, out, !medWindow, t, null),
         keys: median ? medianKeys(window > 0) : gaussianKeys(window > 0, !medWindow),
         truth: TRUTH, raw: RAW, medOut: medOut, out: out,
+    };
+}
+
+/**
+ * The gaps card's sketch without its controls, for the docs' step figure, and the
+ * numbers behind it.
+ * @param {{median: number, gaussian: number, maxGap: number, minSegment: number}} o
+ * @returns {{svg: string, keys: Array, segments: Array<{start: number, end: number}>,
+ *   truth: Float64Array, raw: Float64Array, out: Float64Array}}
+ */
+export function gapSketch(o) {
+    var segments = buildSegments(PRESENT, o.maxGap);
+    return {
+        svg: gapChart(o.median, o.gaussian, o.maxGap, o.minSegment), keys: GAP_KEYS, segments: segments,
+        truth: GTRUTH, raw: GRAW, out: runSegments(o.median, o.gaussian, segments, o.minSegment),
     };
 }
 

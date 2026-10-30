@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * smoothing-wiki-figures.mjs — the luc3d-docs Temporal Smoothing page's two step
+ * smoothing-wiki-figures.mjs — the luc3d-docs Temporal Smoothing page's three step
  * figures, drawn with the Settings figure's own sketches, so they run LUC3D's real
  * filter and use its colours (`.smooth-fig` in styles.css).
  *
@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stageSketch, TRACE_FRAMES } from '../ui/smoothing-windows-figure.js';
+import { stageSketch, gapSketch, TRACE_FRAMES } from '../ui/smoothing-windows-figure.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = process.argv[2];
@@ -50,13 +50,28 @@ const FIGURES = [
     },
 ];
 
+// The gaps figure, smoothed by a 3-frame median and a 9-frame Gaussian throughout.
+const GAPS = {
+    file: 'gaps-steps.svg', title: 'Gaps and segments, three steps',
+    desc: 'A made-up trace with absences of 2, 7 and 6 frames, at three settings of Max gap and Minimum segment length.',
+    windows: { median: 3, gaussian: 9 },
+    steps: [
+        { title: 'Max gap 5, minimum segment 5 (the defaults)', maxGap: 5, minSegment: 5,
+            text: 'The 2-frame absence stays a hole. The 7- and 6-frame ones split the trace into three segments, and no window crosses them. The 3-frame segment is shorter than the minimum, so it is left as it is.' },
+        { title: 'Minimum segment 2', maxGap: 5, minSegment: 2,
+            text: 'The 3-frame segment is now filtered. Its two ends have no room for a window, so only its middle frame can change, and it barely moves.' },
+        { title: 'Max gap 7', maxGap: 7, minSegment: 5,
+            text: 'Every absence is now a hole, so the trace is one segment. The missing frames are still not filled in. Windows skip over them, so a frame beside an absence averages data from one side only.' },
+    ],
+};
+
 /** The `.smooth-fig .sf-*` rules of styles.css, with the theme's colours filled in. */
 function figureCss() {
     const css = fs.readFileSync(path.join(repoRoot, 'styles.css'), 'utf8');
     const root = css.slice(css.indexOf(':root {'), css.indexOf('}', css.indexOf(':root {')));
     const vars = new Map([...root.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
     const rules = [...css.matchAll(/^\.smooth-fig (\.sf-[\w.-]+) \{([^}]*)\}/gm)]
-        .filter((m) => !m[1].startsWith('.sf-key') && !/sf-play|sf-seg|sf-absent|sf-left/.test(m[1]));
+        .filter((m) => !m[1].startsWith('.sf-key') && !/sf-play/.test(m[1]));
     return rules.map((m) => m[1] + '{' + m[2].trim().replace(/var\((--[\w-]+)\)/g, (_, v) => {
         if (!vars.has(v)) throw new Error('unknown colour ' + v);
         return vars.get(v);
@@ -91,6 +106,12 @@ function swatch(key, x, y) {
     case 'rank': return bar('sf-rank');
     case 'rank-mid': return bar('sf-rank sf-rank-mid');
     case 'weight': return bar('sf-weight');
+    case 'out-line': return line('sf-out');
+    case 'left': return line('sf-out sf-left');
+    case 'hole': return `<rect x="${x + 2}" y="${y - 4}" width="12" height="8" class="sf-absent"/>`;
+    case 'split': return `<rect x="${x + 2}" y="${y - 4}" width="12" height="8" class="sf-absent sf-absent-split"/>`;
+    case 'seg': return `<rect x="${x + 1}" y="${y - 2.5}" width="14" height="5" rx="2" class="sf-seg"/>`;
+    case 'seg-short': return `<rect x="${x + 1}" y="${y - 2.5}" width="14" height="5" rx="2" class="sf-seg sf-seg-short"/>`;
     default: throw new Error('no swatch for ' + key);
     }
 }
@@ -116,15 +137,37 @@ function panel(fig, step, x, y, h) {
     return o;
 }
 
-function figure(fig) {
-    const panelH = 35 + 3 * LINE - 2 + CHART_H + PAD;
-    const W = 2 * PANEL_W + GAP, H = 2 * panelH + GAP;
+/** The gaps figure: its wide sketches stacked, with one legend at the bottom. */
+function gapsFigure(fig) {
+    const W = 2 * PANEL_W + GAP, chartW = W - 2 * PAD, chartH = chartW * 140 / 600;
+    const legendH = 44;
+    let y = 0, body = '';
+    fig.steps.forEach((st) => {
+        const s = gapSketch({ ...fig.windows, maxGap: st.maxGap, minSegment: st.minSegment });
+        const lines = wrap(st.text, 112);
+        const chartY = y + 35 + (lines.length - 1) * LINE + 6;
+        const h = chartY - y + chartH + PAD;
+        body += `<rect x="0.5" y="${y + 0.5}" width="${W - 1}" height="${h - 1}" rx="8" class="panel"/>`
+            + `<text x="${PAD}" y="${y + 19}" class="step">${esc(st.title)}</text>`
+            + lines.map((l, i) => `<text x="${PAD}" y="${y + 35 + i * LINE}" class="cap">${esc(l)}</text>`).join('')
+            + s.svg.replace('<svg ', `<svg x="${PAD}" y="${chartY}" width="${chartW}" height="${chartH}" `);
+        y += h + GAP;
+    });
+    const keys = gapSketch({ ...fig.windows, maxGap: 5, minSegment: 5 }).keys, colW = (W - 2 * PAD) / 4;
+    body += `<rect x="0.5" y="${y + 0.5}" width="${W - 1}" height="${legendH - 1}" rx="8" class="panel"/>`
+        + keys.map((k, i) => {
+            const lx = PAD + (i % 4) * colW, ly = y + 15 + (i >> 2) * 15;
+            return swatch(k[0], lx, ly) + `<text x="${lx + 20}" y="${ly + 3}" class="key">${esc(k[1])}</text>`;
+        }).join('');
+    return svgDoc(fig, W, y + legendH, body);
+}
+
+function svgDoc(fig, W, H, body) {
     const css = figureCss() + `
 .panel{fill:#1a1a1a;stroke:#3a3a3a}
 .step{font-size:14px;font-weight:600;fill:#e0e0e0}
 .cap{font-size:11px;fill:#aaaaaa}
 .key{font-size:9px;fill:#aaaaaa}`;
-    const body = fig.steps.map((st, i) => panel(fig, st, (i % 2) * (PANEL_W + GAP), (i >> 1) * (panelH + GAP), panelH)).join('\n');
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-labelledby="t d" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
 <title id="t">${esc(fig.title)}</title>
 <desc id="d">${esc(fig.desc)}</desc>
@@ -136,9 +179,18 @@ ${body}
 `;
 }
 
+function figure(fig) {
+    const panelH = 35 + 3 * LINE - 2 + CHART_H + PAD;
+    const W = 2 * PANEL_W + GAP, H = 2 * panelH + GAP;
+    const body = fig.steps.map((st, i) => panel(fig, st, (i % 2) * (PANEL_W + GAP), (i >> 1) * (panelH + GAP), panelH)).join('\n');
+    return svgDoc(fig, W, H, body);
+}
+
 fs.mkdirSync(outDir, { recursive: true });
 FIGURES.forEach((fig) => {
     const file = path.join(outDir, fig.file);
     fs.writeFileSync(file, figure(fig));
     console.log('wrote ' + file);
 });
+fs.writeFileSync(path.join(outDir, GAPS.file), gapsFigure(GAPS));
+console.log('wrote ' + path.join(outDir, GAPS.file));
