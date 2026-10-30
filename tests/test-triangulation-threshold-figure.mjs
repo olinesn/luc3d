@@ -21,8 +21,9 @@
  *   3. `FIGURE_SCENE`, which all the figure's sketches draw, is the real solvers'
  *      output: its 3D, landings and errors, for each method and set of cameras,
  *      and the outcome at every threshold from 1 to 120 px. A mismatch prints the
- *      right numbers. The captions' claims hold too: one stray and Refined lands
- *      close to the true position, two and it is fooled.
+ *      right numbers. The captions' claims hold too: Refined lands close to the true
+ *      position with the stray counted, DLT is pulled away, and another layout
+ *      pulls Refined far off.
  *
  * Run: node tests/test-triangulation-threshold-figure.mjs
  */
@@ -189,7 +190,7 @@ group('3. the figure\'s scene is what the real solvers give');
         }
         // Every whole-pixel threshold the slider and most of the box can reach.
         for (let t = 1; t <= 120; t++) {
-            const pred = thresholdPasses([0, 1, 2, 3], (cams2) => FIGURE_SCENE.solves[method][cams2.join(',')].errors, t);
+            const pred = thresholdPasses([0, 1, 2], (cams2) => FIGURE_SCENE.solves[method][cams2.join(',')].errors, t);
             const real = core.triangulateAndReproject(g, cams, { method, reprojErrorThreshold: t });
             const has = pd.hasPoint3d(real.points3d, 0);
             ok(has === pred.kept, `${method} ${t} px: solver ${has ? 'kept' : 'dropped'} the node, the figure says ${pred.kept ? 'kept' : 'dropped'}`);
@@ -201,18 +202,26 @@ group('3. the figure\'s scene is what the real solvers give');
     }
     // The captions' claims.
     const truth = FIGURE_SCENE.truth;
-    const off = (res) => { const p = pd.getPoint3d(res.points3d, 0); return Math.hypot(p[0] - truth[0], p[1] - truth[1]); };
-    const ALL = [0, 1, 2, 3];
-    const topHonest = FIGURE_SCENE.detections.slice(0, 3).concat([[cams[3].project([truth[0], truth[1], 0])[0], 0]]);
-    const oneStray = off(solveSet('ba', ALL, topHonest)), twoStrays = off(solveSet('ba', ALL));
-    ok(oneStray < 5, `with only the right camera wrong, Refined lands close to the true position (${oneStray.toFixed(1)} units)`);
-    ok(twoStrays > 25, `with both strays, Refined is fooled (${twoStrays.toFixed(1)} units off)`);
-    const ba = FIGURE_SCENE.solves.ba['0,1,2,3'].errors;
-    ok(ba[3] < 0.1 && ba[0] > 20, `Refined settles on the top stray's line (${ba[3]} px) and the left camera looks wrong (${ba[0]} px)`);
+    const dist = (p) => Math.hypot(p[0] - truth[0], p[1] - truth[1]);
+    const off = (res) => dist(pd.getPoint3d(res.points3d, 0));
+    const ALL = [0, 1, 2];
+    const refined = off(solveSet('ba', ALL)), dlt = off(solveSet('dlt', ALL));
+    ok(refined < 5 && refined > 1, `Refined lands close to the true position, with the stray still counted (${refined.toFixed(1)} units)`);
+    ok(dlt > 25, `DLT is pulled well away (${dlt.toFixed(1)} units)`);
     for (const method of ['dlt', 'ba']) {
-        const two = FIGURE_SCENE.solves[method]['0,1'].point;
-        ok(Math.hypot(two[0] - truth[0], two[1] - truth[1]) < 0.5, `${method}: the two cameras that were right give the true position`);
+        ok(dist(FIGURE_SCENE.solves[method]['0,1'].point) < 0.5, `${method}: the two cameras that were right give the true position`);
     }
+    // "With other camera layouts it can still be pulled far off": the same scene
+    // with the right camera's image plane further from it.
+    const far = FIGURE_SCENE.cameras[2];
+    const wide = cams.slice(0, 2).concat((() => {
+        const a = far.rot * Math.PI / 180, f = [Math.cos(a), Math.sin(a)], r = [-f[1], f[0]];
+        return new pd.Camera('c2', [[72 * PX, 0, 0], [0, 72 * PX, 0], [0, 0, 1]], [0, 0, 0, 0, 0],
+            [[r[0], r[1], 0], [0, 0, 1], [f[0], f[1], 0]],
+            [-(r[0] * far.at[0] + r[1] * far.at[1]), 0, -(f[0] * far.at[0] + f[1] * far.at[1])], [144, 144]);
+    })());
+    const fooled = off(core.triangulateAndReproject(g, wide, { method: 'ba', reprojErrorThreshold: 0 }));
+    ok(fooled > 20, `another layout pulls Refined far off (${fooled.toFixed(1)} units)`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

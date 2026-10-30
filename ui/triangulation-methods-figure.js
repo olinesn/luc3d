@@ -6,17 +6,15 @@
 // (`'dlt'` | `'ba'`). The cards are `role="radio"` in a `radiogroup`, so the
 // caller also handles Enter/Space.
 //
-// Every sketch is the SAME scene from above: four cameras, one node. Each
+// Every sketch is the SAME scene from above: three cameras, one node. Each
 // camera's 2D detection (orange) sits on its image plane, with the camera's line
 // of sight through it (dashed, from the camera on, so it is clear whose it is:
 // grey if the camera is right, orange if stray), the 3D answer (blue), the line
 // from the camera to that answer, where the answer lands back in each camera
 // (blue ring) and the pixel error between the two (red). A cross marks the true
-// position. The left and bottom cameras are right; the right one is badly off
-// and the top one less so (both marked stray). With two wrong views DLT is pulled
-// away and Refined settles on the top camera's stray line, which is why Refined
-// can still need the threshold. With only the right camera wrong, Refined lands
-// close to the true position (`tests/test-triangulation-threshold-figure.mjs`).
+// position. The left and bottom cameras are right; the right one is a stray. DLT
+// is pulled well away. Refined counts the stray less and lands close to the true
+// position, with the stray still counted; the threshold removes it altogether.
 //
 // The answers are NOT hand-drawn. `FIGURE_SCENE` holds the layout and the 2D
 // points; its `solves` are the real `triangulateAndReproject`'s output for that
@@ -25,8 +23,8 @@
 // scene and fails if they drift; change the layout and it prints the new numbers.
 //
 // The threshold card (Tracking Wizard ▸ "Reprojection error threshold (px)",
-// `reprojErrorThreshold`) has up to three more sketches of the scene: the first
-// solve, then the solve again after each dropped camera. On each image plane
+// `reprojErrorThreshold`) has two more sketches of the scene: the first solve, and
+// the solve again without the dropped camera. On each image plane
 // still checked, a band `threshold` px either side of the detection is where the
 // answer may land; it is green, orange or red as that camera is within, over, or
 // over and dropped. `thresholdPasses` decides what is dropped: it restates the
@@ -63,29 +61,26 @@ export var FIGURE_SCENE = {
     cameras: [
         { name: 'Left camera', at: [22, 118], rot: -17.4, plane: 72 },
         { name: 'Bottom camera', at: [150, 180], rot: -90, plane: 72 },
-        { name: 'Right camera', at: [278, 118], rot: -162.6, plane: 72 },
-        { name: 'Top camera', at: [100, -20], rot: 64.5, plane: 60 },
+        { name: 'Right camera', at: [278, 118], rot: -164.2, plane: 40 },
     ],
-    detections: [[2.84, 3], [-2.4, -3], [70, 0], [-24, 0]],
+    detections: [[2.84, 3], [-2.4, -3], [60.02, 0]],
     truth: [148.4, 81.3],
     solves: {
         dlt: {
-            '0,1,2,3': { point: [170.9, 51.3], x: [-16.97, 23.43, 37.29, -42.14], errors: [20, 26, 32.7, 18.1] },
-            '0,1,3': { point: [156.2, 73.5], x: [-2.36, 8.41, 6.71, -11.58], errors: [5.9, 11.3, 63.3, 12.4] },
-            '0,1': { point: [148.3, 81.2], x: [2.9, -2.48, -3.91, -0.03], errors: [2.6, 3.5, 73.9, 24] },
+            '0,1,2': { point: [173, 50.4], x: [-16.98, 25.52, 24.42], errors: [20, 28.1, 35.6] },
+            '0,1': { point: [148.3, 81.2], x: [2.86, -2.48, 0.08], errors: [2.6, 3.5, 59.9] },
         },
         ba: {
-            '0,1,2,3': { point: [151.9, 49.4], x: [-26.53, 2.13, 28.4, -24], errors: [29.5, 5.4, 41.6, 0] },
-            '0,1,3': { point: [151.9, 78.8], x: [1.51, 2.75, -0.29, -4.68], errors: [2.6, 6.6, 70.3, 19.3] },
-            '0,1': { point: [148.4, 81.2], x: [2.93, -2.4, -3.91, -0.08], errors: [5.2, 0, 73.9, 24] },
+            '0,1,2': { point: [148.3, 78], x: [-0.42, -2.4, 1.86], errors: [6.2, 0, 58.2] },
+            '0,1': { point: [148.4, 81.2], x: [2.93, -2.4, 0.06], errors: [5.2, 0, 60] },
         },
     },
 };
 var CAMS = FIGURE_SCENE.cameras;
-var ALL = [0, 1, 2, 3];
-// Where each stray's label goes, beside its own line of sight: `y` is the first
+var ALL = [0, 1, 2];
+// Where the stray's label goes, beside its own line of sight: `y` is the first
 // line of the label, or with `up` the last.
-var STRAY_LABELS = { 2: { x: 242, y: 74, up: true }, 3: { x: 110, y: 2, anchor: 'end' } };
+var STRAY_LABELS = { 2: { x: 250, y: 72, up: true } };
 
 function fmt(v) { return Math.round(v * 10) / 10; }
 
@@ -123,7 +118,7 @@ var TRUE_MARK = (function () {
 var DOTS = DETECTIONS.map(function (d) {
     return '<circle cx="' + fmt(d[0]) + '" cy="' + fmt(d[1]) + '" r="3" class="tm-det"/>';
 }).join('');
-var VIEW_BOX = '5 -38 290 235';
+var VIEW_BOX = '5 25 290 172';
 
 /**
  * One sketch: the scene, the 3D answer `solve.point` and, for each camera in
@@ -162,21 +157,20 @@ function strayNote(i, lines, lastCls) {
     }).join('');
 }
 
-var DLT_ALL = FIGURE_SCENE.solves.dlt['0,1,2,3'];
-var BA_ALL = FIGURE_SCENE.solves.ba['0,1,2,3'];
+var DLT_ALL = FIGURE_SCENE.solves.dlt['0,1,2'];
+var BA_ALL = FIGURE_SCENE.solves.ba['0,1,2'];
 
-var PULLED_NOTE = line([92, 30], [165, 49], 'tm-leader') + note(['pulled toward', 'the strays'], 90, 24);
-var FOOLED_NOTE = line([92, 30], [146, 47], 'tm-leader') + note(['on the top', 'stray\'s line'], 90, 24);
-var APART_NOTE = line([92, 38], [144, 77], 'tm-leader') + note(['from above they', 'cross; in 3D they', 'just miss'], 90, 24);
+var PULLED_NOTE = line([132, 44], [168, 49], 'tm-leader') + note(['pulled toward', 'the stray line'], 128, 38);
+var CLOSE_NOTE = line([132, 46], [145, 75], 'tm-leader') + note(['close to the', 'true position'], 128, 38);
+var APART_NOTE = line([132, 48], [144, 77], 'tm-leader') + note(['from above they', 'cross; in 3D they', 'just miss'], 128, 33);
 
-var DLT_SKETCH = sketch(DLT_ALL, ALL, PULLED_NOTE, strayNote(2, ['stray']) + strayNote(3, ['stray']));
+var DLT_SKETCH = sketch(DLT_ALL, ALL, PULLED_NOTE, strayNote(2, ['stray']));
 var REFINED_SKETCH = sketch(BA_ALL, ALL,
     '<circle cx="' + DLT_ALL.point[0] + '" cy="' + DLT_ALL.point[1] + '" r="4" class="tm-start"/>'
-    + '<line x1="166" y1="51" x2="158" y2="50.1" class="tm-move" marker-end="url(#tm-arrow)"/>'
-    + line([190, 38], [175, 48], 'tm-leader')
-    + '<text x="192" y="36" class="tm-note">DLT start</text>'
-    + FOOLED_NOTE,
-    strayNote(2, ['stray']) + strayNote(3, ['stray']));
+    + '<line x1="170" y1="53.7" x2="153" y2="72.8" class="tm-move" marker-end="url(#tm-arrow)"/>'
+    + line([132, 44], [168, 49], 'tm-leader')
+    + note(['DLT start'], 128, 47),
+    strayNote(2, ['stray']));
 
 /** One selectable card: indicator, name, tagline, sketch, caption, optional note. */
 function card(method, name, tagline, sketchSvg, caption, cardNote) {
@@ -196,7 +190,7 @@ var THRESHOLD_EXAMPLE = 15;      // px, what the sketch opens at while the setti
 var THRESHOLD_SLIDER_MAX = 80;   // a larger value still shows; the slider sits at its end
 var THRESHOLD_MAX = 500;         // the setting's own top (`ui/settings.js`)
 var WIDEST_ERROR = 88.8;         // stands in for the error in the hidden wordings
-var STEP_COUNT = 3;              // four cameras: at most two drops, so three solves
+var STEP_COUNT = 2;              // three cameras: at most one drop, so two solves
 
 /**
  * The reprojection-error-threshold rule of `triangulateAndReproject`
@@ -307,7 +301,7 @@ var THRESHOLD_CONTROL = {
     min: 1, max: THRESHOLD_MAX, step: 1, sliderMax: THRESHOLD_SLIDER_MAX, unit: 'px',
 };
 
-var RESULT_KINDS = ['lost', 'first', 'three', 'two'];
+var RESULT_KINDS = ['lost', 'far', 'close', 'two'];
 
 /** What becomes of the node with `threshold` px. */
 function resultText(kind, threshold) {
@@ -315,14 +309,14 @@ function resultText(kind, threshold) {
     return kind === 'lost'
         ? lead + 'this node gets no 3D point in this frame: only two cameras are left and they still miss by more '
             + 'than that, and a node is never solved from fewer than two.'
-        : kind === 'first'
+        : kind === 'far'
             ? lead + 'every camera lands within the threshold, so nothing is dropped. The first solve stands, far '
                 + 'from the true position (the cross).'
-            : kind === 'three'
-                ? lead + 'the right camera is left out for this node. The other three then land within the threshold, '
-                    + 'so it stops there: close to the true position, with the top camera\'s stray still counted.'
-                : lead + 'the right and top cameras are left out for this node, and the 3D point comes from the two '
-                    + 'cameras that were right: the true position.';
+            : kind === 'close'
+                ? lead + 'every camera lands within the threshold, so nothing is dropped. The first solve stands, close '
+                    + 'to the true position (the cross), with the stray still counted.'
+                : lead + 'the right camera is left out for this node, and the 3D point comes from the two cameras that '
+                    + 'were right: the true position.';
 }
 
 /**
@@ -343,21 +337,20 @@ export function buildTriangulationMethodsFigure(opts) {
     fig.innerHTML =
         '<p class="tri-methods-lead">Both methods triangulate each node of the skeleton on its own (the sketches '
         + 'show one node, from above) and start the same way: each camera\'s 2D point is a line of sight, '
-        + 'and the 3D point is where those lines meet. Real detections never meet exactly. Here two of the four '
-        + 'cameras\' 2D predictions are placed wrong, each marked stray: the right one badly, the top one less so. '
-        + 'The cross is the true position.</p>'
+        + 'and the 3D point is where those lines meet. Real detections never meet exactly. Here the right-hand '
+        + 'camera\'s 2D prediction is placed wrong: an outlier, marked stray. The cross is the true position.</p>'
         + '<div class="tri-methods-cols" role="radiogroup" aria-label="Default triangulation method">'
         + card('dlt', 'Direct Linear Transformation (DLT)', 'one direct solve · fast', DLT_SKETCH,
             'Solves one set of linear equations (algebraic least squares) for the point that fits every '
-            + 'line at once, treating every camera alike. Fast, but outliers pull the answer, so every '
+            + 'line at once, treating every camera alike. Fast, but an outlier pulls the answer, so every '
             + 'camera ends up off.')
         + card('ba', 'Refined (Ref)', 'bundle adjustment · slower', REFINED_SKETCH,
             'Bundle adjustment: starts at the DLT point, projects it back into every camera and moves it to '
             + 'shrink the pixel errors. A camera that disagrees a lot counts less, which helps when one '
-            + 'view\'s 2D prediction is clearly wrong: if only the right camera were wrong here, it would land '
-            + 'close to the true position. Two wrong views can fool it, though: here it settles on the top '
-            + 'camera\'s stray line, so the left camera, which was right, now looks wrong. The reprojection error '
-            + 'threshold below can fix that. When the views roughly agree, it gives about the same point as DLT, '
+            + 'view\'s 2D prediction is clearly wrong: here the answer lands close to the true position, with the '
+            + 'outlier still counted a little. With other camera layouts it can still be pulled far off. The '
+            + 'reprojection error threshold below removes the outlier altogether. When the views roughly agree, it '
+            + 'gives about the same point as DLT, '
             + 'sometimes slightly worse. The cameras stay fixed; only the point moves. Slower.',
             '<strong>Per node:</strong> a camera is counted less only for the node where its 2D '
             + 'point disagrees. If one camera misplaces the nose, it still counts for every other node it '
@@ -378,7 +371,7 @@ export function buildTriangulationMethodsFigure(opts) {
             + '<button type="button" data-demo-method="ba">Refined</button></div>')
         + settingRow('threshold')
         + '<div class="tri-thr-steps">'
-        + [1, 2, 3].map(function (n) {
+        + [1, 2].map(function (n) {
             return '<div class="tri-thr-step" data-step="' + n + '"><div class="tri-thr-step-name"></div>'
                 + '<div class="tri-thr-sketch"></div><div class="tri-thr-verdict-box"><ul class="tri-thr-verdicts"></ul>'
                 + '<p class="tri-thr-idle-note">Not reached: no camera is over the threshold here.</p></div></div>';
@@ -466,7 +459,7 @@ export function buildTriangulationMethodsFigure(opts) {
 
         var run = thresholdPasses(ALL, function (cams) { return table[cams.join(',')].errors; }, t);
         var steps = thr.querySelectorAll('.tri-thr-step');
-        var FALLBACK = [ALL, [0, 1, 3], [0, 1]];
+        var FALLBACK = [ALL, [0, 1]];
         for (var i = 0; i < STEP_COUNT; i++) {
             var pass = run.passes[i], el = steps[i], idle = !pass;
             // A step the rule does not reach keeps its rows (hidden), so it keeps its height.
@@ -474,18 +467,16 @@ export function buildTriangulationMethodsFigure(opts) {
             var states = ALL.map(function (c) { return verdict(shown, c, t); });
             el.classList.toggle('is-idle', idle);
             el.querySelector('.tri-thr-step-name').innerHTML = i === 0
-                ? stack(['1 · First solve (DLT), all four cameras', '1 · First solve (Refined), all four cameras'],
+                ? stack(['1 · First solve (DLT), all three cameras', '1 · First solve (Refined), all three cameras'],
                     current.tryMethod === 'ba' ? 1 : 0)
-                : stack([(i + 1) + ' · Solved again without the ' + (i === 1 ? 'right' : 'top') + ' camera',
-                    (i + 1) + ' · Not reached'], idle ? 1 : 0);
+                : stack(['2 · Solved again without the right camera', '2 · Not reached'], idle ? 1 : 0);
             el.querySelector('.tri-thr-sketch').innerHTML = idle ? IDLE_SKETCH
                 : stepSketch(table[shown.cameras.join(',')], shown.cameras, states, t,
-                    shown.cameras.length === 2 ? APART_NOTE
-                        : i === 0 ? (current.tryMethod === 'dlt' ? PULLED_NOTE : FOOLED_NOTE) : '');
+                    i === 1 ? APART_NOTE : current.tryMethod === 'dlt' ? PULLED_NOTE : CLOSE_NOTE);
             el.querySelector('.tri-thr-verdicts').innerHTML = verdictList(shown, states);
         }
 
-        var kind = !run.kept ? 'lost' : run.passes.length === 1 ? 'first' : run.passes.length === 2 ? 'three' : 'two';
+        var kind = !run.kept ? 'lost' : run.passes.length > 1 ? 'two' : current.tryMethod === 'ba' ? 'close' : 'far';
         var res = thr.querySelector('.tri-thr-result');
         // Every kind at its widest number, then the one shown.
         res.innerHTML = stack(RESULT_KINDS.map(function (k) { return resultText(k, WIDEST_ERROR); })

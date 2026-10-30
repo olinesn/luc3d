@@ -11337,24 +11337,25 @@ entirely, so it gets no line, landing spot or error (a `null` landing). Captions
 so they wrap; the sketches are inline SVG coloured by theme variables
 (`.tri-methods` in `styles.css`).
 
-Every sketch is the same scene from above: four cameras, one node, a cross at the
+Every sketch is the same scene from above: three cameras, one node, a cross at the
 true position, and each camera's line of sight dashed from the camera on (grey if
-the camera is right, orange if stray). The left and bottom cameras are right; the right one is badly off
-and the top one less so. So DLT is pulled away, and Refined settles on the top
-stray's line, which is why Refined can still need the threshold (with only the
-right camera wrong it lands close to the true position). `sketch()` draws them from
-`FIGURE_SCENE`.
+the camera is right, orange if stray). The left and bottom cameras are right and the
+right one is a stray. DLT is pulled well away; Refined counts the stray less and
+lands close to the true position, with the stray still counted; the threshold removes
+it. `sketch()` draws them from `FIGURE_SCENE`.
 
 **The answers are the real solvers', not hand-drawn.** `FIGURE_SCENE.solves` holds
 `triangulateAndReproject`'s output (3D, landings, errors) for each method and set of
 cameras. `tests/test-triangulation-threshold-figure.mjs` re-solves it, checks every
 threshold from 1 to 120 px and the captions' claims, and on a mismatch prints the
-right numbers. The layout itself is hand-picked. Change it and update the wiki's
+right numbers. The layout itself is hand-picked so that the stray is the worst
+camera for both methods (it often isn't: with no majority of good cameras, the real
+solvers can make a good camera look worst). Change it and update the wiki's
 copy (`docs/assets/triangulation/` in talmolab/luc3d-docs) too.
 
 A third, full-width card (`.tri-thr`, not a choice) shows the Tracking Wizard's
-**reprojection error threshold** (`reprojErrorThreshold`) in up to three more
-sketches: the first solve, then the solve again after each dropped camera. On every
+**reprojection error threshold** (`reprojErrorThreshold`) in two more sketches: the
+first solve, and the solve again without the dropped camera. On every
 image plane still checked, a band `threshold` px either side of the detection (2 px
 per sketch unit, cut at the plane's ends) is where the answer may land, green /
 orange / red as that camera is within / over / over and dropped; a verdict line per

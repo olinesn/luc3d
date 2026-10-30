@@ -1,6 +1,6 @@
 /**
  * triangulation-threshold-figure.mjs — Settings ▸ Default Triangulation shows
- * the reprojection error threshold on the four cameras of its sketches, and
+ * the reprojection error threshold on the three cameras of its sketches, and
  * trying a value there never changes a setting (ui/triangulation-methods-figure.js,
  * ui/figure-try-controls.js; the keep/drop rule and the numbers are pinned to the
  * solvers by tests/test-triangulation-threshold-figure.mjs).
@@ -9,10 +9,9 @@
  *  1. With the threshold off (the default) the sketch opens at a 15 px example,
  *     "Your setting" says off, and the large value is what the sketch shows.
  *  2. A value typed in the Tracking Wizard is the setting, and the sketch follows.
- *  3. Picking a method follows too. Refined at 15 px needs two drops (three
- *     sketches) to reach the true position; at 25 px it stops after one; at 45 px
- *     nothing is dropped and it stays fooled; at 5 px the node loses its 3D. DLT at
- *     5 px keeps it.
+ *  3. Picking a method follows too. Refined at 15 px drops the stray and reaches
+ *     the true position; at 60 px nothing is dropped and it stays close; at 5 px the
+ *     node loses its 3D. DLT at 5 px keeps it, and at 40 px stays far off.
  *  4. The card keeps one size whatever is tried, and the sketch of a step not
  *     reached stays in place with no verdict showing through.
  *  5. TRYING CHANGES NOTHING: the slider, the text box and the DLT/Refined switch
@@ -22,8 +21,8 @@
  *  6. Use sets the working value and the wizard field and says "not saved until
  *     you click Apply"; Apply stores it. Turn off sets 0. Reset sketch goes back.
  *  7. The method cards still pick the method; the threshold card is not one of them.
- *  8. Each line of sight starts at its camera, each stray label sits nearest its
- *     own camera's line, and the legend explains the lines.
+ *  8. Each line of sight starts at its camera, the stray label sits by its line,
+ *     and the legend explains the lines.
  *
  * Run: node tests/e2e/triangulation-threshold-figure.mjs   (PORT=… to move the server)
  */
@@ -90,7 +89,7 @@ try {
             num: card.querySelector('[data-try="threshold"] input[type="number"]').value,
             slider: card.querySelector('[data-try="threshold"] input[type="range"]').value,
             name1: shown(step(1).querySelector('.tri-thr-step-name')),
-            s1: states(1), s2: states(2), s3: states(3),
+            s1: states(1), s2: states(2),
             kind: res.dataset.kind,
             result: shown(res),
             lost: res.classList.contains('tri-thr-lost'),
@@ -113,41 +112,40 @@ try {
     check(r.setting === 'off' && r.field === '0', `"Your setting" says off (${r.setting}, field ${r.field})`);
     check(r.big === '15 px' && r.num === '15', `the sketch opens at a 15 px example, in large text (${r.big})`);
     check(r.use === 'Use 15 px' && !r.off && !r.unsaved, 'offers Use; nothing to turn off, nothing unsaved');
-    check(r.cameras === 4 && r.methodCardSketches === '4,4', `four cameras in every sketch (${r.cameras}; cards ${r.methodCardSketches})`);
-    check(r.sketches === 3, 'one sketch per solve: three steps');
-    check(r.name1.includes('DLT') && r.s1 === 'over,over,drop,over', `DLT first solve: all over, only the worst dropped (${r.s1})`);
-    check(/^20 px/.test(r.errText[0]) && /^26 px/.test(r.errText[1]) && /^32\.7 px.*dropped/.test(r.errText[2]) && /^18\.1 px/.test(r.errText[3]), `errors from the real solver (${r.errText.join(' | ')})`);
-    check(r.s2 === 'in,in,out,in' && r.s3 === '', `solved again: the other three within; no third solve (${r.s2})`);
-    check(r.bands2 === 3, `step 2 draws a band only on the cameras still counted (${r.bands2})`);
-    check(r.kind === 'three' && /^With 15 px, the right camera is left out/.test(r.result), `result says so (${r.result.slice(0, 50)}…)`);
+    check(r.cameras === 3 && r.methodCardSketches === '3,3', `three cameras in every sketch (${r.cameras}; cards ${r.methodCardSketches})`);
+    check(r.sketches === 2, 'one sketch per solve: two steps');
+    check(r.name1.includes('DLT') && r.s1 === 'over,over,drop', `DLT first solve: all over, only the worst dropped (${r.s1})`);
+    check(/^20 px/.test(r.errText[0]) && /^28\.1 px/.test(r.errText[1]) && /^35\.6 px.*dropped/.test(r.errText[2]), `errors from the real solver (${r.errText.join(' | ')})`);
+    check(r.s2 === 'in,in,out', `solved again: the other two within (${r.s2})`);
+    check(r.bands2 === 2, `step 2 draws a band only on the cameras still counted (${r.bands2})`);
+    check(r.kind === 'two' && /^With 15 px, the right camera is left out/.test(r.result), `result says so (${r.result.slice(0, 50)}…)`);
     check(!r.inRadio, 'the threshold card is not one of the method choices');
 
     console.log('2. the setting, typed in the Tracking Wizard');
     await type(20);
     r = await read();
     check(r.setting === '20 px' && r.big === '20 px' && r.num === '20', `setting and sketch follow (${r.setting}, ${r.big})`);
-    check(r.s1 === 'in,over,drop,in', `an error of exactly 20 is within; the worst dropped (${r.s1})`);
+    check(r.s1 === 'in,over,drop', `an error of exactly 20 is within; the worst dropped (${r.s1})`);
     check(Math.abs(r.bandLen - 20) < 0.11, `bands drawn 20 px either side of the detection (bottom camera: ${r.bandLen} units at 2 px per unit)`);
 
     console.log('3. Refined, and what the threshold does for it');
     await page.click('.tri-method-choice[data-method="ba"]');
     await type(15);
     r = await read();
-    check(r.name1.includes('Refined') && r.s1 === 'over,in,drop,in', `Refined's first solve fits the top stray; the right camera is worst (${r.s1})`);
-    check(r.s2 === 'in,in,out,drop' && r.s3 === 'in,in,out,out', `then the top camera goes too (${r.s2} → ${r.s3})`);
-    check(r.kind === 'two' && /true position/.test(r.result), `two drops reach the true position (${r.result.slice(0, 60)}…)`);
-    await type(25);
+    check(r.name1.includes('Refined') && r.s1 === 'in,in,drop', `Refined's first solve: only the stray is over (${r.s1})`);
+    check(r.s2 === 'in,in,out' && r.kind === 'two' && /true position/.test(r.result), `dropping it reaches the true position (${r.result.slice(0, 60)}…)`);
+    await type(60);
     r = await read();
-    check(r.kind === 'three' && r.s3 === '', `25 px stops after one drop (${r.s2})`);
-    await type(45);
-    r = await read();
-    check(r.kind === 'first' && r.s2 === '' && /far from the true position/.test(r.result), `45 px drops nothing and stays fooled (${r.s1})`);
+    check(r.kind === 'close' && r.s2 === '' && /close to the true position/.test(r.result), `60 px drops nothing and stays close (${r.s1})`);
     await type(5);
     r = await read();
     check(r.lost && /no 3D point/.test(r.result), 'Refined at 5 px: the last two still miss (5.2 px), no 3D');
     await page.click('.tri-method-choice[data-method="dlt"]');
     r = await read();
     check(!r.lost && r.kind === 'two', 'DLT at 5 px keeps it (3.5 px)');
+    await type(40);
+    r = await read();
+    check(r.kind === 'far' && /far from the true position/.test(r.result), 'DLT at 40 px drops nothing and stays far off');
     await type(0);
 
     console.log('4. one size whatever is tried');
@@ -155,7 +153,7 @@ try {
     let leak = false;
     for (const m of ['dlt', 'ba']) {
         await page.click(`.tri-thr [data-demo-method="${m}"]`);
-        for (const t of [1, 2, 3, 5, 6, 12, 13, 15, 19, 20, 30, 33, 42, 80, 200]) {
+        for (const t of [1, 2, 3, 4, 5, 6, 12, 15, 20, 30, 36, 58, 59, 80, 200]) {
             await tryBox(t);
             const s = await read();
             sizes.add(s.size);
@@ -228,14 +226,14 @@ try {
         const dist = (p, r) => { const dx = r[2] - r[0], dy = r[3] - r[1], t = Math.max(0, ((p[0] - r[0]) * dx + (p[1] - r[1]) * dy) / (dx * dx + dy * dy)); return Math.hypot(r[0] + t * dx - p[0], r[1] + t * dy - p[1]); };
         const labels = Array.from(svg.querySelectorAll('text.tm-note-stray')).map(t => { const b = t.getBBox(); return [b.x + b.width / 2, b.y + b.height / 2]; });
         return {
-            fromCamera: rays.length === 4 && rays.every((r, i) => r[0] === cams[i][0] && r[1] === cams[i][1]),
+            fromCamera: rays.length === 3 && rays.every((r, i) => r[0] === cams[i][0] && r[1] === cams[i][1]),
             strayFlags: rays.map(r => r[4]).join(),
-            nearest: labels.map(p => { const ds = rays.map((r, i) => r[4] ? { i, d: dist(p, r) } : null).filter(Boolean).sort((a, b) => a.d - b.d); return ds[0].i; }),
+            labelDist: labels.length === 1 ? Math.round(dist(labels[0], rays[2])) : Infinity,
             legend: document.querySelector('.tri-methods-legend').textContent,
         };
     });
-    check(lines.fromCamera && lines.strayFlags === 'false,false,true,true', `four lines of sight, each from its camera; the right and top ones orange (${lines.strayFlags})`);
-    check(lines.nearest.join() === '2,3', `each stray label is nearest its own camera's line (${lines.nearest})`);
+    check(lines.fromCamera && lines.strayFlags === 'false,false,true', `three lines of sight, each from its camera; the right one orange (${lines.strayFlags})`);
+    check(lines.labelDist < 20, `the stray label sits by its own line (${lines.labelDist} units)`);
     check(/line of sight/.test(lines.legend) && /line from the camera to the 3D answer/.test(lines.legend), 'the legend explains the lines');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
