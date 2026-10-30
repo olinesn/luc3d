@@ -5325,7 +5325,7 @@ kbd {
   position: absolute;
   right: 0;
   bottom: 8px;
-  width: min(160px, 44%);
+  width: min(150px, 38%);
   max-height: none;
   margin: 0;
   pointer-events: none;
@@ -5369,7 +5369,7 @@ kbd {
   width: 100%;
   height: auto;
   /* A wide card would otherwise push the captions below the fold. */
-  max-height: 314px;
+  max-height: 330px;
   margin: 6px 0 8px;
   overflow: hidden;
 }

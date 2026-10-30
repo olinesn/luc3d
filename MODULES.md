@@ -11339,8 +11339,8 @@ so they wrap; the sketches are inline SVG coloured by theme variables
 
 Every sketch is the same scene from above: four cameras, one node, a green cross at
 the true position (the target), and each camera's line of sight dashed from the camera
-on (grey if the camera is a little off, orange if stray). Cameras 0, 1 and 2 are 10-16 px
-off and camera 3 is a stray. DLT is pulled well away; Refined counts the stray less and
+on (grey if the camera is a little off, orange if stray). Cameras 0, 1 and 2 are 14-16 px
+off and camera 3 is a stray, chosen so that DLT at a 50 px threshold drops it and solves again. DLT is pulled well away; Refined counts the stray less and
 lands closer, two marker diameters from the target, with the stray still counted; the
 threshold removes it, and set too low it also drops a camera that was only a little off.
 `sketch()` draws them from `FIGURE_SCENE`. A legend at the bottom-left of each card
@@ -11350,7 +11350,7 @@ bottom-right (`errorTotals`, one scale in every sketch) stack each numbered came
 reprojection error above their sum, so DLT's larger sum can be seen against Refined's. A
 dark red line, over every other line and under the markers, is the ground truth error:
 how far the projection is from the target, also a row in the bars (in 3D, so it counts
-the part out of the page; about 39 for DLT, 20 for Refined, 13 after the threshold). The left and bottom cameras are a little off and
+the part out of the page; about 52 for DLT, 20 for Refined, 15 after the threshold). The left and bottom cameras are a little off and
 the right one is a stray. DLT is pulled well away; Refined counts the stray less and
 lands close to the true position, with the stray still counted; the threshold removes
 it. `sketch()` draws them from `FIGURE_SCENE`.

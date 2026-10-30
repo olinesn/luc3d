@@ -81,7 +81,7 @@ try {
         const shown = (el) => { const on = el.querySelector('.tri-thr-stack > .on'); return (on || el).textContent; };
         const res = card.querySelector('.tri-thr-result');
         const box = (el) => { const r = el.getBoundingClientRect(); return Math.round(r.width) + 'x' + Math.round(r.height); };
-        const bottomBand = Array.from(step(1).querySelectorAll('line.tm-band')).find(l => l.getAttribute('y1') === '108');
+        const bottomBand = Array.from(step(1).querySelectorAll('line.tm-band')).find(l => l.getAttribute('y1') === '188');
         const avail = (cls) => !card.querySelector(cls).classList.contains('is-unavailable');
         return {
             big: card.querySelector('.fig-big').textContent,
@@ -124,8 +124,8 @@ try {
     check(r.big === '15 px' && r.use === 'Use 15 px' && r.reset && r.setting === 'off', `trying 15 px offers Use and Reset sketch; the setting stays off (${r.use})`);
     check(r.cameras === 4 && r.methodCardSketches === '4,4', `four cameras in every sketch (${r.cameras}; cards ${r.methodCardSketches})`);
     check(r.sketches === 3, 'one sketch per solve: three steps');
-    check(r.name1.includes('DLT') && r.s1 === 'over,in,over,drop', `DLT first solve: three over... only the worst dropped (${r.s1})`);
-    check(/^24\.9 px/.test(r.errText[0]) && /^2\.8 px/.test(r.errText[1]) && /^17\.2 px/.test(r.errText[2]) && /^36\.1 px.*dropped/.test(r.errText[3]), `errors from the real solver (${r.errText.join(' | ')})`);
+    check(r.name1.includes('DLT') && r.s1 === 'in,in,over,drop', `DLT first solve: two over, only the worst dropped (${r.s1})`);
+    check(/^12\.6 px/.test(r.errText[0]) && /^12\.1 px/.test(r.errText[1]) && /^43\.1 px/.test(r.errText[2]) && /^53\.5 px.*dropped/.test(r.errText[3]), `errors from the real solver (${r.errText.join(' | ')})`);
     check(r.s2 === 'in,in,in,out' && r.s3 === '', `solved again: the other three within; no third solve (${r.s2})`);
     check(/^2 · Second solve \(DLT\), without camera 3$/.test(r.name2) && /Not reached/.test(r.name3), `the second solve's title names the method (${r.name2})`);
     check(r.bands2 === 3, `step 2 draws a band only on the cameras still counted (${r.bands2})`);
@@ -136,32 +136,35 @@ try {
     await type(25);
     r = await read();
     check(r.setting === '25 px' && r.big === '25 px' && r.num === '25', `setting and sketch follow (${r.setting}, ${r.big})`);
-    check(r.s1 === 'in,in,in,drop', `only the stray is over, and it is dropped (${r.s1})`);
-    check(Math.abs(r.bandLen - 25) < 0.11, `bands drawn 25 px either side of the detection (bottom camera: ${r.bandLen} units at 2 px per unit)`);
+    check(r.s1 === 'in,in,over,drop', `camera 2 over too, the stray dropped (${r.s1})`);
+    check(Math.abs(r.bandLen - 25 * 2 / 3) < 0.11, `bands drawn 25 px either side of the detection (bottom camera: ${r.bandLen} units at 3 px per unit)`);
 
     console.log('3. Refined, and what the threshold does for it');
     await page.click('.tri-method-choice[data-method="ba"]');
     await type(15);
     r = await read();
-    check(r.name1.includes('Refined') && r.s1 === 'in,in,in,drop', `Refined's first solve: only the stray is over (${r.s1})`);
+    check(r.name1.includes('Refined') && r.s1 === 'over,in,in,drop', `Refined's first solve: the worst is dropped (${r.s1})`);
     check(/^2 · Second solve \(Refined\), without camera 3$/.test(r.name2), `every solve's title names the method (${r.name2})`);
     check(r.s2 === 'in,in,in,out' && r.kind === 'one' && /near the target, but still a little wrong/.test(r.result), `dropping it lands near the target (${r.result.slice(0, 60)}…)`);
-    await type(60);
+    await type(75);
     r = await read();
-    check(r.kind === 'close' && r.s2 === '' && /closer to the target/.test(r.result), `60 px drops nothing (${r.s1})`);
+    check(r.kind === 'close' && r.s2 === '' && /closer to the target/.test(r.result), `75 px drops nothing (${r.s1})`);
     await type(8);
     r = await read();
-    check(r.kind === 'two' && r.s2 === 'in,drop,in,out' && r.s3 === 'in,out,in,out', `too low: a camera only a little off goes too (${r.s2} → ${r.s3})`);
-    check(/^3 · Third solve \(Refined\), without cameras 3 and 1$/.test(r.name3), `the third title names the method and both cameras (${r.name3})`);
+    check(r.kind === 'two' && r.s2 === 'drop,over,in,out' && r.s3 === 'out,in,in,out', `too low: a camera only a little off goes too (${r.s2} → ${r.s3})`);
+    check(/^3 · Third solve \(Refined\), without cameras 3 and 0$/.test(r.name3), `the third title names the method and both cameras (${r.name3})`);
     await type(3);
     r = await read();
-    check(r.lost && /no 3D point/.test(r.result), 'Refined at 3 px: the last two still miss (4.3 px), no 3D');
+    check(r.lost && /no 3D point/.test(r.result), 'Refined at 3 px: the last two still miss, no 3D');
     await page.click('.tri-method-choice[data-method="dlt"]');
     r = await read();
-    check(!r.lost && r.kind === 'two' && /without cameras 3 and 2/.test(r.name3), `DLT at 3 px keeps it (0.7 px): another camera goes (${r.name3})`);
-    await type(40);
+    check(!r.lost && r.kind === 'two' && /without cameras 3 and 1/.test(r.name3), `DLT at 3 px keeps it: another camera goes (${r.name3})`);
+    await type(50);
     r = await read();
-    check(r.kind === 'far' && /far from the target/.test(r.result), 'DLT at 40 px drops nothing and stays far off');
+    check(r.s1 === 'in,in,in,drop' && r.s2 === 'in,in,in,out' && r.kind === 'one' && /^2 · Second solve \(DLT\), without camera 3$/.test(r.name2), `DLT at 50 px drops camera 3 and solves again (${r.s1} → ${r.s2}; ${r.name2})`);
+    await type(60);
+    r = await read();
+    check(r.kind === 'far' && /far from the target/.test(r.result), 'DLT at 60 px drops nothing and stays far off');
     await type(0);
 
     console.log('4. one size whatever is tried');
@@ -198,7 +201,7 @@ try {
     r = await read();
     check(r.big === 'off' && r.num === '0' && r.slider === '0', `the slider's left end is off (${r.big}, box ${r.num})`);
     check(r.s1 === 'off,off,off,off' && r.s2 === '' && r.bands2 === 0 && r.kind === 'offFar' && /every camera counts/.test(r.result), `off: every camera counts, nothing dropped (${r.s1}; ${r.result.slice(0, 40)}…)`);
-    check(r.bandLen === null && /^24\.9 px · counted/.test(r.errText[0]), `no bands, and no verdict against a threshold (${r.errText[0]})`);
+    check(r.bandLen === null && /^12\.6 px · counted/.test(r.errText[0]), `no bands, and no verdict against a threshold (${r.errText[0]})`);
     check(r.use === null && r.field === '0', 'off offers no Use; the setting stays off');
     await tryBox(40);
     await tryBox(0);
@@ -294,12 +297,12 @@ try {
             numberStyle: (() => { const cs = getComputedStyle(wrap.querySelector('.tm-camera-number')); return cs.fill + ' ' + cs.fontWeight; })() };
     });
     check(totals.dlt.labels.join() === 'camera 0,camera 1,camera 2,camera 3,sum,ground truth', `totals: a row per camera, the sum, the ground truth error (${totals.dlt.labels.join()})`);
-    check(totals.dlt.values[4] === '81 px' && totals.ba.values[4] === '66.1 px', `the sums are the errors added up (DLT ${totals.dlt.values[4]}, Refined ${totals.ba.values[4]})`);
+    check(totals.dlt.values[4] === '121.3 px' && totals.ba.values[4] === '95.7 px', `the sums are the errors added up (DLT ${totals.dlt.values[4]}, Refined ${totals.ba.values[4]})`);
     check(totals.dlt.widths[4] > totals.ba.widths[4], `DLT's sum bar is longer than Refined's (${totals.dlt.widths[4].toFixed(1)} vs ${totals.ba.widths[4].toFixed(1)})`);
-    check(Math.abs(totals.dlt.widths[4] / 81 - totals.ba.widths[4] / 66.1) < 0.02, 'one scale in both sketches');
-    check(Math.abs(totals.dlt.widths[3] - 36.1 * totals.dlt.widths[4] / 81) < 0.2, 'each bar is in proportion to its error');
+    check(Math.abs(totals.dlt.widths[4] / 121.3 - totals.ba.widths[4] / 95.7) < 0.02, 'one scale in both sketches');
+    check(Math.abs(totals.dlt.widths[3] - 53.5 * totals.dlt.widths[4] / 121.3) < 0.2, 'each bar is in proportion to its error');
     check(totals.right && totals.clear, 'the totals sit at the bottom-right, clear of the cameras');
-    check(totals.dlt.values[5] === '38.7 mm' && totals.ba.values[5] === '20.5 mm' && totals.dlt.widths[5] > totals.ba.widths[5] * 1.5, `the ground truth error shrinks from DLT to Refined (${totals.dlt.values[5]} to ${totals.ba.values[5]})`);
+    check(totals.dlt.values[5] === '52.3 mm' && totals.ba.values[5] === '20 mm' && totals.dlt.widths[5] > totals.ba.widths[5] * 1.5, `the ground truth error shrinks from DLT to Refined (${totals.dlt.values[5]} to ${totals.ba.values[5]})`);
     const truthLine = await page.evaluate(() => {
         const svg = document.querySelector('.tri-method-choice[data-method="dlt"] svg');
         const kids = Array.from(svg.children), at = (el) => kids.indexOf(el);

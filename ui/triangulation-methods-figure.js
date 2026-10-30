@@ -56,8 +56,8 @@
 
 import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js';
 
-var PX_PER_UNIT = 2;             // image pixels per sketch unit on an image plane
-var PLANE_HALF = 36;             // image plane half-width, sketch units
+var PX_PER_UNIT = 3;             // image pixels per sketch unit on an image plane
+var PLANE_HALF = 24;             // unless a camera says otherwise (`half`)             // image plane half-width, sketch units
 
 /**
  * The scene and the real solvers' answers for it (see the header). Cameras:
@@ -68,23 +68,23 @@ var PLANE_HALF = 36;             // image plane half-width, sketch units
  */
 export var FIGURE_SCENE = {
     cameras: [
-        { name: 'Camera 0', at: [30, 44], rot: 17.5, plane: 66 },
-        { name: 'Camera 1', at: [24, 142], rot: -26, plane: 72 },
-        { name: 'Camera 2', at: [150, 180], rot: -90, plane: 72 },
-        { name: 'Camera 3', at: [278, 118], rot: -164.2, plane: 40 },
+        { name: 'Camera 0', at: [24, 22], rot: 32.8, plane: 44 },
+        { name: 'Camera 1', at: [14, 132], rot: -13.7, plane: 44 },
+        { name: 'Camera 2', at: [145, 232], rot: -90, plane: 44 },
+        { name: 'Camera 3', at: [278, 112], rot: -174.8, plane: 44, half: 30 },
     ],
-    detections: [[-10.03, 2], [-16.02, 3], [7.67, -3], [60, 0]],
-    truth: [148.4, 81.3],
+    detections: [[-15.98, 2], [13.94, 3], [14, -3], [-84, 0]],
+    truth: [145, 100],
     solves: {
         dlt: {
-            '0,1,2,3': { point: [172, 50.6], z: 0.87, x: [-34.93, -14.36, 24.44, 23.89], errors: [24.9, 2.8, 17.2, 36.1] },
-            '0,1,2': { point: [152.2, 67], z: 0.81, x: [-15.86, -10.89, 2.86, 8.81], errors: [5.9, 5.6, 6.3, 51.2] },
-            '0,1': { point: [138.6, 69.4], z: 2.3, x: [-10.02, -16.02, -14.8, 4.79], errors: [0.7, 0.5, 23.3, 55.2] },
+            '0,1,2,3': { point: [191.5, 123.9], z: 1.16, x: [-3.45, 25.86, 56.83, -30.54], errors: [12.6, 12.1, 43.1, 53.5] },
+            '0,1,2': { point: [165.2, 101.6], z: 1, x: [-7.81, 5.37, 20.43, 0.16], errors: [8.3, 8.8, 7.6, 84.2] },
+            '0,2': { point: [160.3, 88.2], z: -0.5, x: [-15.97, -6.88, 14, 14.44], errors: [2.4, 21.1, 2.5, 98.4] },
         },
         ba: {
-            '0,1,2,3': { point: [156.2, 62.4], z: -2.01, x: [-21.34, -12.69, 7.6, 12.27], errors: [12, 5.9, 0.5, 47.7] },
-            '0,1,2': { point: [155.4, 70], z: -1.37, x: [-13.42, -6.87, 7.08, 7.84], errors: [4.8, 10.1, 1.3, 52.2] },
-            '0,2': { point: [155.7, 73.5], z: -2.21, x: [-9.92, -3.75, 7.67, 5.87], errors: [4.3, 13.3, 0, 54.1] },
+            '0,1,2,3': { point: [157.7, 115.3], z: -1.97, x: [4.89, 16.4, 14.35, -15.71], errors: [21.2, 5.4, 0.8, 68.3] },
+            '0,1,2': { point: [158.8, 103.9], z: -2.56, x: [-3.53, 6.26, 14.26, -3.01], errors: [13.1, 9.3, 0.4, 81] },
+            '1,2': { point: [157.6, 112.7], z: -2.62, x: [3.17, 14.03, 14, -12.84], errors: [19.6, 5.4, 0.1, 71.2] },
         },
     },
 };
@@ -92,7 +92,7 @@ var CAMS = FIGURE_SCENE.cameras;
 var ALL = [0, 1, 2, 3];
 // Where the stray's label goes, beside its own line of sight: `y` is the first
 // line of the label, or with `up` the last.
-var STRAY_LABELS = { 3: { x: 250, y: 72, up: true } };
+var STRAY_LABELS = { 3: { x: 240, y: 148 } };
 
 function fmt(v) { return Math.round(v * 10) / 10; }
 
@@ -106,6 +106,8 @@ function onPlane(i, imageX) {
     return [c.at[0] + f[0] * c.plane + r[0] * u, c.at[1] + f[1] * c.plane + r[1] * u];
 }
 var DETECTIONS = FIGURE_SCENE.detections.map(function (d, i) { return onPlane(i, d[0]); });
+
+function planeHalf(i) { return CAMS[i].half || PLANE_HALF; }
 
 function line(a, b, cls) {
     return '<line x1="' + fmt(a[0]) + '" y1="' + fmt(a[1]) + '" x2="' + fmt(b[0]) + '" y2="' + fmt(b[1]) + '" class="' + cls + '"/>';
@@ -122,12 +124,16 @@ var CAMERA_NUMBERS = CAMS.map(function (c, i) {
 // on, then the cameras.
 var RAYS = DETECTIONS.map(function (d, i) {
     var at = CAMS[i].at, dx = d[0] - at[0], dy = d[1] - at[1], len = Math.hypot(dx, dy);
-    return line(at, [at[0] + dx / len * 320, at[1] + dy / len * 320], 'tm-ray' + (STRAY_LABELS[i] ? ' tm-ray-stray' : ''));
+    // Only as far as just past the target (the stray's, which misses it, as far as the
+    // target), to keep the middle of the sketch clear.
+    var reach = Math.hypot(FIGURE_SCENE.truth[0] - at[0], FIGURE_SCENE.truth[1] - at[1]) + (STRAY_LABELS[i] ? 0 : 40);
+    return line(at, [at[0] + dx / len * reach, at[1] + dy / len * reach], 'tm-ray' + (STRAY_LABELS[i] ? ' tm-ray-stray' : ''));
 }).join('');
 var CAMERA_BODY = '<rect x="-13" y="-7" width="14" height="14" rx="2" class="tm-cam"/>'
     + '<path d="M1 -4 L7 -7 L7 7 L1 4 Z" class="tm-cam"/>';
 var CAMERA_MARKS = CAMS.map(function (c, i) {
-    return line(onPlane(i, -PLANE_HALF * PX_PER_UNIT), onPlane(i, PLANE_HALF * PX_PER_UNIT), 'tm-plane')
+    var half = planeHalf(i);
+    return line(onPlane(i, -half * PX_PER_UNIT), onPlane(i, half * PX_PER_UNIT), 'tm-plane')
         + '<g transform="translate(' + c.at[0] + ' ' + c.at[1] + ') rotate(' + c.rot + ')">' + CAMERA_BODY + '</g>';
 }).join('') + CAMERA_NUMBERS;
 var TRUE_MARK = (function () {
@@ -137,7 +143,7 @@ var TRUE_MARK = (function () {
 var DOTS = DETECTIONS.map(function (d) {
     return '<circle cx="' + fmt(d[0]) + '" cy="' + fmt(d[1]) + '" r="3" class="tm-det"/>';
 }).join('');
-var VIEW_BOX = '5 5 290 235';   // room at the bottom for the legend and the bars, clear of the scene
+var VIEW_BOX = '-6 5 301 245';   // room at the bottom for the legend and the bars, clear of the scene
 
 // Names the sketch's marks. Its own small SVG, pinned to the left edge of the card
 // (`.tm-sketch`), so it stays clear of the scene, which is centred in a wide card.
@@ -153,8 +159,8 @@ var SKETCH_LEGEND = '<svg viewBox="8 137 102 69" class="tm-legend" aria-hidden="
         + '<text x="25" y="3" class="tm-note tm-legend-text">' + row[1] + '</text></g>';
 }).join('') + '</svg>';
 
-var TOTAL_BAR_X = 58, TOTAL_BAR_SCALE = 0.38;   // units per pixel: one scale for every sketch
-var TRUTH_BAR_SCALE = 0.8;                         // units per sketch unit, likewise
+var TOTAL_BAR_X = 58, TOTAL_BAR_SCALE = 0.2;   // units per pixel: one scale for every sketch
+var TRUTH_BAR_SCALE = 0.44;                         // units per sketch unit, likewise
 
 /** How far a solve's projection is from the target, in 3D. */
 function groundTruthError(solve) {
@@ -175,7 +181,7 @@ function errorTotals(solve, counted) {
     function row(y, label, bars, value, cls) {
         return '<g transform="translate(0 ' + y + ')"' + (cls ? ' class="' + cls + '"' : '') + '>'
             + '<text x="0" y="0" class="tm-note tm-legend-text">' + label + '</text>' + bars
-            + '<text x="130" y="0" text-anchor="end" class="tm-note tm-legend-text">' + value + '</text></g>';
+            + '<text x="122" y="0" text-anchor="end" class="tm-note tm-legend-text">' + value + '</text></g>';
     }
     var s = '', x = TOTAL_BAR_X, sum = 0, sumBars = '';
     CAMS.forEach(function (c, i) {
@@ -188,9 +194,9 @@ function errorTotals(solve, counted) {
         x += err * TOTAL_BAR_SCALE;
     });
     var truth = groundTruthError(solve);
-    return '<svg viewBox="0 0 130 80" class="tm-totals" aria-hidden="true">'
+    return '<svg viewBox="0 0 122 80" class="tm-totals" aria-hidden="true">'
         + '<text x="0" y="8" class="tm-note tm-legend-text">reprojection error</text>' + s
-        + '<line x1="0" y1="55.5" x2="130" y2="55.5" class="tm-total-rule"/>'
+        + '<line x1="0" y1="55.5" x2="122" y2="55.5" class="tm-total-rule"/>'
         + row(65, 'sum', sumBars, fmt(sum) + ' px', 'tm-total-sum')
         + row(76, 'ground truth', '<rect x="' + TOTAL_BAR_X + '" y="-4" width="' + fmt(truth * TRUTH_BAR_SCALE)
             + '" height="4" class="tm-truth-bar"/>', fmt(truth) + ' mm', 'tm-total-truth') + '</svg>';
@@ -238,9 +244,12 @@ function strayNote(i, lines, lastCls) {
 var DLT_ALL = FIGURE_SCENE.solves.dlt['0,1,2,3'];
 var BA_ALL = FIGURE_SCENE.solves.ba['0,1,2,3'];
 
-// A note top-left of the scene, clear of camera 0's image plane, and its line to `p`.
+// A note in the empty space above the scene, with a line to `p`.
 function noteTo(lines, p) {
-    return line([143, 22], [p[0] - 4, p[1] - 3], 'tm-leader') + note(lines, 140, 15);
+    var x = 170, y = 60, ax = 185, ay = y + 11 * lines.length - 7;
+    var dx = ax - p[0], dy = ay - p[1], len = Math.hypot(dx, dy);
+    return line([ax, ay], [p[0] + dx / len * 7, p[1] + dy / len * 7], 'tm-leader')
+        + lines.map(function (text, i) { return '<text x="' + x + '" y="' + (y + 11 * i) + '" class="tm-note">' + text + '</text>'; }).join('');
 }
 
 var DLT_SKETCH = sketch(DLT_ALL, ALL, noteTo(['pulled toward', 'the stray line'], DLT_ALL.point), strayNote(3, ['stray']));
@@ -330,14 +339,14 @@ export function thresholdPasses(cameras, solve, threshold) {
  * camera's verdict (`state`).
  */
 function band(i, threshold, state) {
-    var at = FIGURE_SCENE.detections[i][0] / PX_PER_UNIT, half = threshold / PX_PER_UNIT;
-    var u0 = Math.max(-PLANE_HALF, at - half), u1 = Math.min(PLANE_HALF, at + half), r = RIGHT[i];
+    var at = FIGURE_SCENE.detections[i][0] / PX_PER_UNIT, half = threshold / PX_PER_UNIT, edge = planeHalf(i);
+    var u0 = Math.max(-edge, at - half), u1 = Math.min(edge, at + half), r = RIGHT[i];
     function end(u) {
         var p = onPlane(i, u * PX_PER_UNIT);
         return line([p[0] - r[1] * 5, p[1] + r[0] * 5], [p[0] + r[1] * 5, p[1] - r[0] * 5], 'tm-band-end is-' + state);
     }
     return line(onPlane(i, u0 * PX_PER_UNIT), onPlane(i, u1 * PX_PER_UNIT), 'tm-band is-' + state)
-        + (at - half >= -PLANE_HALF ? end(u0) : '') + (at + half <= PLANE_HALF ? end(u1) : '');
+        + (at - half >= -edge ? end(u0) : '') + (at + half <= edge ? end(u1) : '');
 }
 
 /** Camera `c`'s verdict in a pass: 'in', 'over', 'drop', or 'out' (no longer counts). */

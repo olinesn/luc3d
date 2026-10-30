@@ -156,7 +156,7 @@ for (const method of ['dlt', 'ba']) {
 // ---------------------------------------------------------------------------
 group('3. the figure\'s scene is what the real solvers give');
 {
-    const PX = 2;   // image pixels per sketch unit
+    const PX = 3;   // image pixels per sketch unit
     const cams = FIGURE_SCENE.cameras.map((c, i) => {
         const a = c.rot * Math.PI / 180, f = [Math.cos(a), Math.sin(a)], r = [-f[1], f[0]];
         return new pd.Camera('c' + i, [[c.plane * PX, 0, 0], [0, c.plane * PX, 0], [0, 0, 1]], [0, 0, 0, 0, 0],
