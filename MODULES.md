@@ -11338,7 +11338,8 @@ so they wrap; the sketches are inline SVG coloured by theme variables
 (`.tri-methods` in `styles.css`).
 
 Every sketch is the same scene from above: four cameras, one node, a cross at the
-true position. The left and bottom cameras are right; the right one is badly off
+true position, and each camera's line of sight dashed from the camera on (grey if
+the camera is right, orange if stray). The left and bottom cameras are right; the right one is badly off
 and the top one less so. So DLT is pulled away, and Refined settles on the top
 stray's line, which is why Refined can still need the threshold (with only the
 right camera wrong it lands close to the true position). `sketch()` draws them from

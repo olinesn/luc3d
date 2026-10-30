@@ -7,8 +7,10 @@
 // caller also handles Enter/Space.
 //
 // Every sketch is the SAME scene from above: four cameras, one node. Each
-// camera's 2D detection (orange) sits on its image plane, with the line of sight
-// through it, the 3D answer (blue), where that answer lands back in each camera
+// camera's 2D detection (orange) sits on its image plane, with the camera's line
+// of sight through it (dashed, from the camera on, so it is clear whose it is:
+// grey if the camera is right, orange if stray), the 3D answer (blue), the line
+// from the camera to that answer, where the answer lands back in each camera
 // (blue ring) and the pixel error between the two (red). A cross marks the true
 // position. The left and bottom cameras are right; the right one is badly off
 // and the top one less so (both marked stray). With two wrong views DLT is pulled
@@ -81,7 +83,9 @@ export var FIGURE_SCENE = {
 };
 var CAMS = FIGURE_SCENE.cameras;
 var ALL = [0, 1, 2, 3];
-var STRAY_LABELS = { 2: [229, 70], 3: [168, 6] };    // where each stray's label starts
+// Where each stray's label goes, beside its own line of sight: `y` is the first
+// line of the label, or with `up` the last.
+var STRAY_LABELS = { 2: { x: 242, y: 74, up: true }, 3: { x: 110, y: 2, anchor: 'end' } };
 
 function fmt(v) { return Math.round(v * 10) / 10; }
 
@@ -100,10 +104,11 @@ function line(a, b, cls) {
     return '<line x1="' + fmt(a[0]) + '" y1="' + fmt(a[1]) + '" x2="' + fmt(b[0]) + '" y2="' + fmt(b[1]) + '" class="' + cls + '"/>';
 }
 
-// Shared by every sketch: lines of sight through the detections, then the cameras.
+// Shared by every sketch: each camera's line of sight through its detection and
+// on, then the cameras.
 var RAYS = DETECTIONS.map(function (d, i) {
     var at = CAMS[i].at, dx = d[0] - at[0], dy = d[1] - at[1], len = Math.hypot(dx, dy);
-    return line(d, [at[0] + dx / len * 320, at[1] + dy / len * 320], 'tm-ray' + (STRAY_LABELS[i] ? ' tm-ray-stray' : ''));
+    return line(at, [at[0] + dx / len * 320, at[1] + dy / len * 320], 'tm-ray' + (STRAY_LABELS[i] ? ' tm-ray-stray' : ''));
 }).join('');
 var CAMERA_BODY = '<rect x="-13" y="-7" width="14" height="14" rx="2" class="tm-cam"/>'
     + '<path d="M1 -4 L7 -7 L7 7 L1 4 Z" class="tm-cam"/>';
@@ -151,16 +156,18 @@ function strayNote(i, lines, lastCls) {
     var at = STRAY_LABELS[i];
     return lines.map(function (text, n) {
         var cls = n && lastCls ? lastCls : 'tm-note-stray';
-        return '<text x="' + at[0] + '" y="' + (at[1] + 11 * n) + '" class="tm-note ' + cls + '">' + text + '</text>';
+        var y = at.up ? at.y - 11 * (lines.length - 1 - n) : at.y + 11 * n;
+        return '<text x="' + at.x + '" y="' + y + '"' + (at.anchor ? ' text-anchor="' + at.anchor + '"' : '')
+            + ' class="tm-note ' + cls + '">' + text + '</text>';
     }).join('');
 }
 
 var DLT_ALL = FIGURE_SCENE.solves.dlt['0,1,2,3'];
 var BA_ALL = FIGURE_SCENE.solves.ba['0,1,2,3'];
 
-var PULLED_NOTE = line([92, 12], [165, 47], 'tm-leader') + note(['pulled toward', 'the strays'], 90, 6);
-var FOOLED_NOTE = line([92, 12], [146, 46], 'tm-leader') + note(['on the top', 'stray\'s line'], 90, 6);
-var APART_NOTE = line([92, 20], [144, 77], 'tm-leader') + note(['from above they', 'cross; in 3D they', 'just miss'], 90, 2);
+var PULLED_NOTE = line([92, 30], [165, 49], 'tm-leader') + note(['pulled toward', 'the strays'], 90, 24);
+var FOOLED_NOTE = line([92, 30], [146, 47], 'tm-leader') + note(['on the top', 'stray\'s line'], 90, 24);
+var APART_NOTE = line([92, 38], [144, 77], 'tm-leader') + note(['from above they', 'cross; in 3D they', 'just miss'], 90, 24);
 
 var DLT_SKETCH = sketch(DLT_ALL, ALL, PULLED_NOTE, strayNote(2, ['stray']) + strayNote(3, ['stray']));
 var REFINED_SKETCH = sketch(BA_ALL, ALL,
@@ -389,6 +396,8 @@ export function buildTriangulationMethodsFigure(opts) {
         + '<span><i class="tm-key-point"></i>3D answer</span>'
         + '<span><i class="tm-key-proj"></i>where the 3D answer lands in that camera</span>'
         + '<span><i class="tm-key-gap"></i>pixel error</span>'
+        + '<span><i class="tm-key-sight"></i><i class="tm-key-sight tm-key-sight-stray"></i>line of sight: grey if the camera is right, orange if stray</span>'
+        + '<span><i class="tm-key-back"></i>line from the camera to the 3D answer</span>'
         + '<span><i class="tm-key-true"></i>true position</span>'
         + '<span><i class="tm-key-band"></i>threshold: where the answer may land in that camera</span>'
         + '</div>';

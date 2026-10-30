@@ -22,6 +22,8 @@
  *  6. Use sets the working value and the wizard field and says "not saved until
  *     you click Apply"; Apply stores it. Turn off sets 0. Reset sketch goes back.
  *  7. The method cards still pick the method; the threshold card is not one of them.
+ *  8. Each line of sight starts at its camera, each stray label sits nearest its
+ *     own camera's line, and the legend explains the lines.
  *
  * Run: node tests/e2e/triangulation-threshold-figure.mjs   (PORT=… to move the server)
  */
@@ -217,6 +219,24 @@ try {
     await page.click('.tri-method-choice[data-method="ba"]');
     r = await read();
     check(r.picked === 'ba' && r.name1.includes('Refined'), `clicking Refined picks it and the sketch follows (${r.picked})`);
+
+    console.log('8. the lines of sight can be read');
+    const lines = await page.evaluate(() => {
+        const svg = document.querySelector('.tri-method-choice[data-method="dlt"] svg');
+        const cams = Array.from(svg.querySelectorAll('g[transform]')).map(g => g.getAttribute('transform').match(/translate\(([-\d.]+) ([-\d.]+)\)/).slice(1).map(Number));
+        const rays = Array.from(svg.querySelectorAll('line.tm-ray')).map(l => ['x1', 'y1', 'x2', 'y2'].map(a => +l.getAttribute(a)).concat(l.classList.contains('tm-ray-stray')));
+        const dist = (p, r) => { const dx = r[2] - r[0], dy = r[3] - r[1], t = Math.max(0, ((p[0] - r[0]) * dx + (p[1] - r[1]) * dy) / (dx * dx + dy * dy)); return Math.hypot(r[0] + t * dx - p[0], r[1] + t * dy - p[1]); };
+        const labels = Array.from(svg.querySelectorAll('text.tm-note-stray')).map(t => { const b = t.getBBox(); return [b.x + b.width / 2, b.y + b.height / 2]; });
+        return {
+            fromCamera: rays.length === 4 && rays.every((r, i) => r[0] === cams[i][0] && r[1] === cams[i][1]),
+            strayFlags: rays.map(r => r[4]).join(),
+            nearest: labels.map(p => { const ds = rays.map((r, i) => r[4] ? { i, d: dist(p, r) } : null).filter(Boolean).sort((a, b) => a.d - b.d); return ds[0].i; }),
+            legend: document.querySelector('.tri-methods-legend').textContent,
+        };
+    });
+    check(lines.fromCamera && lines.strayFlags === 'false,false,true,true', `four lines of sight, each from its camera; the right and top ones orange (${lines.strayFlags})`);
+    check(lines.nearest.join() === '2,3', `each stray label is nearest its own camera's line (${lines.nearest})`);
+    check(/line of sight/.test(lines.legend) && /line from the camera to the 3D answer/.test(lines.legend), 'the legend explains the lines');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
