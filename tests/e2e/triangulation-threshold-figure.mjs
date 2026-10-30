@@ -22,7 +22,8 @@
  *     you click Apply"; Apply stores it. Turn off sets 0. Reset sketch goes back.
  *  7. The method cards still pick the method; the threshold card is not one of them.
  *  8. Each line of sight starts at its camera, the stray label sits by its line,
- *     and the legend explains the lines.
+ *     the 3D marker lets the true-position cross show through, and the legend
+ *     explains the lines.
  *
  * Run: node tests/e2e/triangulation-threshold-figure.mjs   (PORT=… to move the server)
  */
@@ -234,6 +235,15 @@ try {
     });
     check(lines.fromCamera && lines.strayFlags === 'false,false,true', `three lines of sight, each from its camera; the right one orange (${lines.strayFlags})`);
     check(lines.labelDist < 20, `the stray label sits by its own line (${lines.labelDist} units)`);
+    const marker = await page.evaluate(() => {
+        const svg = document.querySelector('.tri-method-choice[data-method="ba"] svg');
+        const kids = Array.from(svg.children), point = svg.querySelector('circle.tm-point');
+        return {
+            opacity: +getComputedStyle(point).fillOpacity,
+            overCross: kids.indexOf(point) > kids.indexOf(svg.querySelector('line.tm-true')),
+        };
+    });
+    check(marker.opacity < 0.6 && marker.overCross, `the 3D marker is translucent, over the cross, so the cross shows through (fill opacity ${marker.opacity})`);
     check(/line of sight/.test(lines.legend) && /line from the camera to the 3D answer/.test(lines.legend), 'the legend explains the lines');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
