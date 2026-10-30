@@ -15,9 +15,9 @@
  *  6. Trying values changes no setting and nothing in the session.
  *  7. The large tile starts on the largest error, a click on a small tile enlarges
  *     it, and the pick holds through the slider, the switch and the arrows.
- *  8. The card keeps one size. The text runs the full width, then the small tiles, the
- *     large tile and the 3D view, the controls, then the sketches. The large tile and
- *     the 3D view run from the top of the upper crops to the bottom of the lower ones.
+ *  8. The card keeps one size. The text runs the full width, then the sketches, the
+ *     controls, and last the small tiles, the large tile and the 3D view, which run
+ *     from the top of the upper crops to the bottom of the lower ones.
  *  10. The 2D skeletons use the Predictions drawing. The 3D view is the app's own
  *     viewer: it draws shaded, turns when dragged, moves its point when a value drops
  *     a camera, keeps its angle, leaves the wheel to the panel, and goes when closed.
@@ -330,9 +330,11 @@ try {
         const c = R('.tri-thr');
         return {
             full: Math.abs(R('.tri-thr-intro').width - R('.tri-thr-steps').width) < 2,
-            stackedOnSteps: R('.tri-thr-intro').bottom <= R('.thr-ex').top + 1
-                && R('.thr-ex').bottom <= R('.tri-thr .fig-try').top + 1
-                && R('.tri-thr .fig-setting').bottom <= steps[0].top + 1,
+            stackedOnSteps: R('.tri-thr-intro').bottom <= steps[0].top + 1
+                && Math.max(...steps.map(x => x.bottom)) <= R('.tri-thr .fig-try').top + 1
+                && R('.tri-thr .fig-setting').bottom <= R('.thr-ex').top + 1
+                && R('.thr-ex').bottom >= c.bottom - 40,
+            intro: Math.round(steps[0].top - R('.tri-thr-intro').bottom),
             edges: [Math.round(R('.thr-ex-grid').left - steps[0].left), Math.round(R('.thr-ex-3d').right - steps[2].right)],
             aligned: (() => {
                 const crops = Array.from(document.querySelectorAll('.thr-ex-tile canvas')).map(c => c.getBoundingClientRect());
@@ -346,7 +348,7 @@ try {
         };
     });
     const l = await layout();
-    check(l.full && l.stackedOnSteps, `one section: full-width text, the panel, the slider, then the sketches (${JSON.stringify(l)})`);
+    check(l.full && l.stackedOnSteps, `one section: full-width text, the sketches right under it, the slider, then the panel last (${JSON.stringify(l)})`);
     check(l.border === '0px', `no card of its own (${l.border})`);
     check(l.aligned.flat().every(v => Math.abs(v) <= 1), `the large tile and 3D view: same top and bottom as the small crops, and square (${JSON.stringify(l.aligned)})`);
     check(l.edges.every(v => Math.abs(v) <= 1), `the band spans the sketches' width (${l.edges})`);
@@ -373,6 +375,8 @@ try {
     await open('triangulation');
     r = await read();
     check(/Load a session/.test(r.message) && r.tiles.length === 0, `says so (${r.message})`);
+    const empty = await page.evaluate(() => ['.thr-ex-body', '.thr-ex-legend', '.thr-ex-result', '.thr-ex-summary', '.thr-ex-others'].map(q => getComputedStyle(document.querySelector('.thr-ex ' + q)).display));
+    check(empty.every(v => v === 'none'), `and shows no empty images or legend (${empty})`);
     await tryBox(25);
     const big = await page.textContent('.tri-thr .fig-big');
     check(/^25 px/.test(big), `and the figure still works (${big})`);

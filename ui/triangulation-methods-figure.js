@@ -390,8 +390,9 @@ function stepSketch(solve, cameras, states, threshold, stepNote) {
     states.forEach(function (st, i) {
         if (st !== 'out' && st !== 'off') bands += band(i, threshold, st);
         if (!STRAY_LABELS[i]) return;
+        // Once it is out, the faded camera says so.
         strays += st === 'drop' ? strayNote(i, ['stray,', 'dropped'], 'tm-note-drop')
-            : st === 'out' ? strayNote(i, ['stray,', 'left out'])
+            : st === 'out' ? ''
             : strayNote(i, ['stray']);
     });
     return sketch(solve, cameras, stepNote, strays, bands);
@@ -476,8 +477,8 @@ function resultText(kind, threshold, second) {
  * @returns {{el: HTMLElement, update: function({method?: string, threshold?: number, saved?: number}): void}}
  *   `update` takes the picked method, the working threshold, and the threshold
  *   stored when Settings opened (for "not saved until Apply"). `opts.examples` is
- *   an optional `buildThresholdExamples` panel, shown between the card's text and its
- *   controls and told what is being tried.
+ *   an optional `buildThresholdExamples` panel, shown last in the card and told what is
+ *   being tried.
  */
 export function buildTriangulationMethodsFigure(opts) {
     opts = opts || {};
@@ -512,7 +513,7 @@ export function buildTriangulationMethodsFigure(opts) {
             + 'sees well.')
         + '</div>'
         + '<div class="tri-methods-col tri-thr">'
-        + '<div class="tri-thr-top"><div class="tri-thr-intro">'
+        + '<div class="tri-thr-intro">'
         + '<div class="tri-methods-name">Reprojection error threshold (RPE), per node<span class="fig-big"></span></div>'
         + '<p>Optional, for either method, and off (0) by default. Refined only counts a bad camera less; this '
         + 'removes it. After the solve, each camera\'s reprojection error for the node ('
@@ -522,15 +523,6 @@ export function buildTriangulationMethodsFigure(opts) {
         + 'node and the node is solved again from the rest; this repeats while more than two cameras are left. A '
         + 'node whose last two cameras still miss gets no 3D point in this frame. Moving the slider right makes the check '
         + 'stricter. Past the recommended zone (100 to 15 px) it can start dropping good views too.</p>'
-        + '</div></div>'
-        // Between the session's examples and the sketches, since it drives both.
-        + '<div class="tri-thr-controls">'
-        + tryStrip(tryControl('threshold', THRESHOLD_CONTROL)
-            + '<div class="tri-thr-demo-method" role="group" aria-label="First solve to try in the sketch">'
-            + '<span>First solve</span>'
-            + '<button type="button" data-demo-method="dlt">DLT</button>'
-            + '<button type="button" data-demo-method="ba">Refined</button></div>')
-        + settingRow('threshold')
         + '</div>'
         + '<div class="tri-thr-steps">'
         + [1, 2, 3].map(function (n) {
@@ -540,20 +532,30 @@ export function buildTriangulationMethodsFigure(opts) {
         }).join('')
         + '</div>'
         + '<p class="tri-thr-result"></p>'
+        + '<div class="tri-methods-legend">'
+        + '<span><i class="tm-key-sight"></i><i class="tm-key-sight tm-key-sight-stray"></i>line of sight: grey if the camera is a little off, orange if stray</span>'
+        + '<span><i class="tm-key-back"></i>line from the camera to the projection</span>'
+        + '<span><i class="tm-key-band"></i>threshold: where the reprojection may land in that camera</span>'
+        + '</div>'
+        // Between the sketches and the session's examples, since it drives both.
+        + '<div class="tri-thr-controls">'
+        + tryStrip(tryControl('threshold', THRESHOLD_CONTROL)
+            + '<div class="tri-thr-demo-method" role="group" aria-label="First solve to try in the sketch">'
+            + '<span>First solve</span>'
+            + '<button type="button" data-demo-method="dlt">DLT</button>'
+            + '<button type="button" data-demo-method="ba">Refined</button></div>')
+        + settingRow('threshold')
+        + '</div>'
         + '<p class="tri-methods-note"><strong>Where to set it:</strong> the Use button here, the toolbar\'s '
         + 'Triangulate menu or the Tracking Wizard. <strong>Per node:</strong> a dropped camera still counts for every '
         + 'other node it sees well. It applies to every Triangulate (this frame, all frames, after an edit), '
         + 'not to how Track All matches animals across cameras. Set it too low and nodes lose their 3D '
         + '(gaps in the tracks).</p>'
-        + '</div>'
-        + '<div class="tri-methods-legend">'
-        + '<span><i class="tm-key-sight"></i><i class="tm-key-sight tm-key-sight-stray"></i>line of sight: grey if the camera is a little off, orange if stray</span>'
-        + '<span><i class="tm-key-back"></i>line from the camera to the projection</span>'
-        + '<span><i class="tm-key-band"></i>threshold: where the reprojection may land in that camera</span>'
+        + '<div class="tri-thr-session"></div>'
         + '</div>';
 
     var thr = fig.querySelector('.tri-thr');
-    if (opts.examples) thr.querySelector('.tri-thr-top').appendChild(opts.examples.el);
+    if (opts.examples) thr.querySelector('.tri-thr-session').appendChild(opts.examples.el);
     var demoButtons = thr.querySelectorAll('[data-demo-method]');
     // `method` / `setting` / `saved` are real; `tryMethod` / `tryThreshold` are the sketch's.
     var current = { method: 'dlt', setting: 0, saved: 0, tryMethod: 'dlt', tryThreshold: 0 };

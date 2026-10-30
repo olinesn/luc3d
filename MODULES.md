@@ -11362,8 +11362,8 @@ a function showing the setting.
 
 ### ui/threshold-examples-panel.js
 
-**Purpose.** The threshold card's "In this session" band, above its controls and on the
-same width as the sketches below them: up to four small tiles, one large one, then the
+**Purpose.** The threshold card's "In this session" band, its last section, below the
+controls and the sketches: up to four small tiles, one large one, then the
 animal in 3D. The tiles are all at one scale, each a crop of a camera's video around the
 node's prediction with the skeleton as Predictions are drawn in the views (`drawSkeleton`
 in the Visibility panel's style, `getGroupColor`), the node's prediction (orange once
@@ -11496,7 +11496,7 @@ matching (`pose/cross-view-tracker.js` solves plain DLT on every view).
 
 **Key exports.** `buildTriangulationMethodsFigure(opts)` → `{ el, update }`
 (`opts.onThreshold(px)`, `opts.examples`: a `buildThresholdExamples` panel, shown
-between the threshold card's text and its controls and told what is being tried); `thresholdPasses` and `FIGURE_SCENE` (pure, Node-importable).
+last in the threshold card and told what is being tried); `thresholdPasses` and `FIGURE_SCENE` (pure, Node-importable).
 
 **Imports.** `./figure-try-controls.js`. **Imported by** `ui/settings-modal.js`,
 `tests/test-triangulation-threshold-figure.mjs`. e2e:

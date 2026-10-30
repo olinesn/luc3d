@@ -1,7 +1,7 @@
 // ui/threshold-examples-panel.js — the reprojection error threshold card's right
 // half: what the value being tried does to this session's own nodes.
 //
-// Three columns, lined up with the sketches below them. Up to four small tiles and
+// The card's last section, below its controls. Up to four small tiles and
 // one large one, all at one scale so errors compare by eye: a crop of a camera's
 // video around the node's prediction, the animal's skeleton as Predictions are
 // drawn in the views (`drawSkeleton`, with the Visibility panel's style), the node's

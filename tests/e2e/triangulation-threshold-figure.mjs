@@ -152,6 +152,9 @@ try {
     check(r.name1.includes('Refined') && r.s1 === 'over,in,in,drop', `Refined's first solve: the worst is dropped (${r.s1})`);
     check(/^2 · Second solve \(Refined\), without camera 3$/.test(r.name2), `every solve's title names the method (${r.name2})`);
     check(r.s2 === 'in,in,in,out' && r.kind === 'one' && /near the target, but still a little wrong/.test(r.result), `dropping it lands near the target (${r.result.slice(0, 60)}…)`);
+    const noted = await page.evaluate(() => [1, 2].map(n => Array.from(document.querySelectorAll(`.tri-thr-step[data-step="${n}"] .tm-sketch text`)).map(t => t.textContent).join(' ')));
+    check(/stray/.test(noted[0]) && /dropped/.test(noted[0]), `the first solve says "stray, dropped" (${/stray/.test(noted[0])})`);
+    check(!/stray/.test(noted[1]), `the second has no stray note: the faded camera says it (${/stray/.test(noted[1])})`);
     const outs = await page.evaluate(() => [1, 2, 3].map(n => document.querySelectorAll(`.tri-thr-step[data-step="${n}"] .tm-det-out`).length));
     const hues = await page.evaluate(() => {
         const list = document.querySelector('.tri-thr-step[data-step="1"]');

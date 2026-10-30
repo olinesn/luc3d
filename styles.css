@@ -5592,8 +5592,8 @@ kbd {
   margin-top: 10px;
 }
 
-/* One section, full width: text, this session's examples, the controls, the sketches.
-   The controls sit between what they drive, and the examples and sketches share columns. */
+/* One section, full width: text, the sketches, the controls, this session's examples.
+   The controls sit between the two things they drive. */
 .tri-thr-intro { min-width: 0; }
 .tri-thr-controls { margin-top: 12px; }
 
@@ -5609,6 +5609,8 @@ kbd {
 }
 
 .thr-ex:focus-visible { border-top-color: var(--accent); }
+/* Its parts set `display`, which would otherwise beat the `hidden` attribute. */
+.thr-ex [hidden] { display: none; }
 .thr-ex-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .thr-ex-titles { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-width: 0; }
 .thr-ex-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -5746,9 +5748,7 @@ kbd {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px 16px;
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-color);
+  margin-top: 10px;
 }
 
 .tri-thr-step-name {
