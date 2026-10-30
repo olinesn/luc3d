@@ -75,6 +75,7 @@ Loaded via `index.html` script tags / importmap (mirrored in `tests/test-runner.
 - `(luc3d gzip)` gzip level 1 on the big tables: always on the streaming writer's four 2D tables (`createAppendableMatrixDataset`, always chunked); on the eager 2D tables and the three `/session_data` struct tables only once one overflows its 8192-row buffer (`LucidAppendTable` gzip `"chunked"`), so small files stay contiguous and byte-identical. Values/shapes/dtypes unchanged (any HDF5 reader). Real 8-camera project: 2D 1.49 GB → ~0.70 GB. Cost: save ~+0.23 µs per `pred_points` row (~15 s on 57.8M rows), load ~+4 s of inflate. Test: `tests/e2e/frame-identity-compact-roundtrip.mjs` (file layout).
 - `(open progress)` `readFromStreamingFile` takes `onReadBytes(done, total)` (from `readSlpStreaming`'s `options.onReadBytes`): it first sizes the four big tables from their metadata (`lucidPlanTableReads`), then reads a flat 2-D table in row slices of 512K elements (4 MB) into one pre-sized typed array (`lucidReadRowsChunked`), counting each slice; a compound or vlen table is one whole read, counted at its end. Without the option nothing changes. Lets the Open project card count megabytes. `globalThis.__lucidReadSliceElems` shrinks slices for tests. Test: `tests/e2e/project-open-progress.mjs` (a sliced read equals a whole read, value for value).
 - `(smoothing source)` `writeSessions` (chunk-X76PRJK6) appends `Instance3D.lucidUnsmoothed` (a smoothed group's 3D from before Temporal Smoothing) to `/session_data/unsmoothed_points_3d`, ROW-PARALLEL to `points_3d` (NaN rows for groups without one; padded to `points_3d`'s length; created only once a group has one, so never-smoothed files are byte-identical); both `/session_data` readers (`readSessionDataStreaming`, `readSessionDataEager`) return it and `reconstructColumnarFrameGroups` (chunk-H7G4PJNA) sets `instance3d.lucidUnsmoothed` (compacted; all-NaN rows = none). SLEAP ignores the dataset. Test: `tests/e2e/smoothing-save-reopen.mjs`.
+- `(luc3d newer-format)` `readFromStreamingFile`, `readSlp` and `readSlpLazy` (chunk-X76PRJK6) throw `UnsupportedSlpFormatError` for `format_id` ≥ 3.0, and `loadSlp` doesn't retry it. The wording says LUC3D and matches `loading/slp-format-check.js`; upstream's guard (olinesn/sleap-io.js `fix/refuse-newer-slp-format`) says sleap-io.js, so keep this wording if a re-vendor brings that in. Test: `tests/e2e/slp-newer-format.mjs`.
 - **Not a patch, but uses bundle internals:** `makePooledSioInstances` (`import-export/file-io.js`) serves `SIO.Instance`'s private `_xy`/`_visible`/`_complete`/`_score`/`_n`/`_names`; after a re-vendor check they still exist and run `tests/test-sio-pooled-instances.js`.
 - **Obsolete — do NOT re-apply** the old #134 `serializeInstanceGroup` patch (function no longer exists under SLP 2.8; `tests/e2e/save-no-inline-dup.mjs` guards the layout).
 
@@ -102,6 +103,16 @@ Rules:
 - Global appearance prefs stay in `localStorage.visibilitySettings`, never the `.slp`.
 
 Tests: `test-visibility-metadata.js`, `test-plane-serialization.mjs`, e2e `visibility-settings-roundtrip`, `plane-persistence-roundtrip`, `reopen-folder-session-settings`.
+
+## `.slp` files newer than LUC3D can read
+
+Python sleap-io 0.10 writes SLP format 3.0 by default (every table a group of columns). Both readers know 2.x only, and without a check read such a file as 0 frames with no error, under a success message. Rule and wording: `loading/slp-format-check.js`; the vendored copy is the `(luc3d newer-format)` patch.
+- **Both readers check.** A fallback must rethrow a refusal, not retry it on the other reader (`isNewerSlpFormatError`).
+- **A refused file changes nothing.** A loader that clears the open project before its read runs `checkSlpFileFormat` first, as `handleLoadProjectSlpLazy` does. Others read first and are fine.
+- **A file that did not open must not become the save target.** Loaders resolve `false` for it; the menu records `state.slpFileHandle` only after that. Quick save writes straight to the handle.
+- Folders: a refused camera is a view and no data, on both routes, and the status gives the reason (`slpFailuresStatus`).
+- When the readers learn 3.0: raise the limit in both places and honor the `/metadata` `required_features` attribute, as Python does.
+Tests: `tests/test-slp-format-check.mjs`, e2e `slp-newer-format`.
 
 ## Lazy projects: resident frames are a window, and eviction must be lossless
 

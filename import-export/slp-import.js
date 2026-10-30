@@ -68,6 +68,7 @@ import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
+import { isNewerSlpFormatError, slpReadErrorStatus } from '../loading/slp-format-check.js';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -86,6 +87,8 @@ async function parseSlpForImport(file, onProgress) {
         try {
             return await parseSlpViaSleapIO(file, onProgress);
         } catch (err) {
+            // Too new for this reader is too new for the raw worker as well.
+            if (isNewerSlpFormatError(err)) throw err;
             console.warn('[slp-import] sleap-io.js streaming read failed — falling back to the raw h5wasm worker:', err);
         }
     }
@@ -879,12 +882,20 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
     return { hasSessionData: hasSessionData };
 }
 
+/**
+ * Open a `.slp` (or analysis `.h5`) as the project.
+ *
+ * @param {File} slpFile
+ * @returns {Promise<false|undefined>} `false` when the file did not open and the
+ *   project is as it was (cancelled, refused as too new, unreadable), so a caller
+ *   holding a save handle for this file knows not to keep it.
+ */
 export async function handleLoadSlpFile(slpFile) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
             setStatus('Load cancelled', 'warning');
-            return;
+            return false;
         }
 
         // TODO(slp-load): wire SLP-parse phases through ui/loading-progress-modal.js
@@ -903,8 +914,8 @@ export async function handleLoadSlpFile(slpFile) {
         } catch (parseErr) {
             console.error('[load-slp] Parse failed:', parseErr);
             hideLoading();
-            setStatus('SLP parse error: ' + parseErr.message, 'error');
-            return;
+            setStatus(slpReadErrorStatus('SLP parse error', parseErr), 'error');
+            return false;
         }
 
         var totalFrames = slpData.frames.length;
@@ -1745,7 +1756,7 @@ export async function handleAddSlp() {
         } catch (parseErr) {
             console.error('[add-slp] Parse failed:', parseErr);
             hideLoading();
-            setStatus('SLP parse error: ' + parseErr.message, 'error');
+            setStatus(slpReadErrorStatus('SLP parse error', parseErr), 'error');
             return;
         }
 
