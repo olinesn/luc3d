@@ -15,8 +15,11 @@
  *  6. Trying values changes no setting and nothing in the session.
  *  7. The large tile starts on the largest error, a click on a small tile enlarges
  *     it, and the pick holds through the slider, the switch and the arrows.
- *  8. The card keeps one size, its text and panel side by side, stacked in a narrow
- *     window.
+ *  8. The card keeps one size. Text and controls run the full width, then the small
+ *     tiles, the large tile and the 3D view on the same columns as the sketches.
+ *  10. Skeletons use the Predictions drawing: the animal's colour and the Visibility
+ *     panel's style. The 3D view draws, turns when dragged, moves its point (not its
+ *     framing) when a value drops a camera, and keeps its angle.
  *  9. No session: says so, and the figure still works.
  *
  * Run: node tests/e2e/threshold-session-examples.mjs   (PORT=… to move the server)
@@ -233,14 +236,69 @@ try {
     await settled();
     check(await page.evaluate(() => document.querySelector('.thr-ex-large canvas').getContext('2d').getImageData(4, 4, 1, 1).data[1]) > 100, 'the large tile draws the video too');
 
+    console.log('10. the skeleton and the 3D view');
+    const hasColour = (sel) => page.evaluate((q) => {
+        const c = document.querySelector(q), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        // Black-and-white marks and a green stand-in video aside, how many pixels are the animal's colour?
+        const seen = new Set();
+        for (let i = 0; i < d.length; i += 4) { const k = d[i] >> 4 << 8 | d[i + 1] >> 4 << 4 | d[i + 2] >> 4; seen.add(k); }
+        return seen.size;
+    }, sel);
+    check(await hasColour('.thr-ex-3d canvas') > 5, 'the 3D view draws');
+    const usesStyle = await page.evaluate(async () => {
+        const R = await import('/ui/rendering.js');
+        return R.getVisibilitySettings().predictedOpts.nodeStyle;
+    });
+    check(!!usesStyle, `the Visibility panel gives the Predictions style (${usesStyle})`);
+    for (let i = 0; i < 12; i++) await page.evaluate(() => document.querySelector('.thr-ex-next').click());
+    const pixels = () => page.evaluate(() => {
+        const c = document.querySelector('.thr-ex-3d canvas');
+        return Array.from(c.getContext('2d').getImageData(0, 0, c.width, c.height).data.filter((_, i) => i % 400 === 0)).join();
+    });
+    await tryBox(0);
+    await page.waitForTimeout(40);
+    const off3d = await pixels();
+    await tryBox(40);
+    await page.waitForTimeout(40);
+    const dropped3d = await pixels();
+    check(off3d !== dropped3d, 'dropping a camera moves the 3D point');
+    const note = await page.textContent('.thr-ex-3d .thr-ex-err');
+    check(note === '', `it still has one (${JSON.stringify(note)})`);
+    const box3d = await page.evaluate(() => { const r = document.querySelector('.thr-ex-3d canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    await page.evaluate(() => document.querySelector('.thr-ex-3d canvas').scrollIntoView());
+    const b3 = await page.evaluate(() => { const r = document.querySelector('.thr-ex-3d canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    await page.mouse.move(b3.x, b3.y);
+    await page.mouse.down();
+    await page.mouse.move(b3.x + 60, b3.y + 25, { steps: 4 });
+    await page.mouse.up();
+    const turned = await pixels();
+    check(turned !== dropped3d && box3d.x > 0, 'dragging turns it');
+    await tryBox(39);
+    await page.waitForTimeout(40);
+    await tryBox(40);
+    await page.waitForTimeout(40);
+    check(await pixels() === turned, 'and the slider keeps its angle');
+
     console.log('8. layout');
     const layout = () => page.evaluate(() => {
-        const a = document.querySelector('.tri-thr-intro').getBoundingClientRect(), b = document.querySelector('.thr-ex').getBoundingClientRect();
-        const c = document.querySelector('.tri-thr').getBoundingClientRect();
-        return { left: a.right <= b.left, top: Math.round(a.top - b.top), half: Math.round(100 * a.width / c.width), h: Math.round(c.height), w: Math.round(c.width), stacked: b.top >= a.bottom };
+        const R = (s) => document.querySelector(s).getBoundingClientRect();
+        const steps = Array.from(document.querySelectorAll('.tri-thr-step')).map(e => e.getBoundingClientRect());
+        const c = R('.tri-thr');
+        return {
+            full: Math.abs(R('.tri-thr-intro').width - R('.tri-thr-steps').width) < 2,
+            stackedOnSteps: R('.thr-ex').bottom <= steps[0].top + 1 && R('.tri-thr-intro').bottom <= R('.thr-ex').top + 1,
+            columns: [R('.thr-ex-grid'), R('.thr-ex-large'), R('.thr-ex-3d')].map((b, i) => Math.round(b.left - steps[i].left)),
+            widths: [R('.thr-ex-grid'), R('.thr-ex-large'), R('.thr-ex-3d')].map((b, i) => Math.round(b.width - steps[i].width)),
+            border: getComputedStyle(document.querySelector('.thr-ex')).borderLeftWidth,
+            tiles: document.querySelectorAll('.thr-ex-tile').length,
+            h: Math.round(c.height), w: Math.round(c.width),
+            overflow: document.querySelector('.thr-ex').scrollWidth > document.querySelector('.thr-ex').clientWidth + 1,
+        };
     });
     const l = await layout();
-    check(l.left && l.top === 0 && l.half > 40 && l.half < 55, `text on the left, about half width, the panel beside it (${JSON.stringify(l)})`);
+    check(l.full && l.stackedOnSteps, `one section: full-width text, then the panel, then the sketches (${JSON.stringify(l)})`);
+    check(l.border === '0px', `no card of its own (${l.border})`);
+    check(l.columns.every(v => Math.abs(v) <= 1) && l.widths.every(v => Math.abs(v) <= 1), `tiles, large and 3D on the sketches' columns (${l.columns}; ${l.widths})`);
     const sizes = new Set();
     for (const t of [0, 5, 12, 40, 90, 200, 640]) {
         await tryBox(t);
@@ -254,7 +312,7 @@ try {
     await page.setViewportSize({ width: 800, height: 900 });
     await page.waitForTimeout(100);
     const narrow = await layout();
-    check(narrow.stacked, `stacked in a narrow window (${JSON.stringify(narrow)})`);
+    check(!narrow.overflow, `nothing overflows in a narrow window (${JSON.stringify(narrow.columns)})`);
     await page.setViewportSize({ width: 1440, height: 1000 });
     await close();
 

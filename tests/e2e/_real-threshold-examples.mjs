@@ -82,7 +82,7 @@ try {
     log(`DLT scan ${((await page.evaluate(() => performance.now() - window.__t0)) / 1000).toFixed(1)} s: ${await page.textContent('.thr-ex-pos')}`);
     const shot = async (name) => {
         await sleep(2500);
-        await (await page.$('.tri-thr-top')).screenshot({ path: path.join(OUT, name + '.png') });
+        await (await page.$('.tri-thr')).screenshot({ path: path.join(OUT, name + '.png') });
         log(`${name}: ${await page.textContent('.thr-ex-where')} | ${await page.textContent('.thr-ex-result')} | ${await page.textContent('.thr-ex-summary')}`);
     };
     await page.evaluate(() => document.querySelector('.settings-modal').style.cssText += ';height:960px;top:10px');

@@ -3678,7 +3678,7 @@ read and given back.
 **Key exports.** `EXAMPLE_MAX_FRAMES`, `EXAMPLE_MIN_CAMERAS`, `EXAMPLE_SET_SIZE`,
 `pickRepresentativeExamples`, `calibratedCameras`,
 `sampleExampleFrames`, `firstOverThreshold`, `scanThresholdExamples`, `solveExample`,
-`pickShownCameras`.
+`solveExample3d`, `lineOfSight`, `pickShownCameras`.
 
 **Imports.** `pose/triangulation-core.js`, `pose/lazy-residency.js`,
 `pose/placeholder-cameras.js`. **Imported by** `ui/threshold-examples-panel.js`.
@@ -11362,13 +11362,16 @@ a function showing the setting.
 
 ### ui/threshold-examples-panel.js
 
-**Purpose.** The threshold card's right half, "In this session": up to six small tiles
-and one large one, all at one scale, each a crop of a camera's video around the
-node's prediction with the prediction, the reprojection after the rule has run, the
-reprojection error, the threshold as a dashed ring and, where a camera was dropped,
-the first solve's reprojection. The tiles are the cameras with the largest errors
-(`pickShownCameras`), and a line names the rest. Clicking a tile enlarges it; the pick
-holds while that camera has a tile, otherwise the largest error is enlarged. The arrows
+**Purpose.** The threshold card's "In this session" band, between its controls and its
+sketches and on the same three columns: up to four small tiles, one large one, then the
+animal in 3D. The tiles are all at one scale, each a crop of a camera's video around the
+node's prediction with the skeleton as Predictions are drawn in the views (`drawSkeleton`
+in the Visibility panel's style, `getGroupColor`), the node's prediction, the
+reprojection after the rule has run, the reprojection error, the threshold as a dashed
+ring and, where a camera was dropped, the first solve's reprojection. The tiles are the
+cameras with the largest errors (`pickShownCameras`), and a line names the rest. Clicking
+a tile enlarges it; the pick holds while that camera has a tile, otherwise the largest
+error is enlarged. The arrows
 (and the ← → keys, through the modal's `onDocKeyDown`) walk a fixed set of 12 examples,
 spread from small errors to large (`pickRepresentativeExamples`), opening on the first
 at 50 px or more. The slider and the DLT / Refined switch never change the example, the
@@ -11383,10 +11386,25 @@ camera runs.
 `{ el, start, update({ threshold, method }), step(by), invalidate, dispose }`,
 `SMALL_TILES`, `exampleResultText`, `tileVerdict`, `cropSide`.
 
-**Imports.** `pose/threshold-examples.js`, `ui/app-state.js`, `ui/frame-readout.js`.
+**Imports.** `pose/threshold-examples.js`, `ui/threshold-examples-3d.js`,
+`ui/app-state.js`, `ui/frame-readout.js`, `ui/overlays.js`, `ui/rendering.js`.
 **Imported by** `ui/settings-modal.js`. **Tests.**
 `tests/e2e/threshold-session-examples.mjs`; on a real recording,
 `tests/e2e/_real-threshold-examples.mjs` (no assertions).
+
+### ui/threshold-examples-3d.js
+
+**Purpose.** The 3D view in "In this session": the animal's skeleton from the solve being
+tried (`drawSkeleton`, Predictions style), the example node's 3D point, the first solve's
+point if a camera was dropped, and each camera's line of sight (orange if dropped),
+over a floor grid. An orthographic drawing on a 2D canvas, Z up, in a framing the
+caller holds still (`frameFromPoints`, from a DLT solve with the threshold off), so what
+moves is the point. Dragged to turn; the angle holds between examples.
+
+**Key exports.** `draw3dScene(ctx, size, scene)`, `frameFromPoints(flat)`,
+`makeProjector(frame, size, yaw, pitch)`.
+
+**Imports.** `ui/overlays.js`. **Imported by** `ui/threshold-examples-panel.js`.
 
 ### ui/triangulation-methods-figure.js
 
@@ -11476,7 +11494,7 @@ matching (`pose/cross-view-tracker.js` solves plain DLT on every view).
 
 **Key exports.** `buildTriangulationMethodsFigure(opts)` → `{ el, update }`
 (`opts.onThreshold(px)`, `opts.examples`: a `buildThresholdExamples` panel, shown
-beside the threshold card's text and told what is being tried); `thresholdPasses` and `FIGURE_SCENE` (pure, Node-importable).
+between the threshold card's controls and its sketches and told what is being tried); `thresholdPasses` and `FIGURE_SCENE` (pure, Node-importable).
 
 **Imports.** `./figure-try-controls.js`. **Imported by** `ui/settings-modal.js`,
 `tests/test-triangulation-threshold-figure.mjs`. e2e:

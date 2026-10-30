@@ -249,13 +249,14 @@ var BA_ALL = FIGURE_SCENE.solves.ba['0,1,2,3'];
 
 // A note in the empty space above the scene, with a line to `p`.
 function noteTo(lines, p) {
-    var x = 170, y = 60, ax = 185, ay = y + 11 * lines.length - 7;
+    // A note of three lines grows upward, into the free space above the leader.
+    var x = 170, y = lines.length > 2 ? 82 - 11 * lines.length : 60, ax = 185, ay = y + 11 * lines.length - 7;
     var dx = ax - p[0], dy = ay - p[1], len = Math.hypot(dx, dy);
     return line([ax, ay], [p[0] + dx / len * 7, p[1] + dy / len * 7], 'tm-leader')
         + lines.map(function (text, i) { return '<text x="' + x + '" y="' + (y + 11 * i) + '" class="tm-note">' + text + '</text>'; }).join('');
 }
 
-var DLT_SKETCH = sketch(DLT_ALL, ALL, noteTo(['pulled toward', 'the stray line'], DLT_ALL.point), strayNote(3, ['stray']));
+var DLT_SKETCH = sketch(DLT_ALL, ALL, noteTo(['Projection gets pulled', 'toward the stray line', 'of Camera 3'], DLT_ALL.point), strayNote(3, ['stray']));
 var REFINED_SKETCH = sketch(BA_ALL, ALL,
     '<circle cx="' + DLT_ALL.point[0] + '" cy="' + DLT_ALL.point[1] + '" r="4" class="tm-start"/>'
     + (function () {
@@ -468,8 +469,8 @@ function resultText(kind, threshold, second) {
  * @returns {{el: HTMLElement, update: function({method?: string, threshold?: number, saved?: number}): void}}
  *   `update` takes the picked method, the working threshold, and the threshold
  *   stored when Settings opened (for "not saved until Apply"). `opts.examples` is
- *   an optional `buildThresholdExamples` panel, shown beside the card's text and
- *   told what is being tried.
+ *   an optional `buildThresholdExamples` panel, shown between the card's controls and
+ *   its sketches and told what is being tried.
  */
 export function buildTriangulationMethodsFigure(opts) {
     opts = opts || {};
@@ -622,7 +623,7 @@ export function buildTriangulationMethodsFigure(opts) {
                 : stack(stepTitles(i), idle ? stepTitles(i).length - 1 : stepTitleIndex(methodName, run.passes[i - 1].drop));
             el.querySelector('.tri-thr-sketch').innerHTML = idle ? IDLE_SKETCH
                 : stepSketch(table[shown.cameras.join(',')], shown.cameras, states, t,
-                    i === 0 ? noteTo(current.tryMethod === 'dlt' ? ['pulled toward', 'the stray line'] : ['closer to', 'the target'], table[shown.cameras.join(',')].point)
+                    i === 0 ? noteTo(current.tryMethod === 'dlt' ? ['Projection gets pulled', 'toward the stray line', 'of Camera 3'] : ['closer to', 'the target'], table[shown.cameras.join(',')].point)
                         : i === 2 ? noteTo(['cross from above,', 'just miss in 3D'], table[shown.cameras.join(',')].point) : '');
             el.querySelector('.tri-thr-verdicts').innerHTML = verdictList(shown, states);
         }

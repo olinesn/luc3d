@@ -13,6 +13,8 @@
  *   5. Fewer than 3 calibrated cameras, or no groups: an empty list, no error.
  *   7. `pickShownCameras`: the largest errors, no prediction last, session order, the
  *      top one named.
+ *   9. `lineOfSight` passes through the prediction, and through the solved point of a
+ *      camera that agrees; `solveExample3d` is a real Triangulate's 3D.
  *   8. `pickRepresentativeExamples`: a fixed set spread evenly on a log scale of
  *      error, reaching the largest, none twice, the same every time.
  *   6. A lazy project's members are read from the store and given back, and it
@@ -207,10 +209,10 @@ group('7. which cameras get a tile');
     const errors = { a: 55, b: 203, c: 60, d: 14, e: 167, f: 60, g: 102, h: null };
     const predictions = new Map(names.map(n => [n, n === 'h' ? null : [1, 2]]));
     const base = { passes: [{ errors }], predictions };
-    let r = ex.pickShownCameras(base, names, 6);
-    ok(r.shown.join() === 'a,b,c,e,f,g', `the six largest, in session order (${r.shown})`);
+    let r = ex.pickShownCameras(base, names, 4);
+    ok(r.shown.join() === 'b,e,f,g' || r.shown.join() === 'b,c,e,g', `the four largest, in session order (${r.shown})`);
     ok(r.first === 'b', `the largest is enlarged first (${r.first})`);
-    ok(r.others.join() === 'd,h', `the rest are named (${r.others})`);
+    ok(r.others.length === 4 && r.others.includes('h') && r.others.includes('d'), `the rest are named (${r.others})`);
     r = ex.pickShownCameras(base, ['a', 'h'], 6);
     ok(r.shown.join() === 'a,h' && r.others.length === 0 && r.first === 'a', 'fewer cameras than slots: all of them, no prediction ranked last');
     ok(ex.pickShownCameras(base, [], 6).first === null, 'no cameras: nothing to enlarge');
@@ -237,6 +239,34 @@ group('8. a representative set');
     const few = list.slice(0, 5);
     ok(ex.pickRepresentativeExamples(few).length === 5, 'fewer nodes than the set: all of them');
     ok(ex.pickRepresentativeExamples([]).length === 0, 'none: an empty set');
+}
+
+group('9. the 3D view\'s geometry');
+{
+    const sCams = makeCameras(5);
+    for (const cam of sCams) {
+        const X = [12, -8, 20];
+        const pred = observe(cam, X);
+        const ray = ex.lineOfSight(cam, pred);
+        ok(!!ray && Math.abs(Math.hypot(...ray.dir) - 1) < 1e-9, `${cam.name}: a unit direction`);
+        // Along the line, the camera still sees the same pixel: the ray is its own.
+        for (const t of [300, 700, 1100]) {
+            const p = [ray.origin[0] + ray.dir[0] * t, ray.origin[1] + ray.dir[1] * t, ray.origin[2] + ray.dir[2] * t];
+            const q = observe(cam, p);
+            ok(Math.hypot(q[0] - pred[0], q[1] - pred[1]) < 1e-3, `${cam.name}: the line stays on its prediction at ${t} (${q} vs ${pred})`);
+        }
+        const t0 = (X[0] - ray.origin[0]) * ray.dir[0] + (X[1] - ray.origin[1]) * ray.dir[1] + (X[2] - ray.origin[2]) * ray.dir[2];
+        const miss = Math.hypot(ray.origin[0] + ray.dir[0] * t0 - X[0], ray.origin[1] + ray.dir[1] * t0 - X[1], ray.origin[2] + ray.dir[2] * t0 - X[2]);
+        ok(miss < 1e-3, `${cam.name}: and passes through the point it saw (${miss})`);
+    }
+    const scan = await ex.scanThresholdExamples(session, { method: 'dlt' });
+    const e = scan.examples[scan.examples.length - 1];
+    const g = session.instanceGroups.get(e.frame)[e.group];
+    for (const t of [0, 10, 40]) {
+        const real = core.triangulateAndReproject(g, cams, { method: 'dlt', reprojErrorThreshold: t, includedCameras: included });
+        const mine = ex.solveExample3d(session, e, { method: 'dlt', threshold: t, included });
+        ok(Array.from(mine).every((v, i) => Object.is(v, real.points3d[i]) || Math.abs(v - real.points3d[i]) < 1e-9), `at ${t} px: a real Triangulate's 3D`);
+    }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -1,14 +1,17 @@
 // ui/threshold-examples-panel.js — the reprojection error threshold card's right
 // half: what the value being tried does to this session's own nodes.
 //
-// Up to six small tiles and one large one, all at one scale so errors compare by
-// eye: a crop of a camera's video around the node's prediction, the prediction
-// (white dot), the reprojection after the rule has run (blue ring), the
+// Three columns, lined up with the sketches below them. Up to four small tiles and
+// one large one, all at one scale so errors compare by eye: a crop of a camera's
+// video around the node's prediction, the animal's skeleton as Predictions are
+// drawn in the views (`drawSkeleton`, with the Visibility panel's style), the node's
+// prediction (white dot), the reprojection after the rule has run (blue ring), the
 // reprojection error (red line), the threshold (dashed green ring) and, where a
 // camera was dropped, the first solve's reprojection (grey ring). The tiles are the
 // cameras with the largest errors (`pickShownCameras`), and a line names the rest.
 // Clicking a tile enlarges it; the pick holds while that camera has a tile. Otherwise
-// the one with the largest error is enlarged.
+// the one with the largest error is enlarged. Beside the large tile, the animal in 3D
+// from the same solve (ui/threshold-examples-3d.js), which can be dragged to turn.
 //
 // The arrows walk a fixed set of examples, spread from small errors to large
 // (`pickRepresentativeExamples`). The slider and the DLT / Refined switch never
@@ -23,8 +26,9 @@
 // screen decodes video. A decoder's frame may be closed by the next decode, so each
 // crop is copied at once, and only the newest request per camera runs.
 //
-// Depends on: pose/threshold-examples.js, ui/app-state.js (state),
-// ui/frame-readout.js (formatFrameNumber).
+// Depends on: pose/threshold-examples.js, ui/threshold-examples-3d.js,
+// ui/app-state.js (state), ui/frame-readout.js (formatFrameNumber), ui/overlays.js
+// (the Predictions drawing and colours), ui/rendering.js (getVisibilitySettings).
 
 import {
     calibratedCameras,
@@ -32,14 +36,19 @@ import {
     pickRepresentativeExamples,
     scanThresholdExamples,
     solveExample,
+    lineOfSight,
     pickShownCameras,
+    solveExample3d,
     EXAMPLE_MIN_CAMERAS,
 } from '../pose/threshold-examples.js';
 import { state } from './app-state.js';
 import { formatFrameNumber } from './frame-readout.js';
+import { desaturateColor, drawSkeleton, getGroupColor } from './overlays.js';
+import { getVisibilitySettings } from './rendering.js';
+import { draw3dScene, frameFromPoints } from './threshold-examples-3d.js';
 
 /** Small tiles shown, at most. */
-export const SMALL_TILES = 6;
+export const SMALL_TILES = 4;
 /** Canvas sides, in device pixels. Marks keep their pixel size, so they read the same in both. */
 const TILE_PX = 240, LARGE_PX = 640;
 /** A crop's smallest side, in video pixels: a small error still shows its surroundings. */
@@ -114,20 +123,36 @@ export function cropSide(solved, names) {
     return Math.max(MIN_CROP, Math.ceil(worst * 2.6));
 }
 
-function drawMarks(ctx, size, solved, name, box, threshold, edges) {
+/** The live views' Predictions style for an animal of colour `base` (`drawFrameOverlays`' section 3), at `sizeScale`. */
+function predictionStyle(base, sizeScale) {
+    let o = null;
+    try { o = getVisibilitySettings().predictedOpts; } catch (e) { /* controls not on the page */ }
+    o = o || {};
+    return {
+        color: desaturateColor(base, 0.2),
+        edgeColor: desaturateColor(base, 0.4),
+        alpha: 0.85,
+        nodeSize: (o.nodeSize || 6) * sizeScale,
+        lineWidth: (o.lineWidth || 2) * sizeScale,
+        lineStyle: o.postLineStyle || 'solid',
+        nodeShape: o.nodeStyle || 'x',
+        showLabels: false,
+    };
+}
+
+function drawMarks(ctx, size, solved, name, box, threshold, skeleton, style) {
     const scale = size / box.side;
     const X = function (p) { return (p[0] - box.x) * scale; };
     const Y = function (p) { return (p[1] - box.y) * scale; };
     const pts = solved.skeletons.get(name);
-    if (pts) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)'; ctx.lineWidth = 1.5;
-        (edges || []).forEach(function (edge) {
-            const a = pts[edge[0]], b = pts[edge[1]];
-            if (!a || !b) return;
-            ctx.beginPath(); ctx.moveTo(X(a), Y(a)); ctx.lineTo(X(b), Y(b)); ctx.stroke();
-        });
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
-        pts.forEach(function (p) { if (p) { ctx.beginPath(); ctx.arc(X(p), Y(p), 3, 0, 2 * Math.PI); ctx.fill(); } });
+    if (pts && skeleton) {
+        drawSkeleton(ctx, {
+            numNodes: pts.length,
+            nulledNodes: solved.nulled.get(name),
+            hasPoint: function (i) { return !!pts[i]; },
+            getX: function (i) { return X(pts[i]); },
+            getY: function (i) { return Y(pts[i]); },
+        }, skeleton, style);
     }
     const pred = solved.predictions.get(name);
     const first = solved.passes[0].reprojections[name];
@@ -169,7 +194,9 @@ export function buildThresholdExamples(opts) {
     root.setAttribute('aria-label', 'Examples from this session');
 
     const head = el('div', 'thr-ex-head');
-    head.appendChild(el('div', 'thr-ex-title', 'In this session'));
+    const titles = el('div', 'thr-ex-titles');
+    titles.appendChild(el('div', 'thr-ex-title', 'In this session'));
+    head.appendChild(titles);
     const nav = el('div', 'thr-ex-nav');
     const prev = el('button', 'thr-ex-arrow thr-ex-prev', '‹');
     const pos = el('span', 'thr-ex-pos');
@@ -184,7 +211,7 @@ export function buildThresholdExamples(opts) {
     root.appendChild(head);
 
     const where = el('div', 'thr-ex-where');
-    root.appendChild(where);
+    titles.appendChild(where);
     const message = el('p', 'thr-ex-message');
     root.appendChild(message);
     const body = el('div', 'thr-ex-body');
@@ -200,6 +227,15 @@ export function buildThresholdExamples(opts) {
     largeCaption.append(largeName, largeErr);
     large.append(largeCanvas, largeCaption);
     body.appendChild(large);
+    const solid = el('figure', 'thr-ex-3d');
+    const solidCanvas = el('canvas');
+    solidCanvas.width = solidCanvas.height = LARGE_PX;
+    const solidCaption = el('figcaption', 'thr-ex-large-caption');
+    const solidName = el('span', 'thr-ex-cam', '3D, drag to turn');
+    const solidNote = el('span', 'thr-ex-err');
+    solidCaption.append(solidName, solidNote);
+    solid.append(solidCanvas, solidCaption);
+    body.appendChild(solid);
     const others = el('p', 'thr-ex-others');
     root.appendChild(others);
     const result = el('p', 'thr-ex-result');
@@ -209,7 +245,8 @@ export function buildThresholdExamples(opts) {
     const legend = el('div', 'thr-ex-legend');
     legend.innerHTML = '<span><i class="thr-key-pred"></i>prediction</span><span><i class="thr-key-rep"></i>reprojection</span>'
         + '<span><i class="thr-key-first"></i>first solve</span><span><i class="thr-key-err"></i>reprojection error</span>'
-        + '<span><i class="thr-key-ring"></i>threshold</span>';
+        + '<span><i class="thr-key-ring"></i>threshold</span><span><i class="thr-key-proj"></i>projection</span>'
+        + '<span><i class="thr-key-sight"></i><i class="thr-key-sight thr-key-sight-drop"></i>line of sight: orange if dropped</span>';
     root.appendChild(legend);
 
     const cameras = calibratedCameras(session);
@@ -236,7 +273,8 @@ export function buildThresholdExamples(opts) {
     let exampleSet = null;  // the fixed examples the arrows walk
     const baselines = new Map();    // example -> what holds still for it
     let picked = null;      // the camera the user enlarged
-    let view = null;        // what is on screen: { solved, boxes, verdicts, edges, shown, selected }
+    let view = null;        // what is on screen: { solved, boxes, verdicts, colors, shown, selected, scene3d }
+    let yaw = -0.7, pitch = 0.45;
     const crops = new Map();        // camera name -> { key, crop }
     const decodeChains = new Map();
 
@@ -276,7 +314,24 @@ export function buildThresholdExamples(opts) {
         ctx.fillStyle = '#111';
         ctx.fillRect(0, 0, size, size);
         if (entry && entry.crop) ctx.drawImage(entry.crop, 0, 0, size, size);
-        drawMarks(ctx, size, view.solved, name, view.boxes.get(name), threshold, view.edges);
+        // Sizes are the views' on-screen ones, less in a small tile.
+        const shown = canvas.clientWidth > 0 ? size / canvas.clientWidth : 2;
+        const style = predictionStyle(view.colors.get(name), shown * (size === TILE_PX ? 0.6 : 1));
+        drawMarks(ctx, size, view.solved, name, view.boxes.get(name), threshold, session.skeleton, style);
+    }
+
+    function paint3d() {
+        const scene = view && view.scene3d;
+        if (!scene) {
+            const ctx = solidCanvas.getContext('2d');
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, LARGE_PX, LARGE_PX);
+            return;
+        }
+        const shown = solidCanvas.clientWidth > 0 ? LARGE_PX / solidCanvas.clientWidth : 2;
+        draw3dScene(solidCanvas.getContext('2d'), LARGE_PX, Object.assign({}, scene, {
+            yaw: yaw, pitch: pitch, style: predictionStyle(scene.color, shown),
+        }));
     }
 
     function paintLarge() {
@@ -302,7 +357,7 @@ export function buildThresholdExamples(opts) {
     }
 
     // What holds still for an example while values are tried: from a DLT solve with the
-    // threshold off, every tile's camera and crop.
+    // threshold off, every tile's camera and crop, and the 3D view's framing.
     function baselineFor(example, use) {
         let base = baselines.get(example);
         if (base) return base;
@@ -310,7 +365,13 @@ export function buildThresholdExamples(opts) {
         if (!solved) return null;
         const side = cropSide(solved, use);
         const picks = pickShownCameras(solved, names, SMALL_TILES);
-        const boxes = new Map();
+        const boxes = new Map(), colors = new Map(), rays = [];
+        const group = (session.instanceGroups.get(example.frame) || [])[example.group];
+        names.forEach(function (name) {
+            let color = '#888888';
+            try { color = getGroupColor(group, session, state.colorByIdentity, example.frame, name) || color; } catch (e) { /* the default */ }
+            colors.set(name, color);
+        });
         picks.shown.forEach(function (name) {
             // Centred on its own prediction or, without one, its reprojection.
             const centre = solved.predictions.get(name) || solved.passes[0].reprojections[name];
@@ -318,9 +379,39 @@ export function buildThresholdExamples(opts) {
                 ? { x: centre[0] - side / 2, y: centre[1] - side / 2, side: side, hasCentre: true }
                 : { x: 0, y: 0, side: side, hasCentre: false });
         });
-        base = { picks: picks, boxes: boxes };
+        cameras.forEach(function (cam) {
+            const pred = solved.predictions.get(cam.name);
+            const ray = pred && use.indexOf(cam.name) >= 0 ? lineOfSight(cam, pred) : null;
+            if (ray) rays.push({ name: cam.name, origin: ray.origin, dir: ray.dir });
+        });
+        const off3d = solveExample3d(session, example, { method: 'dlt', threshold: 0, included: use });
+        base = {
+            picks: picks, boxes: boxes, colors: colors, rays: rays,
+            frame: off3d ? frameFromPoints(off3d) : null,
+            color: colors.get(picks.first) || '#888888',
+        };
         baselines.set(example, base);
         return base;
+    }
+
+    // The 3D view at what is being tried, in the example's fixed framing.
+    function scene3dFor(example, base, solved, use) {
+        if (!base.frame) return null;
+        const points = solveExample3d(session, example, { method: method, threshold: threshold, included: use });
+        if (!points) return null;
+        let first = null;
+        if (solved.dropped.length || solved.lost) {
+            const f = solveExample3d(session, example, { method: method, threshold: 0, included: use });
+            const k = example.node;
+            if (f && Number.isFinite(f[3 * k])) first = [f[3 * k], f[3 * k + 1], f[3 * k + 2]];
+        }
+        return {
+            frame: base.frame, points: points, node: example.node, first: first, color: base.color,
+            skeleton: session.skeleton,
+            rays: base.rays.map(function (r) {
+                return { origin: r.origin, dir: r.dir, dropped: solved.dropped.indexOf(r.name) >= 0 };
+            }),
+        };
     }
 
     function summaryText() {
@@ -367,10 +458,12 @@ export function buildThresholdExamples(opts) {
             }
         });
         view = {
-            solved: solved, boxes: base.boxes, verdicts: verdicts, shown: picks.shown,
-            edges: session.skeleton && session.skeleton.edges,
+            solved: solved, boxes: base.boxes, verdicts: verdicts, shown: picks.shown, colors: base.colors,
             selected: picks.shown.indexOf(picked) >= 0 ? picked : picks.first,
+            scene3d: scene3dFor(example, base, solved, use),
         };
+        solidNote.textContent = solved.lost ? 'no 3D point here' : '';
+        paint3d();
         tiles.forEach(function (t, i) {
             const name = picks.shown[i];
             t.tile.dataset.camera = name;
@@ -452,6 +545,23 @@ export function buildThresholdExamples(opts) {
         index = nextIndex;
         show();
     }
+
+    // Drag to turn. The view holds its angle from one example to the next.
+    let turning = null;
+    solidCanvas.addEventListener('pointerdown', function (e) {
+        turning = { x: e.clientX, y: e.clientY, yaw: yaw, pitch: pitch };
+        solidCanvas.setPointerCapture(e.pointerId);
+        e.preventDefault();
+    });
+    solidCanvas.addEventListener('pointermove', function (e) {
+        if (!turning) return;
+        yaw = turning.yaw + (e.clientX - turning.x) * 0.01;
+        pitch = Math.max(-1.5, Math.min(1.5, turning.pitch + (e.clientY - turning.y) * 0.01));
+        paint3d();
+    });
+    const endTurn = function () { turning = null; };
+    solidCanvas.addEventListener('pointerup', endTurn);
+    solidCanvas.addEventListener('pointercancel', endTurn);
 
     prev.addEventListener('click', function () { step(-1); });
     next.addEventListener('click', function () { step(1); });

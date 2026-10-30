@@ -20,7 +20,7 @@
 // pose/lazy-residency.js (hydrateFrameMembers2d, releaseFrameMembers2d),
 // pose/placeholder-cameras.js (isPlaceholderCamera).
 
-import { triangulateAndReproject } from './triangulation-core.js';
+import { invert3x3, triangulateAndReproject } from './triangulation-core.js';
 import { hydrateFrameMembers2d, releaseFrameMembers2d } from './lazy-residency.js';
 import { isPlaceholderCamera } from './placeholder-cameras.js';
 
@@ -223,6 +223,48 @@ export function pickShownCameras(baseline, names, slots) {
 }
 
 /**
+ * A prediction's line of sight in the world: the camera's centre, and the unit
+ * direction through the prediction (undistorted, as the solver reads it).
+ * @param {Object} camera
+ * @param {number[]} prediction  [x, y] in the camera's native pixels
+ * @returns {?{origin: number[], dir: number[]}} null for a camera with no usable matrix
+ */
+export function lineOfSight(camera, prediction) {
+    var P = camera.projectionMatrix;
+    var inv = invert3x3([[P[0][0], P[0][1], P[0][2]], [P[1][0], P[1][1], P[1][2]], [P[2][0], P[2][1], P[2][2]]]);
+    if (!inv) return null;
+    var uv = camera.undistortPoint ? camera.undistortPoint(prediction) : prediction;
+    var apply = function (v) {
+        return [0, 1, 2].map(function (r) { return inv[r][0] * v[0] + inv[r][1] * v[1] + inv[r][2] * v[2]; });
+    };
+    var origin = apply([-P[0][3], -P[1][3], -P[2][3]]);
+    var d = apply([uv[0], uv[1], 1]);
+    var len = Math.hypot(d[0], d[1], d[2]);
+    if (!(len > 0)) return null;
+    return { origin: origin, dir: [d[0] / len, d[1] / len, d[2] / len] };
+}
+
+/**
+ * The whole animal's 3D as a real Triangulate would leave it at this threshold.
+ * @param {Object} session
+ * @param {{frame: number, group: number}} example
+ * @param {{method: string, threshold: number, included?: string[]}} opts
+ * @returns {?Float64Array} flat [x,y,z] per node, NaN where a node has none
+ */
+export function solveExample3d(session, example, opts) {
+    var cameras = calibratedCameras(session);
+    var included = opts.included || cameras.map(function (c) { return c.name; });
+    var method = opts.method;
+    return bracketFrame(session, example.frame, function () {
+        var group = (session.instanceGroups.get(example.frame) || [])[example.group];
+        if (!group) return null;
+        return triangulateAndReproject(group, cameras, {
+            method: method, reprojErrorThreshold: opts.threshold, includedCameras: included, triangulateOnly: true,
+        }).points3d;
+    });
+}
+
+/**
  * Run the threshold's rule on one example: after each solve, while more than two
  * cameras are left, drop only the worst camera over the threshold and solve again;
  * if the last cameras are still over, the node has no 3D.
@@ -234,7 +276,7 @@ export function pickShownCameras(baseline, names, slots) {
  * @param {number} opts.threshold  0 = off
  * @param {string[]} [opts.included]
  * @returns {?{
- *   skeletons: Map<string, Array>, predictions: Map<string, ?number[]>,
+ *   skeletons: Map<string, Array>, nulled: Map<string, ?Set<number>>, predictions: Map<string, ?number[]>,
  *   passes: Array<{cameras: string[], errors: Object, reprojections: Object, drop: ?string}>,
  *   dropped: string[], lost: boolean, identityId: number
  * }} null if the example's group is gone. `skeletons` holds every node's 2D per
@@ -249,7 +291,7 @@ export function solveExample(session, example, opts) {
         if (!group) return null;
         var k = example.node;
         var view = oneNodeView(group, k);
-        var skeletons = new Map(), predictions = new Map();
+        var skeletons = new Map(), nulled = new Map(), predictions = new Map();
         group.instances.forEach(function (inst, cam) {
             var pts = [];
             for (var n = 0; inst && n < inst.numNodes; n++) {
@@ -257,6 +299,7 @@ export function solveExample(session, example, opts) {
                 pts.push(p ? [p[0], p[1]] : null);
             }
             skeletons.set(cam, pts);
+            nulled.set(cam, inst && inst.nulledNodes && inst.nulledNodes.size ? new Set(inst.nulledNodes) : null);
             var mine = view.getInstance(cam);
             predictions.set(cam, mine.hasPoint() ? pts[k] : null);
         });
@@ -288,7 +331,7 @@ export function solveExample(session, example, opts) {
             kept = kept.filter(function (name) { return name !== worst; });
         }
         return {
-            skeletons: skeletons, predictions: predictions, passes: passes,
+            skeletons: skeletons, nulled: nulled, predictions: predictions, passes: passes,
             dropped: dropped, lost: lost, identityId: group.identityId,
         };
     });
