@@ -11506,31 +11506,38 @@ last in the threshold card and told what is being tried); `thresholdPasses` and 
 
 **Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
 Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
-Both plot one made-up trace (one node's x over 40 frames: a slow movement,
-dashed, with one fast real move up and back on the right, plus jitter and one
+Both plot one made-up trace (one node's x over 40 frames: a slow movement, a
+solid white line under everything else that ends low, with one fast real move
+up and back, tall enough that a Gaussian visibly damps it, plus jitter and one
 one-frame spike) and draw what the stage
 makes of its input, the window around one frame (shaded) and stems at the
 bottom of that window: for the Gaussian its weights, for the median the
 window's values sorted low to high, the middle one (the median, what the spike
 frame becomes) green and the spike red. The median's output is green in both
-cards (its line on the left, with the same green dot at every frame as the
-Gaussian's input dots on the right); the Gaussian's output is blue, with an
-open black circle at every frame. Raw samples
-are open grey rings drawn over the green dots, since a median keeps many
-samples exactly and a filled dot would hide under the green one. The Gaussian's
+cards (the same line and dots, on the right as the Gaussian's input); the
+Gaussian's output is blue, with an open black circle at every frame. Raw samples
+are open grey rings joined by a grey line, the rings drawn over the green dots,
+since a median keeps many samples exactly and a filled dot would hide under the
+green one. Each card has its own legend, naming only what that card draws (the
+top two stand it in the card's top right corner, over the space above the trace's
+low end, or under the title in a narrow card; the gaps card keeps it under the chart): the Gaussian's second row follows its input (raw with the median off),
+and a key for the ring appears while a frame is picked. The legend has a fixed
+width and every entry a fixed row, blank while its mark is not drawn, so nothing
+in it moves as a stage is turned on or off. The Gaussian's
 window sits on the fast move, which survives the example windows and is
 flattened by long ones (over-smoothing).
 
 **The lines are the real filter, not drawn by hand.** `update(params)` runs
 `smoothSignalInto` (`pose/temporal-smoothing.js`) on the trace with the panel's
-working windows, so the cards follow what is typed. A window that is off (0)
-is drawn with an example (median 5, Gaussian 9) and labelled so. The Gaussian
-card's input is the median's output, except with the median off and the
-Gaussian on: then it is the raw trace and a note says the spike becomes a bump
-(why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
+working windows, so the cards follow what is typed. A stage that is off (0) draws
+no window and no output, only its input, and its Frame control is disabled. The
+Gaussian card's input is the median's output, except with the median off: then it
+is the raw trace, and with the Gaussian on a note says the spike becomes a bump
+(why the median runs first). The gaps card still smooths with an example (median 5,
+Gaussian 9, labelled so) while a stage is off, because it is about the segments. Colours come from `.smooth-fig` in `styles.css`.
 
 **Trying a value never changes a setting** (`ui/figure-try-controls.js`). Each card
-has a Window slider with a text box (slider 1–31 frames, box up to 101; under 3 the
+has a Window slider with a text box (slider off, then 1–31 frames, box up to 101; under 3 the
 filter leaves the 3D as it is, drawn as a 1-frame window) and a Frame slider with a
 text box and ▶ that slides the shaded window along the 40 frames (90 ms a frame;
 stops at the end, on a second click, or once the figure leaves the page). They only
@@ -11543,19 +11550,27 @@ Only a card's Use and Turn off buttons change a setting, through `onParam(id, va
 **Card 3, gaps and segments** (full width, below the two): Max gap and Minimum
 segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
 6-frame absence with a 3-frame stretch between them; the node comes back 12 mm
-away after the 7-frame one). It runs both stages at the windows the other cards
+away after the 7-frame one, and is moving fast after the 6-frame one, so raising
+Max gap past it visibly pulls the first frame back ahead of the true movement). It runs both stages at the windows the other cards
 show over the segments `buildSegments` cuts, as the real pass does, and draws
-each absence (labelled hole or split), the output per segment (grey where too
+each absence (labelled hole or split), the measurements' grey line (broken at
+every absence), the output per segment (grey where too
 short to smooth) and the segments as bars. Its Max gap and Min segment sliders
 (0–15, 1–15; the text boxes go further) try values the same way; its Use button
 sets both through `onParam`.
 
-**Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`.
+**Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`;
+`stageSketch(stage, window, { medianWindow, frame })` → `{ svg, keys, truth, raw, medOut, out }`,
+one card's sketch with no controls, DOM-free, and `gapSketch({ median, gaussian, maxGap, minSegment })`
+→ `{ svg, keys, segments, truth, raw, out }`, the gaps card's; `scripts/smoothing-wiki-figures.mjs`
+draws the docs' step figures from them.
 
 **Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
-`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`.
+`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`,
+`scripts/smoothing-wiki-figures.mjs`.
 
-**Tests.** `tests/e2e/smoothing-windows-figure.mjs`.
+**Tests.** `tests/e2e/smoothing-windows-figure.mjs`; `tests/test-smoothing-figure-steps.mjs`
+(what the docs' step captions claim about the trace).
 
 ### ui/smoothing-button.js
 
