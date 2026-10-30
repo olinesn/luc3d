@@ -172,6 +172,7 @@ function isOver(error, threshold) { return threshold > 0 && error > threshold; }
 export function solveExample(session, example, opts) {
     var cameras = calibratedCameras(session);
     var included = opts.included || cameras.map(function (c) { return c.name; });
+    var method = opts.method;
     return bracketFrame(session, example.frame, function () {
         var group = (session.instanceGroups.get(example.frame) || [])[example.group];
         if (!group) return null;
@@ -192,7 +193,7 @@ export function solveExample(session, example, opts) {
         var passes = [], dropped = [], lost = false;
         for (var guard = 0; guard <= cameras.length; guard++) {
             var result = triangulateAndReproject(view, cameras,
-                { method: opts.method, reprojErrorThreshold: 0, includedCameras: kept });
+                { method: method, reprojErrorThreshold: 0, includedCameras: kept });
             var errors = {}, reprojections = {};
             cameras.forEach(function (c) {
                 var err = result.errors[c.name] ? result.errors[c.name][0] : null;
