@@ -2498,7 +2498,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     }
 
     var behaviorEvents = buildBehaviorEvents(SIO, [{
-        session: session, video: sioVideos[0] || null, identities: sioIdentities, tracks: tracks,
+        session: session, video: sioVideos[0] || null, videos: sioVideos, identities: sioIdentities, tracks: tracks,
     }]);
     return new SIO.Labels({
         labeledFrames: labeledFrames,

@@ -34,9 +34,12 @@
 //
 // An event the per-animal labels cannot hold (no subject, e.g. a stimulus epoch; a
 // social behavior with no target) is kept per session (`_keptRows`) and written back
-// unchanged, so reopening and saving a file never loses it. A label keeps only its
-// note: other per-event metadata and names written by other tools are not carried
-// through a LUC3D save.
+// unchanged, so reopening and saving a file never loses it. So is an event on another
+// video of a file with no recording session: its videos need not be cameras of one
+// recording (a sleap-app project of separate videos), though LUC3D opens them as if they
+// were, so only the first video's events are labels here and the others stay on their
+// own video. A label keeps only its note: other per-event metadata and names written by
+// other tools are not carried through a LUC3D save.
 //
 // DOM-free: Node tests import it directly (they pass their own `SIO` classes).
 //
@@ -84,10 +87,11 @@ function notTypeName(b) {
  * its bytes do not move.
  *
  * @param {Object} SIO sleap-io classes: EventType, UserEvent, PredictedEvent, Identity
- * @param {Array<{session: Session, video: ?Object, identities: ?Object[], tracks: ?Object[]}>} items
- *   each session with its first camera's video and the catalogs its animals are
- *   looked up in. An animal in neither (a deleted identity's bouts) becomes a new
- *   Identity, added to `identities`.
+ * @param {Array<{session: Session, video: ?Object, videos: ?Object[], identities: ?Object[], tracks: ?Object[]}>} items
+ *   each session with its first camera's video, all its cameras' videos in order
+ *   (where kept events of other videos can go back to; without it they are left out,
+ *   as in a one-camera export), and the catalogs its animals are looked up in. An animal
+ *   in neither (a deleted identity's bouts) becomes a new Identity, added to `identities`.
  * @returns {{eventTypes: Object[], events: Object[]}}
  */
 export function buildBehaviorEvents(SIO, items) {
@@ -145,8 +149,10 @@ export function buildBehaviorEvents(SIO, items) {
             }));
         });
         keptRowsOf(session).forEach(function (row) {
+            var ownVideo = row.ownVideo === undefined ? item.video : item.videos && item.videos[row.ownVideo];
+            if (row.ownVideo !== undefined && !ownVideo) return;
             var options = {
-                type: typeOf(row.type), video: item.video || null, startFrame: row.start, endFrame: row.end,
+                type: typeOf(row.type), video: ownVideo || null, startFrame: row.start, endFrame: row.end,
                 subject: animal(row.subject), target: animal(row.target),
                 name: row.name, source: row.source, metadata: Object.assign({}, row.metadata),
             };
@@ -201,6 +207,16 @@ export function sessionVideoIdxs(rawSession) {
     return out.size ? out : null;
 }
 
+/**
+ * For a file with no recording session and several videos: the video whose events are
+ * the session's labels (the first), else null (see the header).
+ * @param {{sessions: ?Array, videos: ?Array}} file `parseSlpViaSleapIO`'s result, or Labels
+ */
+export function onlyVideoOf(file) {
+    var noSessions = !file.sessions || file.sessions.length === 0;
+    return noSessions && file.videos && file.videos.length > 1 ? 0 : null;
+}
+
 /** A catalog entry as `ingestEthogram` reads it. */
 function typeToBehavior(t, id, extra, hasTarget) {
     var m = t.metadata || {};
@@ -228,9 +244,11 @@ function typeToBehavior(t, id, extra, hasTarget) {
  * @param {?{types: Array, rows: Array}} fileEvents `fileEventsOf`'s result
  * @param {Object} lucid the session's `metadata.lucid` (`ethogram` extras, run headers)
  * @param {?Set<number>} videoIdxs this session's videos; null reads every row
+ * @param {?number} [onlyVideo] a file with no recording session and several videos: the
+ *   one video whose events are this session's labels; the others' are kept
  * @returns {{ethogram: Object, labelRows: Array, runs: Array, kept: Array}}
  */
-export function eventsToBehaviorData(fileEvents, lucid, videoIdxs) {
+export function eventsToBehaviorData(fileEvents, lucid, videoIdxs, onlyVideo) {
     var types = (fileEvents && fileEvents.types) || [];
     var allRows = (fileEvents && fileEvents.rows) || [];
     var extras = lucid && lucid.ethogram && lucid.ethogram.v === 2 ? lucid.ethogram : null;
@@ -292,6 +310,10 @@ export function eventsToBehaviorData(fileEvents, lucid, videoIdxs) {
 
     allRows.forEach(function (r) {
         if (videoIdxs && r.video >= 0 && !videoIdxs.has(r.video)) return;
+        if (Number.isInteger(onlyVideo) && r.video >= 0 && r.video !== onlyVideo) {
+            kept.push(Object.assign({}, r, { ownVideo: r.video }));
+            return;
+        }
         var negated = negates.has(r.type);
         var behaviorName = negated ? negates.get(r.type) : r.type;
         var id = idOfName.get(behaviorName);

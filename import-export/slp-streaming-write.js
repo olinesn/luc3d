@@ -423,6 +423,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     writeBehaviorSlpMetadata(sioSession.metadata.lucid, session);
     ctx.behaviorItems.push({
         session: session, video: sessionVideoIndices.length ? ctx.allVideos[sessionVideoIndices[0]] : null,
+        videos: sessionVideoIndices.map(function (vi) { return ctx.allVideos[vi]; }),
         identities: Array.from(lucidIdToSioId.values()),
     });
     for (var av = 0; av < sioCameras.length; av++) sioSession.addVideo(ctx.allVideos[sessionVideoIndices[av]], sioCameras[av]);

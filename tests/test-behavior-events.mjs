@@ -13,10 +13,11 @@
  *     target makes a behavior social, a prediction makes a run that never goes stale;
  *   - an event on any camera of a session is the session's, and only that session's;
  *   - a frame-level event survives a load and save unchanged;
+ *   - a file of separate videos keeps each video's events on that video;
  *   - renamed elsewhere, a behavior keeps its detector.
  */
 
-import { buildBehaviorEvents, fileEventsOf, sessionVideoIdxs } from '../import-export/behavior-events.js';
+import { buildBehaviorEvents, fileEventsOf, onlyVideoOf, sessionVideoIdxs } from '../import-export/behavior-events.js';
 import { readBehaviorMetadata, writeBehaviorSlpMetadata, resetBehaviorState } from '../import-export/behavior-metadata.js';
 import { addBehavior, behaviors, behaviorByName, setBehaviorDetector, serializeEthogram } from '../pose/behavior-ethogram.js';
 import { labelRange, noteBehaviorFps, exportBoutRows, behaviorFps } from '../pose/behavior-labels.js';
@@ -195,6 +196,29 @@ console.log('\n6. What labels cannot hold survives a save');
         'a frame-level event is written back unchanged');
     const chaseE = out.events.find(e => e.type.name === 'chase');
     check(chaseE && chaseE.subject === m && chaseE.target === null, 'and so is a social event with no target');
+}
+
+console.log('\n6b. A file of separate videos, which LUC3D opens as cameras');
+{
+    resetBehaviorState();
+    const rear = new EventType({ name: 'rear' });
+    const v = [{ n: 0 }, { n: 1 }, { n: 2 }];
+    const a = new Track('a');
+    const events = [
+        new UserEvent({ type: rear, video: v[0], startFrame: 1, endFrame: 2, subject: a, source: 'manual' }),
+        new UserEvent({ type: rear, video: v[2], startFrame: 1, endFrame: 2, subject: a, source: 'manual' }),
+        new UserEvent({ type: rear, video: v[2], startFrame: 50, endFrame: 60, subject: a, source: 'manual' }),
+    ];
+    check(onlyVideoOf({ sessions: [], videos: v }) === 0, 'no session, several videos: only the first is labels');
+    check(onlyVideoOf({ sessions: [], videos: [v[0]] }) === null, 'one video: all of it');
+    check(onlyVideoOf({ sessions: [{}], videos: v }) === null, 'a session says which videos go together');
+    const s = { name: 's' };
+    const res = readBehaviorMetadata(s, null, asFile([rear], events, v), null, onlyVideoOf({ sessions: [], videos: v }));
+    check(res.kept === 1 && eq(exportBoutRows(s).map(r => r[3]), [1]), 'the first video\'s bouts are the labels');
+    const out = buildBehaviorEvents(SIO, [{ session: s, video: v[0], videos: v, tracks: [a] }]);
+    check(out.events.filter(e => e.video === v[0]).length === 1 && out.events.filter(e => e.video === v[2]).length === 2, 'saved, each bout is still on its own video');
+    const oneCamera = buildBehaviorEvents(SIO, [{ session: s, video: v[0], tracks: [a] }]);
+    check(oneCamera.events.length === 1, 'a one-camera export leaves the others out');
 }
 
 console.log('\n7. Renamed elsewhere');

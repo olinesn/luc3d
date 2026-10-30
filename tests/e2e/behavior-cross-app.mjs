@@ -19,6 +19,10 @@
  *     its tracks -> edited there -> saved -> opened in sleap-app again, where the bouts
  *     are still on the same tracks -> Python reads it.
  *
+ *  C. A sleap-app project of two separate videos, labelled on both: LUC3D opens the videos
+ *     as cameras, so only the first video's bouts are its labels, and a save there leaves
+ *     each bout on its own video.
+ *
  * Needs a checkout of sleap-app linked to a sleap-io.js with events: SLEAP_APP_DIR (default
  * ../sleap-app beside the main LUC3D checkout), and `uv` for Python. Skips without them.
  *
@@ -93,6 +97,28 @@ for f in range(100):
         sio.PredictedInstance.from_numpy(np.array([[40.0, 40.0 + f / 10], [50.0, 50.0]]), skeleton=skeleton, track=t2, score=0.9, point_scores=np.array([0.9, 0.9])),
     ]))
 sio.Labels(labeled_frames=frames, videos=[video], skeletons=[skeleton], tracks=[t1, t2]).save(sys.argv[1], embed=False)
+`;
+    const r = spawnSync('uv', ['run', '--quiet', '--with', PY_SPEC, 'python', '-I', '-c', script, file], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error('python failed: ' + r.stderr);
+}
+
+/** A project of two separate videos, no session: the same tracks on both. */
+function pythonTwoVideos(file) {
+    const script = `
+import sys, numpy as np, sleap_io as sio
+skeleton = sio.Skeleton(nodes=["nose", "tail"], edges=[("nose", "tail")])
+videos = [sio.Video(filename=n, open_backend=False) for n in ("one.mp4", "two.mp4")]
+for v in videos:
+    v.backend_metadata["shape"] = (50, 64, 64, 1)
+t1, t2 = sio.Track(name="mouse1"), sio.Track(name="mouse2")
+frames = []
+for v in videos:
+    for f in range(50):
+        frames.append(sio.LabeledFrame(video=v, frame_idx=f, instances=[
+            sio.PredictedInstance.from_numpy(np.array([[10.0, 10.0], [20.0, 20.0]]), skeleton=skeleton, track=t1, score=0.9, point_scores=np.array([0.9, 0.9])),
+            sio.PredictedInstance.from_numpy(np.array([[40.0, 40.0], [50.0, 50.0]]), skeleton=skeleton, track=t2, score=0.9, point_scores=np.array([0.9, 0.9])),
+        ]))
+sio.Labels(labeled_frames=frames, videos=videos, skeletons=[skeleton], tracks=[t1, t2]).save(sys.argv[1], embed=False)
 `;
     const r = spawnSync('uv', ['run', '--quiet', '--with', PY_SPEC, 'python', '-I', '-c', script, file], { encoding: 'utf8' });
     if (r.status !== 0) throw new Error('python failed: ' + r.stderr);
@@ -527,6 +553,38 @@ try {
     check(py.events.some(e => eq(e.slice(0, 6), ['not rear', 50, 59, ['Track', 'mouse2'], null, false])), 'and the "not" as its own type');
     check(py.events.some(e => eq(e.slice(0, 6), ['rear', 70, 79, ['Track', 'mouse2'], null, false])), 'and LUC3D\'s bout');
     check(app.pageErrors.length === 0, 'no page errors in sleap-app', app.pageErrors);
+
+    // =================================================================
+    console.log('\n-- C. a sleap-app project of separate videos, through LUC3D --');
+    const pathC0 = path.join(tmp, 'two-videos.slp');
+    pythonTwoVideos(pathC0);
+    check(await appLoad(app, fs.readFileSync(pathC0), 'two-videos.slp') === true, 'sleap-app opens a project of two videos');
+    await openBehaviorPanel(app);
+    await appAddBehavior(app, 'rear', 'r');
+    await app.locator('[data-testid="behavior-mode"]').click();
+    await appGoTo(app, 10);
+    await app.keyboard.press('r');
+    await appGoTo(app, 19);
+    await app.keyboard.press('r');
+    await app.evaluate(() => { const st = window.sleap.store.getState(); st.setVideo(st.labels.videos[1]); });
+    await appGoTo(app, 10);
+    await app.keyboard.press('2');
+    await app.keyboard.press('r');
+    await appGoTo(app, 29);
+    await app.keyboard.press('r');
+    await app.waitForFunction(() => window.sleap.store.getState().labels.events.length === 2);
+    await app.keyboard.press('Escape');
+    const fileC1 = await appSave(app);
+    check(await luc3dLoad(luc3d, fileC1, 'two-videos-labelled.slp') === true, 'LUC3D opens it');
+    l = await luc3dState(luc3d);
+    check(eq(l.bouts.map(r => r.slice(1, 5)), [['mouse1', '', 10, 19]]), 'its labels are the first video\'s', l.bouts);
+    const fileC2 = await luc3dSave(luc3d);
+    check(await appLoad(app, fileC2, 'two-videos-again.slp') === true, 'saved there and back in sleap-app');
+    const onVideos = await app.evaluate(() => {
+        const { labels } = window.sleap.store.getState();
+        return labels.events.map(e => [labels.videos.indexOf(e.video), e.startFrame, e.endFrame, e.subject.name]).sort((a, b) => a[0] - b[0]);
+    });
+    check(eq(onVideos, [[0, 10, 19, 'mouse1'], [1, 10, 29, 'mouse2']]), 'each bout is still on its own video', onVideos);
 
     console.log(fails === 0 ? '\nPASS' : `\nFAIL — ${fails} check(s)`);
     process.exitCode = fails === 0 ? 0 : 1;

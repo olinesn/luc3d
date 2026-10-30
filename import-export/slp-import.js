@@ -69,6 +69,7 @@ import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { readBehaviorMetadata, resetBehaviorState } from './behavior-metadata.js';
+import { onlyVideoOf } from './behavior-events.js';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -1148,7 +1149,7 @@ export async function handleLoadSlpFile(slpFile) {
         readSmoothingMetadata(session, earlyVisibility);
         // The ethogram (first session read) and this session's behavior bouts.
         readBehaviorMetadata(session, earlyVisibility, slpData.behaviorEvents,
-            sessVideoIndices.size > 0 ? sessVideoIndices : null);
+            sessVideoIndices.size > 0 ? sessVideoIndices : null, onlyVideoOf(slpData));
         // Define Planes state — pool/planes/origin from the first session that
         // carries them, this session's per-view 2D onto this session.
         readPlaneMetadata(session, earlyVisibility);

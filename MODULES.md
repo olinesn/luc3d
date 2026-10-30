@@ -14214,8 +14214,8 @@ is kept per session (`setKeptEventRows`) and written back unchanged. DOM-free.
 
 **Exports.** `buildBehaviorEvents(SIO, items)` → `{eventTypes, events}`,
 `fileEventsOf(labels)` → plain `{types, rows}` or null,
-`sessionVideoIdxs(rawSession)` → `Set<number>` or null,
-`eventsToBehaviorData(fileEvents, lucid, videoIdxs)` → `{ethogram, labelRows, runs, kept}`
+`sessionVideoIdxs(rawSession)` → `Set<number>` or null, `onlyVideoOf(file)` → 0 or null,
+`eventsToBehaviorData(fileEvents, lucid, videoIdxs, onlyVideo)` → `{ethogram, labelRows, runs, kept}`
 (ids are the file's), `setKeptEventRows(session, rows)`.
 
 **Imports.** `pose/behavior-ethogram.js`, `pose/behavior-labels.js`,
@@ -14253,7 +14253,7 @@ merges its ethogram by name and remaps its bouts' and predictions' ids. The four
 
 **Exports.** `BEHAVIOR_METADATA_KEYS`, `writeBehaviorMetadata(lucid, session)`,
 `writeBehaviorSlpMetadata(lucid, session)`,
-`readBehaviorMetadata(session, lucid, fileEvents?, videoIdxs?)` → `{kept, dropped}` (also
+`readBehaviorMetadata(session, lucid, fileEvents?, videoIdxs?, onlyVideo?)` → `{kept, dropped}` (also
 `noteLabelsChanged`, so the cached label prints are redone),
 `resetBehaviorState()` (forget the ethogram, the trained classifiers with
 their row cache, and every session's states; before every load and on New Project).
