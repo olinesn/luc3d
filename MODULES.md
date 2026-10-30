@@ -11341,7 +11341,9 @@ Every sketch is the same scene from above: three cameras, one node, a green cros
 the true position (the target), and each camera's line of sight dashed from the camera
 on (grey if the camera is right, orange if stray). A legend at the bottom-left of each card
 (`SKETCH_LEGEND`, pinned by `.tm-sketch`, clear of the centred scene) names its prediction, projection, target, reprojection and
-reprojection error; the legend below the figures covers the rest. The left and bottom cameras are right and the
+reprojection error; the legend below the figures covers the rest. Bars at the
+bottom-right (`errorTotals`, one scale in every sketch) stack each numbered camera's
+reprojection error above their sum, so DLT's larger sum can be seen against Refined's. The left and bottom cameras are right and the
 right one is a stray. DLT is pulled well away; Refined counts the stray less and
 lands close to the true position, with the stray still counted; the threshold removes
 it. `sketch()` draws them from `FIGURE_SCENE`.

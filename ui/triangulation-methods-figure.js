@@ -13,7 +13,8 @@
 // white ring, translucent blue, so the cross shows through it), the line from the
 // camera to it, the reprojection, where it lands back in each camera (blue ring),
 // and the reprojection error between the two (red). A legend at the bottom-left of
-// each card names them. The target, a green cross, marks the true
+// each card names them, and bars at the bottom-right (`errorTotals`, one scale for
+// every sketch) stack each camera's reprojection error above their sum. The target, a green cross, marks the true
 // position. The left and bottom cameras are right; the right one is a stray. DLT
 // is pulled well away. Refined counts the stray less and lands close to the true
 // position, with the stray still counted; the threshold removes it altogether.
@@ -62,9 +63,9 @@ var PLANE_HALF = 36;             // image plane half-width, sketch units
  */
 export var FIGURE_SCENE = {
     cameras: [
-        { name: 'Left camera', at: [22, 118], rot: -17.4, plane: 72 },
-        { name: 'Bottom camera', at: [150, 180], rot: -90, plane: 72 },
-        { name: 'Right camera', at: [278, 118], rot: -164.2, plane: 40 },
+        { name: 'Camera 0 (left)', at: [22, 118], rot: -17.4, plane: 72 },
+        { name: 'Camera 1 (bottom)', at: [150, 180], rot: -90, plane: 72 },
+        { name: 'Camera 2 (right)', at: [278, 118], rot: -164.2, plane: 40 },
     ],
     detections: [[2.84, 3], [-2.4, -3], [60.02, 0]],
     truth: [148.4, 81.3],
@@ -102,6 +103,11 @@ function line(a, b, cls) {
     return '<line x1="' + fmt(a[0]) + '" y1="' + fmt(a[1]) + '" x2="' + fmt(b[0]) + '" y2="' + fmt(b[1]) + '" class="' + cls + '"/>';
 }
 
+// Each camera's number, by its body, so the totals' rows can be matched to it.
+var CAMERA_NUMBERS = [[8, 104], [128, 188], [288, 106]].map(function (at, i) {
+    return '<text x="' + at[0] + '" y="' + at[1] + '" class="tm-note tm-camera-number">' + i + '</text>';
+}).join('');
+
 // Shared by every sketch: each camera's line of sight through its detection and
 // on, then the cameras.
 var RAYS = DETECTIONS.map(function (d, i) {
@@ -113,7 +119,7 @@ var CAMERA_BODY = '<rect x="-13" y="-7" width="14" height="14" rx="2" class="tm-
 var CAMERA_MARKS = CAMS.map(function (c, i) {
     return line(onPlane(i, -PLANE_HALF * PX_PER_UNIT), onPlane(i, PLANE_HALF * PX_PER_UNIT), 'tm-plane')
         + '<g transform="translate(' + c.at[0] + ' ' + c.at[1] + ') rotate(' + c.rot + ')">' + CAMERA_BODY + '</g>';
-}).join('');
+}).join('') + CAMERA_NUMBERS;
 var TRUE_MARK = (function () {
     var t = FIGURE_SCENE.truth, s = 5;
     return line([t[0] - s, t[1]], [t[0] + s, t[1]], 'tm-true') + line([t[0], t[1] - s], [t[0], t[1] + s], 'tm-true');
@@ -137,6 +143,38 @@ var SKETCH_LEGEND = '<svg viewBox="8 137 102 58" class="tm-legend" aria-hidden="
         + '<text x="25" y="3" class="tm-note tm-legend-text">' + row[1] + '</text></g>';
 }).join('') + '</svg>';
 
+var TOTAL_BAR_X = 45, TOTAL_BAR_SCALE = 0.54;   // units per pixel: one scale for every sketch
+
+/**
+ * The reprojection errors of one solve as bars: a row per camera, then a row for
+ * their sum, made of the same bars end to end. A camera not `counted` is named as
+ * left out and adds nothing. Its own small SVG, pinned to the card's right edge.
+ */
+function errorTotals(solve, counted) {
+    function bar(x, px, cls) {
+        return '<rect x="' + fmt(x) + '" y="-4" width="' + fmt(px * TOTAL_BAR_SCALE) + '" height="4" class="' + cls + '"/>';
+    }
+    function row(y, label, bars, value, cls) {
+        return '<g transform="translate(0 ' + y + ')"' + (cls ? ' class="' + cls + '"' : '') + '>'
+            + '<text x="0" y="0" class="tm-note tm-legend-text">' + label + '</text>' + bars
+            + '<text x="130" y="0" text-anchor="end" class="tm-note tm-legend-text">' + value + '</text></g>';
+    }
+    var s = '', x = TOTAL_BAR_X, sum = 0, sumBars = '';
+    CAMS.forEach(function (c, i) {
+        var used = counted.indexOf(i) >= 0, err = solve.errors[i];
+        s += used ? row(19 + 11 * i, 'camera ' + i, bar(TOTAL_BAR_X, err, 'tm-total-bar'), fmt(err) + ' px')
+            : row(19 + 11 * i, 'camera ' + i, '', 'left out', 'tm-total-out');
+        if (!used) return;
+        sum += err;
+        sumBars += bar(x, err, 'tm-total-bar');
+        x += err * TOTAL_BAR_SCALE;
+    });
+    return '<svg viewBox="0 0 130 58" class="tm-totals" aria-hidden="true">'
+        + '<text x="0" y="8" class="tm-note tm-legend-text">reprojection error</text>' + s
+        + '<line x1="0" y1="44.5" x2="130" y2="44.5" class="tm-total-rule"/>'
+        + row(54, 'sum', sumBars, fmt(sum) + ' px', 'tm-total-sum') + '</svg>';
+}
+
 /**
  * One sketch: the scene, the 3D answer `solve.point` and, for each camera in
  * `counted`, the line back to it, where the answer lands and the reprojection error.
@@ -156,7 +194,7 @@ function sketch(solve, counted, extra, strayLabel, overlay) {
     return '<div class="tm-sketch"><svg viewBox="' + VIEW_BOX + '" role="img" aria-hidden="true">'
         + '<defs><marker id="tm-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">'
         + '<path d="M0 0 L8 4 L0 8 Z" class="tm-arrowhead"/></marker></defs>'
-        + s + '</svg>' + SKETCH_LEGEND + '</div>';
+        + s + '</svg>' + SKETCH_LEGEND + errorTotals(solve, counted) + '</div>';
 }
 
 function note(lines, x, y) {
@@ -362,7 +400,8 @@ export function buildTriangulationMethodsFigure(opts) {
         + 'and the projection, the 3D point, is where those lines meet. Real detections never meet exactly. Here the right-hand '
         + 'camera\'s 2D prediction is placed wrong: an outlier, marked stray. The green cross is the target: the true position. The reprojection is where the '
         + 'projection lands back in a camera\'s 2D image, and the reprojection error is the distance on that 2D image '
-        + 'between the prediction and the reprojection.</p>'
+        + 'between the prediction and the reprojection. The bars at the bottom right of each sketch add up those errors: Refined\'s sum '
+        + 'is lower than DLT\'s, even though its error in the stray camera is larger.</p>'
         + '<div class="tri-methods-cols" role="radiogroup" aria-label="Default triangulation method">'
         + card('dlt', 'Direct Linear Transformation (DLT)', 'one direct solve · fast', DLT_SKETCH,
             'Solves one set of linear equations (algebraic least squares) for the point that fits every '

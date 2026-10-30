@@ -5321,6 +5321,16 @@ kbd {
   display: flow-root;
 }
 
+.tri-methods-col svg.tm-totals {
+  position: absolute;
+  right: 0;
+  bottom: 8px;
+  width: min(160px, 44%);
+  max-height: none;
+  margin: 0;
+  pointer-events: none;
+}
+
 .tri-methods-col svg.tm-legend {
   position: absolute;
   left: 0;
@@ -5624,7 +5634,7 @@ kbd {
 
 .tri-thr-verdicts li {
   display: grid;
-  grid-template-columns: 7.2em minmax(0, 1fr);
+  grid-template-columns: 8.8em minmax(0, 1fr);
   gap: 6px;
   white-space: nowrap;
 }
@@ -5785,6 +5795,11 @@ kbd {
 .tri-methods .tm-note-stray { fill: var(--warning-color); }
 .tri-methods .tm-note-drop { fill: var(--error-color); }
 .tri-methods .tm-legend-text { font-size: 9px; }
+.tri-methods .tm-camera-number { fill: var(--text-muted); font-size: 9px; }
+.tri-methods .tm-total-bar { fill: var(--error-color); stroke: var(--bg-primary); stroke-width: 0.5; }
+.tri-methods .tm-total-rule { stroke: var(--border-light); stroke-width: 0.8; }
+.tri-methods .tm-total-sum .tm-note { fill: var(--text-primary); font-weight: 600; }
+.tri-methods .tm-total-out .tm-note { fill: var(--text-muted); }
 
 .settings-docs-note a {
   color: var(--accent);

@@ -25,6 +25,8 @@
  *  8. Each line of sight starts at its camera, the stray label sits by its line,
  *     the projection marker lets the target show through, each sketch's legend names
  *     its marks, and the legend below explains the lines.
+ *  9. Bars at each sketch's bottom right stack the cameras' errors above their sum,
+ *     at one scale, so DLT's longer sum can be seen against Refined's.
  *
  * Run: node tests/e2e/triangulation-threshold-figure.mjs   (PORT=… to move the server)
  */
@@ -97,7 +99,7 @@ try {
             lost: res.classList.contains('tri-thr-lost'),
             bandLen: bottomBand ? Math.abs(+bottomBand.getAttribute('x2') - +bottomBand.getAttribute('x1')) : null,
             bands2: step(2).querySelectorAll('line.tm-band').length,
-            sketches: card.querySelectorAll('.tri-thr-sketch svg:not(.tm-legend)').length,
+            sketches: card.querySelectorAll('.tri-thr-sketch svg:not(.tm-legend):not(.tm-totals)').length,
             cameras: step(1).querySelectorAll('.tm-plane').length,
             errText: rows(1).map(li => shown(li)),
             idleLeak: Array.from(card.querySelectorAll('.tri-thr-step.is-idle .tri-thr-verdicts .tri-thr-stack > span')).some(s => getComputedStyle(s).visibility === 'visible'),
@@ -105,7 +107,7 @@ try {
             inRadio: !!card.closest('[role="radiogroup"]') || card.classList.contains('tri-method-choice'),
             field: document.querySelector(f).value,
             picked: Array.from(document.querySelectorAll('.tri-method-choice')).filter(c => c.getAttribute('aria-checked') === 'true').map(c => c.dataset.method).join(),
-            methodCardSketches: Array.from(document.querySelectorAll('.tri-method-choice svg:not(.tm-legend)')).map(s => s.querySelectorAll('.tm-plane').length).join(),
+            methodCardSketches: Array.from(document.querySelectorAll('.tri-method-choice svg:not(.tm-legend):not(.tm-totals)')).map(s => s.querySelectorAll('.tm-plane').length).join(),
         };
     }, FIELD);
 
@@ -262,6 +264,33 @@ try {
         return says(document.querySelector('.tri-methods-lead')) && says(document.querySelector('.tri-thr'));
     });
     check(defined, 'the text says the reprojection error is the distance on the 2D image between prediction and reprojection');
+    const totals = await page.evaluate(() => {
+        const read = (root) => {
+            const svg = root.querySelector('.tm-totals');
+            const rows = Array.from(svg.querySelectorAll('g'));
+            const width = (g) => Array.from(g.querySelectorAll('rect')).reduce((sum, r) => sum + +r.getAttribute('width'), 0);
+            return { svg, labels: rows.map(g => g.querySelector('text').textContent), values: rows.map(g => g.querySelector('text:last-of-type').textContent), widths: rows.map(width) };
+        };
+        const dlt = read(document.querySelector('.tri-method-choice[data-method="dlt"]'));
+        const ba = read(document.querySelector('.tri-method-choice[data-method="ba"]'));
+        const wrap = document.querySelector('.tri-method-choice[data-method="dlt"] .tm-sketch');
+        const box = dlt.svg.getBoundingClientRect(), cams = Array.from(wrap.querySelector('svg').querySelectorAll('g[transform]')).map(g => g.getBoundingClientRect());
+        const clear = (c) => box.left > c.right || box.top > c.bottom;
+        const label = dlt.svg.querySelector('g text').getBBox(), firstBar = dlt.svg.querySelector('g rect');
+        return { dlt: { labels: dlt.labels, values: dlt.values, widths: dlt.widths }, ba: { values: ba.values, widths: ba.widths },
+            right: Math.abs(box.right - wrap.getBoundingClientRect().right) < 1, clear: cams.every(clear),
+            barsClearOfLabels: label.x + label.width < +firstBar.getAttribute('x'),
+            sumClearOfValue: (() => { const rows = dlt.svg.querySelectorAll('g'), sum = rows[rows.length - 1], rects = sum.querySelectorAll('rect'), last = rects[rects.length - 1]; return +last.getAttribute('x') + +last.getAttribute('width') + 1 < sum.querySelector('text:last-of-type').getBBox().x; })(),
+            numbers: Array.from(wrap.querySelectorAll('.tm-camera-number')).map(t => t.textContent).join() };
+    });
+    check(totals.dlt.labels.join() === 'camera 0,camera 1,camera 2,sum', `totals: a row per camera, then the sum (${totals.dlt.labels.join()})`);
+    check(totals.dlt.values[3] === '83.7 px' && totals.ba.values[3] === '64.4 px', `the sums are the errors added up (DLT ${totals.dlt.values[3]}, Refined ${totals.ba.values[3]})`);
+    check(totals.dlt.widths[3] > totals.ba.widths[3], `DLT's sum bar is longer than Refined's (${totals.dlt.widths[3].toFixed(1)} vs ${totals.ba.widths[3].toFixed(1)})`);
+    check(Math.abs(totals.dlt.widths[3] / 83.7 - totals.ba.widths[3] / 64.4) < 0.02, 'one scale in both sketches');
+    check(Math.abs(totals.dlt.widths[2] - 35.6 * totals.dlt.widths[3] / 83.7) < 0.2, 'each bar is in proportion to its error');
+    check(totals.right && totals.clear, 'the totals sit at the bottom-right, clear of the cameras');
+    check(totals.barsClearOfLabels && totals.sumClearOfValue, 'the bars do not touch the labels or the values');
+    check(totals.numbers === '0,1,2', 'each camera is numbered, to match the rows');
     const legend = await page.evaluate(() => {
         const sketches = Array.from(document.querySelectorAll('.tri-methods .tm-sketch')).filter(s => !s.querySelector('.tm-idle'));
         const wrap = sketches[0], svg = wrap.querySelector('svg');
