@@ -11457,7 +11457,7 @@ is the raw trace, and with the Gaussian on a note says the spike becomes a bump
 Gaussian 9, labelled so) while a stage is off, because it is about the segments. Colours come from `.smooth-fig` in `styles.css`.
 
 **Trying a value never changes a setting** (`ui/figure-try-controls.js`). Each card
-has a Window slider with a text box (slider 1–31 frames, box up to 101; under 3 the
+has a Window slider with a text box (slider off, then 1–31 frames, box up to 101; under 3 the
 filter leaves the 3D as it is, drawn as a 1-frame window) and a Frame slider with a
 text box and ▶ that slides the shaded window along the 40 frames (90 ms a frame;
 stops at the end, on a second click, or once the figure leaves the page). They only

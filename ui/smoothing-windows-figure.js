@@ -357,6 +357,7 @@ var GAP_LEGEND = '<div class="smooth-fig-legend">' + legendItems([KEY_TRUE, KEY_
     ['left', 'too short, left as is'], ['hole', 'no 3D, stays a hole'], ['split', 'no 3D, splits the trace'],
     ['seg', 'segment'], ['seg-short', 'segment too short']]) + '</div>';
 
+var SIZE_OFF = -1;     // the Window sliders' off position (step 2, then 1, 3, 5…)
 var SIZE_MAX = 31;     // the Window sliders' top; a longer typed window still shows, the slider sits at its end
 var WINDOW_MAX = 101;  // the settings' own top (`SMOOTHING_PARAMS`, `ui/settings.js`)
 var GAP_MAX = 1000;
@@ -368,7 +369,11 @@ function plural(n) { return n + (n === 1 ? ' frame' : ' frames'); }
 function effectiveWindow(v) { return v > 0 ? (normalizeWindow(v) || 1) : 0; }
 
 function sizeControl(name) {
-    return { name: 'Window', aria: name + ' window (frames)', min: 0, max: WINDOW_MAX, step: 2, sliderMin: 1, sliderMax: SIZE_MAX, unit: 'frames' };
+    // The slider's first position is off, one step before 1 frame.
+    return { name: 'Window', aria: name + ' window (frames)', min: 0, max: WINDOW_MAX, step: 2, sliderMin: SIZE_OFF, sliderMax: SIZE_MAX, unit: 'frames',
+        toSlider: function (v) { return v > 0 ? Math.min(v, SIZE_MAX) : SIZE_OFF; },
+        fromSlider: function (pos) { return pos > 0 ? pos : 0; },
+        ticks: [[SIZE_OFF, 'off']] };
 }
 function posControl(name) {
     return { name: 'Frame', aria: 'Frame the ' + name + ' window is on', min: 1, max: N, step: 1, unit: '/ ' + N,
@@ -593,7 +598,7 @@ export function buildSmoothingWindowsFigure(opts) {
             // With no window there is nothing for Frame to move.
             if (off) stop(k);
             el.querySelectorAll('[data-try="pos"] input, .sf-play').forEach(function (c) { c.disabled = off; });
-            sizeCtl[k].set(typed, Math.min(shown, SIZE_MAX));
+            sizeCtl[k].set(typed, shown > 0 ? Math.min(shown, SIZE_MAX) : SIZE_OFF);
             var now = effectiveWindow(+setting[id] || 0);
             // What Use would set: the tried window, if one is being tried.
             var tryNow = candidate[k] = typed > 0 ? effectiveWindow(typed) : 0;

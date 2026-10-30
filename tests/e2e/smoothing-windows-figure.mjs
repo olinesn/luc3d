@@ -231,6 +231,29 @@ try {
     check(gp.big === 'Max gap 5 · minimum segment 2' && gp.useLabel === 'Use max gap 5, minimum segment 2', `says what the sketch shows and offers Use (${gp.big}; ${gp.useLabel})`);
     check(gp.usedGap === '6' && gp.usedSeg === '2' && gp.stored.join() === '6,2', `Use sets both, Apply stores them (${gp.usedGap}, ${gp.usedSeg}; ${gp.stored})`);
 
+    console.log('7. the Window slider has an off position');
+    await page.evaluate(() => { document.getElementById('menuSettings').click(); document.querySelector('.settings-nav-item[data-panel="smoothing"]').click(); });
+    const off = await page.evaluate(() => {
+        const card = document.querySelector('.smooth-fig [data-stage="median"]');
+        const ctl = card.querySelector('[data-try="size"]');
+        const range = ctl.querySelector('input[type="range"]'), box = ctl.querySelector('input[type="number"]');
+        const set = (el, v) => { el.value = String(v); el.dispatchEvent(new Event('input')); };
+        const out = {};
+        set(range, 1);
+        out.one = [card.querySelector('.fig-big').textContent, box.value];
+        set(range, range.min);
+        out.off = [card.querySelector('.fig-big').textContent, box.value, !!card.querySelector('rect.sf-band')];
+        set(box, 5);
+        set(box, 0);
+        out.typed = [range.value === range.min, card.querySelector('.fig-big').textContent];
+        out.tick = ctl.querySelector('.fig-tick').textContent;
+        return out;
+    });
+    check(off.one.join() === '1 frame,1', `one step along is 1 frame (${off.one})`);
+    check(off.off.join() === 'off,0,false', `the left end is off: box 0, no window (${off.off})`);
+    check(off.typed[0] && off.typed[1] === 'off', 'typing 0 puts the slider back at off');
+    check(off.tick === 'off', 'the position is labelled off');
+
     console.log('6. layers and legends');
     await page.evaluate(() => { document.getElementById('menuSettings').click(); document.querySelector('.settings-nav-item[data-panel="smoothing"]').click(); });
     const lay = await page.evaluate(() => {
