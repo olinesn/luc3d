@@ -1,16 +1,18 @@
 // pose/behavior-predictions.js — predicted behavior bouts, per session: what
-// the rule detectors say each animal did (and, in later phases, classifiers,
-// keypoint-MoSeq states and discovery), kept for review.
+// the rule detectors, the classifiers and promoted states (keypoint-MoSeq
+// syllables, pose/behavior-states.js) say each animal did, kept for review.
 //
 // ## Storage
 //
 // Per session (a WeakMap, like the labels), one RUN per behavior — the last
 // time that behavior was detected:
 //
-//   { behaviorId, source: 'rule' | 'model:<hash>',
+//   { behaviorId, source: 'rule' | 'model:<hash>' | 'states:<layer>',
 //     cfg,               // a print of what produced it: the detector (a model
 //                        // run: its post-processing and exclusive group), the
-//                        // body and floor settings, the frame rate, 2D or 3D
+//                        // body and floor settings, the frame rate, 2D or 3D;
+//                        // a states run: its layer's runs and its states
+//     states,            // a states run: the states promoted (sorted), else null
 //     labels,            // a model run: the print of the labels its model
 //                        // learned from (pose/behavior-classifier.js
 //                        // `trainingLabelPrint`), or null (an imported model)
@@ -34,6 +36,8 @@
 //     run, its camera's 2D) no longer has the print taken when it ran
 //     (`predictionInputPrint`: an order-free hash of every value, its frame and
 //     its identity, so any edit, re-solve, smoothing or identity fix shows).
+//   * states (a states run) — its layer was replaced, changed or removed
+//     (the layer's print is in `cfg`; the states' names are not);
 //   * labels (a classifier run only) — the labels its model learned from
 //     changed (`env.labelPrintOf(behaviorId)` differs from the run's `labels`),
 //     so a retrain would change it: Accept and Reject feed the next training;
@@ -57,19 +61,37 @@
 // DOM-free.
 //
 // Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js, pose/behavior-tensor.js,
-//             pose/pose-data.js
+//             pose/behavior-states.js, pose/pose-data.js
 
 import { behaviorById, featureSettings, behaviorPost, exclusivePeers } from './behavior-ethogram.js';
 import { boutIntervals, labelBouts } from './behavior-labels.js';
 import { resolveBody, POSE_CHECK_VERSION } from './behavior-tensor.js';
+import { stateLayer, layerPrint, cleanLayerName } from './behavior-states.js';
 import { FEATURE_SPEC_VERSION } from './behavior-features.js';
 import { POINT3D_STRIDE, points3dNodeCount } from './pose-data.js';
 
 var SEP = '\u0001';
 
-/** Is `s` a run source: 'rule', or 'model:' and a forest's 16-hex-digit hash? */
+/** Is `s` a run source: 'rule', 'model:' and a forest's 16-hex-digit hash, or 'states:' and a layer name? */
 export function isRunSource(s) {
-    return s === 'rule' || (typeof s === 'string' && /^model:[0-9a-f]{16}$/.test(s));
+    return s === 'rule' || (typeof s === 'string' && (/^model:[0-9a-f]{16}$/.test(s) ||
+        (s.indexOf('states:') === 0 && cleanLayerName(s.slice(7)) === s.slice(7) && s.length > 7)));
+}
+
+/** A states run's layer name ('' for any other run). */
+export function runStateLayer(run) {
+    var s = run && run.source;
+    return typeof s === 'string' && s.indexOf('states:') === 0 ? s.slice(7) : '';
+}
+
+/** States as a run keeps them: unique non-negative integers, sorted. */
+function stateList(states) {
+    var out = [];
+    (Array.isArray(states) ? states : []).forEach(function (k) {
+        var v = Number(k);
+        if (Number.isInteger(v) && v >= 0 && out.indexOf(v) < 0) out.push(v);
+    });
+    return out.sort(function (a, b) { return a - b; });
 }
 
 /** A model run's forest hash ('' for a rule run). */
@@ -151,6 +173,12 @@ function bodyPrint(session) {
  */
 export function runConfigPrint(behavior, session, env) {
     env = env || {};
+    if (typeof env.source === 'string' && env.source.indexOf('states:') === 0) {
+        // Promoted states: the layer's runs (re-imported or removed: stale) and which states.
+        var layer = stateLayer(session, env.source.slice(7));
+        return fnv(JSON.stringify(['states', env.source, layer ? layerPrint(layer) : null, stateList(env.states),
+            behavior ? [behavior.kind, !!behavior.social, !!behavior.mutual] : null]));
+    }
     // The floor in effect (the caller's key); without one, the floor setting.
     var fs = featureSettings();
     var floor = env.mode === '2d' ? '' : env.floorKey != null ? env.floorKey : (fs && fs.floor ? JSON.stringify(fs.floor) : 'auto');
@@ -310,7 +338,8 @@ function normalizeRun(run) {
     var source = isRunSource(run.source) ? run.source : 'rule';
     return {
         behaviorId: run.behaviorId, source: source, cfg: run.cfg || '',
-        labels: source !== 'rule' && typeof run.labels === 'string' && run.labels ? run.labels : null,
+        labels: source.indexOf('model:') === 0 && typeof run.labels === 'string' && run.labels ? run.labels : null,
+        states: source.indexOf('states:') === 0 ? stateList(run.states) : null,
         fps: run.fps > 0 ? run.fps : 0, mode: run.mode === '2d' ? '2d' : '3d', camera: run.camera || null,
         bouts: bouts, scores: run.scores || null,
     };
@@ -491,7 +520,7 @@ export function predictionStaleness(session, env) {
     st.runs.forEach(function (run, id) {
         var b = behaviorById(id);
         var now = b && runConfigPrint(b, session, { fps: env && env.fps, mode: run.mode, camera: run.camera, floorKey: env && env.floorKey,
-                                                   source: run.source });
+                                                   source: run.source, states: run.states });
         if (!b || now !== run.cfg) settings.push(id);
         var hash = runModelHash(run);
         if (!hash || !b) return;
@@ -644,6 +673,7 @@ export function exportPredictionRuns(session) {
         if (!run.bouts.length || !behaviorById(run.behaviorId)) return;
         var o = { behavior: run.behaviorId, source: run.source, cfg: run.cfg, mode: run.mode };
         if (run.labels) o.labels = run.labels;
+        if (run.states) o.states = run.states;
         if (run.camera) o.camera = run.camera;
         if (run.fps > 0) o.fps = run.fps;
         o.bouts = run.bouts.map(function (b) {
@@ -681,7 +711,7 @@ export function importPredictionRuns(session, payload, idMap) {
         });
         kept += bouts.length;
         st.runs.set(id, normalizeRun({ behaviorId: id, source: r.source, cfg: typeof r.cfg === 'string' ? r.cfg : '',
-            labels: r.labels, fps: r.fps > 0 ? r.fps : 0, mode: r.mode, camera: r.camera, bouts: bouts }));
+            labels: r.labels, states: r.states, fps: r.fps > 0 ? r.fps : 0, mode: r.mode, camera: r.camera, bouts: bouts }));
     });
     return { kept: kept, dropped: dropped };
 }
