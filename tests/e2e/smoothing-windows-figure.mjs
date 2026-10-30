@@ -284,7 +284,7 @@ try {
         const keys = (s) => [...card(s).querySelectorAll('.smooth-fig-legend i')].filter(i => i.offsetParent && getComputedStyle(i).visibility !== 'hidden').map(i => i.className.replace('sf-key-', ''));
         const pieces = (el) => el.getAttribute('d').split('M').length - 1;
         const out = { shared: !!document.querySelector('.smooth-fig > .smooth-fig-legend') };
-        // The legend is inside the chart, and the white line stays below it.
+        // The legend is in the card's top right corner, and the white line stays below it.
         out.clear = ['median', 'gaussian'].map((s) => {
             const svg = card(s).querySelector('svg'), box = svg.getBoundingClientRect();
             const leg = card(s).querySelector('.smooth-fig-legend').getBoundingClientRect();
@@ -293,7 +293,8 @@ try {
                 .map(p => p.trim().split(' ').map(Number))
                 .filter(p => box.left + p[0] * scale >= leg.left)
                 .every(p => box.top + p[1] * scale > leg.bottom);
-            return { inside: leg.top >= box.top && leg.bottom <= box.bottom && leg.right <= box.right + 1, clear: under };
+            const cardBox = card(s).getBoundingClientRect();
+            return { inside: leg.top - cardBox.top < 24 && cardBox.right - leg.right < 24 && leg.right <= cardBox.right && leg.bottom <= box.bottom, clear: under };
         });
         out.first = ['median', 'gaussian', 'gaps'].map(s => card(s).querySelector('svg').firstElementChild.getAttribute('class'));
         const t = getComputedStyle(card('median').querySelector('.sf-true'));
@@ -315,7 +316,7 @@ try {
         return out;
     });
     check(!lay.shared, 'no legend shared between the cards');
-    check(lay.clear.every(c => c.inside && c.clear), `the top legends sit in the chart, above the white line (${JSON.stringify(lay.clear)})`);
+    check(lay.clear.every(c => c.inside && c.clear), `the top legends sit in the card's top right corner, above the white line (${JSON.stringify(lay.clear)})`);
     check(lay.first.every(c => c === 'sf-true'), `true movement drawn first on every card (${lay.first})`);
     check(lay.stroke === 'rgb(255, 255, 255)' && lay.dash === 'none', `solid white (${lay.stroke}, ${lay.dash})`);
     check(lay.medRaw && lay.gapRawPieces === 4, `grey line joins the measurements, broken at the 3 absences (${lay.gapRawPieces} pieces)`);

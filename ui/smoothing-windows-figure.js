@@ -7,7 +7,7 @@
 // triangulation would give it with a little jitter (grey rings joined by a grey
 // line), one one-frame spike (red) and a fast real movement: a quick dart up and
 // back over a few frames, which too long a window flattens (over-smoothing). The
-// movement ends low, and each card's legend sits in the space above that end.
+// movement ends low, and each card's legend sits in its top right corner, above that end.
 // Each card draws what its
 // stage makes of its input, the window around one frame (shaded), and for the
 // Gaussian the weights inside that window (a bell of stems). The median's
@@ -438,8 +438,7 @@ export function buildSmoothingWindowsFigure(opts) {
         + 'your setting.</p>'
         + '<div class="smooth-fig-cols">'
         + '<div class="smooth-fig-col" data-stage="median">'
-        + '<div class="smooth-fig-name">1 · Median window<span class="fig-big"></span><small></small></div><div class="smooth-fig-plot"><div class="smooth-fig-chart"></div>'
-        + STAGE_LEGEND + '</div>'
+        + '<div class="smooth-fig-name">1 · Median window<span class="fig-big"></span><small></small>' + STAGE_LEGEND + '</div><div class="smooth-fig-chart"></div>'
         + tryStrip(tryControl('size', sizeControl('median')) + tryControl('pos', posControl('median')))
         + settingRow('median')
         + '<p>Each frame takes the middle value of the frames in its window. The stems are the window sorted by '
@@ -447,8 +446,7 @@ export function buildSmoothingWindowsFigure(opts) {
         + 'than averaged in. Real movement shorter than about half the window is erased too: raise the window and '
         + 'watch the fast move flatten.</p></div>'
         + '<div class="smooth-fig-col" data-stage="gaussian">'
-        + '<div class="smooth-fig-name">2 · Gaussian window<span class="fig-big"></span><small></small></div><div class="smooth-fig-plot"><div class="smooth-fig-chart"></div>'
-        + STAGE_LEGEND + '</div>'
+        + '<div class="smooth-fig-name">2 · Gaussian window<span class="fig-big"></span><small></small>' + STAGE_LEGEND + '</div><div class="smooth-fig-chart"></div>'
         + tryStrip(tryControl('size', sizeControl('Gaussian')) + tryControl('pos', posControl('Gaussian')))
         + settingRow('gaussian')
         + '<p>Runs on the median\'s output (green: the line on the left). A weighted average over the window: '

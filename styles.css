@@ -5850,36 +5850,38 @@ kbd {
 .smooth-fig-legend > span[hidden] { display: none; }
 .smooth-fig-legend span.sf-key-absent { visibility: hidden; }
 
-/* The top cards' legends stand in the space above the trace's low end, while
-   the card is wide enough; a narrow card keeps them in a row under the chart. */
-.smooth-fig-plot { position: relative; container-type: inline-size; }
+/* The top cards' legends stand in the card's top right corner, over the space
+   above the trace's low end, while the card is wide enough; a narrow card keeps
+   them in a row under its title. */
+.smooth-fig-col > .smooth-fig-name:has(.smooth-fig-legend) { position: relative; container-type: inline-size; }
+.smooth-fig-name .smooth-fig-legend { margin: 6px 0 0; font-weight: 400; }
 @container (min-width: 400px) {
-  .smooth-fig-plot .smooth-fig-legend {
+  .smooth-fig-name .smooth-fig-legend {
     position: absolute;
-    top: 8px;
+    top: 0;
     right: 0;
     /* As wide as its widest possible row, so it stays put as rows change. */
     width: 14.5em;
     margin: 0;
     white-space: nowrap;
   }
-  .smooth-fig-plot .smooth-fig-legend,
-  .smooth-fig-plot .smooth-fig-legend .sf-legend-items {
+  .smooth-fig-name .smooth-fig-legend,
+  .smooth-fig-name .smooth-fig-legend .sf-legend-items {
     flex-direction: column;
     flex-wrap: nowrap;
     gap: 1px;
     font-size: 11px;
   }
   /* A swatch column, so every label starts at the same place. */
-  .smooth-fig-plot .smooth-fig-legend > span:not(.sf-legend-items),
-  .smooth-fig-plot .smooth-fig-legend .sf-legend-items > span {
+  .smooth-fig-name .smooth-fig-legend > span:not(.sf-legend-items),
+  .smooth-fig-name .smooth-fig-legend .sf-legend-items > span {
     display: grid;
     grid-template-columns: 18px auto;
     align-items: center;
     column-gap: 5px;
   }
-  .smooth-fig-plot .smooth-fig-legend > span[hidden] { display: none; }
-  .smooth-fig-plot .smooth-fig-legend i { justify-self: center; }
+  .smooth-fig-name .smooth-fig-legend > span[hidden] { display: none; }
+  .smooth-fig-name .smooth-fig-legend i { justify-self: center; }
 }
 
 .smooth-fig-legend i {
