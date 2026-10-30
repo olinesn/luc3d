@@ -107,6 +107,7 @@ try {
         const i = document.querySelector(w);
         i.value = '40'; i.dispatchEvent(new Event('input'));
         document.querySelector('.settings-btn-apply').click();
+        document.querySelector('.settings-modal-close').click();
         return out;
     }, WIZARD);
     check(settings.field === '25' && /^25 px/.test(settings.tag), `Settings shows it (${settings.field}, ${settings.tag})`);

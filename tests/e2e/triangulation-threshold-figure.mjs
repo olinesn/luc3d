@@ -219,13 +219,13 @@ try {
     await page.click('.tri-thr [data-demo-method="ba"]');
     r = await read();
     check(r.name1.includes('Refined') && r.picked === 'dlt', `the DLT/Refined switch redraws, the picked method stays (${r.picked})`);
-    await page.evaluate(() => document.querySelector('.settings-btn-apply').click());
+    await page.evaluate(() => document.querySelector('.settings-modal-close').click());
     const stored = () => page.evaluate(async () => {
         const S = await import('/ui/settings.js');
         return { threshold: S.getTrackingThreshold('reprojErrorThreshold'), method: S.getDefaultTriangulationMethod() };
     });
     let st = await stored();
-    check(st.threshold === 0 && st.method === 'dlt', `Apply after only trying stores nothing new (${JSON.stringify(st)})`);
+    check(st.threshold === 0 && st.method === 'dlt', `closing after only trying stores nothing new (${JSON.stringify(st)})`);
 
     console.log('5b. the slider: off, 640 px, a log scale, a recommended zone');
     await open();
@@ -265,6 +265,9 @@ try {
     await page.evaluate(() => document.querySelector('.settings-btn-apply').click());
     st = await stored();
     check(st.threshold === 25, `Apply stores it (${st.threshold})`);
+    r = await read();
+    check(r.setting === '25 px' && !r.unsaved, `Apply clears "not saved until you click Apply", with the window still open (${r.setting}, ${r.unsaved})`);
+    await page.click('.settings-modal-close');
     await open();
     r = await read();
     check(r.setting === '25 px' && !r.unsaved && r.off, `reopened Settings shows the stored threshold (${r.setting})`);

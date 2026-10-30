@@ -9283,6 +9283,14 @@ commas. One scroller: the block grows to its full height.
 
 ### ui/settings-modal.js
 
+**Apply keeps the window open.** Every write to `working` (a `Proxy`) repaints the
+footer by comparing it with what is stored: Apply is disabled with nothing pending
+and reads "Applied ✓" (`.is-applied`) once clicked, until the next edit; the other
+button reads Cancel with edits pending, otherwise Close. Apply also tells both
+figures what is now stored, which clears their "not saved" notes. Cancel, ×, Esc and
+the backdrop discard what has not been applied. Covered by
+`tests/e2e/settings-apply-stays-open.mjs`.
+
 **Resizable, draggable, and it remembers.** The card carries CSS `resize: both`
 and is dragged by its header (minus the ×, via `noDragSelector`);
 `installModalGeometry` (`ui/modal-geometry.js`, id `settings`) restores the last

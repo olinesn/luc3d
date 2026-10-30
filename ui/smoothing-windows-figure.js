@@ -334,8 +334,9 @@ var MINSEG_CONTROL = { name: 'Min segment', aria: 'Minimum segment length (frame
  *   `smoothMinSegment`), so the panel can set its field to match. The sliders and
  *   text boxes never call it. `saved` is those settings as stored when Settings
  *   opened (for "not saved until Apply").
- * @returns {{el: HTMLElement, update: function(Object): void}} `update` takes the
- *   panel's working map (those four ids).
+ * @returns {{el: HTMLElement, update: function(Object, Object=): void}} `update`
+ *   takes the panel's working map (those four ids), and after an Apply what is
+ *   now stored, in place of `saved`.
  */
 export function buildSmoothingWindowsFigure(opts) {
     opts = opts || {};
@@ -486,7 +487,8 @@ export function buildSmoothingWindowsFigure(opts) {
         }
     }
 
-    function update(next) {
+    function update(next, nextSaved) {
+        if (nextSaved) saved = nextSaved;
         next = next || {};
         // A value set elsewhere (a field below, or the first call) shows in the
         // sketch; values only being tried stay.

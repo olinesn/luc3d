@@ -4818,18 +4818,24 @@ kbd {
 }
 
 .settings-modal-close {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 18px;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0 0 2px;
+  background: var(--bg-button);
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-size: 24px;
   line-height: 1;
   cursor: pointer;
-  padding: 0;
-  transition: color var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .settings-modal-close:hover {
-  color: var(--text-primary);
+  background: var(--error-color);
+  border-color: var(--error-color);
+  color: #fff;
 }
 
 .settings-modal-body {
@@ -5863,6 +5869,7 @@ kbd {
   padding: 7px 18px;
   border-radius: 5px;
   font-size: 13px;
+  line-height: 16px;
   cursor: pointer;
   border: 1px solid var(--border-color);
   transition: background var(--transition-fast), color var(--transition-fast),
@@ -5870,6 +5877,7 @@ kbd {
 }
 
 .settings-btn-cancel {
+  min-width: 78px;
   background: var(--bg-button);
   color: var(--text-secondary);
 }
@@ -5884,9 +5892,28 @@ kbd {
   border-color: var(--accent);
 }
 
-.settings-btn-apply:hover {
+.settings-btn-apply {
+  min-width: 96px;
+}
+
+.settings-btn-apply:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+}
+
+/* Nothing to apply. */
+.settings-btn-apply:disabled {
+  background: var(--bg-button);
+  border-color: var(--border-color);
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Just applied: stays this way until the next edit. */
+.settings-btn-apply.is-applied:disabled {
+  background: transparent;
+  border-color: var(--success-color);
+  color: var(--success-color);
 }
 
 /* --------------------------------------------------------------------------
