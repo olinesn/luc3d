@@ -240,7 +240,8 @@ function gaussianChart(window, input, out, inputHasSpikes, t, upto) {
         + '<path d="' + path(input) + '" class="' + (inputHasSpikes ? 'sf-raw-line' : 'sf-in-median') + '"/>'
         + (on ? outLine(out, 'sf-out', upto) : '')
         + dots(input, inputHasSpikes, inputHasSpikes ? 'sf-raw' : 'sf-med')
-        + (on ? outNodes(out, upto) + current(out, t, upto) : ''), on ? t : 0);
+        + (on ? outNodes(out, upto) + current(out, t, upto) : '')
+        + (inputHasSpikes ? SPIKES.map(function (sp) { return spikeArrow(sp[0], input); }).join('') : ''), on ? t : 0);
 }
 
 // ---- Card 3: gaps and segments ----------------------------------------------
@@ -330,23 +331,27 @@ var KEY_SPIKE = ['spike', 'one-frame spike'];
 var KEY_MEDIAN = ['med', 'after the median'];
 var KEY_BAND = ['band', 'window around one frame'];
 
-/** The legend's entries, each `[swatch, text]` (the swatches are `.sf-key-*` in `styles.css`). */
+/** The legend's entries, each `[swatch, text, absent]` (the swatches are `.sf-key-*` in `styles.css`). */
 function legendItems(items) {
     return items.map(function (it) {
-        return '<span><i class="sf-key-' + it[0] + '"></i>' + it[1] + '</span>';
+        return '<span' + (it[2] ? ' class="sf-key-absent"' : '') + '><i class="sf-key-' + it[0] + '"></i>' + it[1] + '</span>';
     }).join('');
 }
 
-/** The median card's legend entries: only its input while it is off. */
+/**
+ * The median card's legend entries. Every entry keeps its row whatever is drawn:
+ * one the sketch does not draw right now is marked absent (a third element) and
+ * left blank, so nothing in the legend moves as a stage is turned on or off.
+ */
 function medianKeys(on) {
-    return [KEY_TRUE, KEY_RAW, KEY_SPIKE].concat(on ? [KEY_MEDIAN, KEY_BAND,
-        ['rank', 'window sorted by value'], ['rank-mid', 'the middle value']] : []);
+    return [KEY_TRUE, KEY_RAW, KEY_SPIKE].concat([KEY_MEDIAN, KEY_BAND,
+        ['rank', 'window sorted by value'], ['rank-mid', 'the middle value']].map(function (k) { return on ? k : k.concat(true); }));
 }
 
-/** The Gaussian card's: its input is the raw trace when the median is off. */
+/** The Gaussian card's: its second row is its input, the raw trace when the median is off. */
 function gaussianKeys(on, rawInput) {
-    return [KEY_TRUE].concat(rawInput ? [KEY_RAW, KEY_SPIKE] : [KEY_MEDIAN],
-        on ? [['out', 'after the Gaussian'], KEY_BAND, ['weight', 'each frame\'s weight']] : []);
+    return [KEY_TRUE, rawInput ? KEY_RAW : KEY_MEDIAN].concat([['out', 'after the Gaussian'], KEY_BAND,
+        ['weight', 'each frame\'s weight']].map(function (k) { return on ? k : k.concat(true); }));
 }
 
 /** Shown only while a frame is picked, which is when the ring is drawn. */

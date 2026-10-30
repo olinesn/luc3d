@@ -254,13 +254,34 @@ try {
     check(off.typed[0] && off.typed[1] === 'off', 'typing 0 puts the slider back at off');
     check(off.tick === 'off', 'the position is labelled off');
 
+    console.log('8. the legends stay put');
+    const still = await page.evaluate(() => {
+        const card = (s) => document.querySelector(`.smooth-fig [data-stage="${s}"]`);
+        const set = (el, v) => { el.value = String(v); el.dispatchEvent(new Event('input')); };
+        const num = (s) => card(s).querySelector('[data-try="size"] input[type="number"]');
+        // Where each legend's rows are, against its chart.
+        const places = (s) => {
+            const box = card(s).querySelector('svg').getBoundingClientRect();
+            const leg = card(s).querySelector('.smooth-fig-legend');
+            const rows = [...leg.querySelectorAll('i')].filter(i => !i.parentElement.classList.contains('sf-picked-key')).map(i => i.parentElement.getBoundingClientRect());
+            return rows.map(r => [Math.round(r.left - box.left), Math.round(r.top - box.top)].join()).join(' ');
+        };
+        const seen = { median: new Set(), gaussian: new Set() };
+        for (const [m, g] of [[0, 0], [1, 0], [5, 0], [0, 9], [5, 9], [0, 1], [31, 31]]) {
+            set(num('median'), m); set(num('gaussian'), g);
+            seen.median.add(places('median')); seen.gaussian.add(places('gaussian'));
+        }
+        return { median: seen.median.size, gaussian: seen.gaussian.size };
+    });
+    check(still.median === 1 && still.gaussian === 1, `every row keeps its place in all 7 states (${still.median}, ${still.gaussian} layouts)`);
+
     console.log('6. layers and legends');
     await page.evaluate(() => { document.getElementById('menuSettings').click(); document.querySelector('.settings-nav-item[data-panel="smoothing"]').click(); });
     const lay = await page.evaluate(() => {
         const card = (s) => document.querySelector(`.smooth-fig [data-stage="${s}"]`);
         const num = (s) => card(s).querySelector('[data-try="size"] input[type="number"]');
         const set = (el, v) => { el.value = String(v); el.dispatchEvent(new Event('input')); };
-        const keys = (s) => [...card(s).querySelectorAll('.smooth-fig-legend i')].filter(i => i.offsetParent).map(i => i.className.replace('sf-key-', ''));
+        const keys = (s) => [...card(s).querySelectorAll('.smooth-fig-legend i')].filter(i => i.offsetParent && getComputedStyle(i).visibility !== 'hidden').map(i => i.className.replace('sf-key-', ''));
         const pieces = (el) => el.getAttribute('d').split('M').length - 1;
         const out = { shared: !!document.querySelector('.smooth-fig > .smooth-fig-legend') };
         // The legend is inside the chart, and the white line stays below it.
@@ -285,6 +306,7 @@ try {
         set(num('median'), 0);
         out.gauRaw = !!card('gaussian').querySelector('path.sf-raw-line') && !card('gaussian').querySelector('path.sf-in-median');
         out.gauRawKeys = keys('gaussian');
+        out.gauRawSpikeLabel = !!card('gaussian').querySelector('.sf-note-spike');
         set(num('median'), 5);
         const pos = card('median').querySelector('[data-try="pos"] input[type="number"]');
         out.pickedBefore = keys('median').includes('current');
@@ -298,7 +320,7 @@ try {
     check(lay.stroke === 'rgb(255, 255, 255)' && lay.dash === 'none', `solid white (${lay.stroke}, ${lay.dash})`);
     check(lay.medRaw && lay.gapRawPieces === 4, `grey line joins the measurements, broken at the 3 absences (${lay.gapRawPieces} pieces)`);
     check(lay.gauGreen, 'Gaussian card: the median output has edges');
-    check(lay.gauRaw && lay.gauRawKeys.includes('raw') && lay.gauRawKeys.includes('spike') && !lay.gauRawKeys.includes('med'), `median off: its input and legend are the raw trace (${lay.gauRawKeys})`);
+    check(lay.gauRaw && lay.gauRawKeys.includes('raw') && !lay.gauRawKeys.includes('med') && lay.gauRawSpikeLabel, `median off: its input and legend are the raw trace (${lay.gauRawKeys})`);
     const wants = (got, list) => list.every(k => got.includes(k));
     check(wants(lay.medKeys, ['true', 'raw', 'spike', 'med', 'band', 'rank', 'rank-mid']) && !lay.medKeys.includes('out'), `median legend (${lay.medKeys})`);
     check(wants(lay.gauKeys, ['true', 'med', 'out', 'band', 'weight']) && !lay.gauKeys.includes('raw'), `Gaussian legend (${lay.gauKeys})`);

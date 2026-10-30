@@ -11493,8 +11493,10 @@ are open grey rings joined by a grey line, the rings drawn over the green dots,
 since a median keeps many samples exactly and a filled dot would hide under the
 green one. Each card has its own legend, naming only what that card draws (the
 top two stand it in the space above the trace's low end, or under the chart in a
-narrow card; the gaps card keeps it under the chart): the Gaussian's follows its input (raw with the median off), and a
-key for the ring appears while a frame is picked. The Gaussian's
+narrow card; the gaps card keeps it under the chart): the Gaussian's second row follows its input (raw with the median off),
+and a key for the ring appears while a frame is picked. The legend has a fixed
+width and every entry a fixed row, blank while its mark is not drawn, so nothing
+in it moves as a stage is turned on or off. The Gaussian's
 window sits on the fast move, which survives the example windows and is
 flattened by long ones (over-smoothing).
 

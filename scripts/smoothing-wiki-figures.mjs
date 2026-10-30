@@ -109,6 +109,7 @@ function panel(fig, step, x, y, h) {
     const widest = Math.max(...s.keys.map((k) => k[1].length));
     const lx = x + PAD + CHART_W + 4 - 20 - widest * 4.9;
     s.keys.forEach((k, i) => {
+        if (k[2]) return;
         const ly = chartY + 8 + i * 11;
         o += swatch(k[0], lx, ly) + `<text x="${lx + 20}" y="${ly + 3}" class="key">${esc(k[1])}</text>`;
     });
