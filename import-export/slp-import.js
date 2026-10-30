@@ -17,6 +17,7 @@ import { hasRealCalibration } from '../pose/placeholder-cameras.js';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
 } from './file-io.js';
+import { isNewerSlpFormatError, slpReadErrorStatus } from '../loading/slp-format-check.js';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
@@ -68,7 +69,6 @@ import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
-import { isNewerSlpFormatError, slpReadErrorStatus } from '../loading/slp-format-check.js';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
