@@ -17,6 +17,9 @@
  *     session reopens with its own bouts and the same ethogram.
  *  3. A project with no ethogram and no bouts writes neither key, so untouched
  *     projects keep their bytes (`tests/e2e/save-golden-digest.mjs`).
+ *  4. Files other tools wrote (`tests/fixtures/behavior-events/`, from sleap-app and
+ *     Python sleap-io; `behavior-cross-app` makes the first) read in, and saved again
+ *     lose nothing.
  *  Both writers also carry the detection settings and predictions (Phase 2):
  *  a behavior's detector, the changed feature settings, and each session's
  *  predicted bouts with their scores; and each session's behavioral states
@@ -212,8 +215,46 @@ try {
             const labels = fileio.buildSlpLabelsAllViews(s, viewsFor(SPECS[0]), videoFilesFor(SPECS[0]));
             res.untouched = await reopen(await window.SleapIO.saveSlpToBytes(labels), 'untouched.slp');
         }
+        // ---- 4. files other tools wrote, through the real adapter
+        async function fromOtherTool(fixture) {
+            const bytes = await (await fetch('/tests/fixtures/behavior-events/' + fixture)).arrayBuffer();
+            const slpData = await fileio.parseSlpViaSleapIO(new File([bytes], fixture), () => {});
+            meta.resetBehaviorState();
+            const s = new Session([], skelOf(), [], 'other tool');
+            const read = meta.readBehaviorMetadata(s, (slpData.sessions[0] && slpData.sessions[0].metadata || {}).lucid || null,
+                slpData.behaviorEvents, null);
+            const out = { read, behaviors: eth.behaviors().map(b => ({ name: b.name, key: b.key, social: b.social, kind: b.kind, color: b.color })),
+                          rows: L.exportBoutRows(s).map(r => [eth.behaviorById(r[0]).name].concat(r.slice(1))),
+                          predicted: P.predictedBouts(s).map(p => [eth.behaviorById(p.behaviorId).name, p.animal, p.start, p.end, p.score]) };
+            // And saved again, nothing of theirs is lost.
+            const video = new window.SleapIO.Video({ filename: 'again.mp4', openBackend: false });
+            const again = events.buildBehaviorEvents(window.SleapIO, [{ session: s, video, identities: [], tracks: [] }]);
+            out.saved = again.events.map(e => [e.type.name, e.startFrame, e.endFrame, e.subject ? e.subject.name : '', e.target ? e.target.name : '',
+                                               e.isPredicted, e.source, e.isPredicted && e.scores ? e.scores.length : 0]);
+            return out;
+        }
+        res.fromApp = await fromOtherTool('sleap_app_behavior.slp');
+        res.fromPython = await fromOtherTool('py_written_26_events.slp');
         return res;
     });
+
+    console.log('\n-- 4. files other tools wrote --');
+    const fa = rt.fromApp;
+    check(fa.behaviors.map(b => b.name).join() === 'rear,chase' && fa.behaviors[0].key === 'r' && fa.behaviors[1].social, 'sleap-app: its ethogram');
+    check(eq(fa.rows.map(r => r.slice(0, 7)), [
+        ['rear', 'mouse1', '', 10, 19, 1, 'm'],
+        ['chase', 'mouse2', 'mouse1', 30, 39, 1, 'm'],
+        ['rear', 'mouse2', '', 50, 59, 0, 'm'],
+    ]), 'sleap-app: its bouts on tracks, a "not" as a "not"');
+    const fp = rt.fromPython;
+    check(fp.behaviors.map(b => b.name).join() === 'attack,rear,never used', 'Python: the catalog, an unused type too');
+    check(fp.behaviors[0].social && fp.behaviors[0].color === '#e6194b', 'Python: a target makes it social; its color comes along');
+    check(fp.rows.some(r => r[0] === 'attack' && r[1] === 'mouse1' && r[2] === 'mouse2' && r[3] === 100 && r[4] === 140 && r[6] === 'm'), 'Python: a bout between tracks');
+    check(fp.rows.some(r => r[0] === 'rear' && r[1] === 'animal_A' && r[3] === 50), 'Python: a bout on an identity');
+    check(fp.predicted.length === 0, 'Python: its predictions have no target or no animal, so they are not offered for review');
+    check(fp.saved.some(e => e[0] === 'attack' && e[5] && e[6] === 'classifier' && e[7] === 5), 'saved again: they are written back, with where they came from and their framewise scores');
+    check(fp.saved.some(e => e[0] === 'rear' && e[1] === 300 && e[2] === 301 && e[3] === ''), 'saved again: an event with no animal is written back');
+    check(fp.saved.some(e => e[0] === 'rear' && e[1] === 7 && e[3] === '' && e[5]), 'and a prediction with no animal');
 
     console.log('\n-- 1. eager writer --');
     const e0 = rt.eager.sessions[0];

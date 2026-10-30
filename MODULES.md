@@ -14222,7 +14222,9 @@ is kept per session (`setKeptEventRows`) and written back unchanged. DOM-free.
 `pose/behavior-predictions.js`. **Imported by** `import-export/behavior-metadata.js`,
 `import-export/file-io.js`, `import-export/slp-streaming-write.js`,
 `loading/session-loader.js`. **Tests.** `tests/test-behavior-events.mjs`, e2e
-`behavior-label-roundtrip`, `behavior-cross-app`.
+`behavior-label-roundtrip` (with files sleap-app and Python wrote,
+`tests/fixtures/behavior-events/`), `behavior-cross-app` (the two real apps, both ways,
+with Python reading the result; needs a sleap-app checkout, skips without one).
 
 ### import-export/behavior-metadata.js
 
