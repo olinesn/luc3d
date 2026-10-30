@@ -11368,14 +11368,14 @@ slider, its text box and the DLT/Refined switch only redraw the sketch. Only Use
 and Turn off change the threshold, through `opts.onThreshold`; Apply saves it.
 `update({ method, threshold, saved })` follows the picked method and the setting;
 the sketch jumps to a value set elsewhere, and opens at 15 px while the setting is
-off. The large value (`.fig-big`) is what the sketch shows.
+off. The slider's left end is off: every camera counts, no band, nothing dropped. The large value (`.fig-big`) is what the sketch shows.
 
 **The card never changes size as the value moves.** Every step keeps its place (a
 faded scene when the rule does not reach it, its verdict rows kept but hidden), and
 every line whose wording changes is a `stack()`: all its wordings in one grid cell,
 only the current one visible, so it is always as tall as its longest wording at any
 width. Keep new changing text in a `stack()`;
-`tests/e2e/triangulation-threshold-figure.mjs` §4 checks one size across 30 states.
+`tests/e2e/triangulation-threshold-figure.mjs` §4 checks one size across 32 states.
 
 **Don't call Refined more accurate in general.** Measured on held-out cameras
 (9 proofread SLAP sessions), shipped Refined beat DLT in only 1 of 9 (median

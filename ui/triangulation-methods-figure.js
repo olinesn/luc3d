@@ -36,7 +36,8 @@
 // panel's working value; Apply saves it), and "Your setting" says what the setting
 // is. `update({ method, threshold, saved })` follows the picked method and the
 // setting; the sketch jumps to a value set elsewhere, and to `THRESHOLD_EXAMPLE`
-// while the setting is off.
+// while the setting is off. The slider's left end is off: every camera counts, no
+// band is drawn and nothing is dropped.
 //
 // The card never changes size: every step keeps its place (a faded scene when not
 // reached), and each line whose wording changes is a `stack`.
@@ -254,7 +255,7 @@ function verdict(pass, c, threshold) {
 function stepSketch(solve, cameras, states, threshold, stepNote) {
     var bands = '', strays = '';
     states.forEach(function (st, i) {
-        if (st !== 'out') bands += band(i, threshold, st);
+        if (st !== 'out' && st !== 'off') bands += band(i, threshold, st);
         if (!STRAY_LABELS[i]) return;
         strays += st === 'drop' ? strayNote(i, ['stray,', 'dropped'], 'tm-note-drop')
             : st === 'out' ? strayNote(i, ['stray,', 'left out'])
@@ -277,7 +278,7 @@ function stack(variants, on) {
     }).join('') + '</span>';
 }
 
-var VERDICT_STATES = ['in', 'over', 'two', 'drop', 'out'];
+var VERDICT_STATES = ['in', 'over', 'two', 'drop', 'out', 'off'];
 
 /** The cameras' verdicts under a step's sketch. */
 function verdictList(pass, states) {
@@ -285,7 +286,8 @@ function verdictList(pass, states) {
         var shown = st === 'over' && pass.drop < 0 ? 'two' : st;
         var say = VERDICT_STATES.map(function (v) {
             var err = (v === shown ? pass.errors[c] : WIDEST_ERROR) + ' px · ';
-            return v === 'in' ? err + 'within'
+            return v === 'off' ? err + 'counted'
+                : v === 'in' ? err + 'within'
                 : v === 'over' ? err + 'over, checked again'
                 : v === 'two' ? err + 'over, only two left'
                 : v === 'drop' ? err + 'the worst: dropped'
@@ -298,14 +300,19 @@ function verdictList(pass, states) {
 
 var THRESHOLD_CONTROL = {
     name: 'Threshold', aria: 'Reprojection error threshold (px)',
-    min: 1, max: THRESHOLD_MAX, step: 1, sliderMax: THRESHOLD_SLIDER_MAX, unit: 'px',
+    min: 0, max: THRESHOLD_MAX, step: 1, sliderMax: THRESHOLD_SLIDER_MAX, unit: 'px', sliderStart: 'off',
 };
 
-var RESULT_KINDS = ['lost', 'far', 'close', 'two'];
+var RESULT_KINDS = ['lost', 'far', 'close', 'two', 'offFar', 'offClose'];
 
 /** What becomes of the node with `threshold` px. */
 function resultText(kind, threshold) {
     var lead = 'With ' + threshold + ' px, ';
+    if (kind === 'offFar' || kind === 'offClose') {
+        return 'With the threshold off, every camera counts, whatever its error. The first solve stands, '
+            + (kind === 'offFar' ? 'far from the true position (the cross).'
+                : 'close to the true position (the cross), with the stray still counted.');
+    }
     return kind === 'lost'
         ? lead + 'this node gets no 3D point in this frame: only two cameras are left and they still miss by more '
             + 'than that, and a node is never solved from fewer than two.'
@@ -374,7 +381,7 @@ export function buildTriangulationMethodsFigure(opts) {
         + [1, 2].map(function (n) {
             return '<div class="tri-thr-step" data-step="' + n + '"><div class="tri-thr-step-name"></div>'
                 + '<div class="tri-thr-sketch"></div><div class="tri-thr-verdict-box"><ul class="tri-thr-verdicts"></ul>'
-                + '<p class="tri-thr-idle-note">Not reached: no camera is over the threshold here.</p></div></div>';
+                + '<p class="tri-thr-idle-note">Not reached: no camera is dropped.</p></div></div>';
         }).join('')
         + '</div>'
         + '<p class="tri-thr-result"></p>'
@@ -439,12 +446,14 @@ export function buildTriangulationMethodsFigure(opts) {
     }
 
     function render() {
-        var t = current.tryThreshold, set = current.setting;
+        var t = current.tryThreshold, set = current.setting, off = !(t > 0);
+        // Off: nothing is over, so the rule stops after the first solve.
+        var limit = off ? Infinity : t;
         var methodName = current.tryMethod === 'ba' ? 'Refined' : 'DLT';
         var table = FIGURE_SCENE.solves[current.tryMethod];
 
         control.set(fmt(t), Math.min(Math.round(t), THRESHOLD_SLIDER_MAX));
-        thr.querySelector('.fig-big').textContent = fmt(t) + ' px';
+        thr.querySelector('.fig-big').textContent = off ? 'off' : fmt(t) + ' px';
         demoButtons.forEach(function (b) {
             b.setAttribute('aria-pressed', b.getAttribute('data-demo-method') === current.tryMethod ? 'true' : 'false');
         });
@@ -452,19 +461,19 @@ export function buildTriangulationMethodsFigure(opts) {
             label: 'Your setting',
             now: set > 0 ? fmt(set) + ' px' : 'off',
             unsaved: set !== current.saved,
-            use: t !== set ? 'Use ' + fmt(t) + ' px' : null,
+            use: !off && t !== set ? 'Use ' + fmt(t) + ' px' : null,
             off: set > 0,
             reset: t !== baseline() || current.tryMethod !== current.method,
         });
 
-        var run = thresholdPasses(ALL, function (cams) { return table[cams.join(',')].errors; }, t);
+        var run = thresholdPasses(ALL, function (cams) { return table[cams.join(',')].errors; }, limit);
         var steps = thr.querySelectorAll('.tri-thr-step');
         var FALLBACK = [ALL, [0, 1]];
         for (var i = 0; i < STEP_COUNT; i++) {
             var pass = run.passes[i], el = steps[i], idle = !pass;
             // A step the rule does not reach keeps its rows (hidden), so it keeps its height.
             var shown = pass || { cameras: FALLBACK[i], errors: table[FALLBACK[i].join(',')].errors, drop: -1 };
-            var states = ALL.map(function (c) { return verdict(shown, c, t); });
+            var states = ALL.map(function (c) { return off ? (shown.cameras.indexOf(c) < 0 ? 'out' : 'off') : verdict(shown, c, t); });
             el.classList.toggle('is-idle', idle);
             el.querySelector('.tri-thr-step-name').innerHTML = i === 0
                 ? stack(['1 · First solve (DLT), all three cameras', '1 · First solve (Refined), all three cameras'],
@@ -476,7 +485,8 @@ export function buildTriangulationMethodsFigure(opts) {
             el.querySelector('.tri-thr-verdicts').innerHTML = verdictList(shown, states);
         }
 
-        var kind = !run.kept ? 'lost' : run.passes.length > 1 ? 'two' : current.tryMethod === 'ba' ? 'close' : 'far';
+        var kind = off ? (current.tryMethod === 'ba' ? 'offClose' : 'offFar')
+            : !run.kept ? 'lost' : run.passes.length > 1 ? 'two' : current.tryMethod === 'ba' ? 'close' : 'far';
         var res = thr.querySelector('.tri-thr-result');
         // Every kind at its widest number, then the one shown.
         res.innerHTML = stack(RESULT_KINDS.map(function (k) { return resultText(k, WIDEST_ERROR); })

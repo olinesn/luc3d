@@ -17,7 +17,7 @@
  *  5. TRYING CHANGES NOTHING: the slider, the text box and the DLT/Refined switch
  *     redraw the sketch only. The wizard field, the picked method and what Apply
  *     stores stay as they were. A typed value past the slider's end works; out of
- *     range is ignored.
+ *     range is ignored. The slider's left end is off: every camera counts.
  *  6. Use sets the working value and the wizard field and says "not saved until
  *     you click Apply"; Apply stores it. Turn off sets 0. Reset sketch goes back.
  *  7. The method cards still pick the method; the threshold card is not one of them.
@@ -154,14 +154,14 @@ try {
     let leak = false;
     for (const m of ['dlt', 'ba']) {
         await page.click(`.tri-thr [data-demo-method="${m}"]`);
-        for (const t of [1, 2, 3, 4, 5, 6, 12, 15, 20, 30, 36, 58, 59, 80, 200]) {
+        for (const t of [0, 1, 2, 3, 4, 5, 6, 12, 15, 20, 30, 36, 58, 59, 80, 200]) {
             await tryBox(t);
             const s = await read();
             sizes.add(s.size);
             leak = leak || s.idleLeak;
         }
     }
-    check(sizes.size === 1, `one size for the card and every step across 30 states (${[...sizes].join(' | ')})`);
+    check(sizes.size === 1, `one size for the card and every step across 32 states (${[...sizes].join(' | ')})`);
     check(!leak, 'no verdict shows through a step not reached');
 
     console.log('5. trying changes nothing');
@@ -179,8 +179,16 @@ try {
     check(r.big === '200 px' && r.slider === '80' && r.field === '0', `a value past the slider's end works (${r.big}, slider ${r.slider})`);
     await tryBox(600);
     check((await read()).big === '200 px', 'out of range is ignored');
+    await trySlider(0);
+    r = await read();
+    check(r.big === 'off' && r.num === '0' && r.slider === '0', `the slider's left end is off (${r.big}, box ${r.num})`);
+    check(r.s1 === 'off,off,off' && r.s2 === '' && r.bands2 === 0 && r.kind === 'offFar' && /every camera counts/.test(r.result), `off: every camera counts, nothing dropped (${r.s1}; ${r.result.slice(0, 40)}…)`);
+    check(r.bandLen === null && /^20 px · counted/.test(r.errText[0]), `no bands, and no verdict against a threshold (${r.errText[0]})`);
+    check(r.use === null && r.field === '0', 'off offers no Use; the setting stays off');
+    await tryBox(40);
     await tryBox(0);
-    check((await read()).big === '200 px', 'and 0 too: off is the Turn off button');
+    r = await read();
+    check(r.big === 'off' && r.slider === '0', 'typing 0 is off too');
     await page.click('.tri-thr [data-demo-method="ba"]');
     r = await read();
     check(r.name1.includes('Refined') && r.picked === 'dlt', `the DLT/Refined switch redraws, the picked method stays (${r.picked})`);

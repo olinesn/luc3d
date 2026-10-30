@@ -5448,6 +5448,7 @@ kbd {
 
 .fig-ctl-name { flex: none; min-width: 52px; white-space: nowrap; }
 .fig-ctl-unit { flex: none; min-width: 38px; white-space: nowrap; }
+.fig-ctl-end { flex: none; margin-right: -2px; }
 
 .fig-ctl input[type="range"] {
   flex: 1;
@@ -5620,6 +5621,7 @@ kbd {
 .tri-thr-verdicts li.is-over > span:last-child { color: var(--warning-color); }
 .tri-thr-verdicts li.is-drop > span:last-child { color: var(--error-color); }
 .tri-thr-verdicts li.is-out > span:last-child { color: var(--text-muted); }
+.tri-thr-verdicts li.is-off > span:last-child { color: var(--text-secondary); }
 
 .tri-methods-col p.tri-thr-result {
   margin-top: 12px;

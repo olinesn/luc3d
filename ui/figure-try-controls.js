@@ -25,11 +25,12 @@ export function tryStrip(controlsHtml) {
  * A slider with a text box. `o`: `name` (the label), `aria` (what it sets),
  * `min`, `max`, `step` (the text box's range), `sliderMin`, `sliderMax` (the
  * slider's, a typed value past them leaves it at its end), `unit`, `extra` (HTML
- * after the unit).
+ * after the unit), `sliderStart` (a word marking the slider's left end).
  */
 export function tryControl(key, o) {
     var sMin = o.sliderMin != null ? o.sliderMin : o.min, sMax = o.sliderMax != null ? o.sliderMax : o.max;
     return '<div class="fig-ctl" data-try="' + key + '"><span class="fig-ctl-name">' + o.name + '</span>'
+        + (o.sliderStart ? '<span class="fig-ctl-end">' + o.sliderStart + '</span>' : '')
         + '<input type="range" min="' + sMin + '" max="' + sMax + '" step="' + o.step + '" aria-label="' + o.aria + ' to try (slider)">'
         + '<input type="number" class="fig-num" min="' + o.min + '" max="' + o.max + '" step="' + o.step + '" aria-label="' + o.aria + ' to try">'
         + '<span class="fig-ctl-unit">' + (o.unit || '') + '</span>' + (o.extra || '') + '</div>';
