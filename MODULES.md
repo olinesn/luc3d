@@ -2521,7 +2521,10 @@ no UI imports, so the module stays unit-testable in plain Node.
 `unsmoothSession`, `resolveSmoothingParams`, `hasSmoothed3d`,
 `removeSmoothing`, `restoreSmoothing`), `ui/smoothing-button.js`
 (`hasSmoothed3d`, `hasRemovedSmoothing`),
-`import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`).
+`import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`),
+`ui/smoothing-windows-figure.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, `buildSegments`, to draw the Settings figure with the real
+filter).
 
 **Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
 for bit against the all-frames pass on every frame of noisy fixtures with
@@ -5445,7 +5448,8 @@ the card opens at the stylesheet's size, so changing the default reaches
 everyone who never resized. Records from before the flag saved the opening size
 on every close: `opts.legacyDefaultSize` names that old default, and such a
 record opens at the new default, centred where the old card was. Settings passes
-`{w: 880, h: 620}` (its default before it widened to 1040px).
+`{w: 880, h: 620}` (its default before it widened; it now opens at 1320x800,
+wide enough for the Temporal Smoothing figure's two charts).
 
 **This module is the ONE owner of the card's rect.** `.settings-modal`
 deliberately has no `max-width`/`max-height`, and `apply()` sets both to `none`
@@ -9281,10 +9285,14 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 
 **Key exports.**
 - `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
-  `'keyboard'` | `'wizard'` | `'smoothing'` (default `'triangulation'`).
+  `'keyboard'` | `'wizard'` | `'smoothing'`. Without one (Help ▸ Settings and its
+  shortcut) it opens on the panel last shown (`localStorage.settingsLastPanel`,
+  browser-local, written by `selectPanel`), else the first, Tracking Wizard.
   Single-instance.
 
-**Behavior.** Four panels: **Default Triangulation** (the method is picked by
+**Behavior.** Four panels, listed in the nav in the order they are used (Tracking
+Wizard, Default Triangulation, Temporal Smoothing, then Keyboard Shortcuts):
+**Default Triangulation** (the method is picked by
 clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
 DLT or "Refined (Ref)" = bundle adjustment — no separate rows; Enter/Space on a
 focused card is handled in `onDocKeyDown`, which stops every keydown in the
@@ -9302,7 +9310,10 @@ tracking and greys the row), and **Tracking Thresholds** (one field per
 `kind: 'toggle'` entry, via `makeToggle`). Covered by
 `tests/e2e/settings-wizard-toggles.mjs`. And **Temporal Smoothing** (luc3d
 #134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
-median window, Gaussian window, max gap, minimum segment. Its own panel because
+median window, Gaussian window, max gap, minimum segment, under a figure from
+`ui/smoothing-windows-figure.js` that the two window fields redraw through
+`onEdit`, and whose sliders set the window, max gap and minimum segment fields
+back through `onParam`. Its own panel because
 it is not a tracking parameter — it runs after triangulation, on 3D the tracker
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
@@ -9601,14 +9612,32 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
 - `collapseTimeline()` closes the timeline only if it is open (never opens
   it), via `toggleTimeline()` so the height cache and toolbar button match a
   manual collapse. Returns whether it collapsed anything.
+- `fitTimelineToData()` sets the height to exactly `min(preferred, 30%)`, so it
+  also SHRINKS a timeline left taller by a bigger project or a drag. The load
+  paths call it right after `timeline.setData` (whose own `_fitContainerToData`
+  only grows or caps), in the same task, so only the final height is painted.
+  Callers: every project open — `setupTimeline`, `handleLoadSlpFile`,
+  `handleLoadProjectSlpLazy`, `handleLoadSessionFolderPerCamera`,
+  `handleLoadSessionFolderSingleSlp`, `handleLoadProject` (JSON) — and
+  `toggleTimeline`'s expand when no height is cached. A new project-open path
+  must call it too. Edits to the open project (Add SLP, Load 3D Points, a new
+  empty session, video changes) call `setData` alone, so a height the user
+  dragged stays; session switching restores or fits per session itself
+  (`ui/sessions-panes.js`).
+- `toggleTimeline()`'s expand does not call `resize()`: the Timeline's
+  ResizeObserver resizes the canvas before the first painted frame.
 
 **Imports from project modules.**
-- `./app-state.js` — `state` (for `state.timeline`); `timeline` (the live
-  binding, for the display mode).
+- `./app-state.js` — `timeline` (the live binding `setTimeline()` writes;
+  nothing sets `state.timeline`, and reading it made `fitTimelineToData()` a
+  silent no-op). Test: `tests/e2e/timeline-fit-on-load.mjs`. The display mode
+  reads and sets it too.
 
 **Imported by.** `pose/initialization.js` (`installTimelineShortcuts`, and
-`setTimelineDisplayMode` for the toggle's buttons), `pose/tracker.js`
-(`collapseTimeline` and the display mode, after Track All), `ui/ui-wiring.js`
+`setTimelineDisplayMode` for the toggle's buttons),
+`pose/tracker.js` (`collapseTimeline` and the display mode, after Track All),
+`import-export/save-load.js` (`fitTimelineToData`, JSON project open),
+`ui/ui-wiring.js`
 (re-exports the same surface so legacy `import { toggleTimeline, … } from
 './ui-wiring.js'` keeps working).
 
@@ -11315,6 +11344,57 @@ tooltip in `index.html`) say just that.
 **Key exports.** `buildTriangulationMethodsFigure()` → a `<figure>`.
 
 **Imports.** None. **Imported by** `ui/settings-modal.js`.
+
+### ui/smoothing-windows-figure.js
+
+**Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
+Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
+Both plot one made-up trace (one node's x over 40 frames: a slow movement,
+dashed, with one fast real move up and back on the right, plus jitter and one
+one-frame spike) and draw what the stage
+makes of its input, the window around one frame (shaded) and stems at the
+bottom of that window: for the Gaussian its weights, for the median the
+window's values sorted low to high, the middle one (the median, what the spike
+frame becomes) green and the spike red. The median's output is green in both
+cards (its line on the left, with the same green dot at every frame as the
+Gaussian's input dots on the right); the Gaussian's output is blue, with an
+open black circle at every frame. Raw samples
+are open grey rings drawn over the green dots, since a median keeps many
+samples exactly and a filled dot would hide under the green one. The Gaussian's
+window sits on the fast move, which survives the example windows and is
+flattened by long ones (over-smoothing).
+
+**The lines are the real filter, not drawn by hand.** `update(params)` runs
+`smoothSignalInto` (`pose/temporal-smoothing.js`) on the trace with the panel's
+working windows, so the cards follow what is typed. A window that is off (0)
+is drawn with an example (median 5, Gaussian 9) and labelled so. The Gaussian
+card's input is the median's output, except with the median off and the
+Gaussian on: then it is the raw trace and a note says the spike becomes a bump
+(why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
+
+**Sliders.** Each card has a Window slider (1–31 frames; under 3 the filter
+leaves the 3D as it is, drawn as a 1-frame window) that redraws the card
+and calls `onParam(id, value)` so the panel sets its working value and field
+(Apply then stores it), and a Frame slider with ▶ that slides the shaded window
+along the 40 frames (90 ms a frame; stops at the end, on a second click, or once
+the figure leaves the page). While a frame is picked, that stage's output is
+solid up to it and faint after it, with a ring on its value.
+
+**Card 3, gaps and segments** (full width, below the two): Max gap and Minimum
+segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
+6-frame absence with a 3-frame stretch between them; the node comes back 12 mm
+away after the 7-frame one). It runs both stages at the windows the other cards
+show over the segments `buildSegments` cuts, as the real pass does, and draws
+each absence (labelled hole or split), the output per segment (grey where too
+short to smooth) and the segments as bars. Its Max gap (0–15) and Min segment
+(1–15) sliders report through `onParam` like the Window sliders.
+
+**Key exports.** `buildSmoothingWindowsFigure({ onParam })` → `{ el, update(params) }`.
+
+**Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`.
+
+**Tests.** `tests/e2e/smoothing-windows-figure.mjs`.
 
 ### ui/smoothing-button.js
 
@@ -13904,6 +13984,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `../ui/loading-overlay.js` (`showLoading`/`hideLoading`, re-exported),
   `../ui/loading-progress-modal.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`,
+  `../ui/timeline-controller.js` (`fitTimelineToData`, after the JSON project
+  open's `timeline.setData`),
   `./slp-import.js`, `./visibility-metadata.js`
   (`writeVisibilityMetadata`/`readVisibilityMetadata` for the session-scoped
   settings in the legacy v2/v3 project JSON — same keys and omit-the-defaults
