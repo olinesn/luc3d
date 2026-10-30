@@ -248,16 +248,20 @@ function gaussianChart(window, input, out, inputHasSpikes, t, upto) {
 
 var GN = 60;                                     // frames in the gap card's trace
 // Frames with no 3D: a 2-frame hole, a 7-frame absence, then (after a 3-frame
-// stretch) a 6-frame one. The node comes back 12 mm away after the 7-frame one.
+// stretch) a 6-frame one. The node comes back 12 mm away after the 7-frame one, and
+// is moving fast as it comes back from the 6-frame one, so a window that only has
+// data from that side lands visibly ahead of it. The jitter's seed leaves the first
+// frame back close to the true movement, so what the sketch shows is that pull.
 var ABSENT = [[9, 10], [20, 26], [30, 35]];
 var GAP_DEFAULT = { maxGap: 5, minSegment: 5 };  // the settings' defaults (`ui/settings.js`)
 var GAP_SLIDER_MAX = 15;
 var GTRUTH = new Float64Array(GN), GRAW = new Float64Array(GN), PRESENT = new Uint8Array(GN);
 (function () {
-    var seed = 11;
+    var seed = 215;
     function rand() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
     for (var t = 0; t < GN; t++) {
-        GTRUTH[t] = 5 * Math.sin(2 * Math.PI * t / 34) + 12 / (1 + Math.exp(-(t - 23)));
+        GTRUTH[t] = 5 * Math.sin(2 * Math.PI * t / 34) + 12 / (1 + Math.exp(-(t - 23)))
+            + 22 / (1 + Math.exp(-(t - 38) / 1.6));
         var absent = ABSENT.some(function (a) { return t >= a[0] && t <= a[1]; });
         PRESENT[t] = absent ? 0 : 1;
         var noise = 6 * (rand() + rand() - 1);
@@ -485,8 +489,8 @@ export function buildSmoothingWindowsFigure(opts) {
         + 'over it. A longer one splits the trace into segments (bars), and no window reaches across a split, so the '
         + 'line never cuts straight through the time the node was missing; here it comes back 12 mm away. Raise Max '
         + 'gap past an absence and it becomes a hole: the frames next to it then average data from one side only, '
-        + 'which pulls them toward that side. Try Max gap 7 with a Gaussian window of 15 and look at the first frame '
-        + 'after the 6-frame absence. A segment shorter than Minimum segment length is left as it is (grey). Near a segment\'s ends the window shrinks '
+        + 'which pulls them toward that side. Try Max gap 7 with a Gaussian window of 15: the node is moving fast after '
+        + 'the 6-frame absence, and the first frame back lands well ahead of it. A segment shorter than Minimum segment length is left as it is (grey). Near a segment\'s ends the window shrinks '
         + 'evenly, so smoothing is weakest there.</p></div>';
 
     var PARAM = { median: 'smoothMedianWindow', gaussian: 'smoothGaussianWindow' };

@@ -59,9 +59,9 @@ const GAPS = {
         { title: 'Max gap 5, minimum segment 5 (the defaults)', maxGap: 5, minSegment: 5,
             text: 'The 2-frame absence stays a hole. The 7- and 6-frame ones split the trace into three segments, and no window crosses them. The 3-frame segment is shorter than the minimum, so it is left as it is.' },
         { title: 'Minimum segment 2', maxGap: 5, minSegment: 2,
-            text: 'The 3-frame segment is now filtered. Its two ends have no room for a window, so only its middle frame can change, and it barely moves.' },
+            text: 'The 3-frame segment is now filtered. Its two ends have no room for a window, so only its middle frame can change.' },
         { title: 'Max gap 7', maxGap: 7, minSegment: 5,
-            text: 'Every absence is now a hole, so the trace is one segment. The missing frames are still not filled in. Windows skip over them, so a frame beside an absence averages data from one side only.' },
+            text: 'Every absence is now a hole, so the trace is one segment. The missing frames are still not filled in. Windows skip over them, so the first frame after the 6-frame absence averages only itself and later frames, and lands ahead of the fast movement there.' },
     ],
 };
 

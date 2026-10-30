@@ -47,9 +47,16 @@ check(sizes(d55) === '20+3+24', `the defaults cut three segments (${sizes(d55)})
 check(same(d55.out.subarray(27, 30), d55.raw.subarray(27, 30)), 'the 3-frame segment is left as it is');
 check(sizes(d52) === '20+3+24', `minimum segment 2 keeps them (${sizes(d52)})`);
 check(d52.out[27] === d52.raw[27] && d52.out[29] === d52.raw[29], 'its ends have no room for a window');
-check(d52.out[28] !== d52.raw[28] && Math.abs(d52.out[28] - d52.raw[28]) < 1, `its middle frame changes, barely (${Math.abs(d52.out[28] - d52.raw[28]).toFixed(3)} mm)`);
+check(Math.abs(d52.out[28] - d52.raw[28]) > 1, `its middle frame changes (${Math.abs(d52.out[28] - d52.raw[28]).toFixed(1)} mm)`);
 check(sizes(d75) === '60', `max gap 7 makes one segment (${sizes(d75)})`);
 check(d75.out.every((v, t) => Number.isNaN(v) === Number.isNaN(d75.raw[t])), 'the missing frames are still not filled in');
+
+const FIRST_BACK = 36;
+const off = (s) => s.out[FIRST_BACK] - s.truth[FIRST_BACK];
+check(Math.abs(off(d55)) < 1.5, `at the defaults the first frame back stays on the true movement (${off(d55).toFixed(1)} mm)`);
+check(off(d75) > 4, `max gap 7 pulls it ahead of the true movement (${off(d75).toFixed(1)} mm)`);
+const d75g15 = gapSketch({ median: 3, gaussian: 15, maxGap: 7, minSegment: 5 });
+check(off(d75g15) > 6, `more so with the 15-frame Gaussian the Settings text suggests (${off(d75g15).toFixed(1)} mm)`);
 
 console.log(fails ? `\n${fails} FAILED` : '\nPASS');
 process.exit(fails ? 1 : 0);

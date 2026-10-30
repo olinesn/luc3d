@@ -11523,7 +11523,8 @@ Only a card's Use and Turn off buttons change a setting, through `onParam(id, va
 **Card 3, gaps and segments** (full width, below the two): Max gap and Minimum
 segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
 6-frame absence with a 3-frame stretch between them; the node comes back 12 mm
-away after the 7-frame one). It runs both stages at the windows the other cards
+away after the 7-frame one, and is moving fast after the 6-frame one, so raising
+Max gap past it visibly pulls the first frame back ahead of the true movement). It runs both stages at the windows the other cards
 show over the segments `buildSegments` cuts, as the real pass does, and draws
 each absence (labelled hole or split), the measurements' grey line (broken at
 every absence), the output per segment (grey where too
