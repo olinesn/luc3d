@@ -3663,6 +3663,24 @@ order, slot recycling, copies, pooling, freeing); end to end
 
 ---
 
+### pose/threshold-examples.js
+
+**Purpose.** The session's own nodes for the reprojection error threshold card.
+`scanThresholdExamples` solves up to `EXAMPLE_MAX_FRAMES` frames with the threshold
+off, a slice per task, and lists every node 3 or more cameras see, smallest worst
+camera error first; `firstOverThreshold` splits that list at a threshold.
+`solveExample` runs the rule on one node solve by solve, through
+`triangulateAndReproject` on a one-node view of the group with `includedCameras`, so
+it matches a real Triangulate. Read-only; a lazy frame's members are hydrated for the
+read and given back.
+
+**Key exports.** `EXAMPLE_MAX_FRAMES`, `EXAMPLE_MIN_CAMERAS`, `calibratedCameras`,
+`sampleExampleFrames`, `firstOverThreshold`, `scanThresholdExamples`, `solveExample`.
+
+**Imports.** `pose/triangulation-core.js`, `pose/lazy-residency.js`,
+`pose/placeholder-cameras.js`. **Imported by** `ui/threshold-examples-panel.js`.
+**Tests.** `tests/test-threshold-examples.mjs`.
+
 ### pose/view-align.js
 
 **Purpose.** The math behind View ▸ **Align Views to References…**:
@@ -5428,7 +5446,9 @@ Gives a modal card a drag handle, a resize grip (CSS `resize: both`) and a
   clamping on the way in would let one small window permanently shrink the
   remembered size.
 - `installModalGeometry(card, opts)` — restores, wires the header drag, watches
-  the CSS resize via `ResizeObserver`, re-clamps on window resize, and returns a
+  the CSS resize via `ResizeObserver`, re-clamps on window resize (with
+  `opts.fillHeight`, a card whose size the user has not chosen takes the viewport's
+  whole height and follows it; Settings uses this), and returns a
   `dispose()` that also flushes the final rect (a resize that ended inside the
   200 ms persist debounce would otherwise be lost when the modal closes).
 - `rememberedSizeIsChosen(geom, legacyDefaultSize)` — whether a record's size
@@ -9283,6 +9303,11 @@ commas. One scroller: the block grows to its full height.
 
 ### ui/settings-modal.js
 
+**The threshold card's examples.** It builds `buildThresholdExamples`
+(`ui/threshold-examples-panel.js`), hands it to the figure as `opts.examples`, starts it
+when the Default Triangulation panel is first shown, re-solves it when a Camera Views
+switch changes, and routes ← → to it while focus is inside it.
+
 **Apply keeps the window open.** Every write to `working` (a `Proxy`) repaints the
 footer by comparing it with what is stored: Apply is disabled with nothing pending
 and reads "Applied ✓" (`.is-applied`) once clicked, until the next edit; the other
@@ -9291,7 +9316,8 @@ figures what is now stored, which clears their "not saved" notes. Cancel, ×, Es
 the backdrop discard what has not been applied. Covered by
 `tests/e2e/settings-apply-stays-open.mjs`.
 
-**Resizable, draggable, and it remembers.** The card carries CSS `resize: both`
+**Resizable, draggable, and it remembers.** Until the user resizes it, the card
+fills the browser's height (`fillHeight`). The card carries CSS `resize: both`
 and is dragged by its header (minus the ×, via `noDragSelector`);
 `installModalGeometry` (`ui/modal-geometry.js`, id `settings`) restores the last
 size/position on open and records it on close. It is installed AFTER the
@@ -11331,6 +11357,30 @@ a function showing the setting.
 **Imports.** None. **Imported by** `ui/triangulation-methods-figure.js`,
 `ui/smoothing-windows-figure.js`.
 
+### ui/threshold-examples-panel.js
+
+**Purpose.** The threshold card's right half, "In this session": one tile per
+calibrated camera, all at one scale, each a crop of that camera's video around the
+node's prediction with the prediction, the reprojection after the rule has run, the
+reprojection error, the threshold as a dashed ring and, where a camera was dropped,
+the first solve's reprojection. The arrows (and the ← → keys, through the modal's
+`onDocKeyDown`) walk the nodes from the smallest worst-camera error to the largest;
+moving the slider jumps to the first node that value catches, so ‹ shows what it keeps
+and › what it drops. Off, or nothing over it, opens at the largest. Follows the
+demo's threshold and method, and never changes a setting or the session. The session
+is solved once per method, when the panel is first shown; only the example on screen
+decodes video (`view.decoder.getFrame`), a crop is copied at once, and only the newest
+request per camera runs.
+
+**Key exports.** `buildThresholdExamples({ session, isCameraIncluded })` →
+`{ el, start, update({ threshold, method }), step(by), invalidate, dispose }`,
+`exampleResultText`, `tileVerdict`, `cropSide`.
+
+**Imports.** `pose/threshold-examples.js`, `ui/app-state.js`, `ui/frame-readout.js`.
+**Imported by** `ui/settings-modal.js`. **Tests.**
+`tests/e2e/threshold-session-examples.mjs`; on a real recording,
+`tests/e2e/_real-threshold-examples.mjs` (no assertions).
+
 ### ui/triangulation-methods-figure.js
 
 **Purpose.** The Settings ▸ Default Triangulation choice: two cards that each
@@ -11418,7 +11468,8 @@ both together. The card also says the threshold is not used by Track All's
 matching (`pose/cross-view-tracker.js` solves plain DLT on every view).
 
 **Key exports.** `buildTriangulationMethodsFigure(opts)` → `{ el, update }`
-(`opts.onThreshold(px)`); `thresholdPasses` and `FIGURE_SCENE` (pure, Node-importable).
+(`opts.onThreshold(px)`, `opts.examples`: a `buildThresholdExamples` panel, shown
+beside the threshold card's text and told what is being tried); `thresholdPasses` and `FIGURE_SCENE` (pure, Node-importable).
 
 **Imports.** `./figure-try-controls.js`. **Imported by** `ui/settings-modal.js`,
 `tests/test-triangulation-threshold-figure.mjs`. e2e:

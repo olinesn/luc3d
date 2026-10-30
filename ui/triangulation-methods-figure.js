@@ -467,7 +467,9 @@ function resultText(kind, threshold, second) {
  *   slider and the DLT/Refined switch never call it.
  * @returns {{el: HTMLElement, update: function({method?: string, threshold?: number, saved?: number}): void}}
  *   `update` takes the picked method, the working threshold, and the threshold
- *   stored when Settings opened (for "not saved until Apply").
+ *   stored when Settings opened (for "not saved until Apply"). `opts.examples` is
+ *   an optional `buildThresholdExamples` panel, shown beside the card's text and
+ *   told what is being tried.
  */
 export function buildTriangulationMethodsFigure(opts) {
     opts = opts || {};
@@ -502,6 +504,7 @@ export function buildTriangulationMethodsFigure(opts) {
             + 'sees well.')
         + '</div>'
         + '<div class="tri-methods-col tri-thr">'
+        + '<div class="tri-thr-top"><div class="tri-thr-intro">'
         + '<div class="tri-methods-name">Reprojection error threshold (RPE), per node<span class="fig-big"></span></div>'
         + '<p>Optional, for either method, and off (0) by default. Refined only counts a bad camera less; this '
         + 'removes it. After the solve, each camera\'s reprojection error for the node ('
@@ -517,6 +520,7 @@ export function buildTriangulationMethodsFigure(opts) {
             + '<button type="button" data-demo-method="dlt">DLT</button>'
             + '<button type="button" data-demo-method="ba">Refined</button></div>')
         + settingRow('threshold')
+        + '</div></div>'
         + '<div class="tri-thr-steps">'
         + [1, 2, 3].map(function (n) {
             return '<div class="tri-thr-step" data-step="' + n + '"><div class="tri-thr-step-name"></div>'
@@ -538,6 +542,7 @@ export function buildTriangulationMethodsFigure(opts) {
         + '</div>';
 
     var thr = fig.querySelector('.tri-thr');
+    if (opts.examples) thr.querySelector('.tri-thr-top').appendChild(opts.examples.el);
     var demoButtons = thr.querySelectorAll('[data-demo-method]');
     // `method` / `setting` / `saved` are real; `tryMethod` / `tryThreshold` are the sketch's.
     var current = { method: 'dlt', setting: 0, saved: 0, tryMethod: 'dlt', tryThreshold: 0 };
@@ -598,6 +603,8 @@ export function buildTriangulationMethodsFigure(opts) {
             off: set > 0,
             reset: t !== set || current.tryMethod !== current.method,
         });
+
+        if (opts.examples) opts.examples.update({ threshold: t, method: current.tryMethod });
 
         var run = thresholdPasses(ALL, function (cams) { return table[cams.join(',')].errors; }, limit);
         var steps = thr.querySelectorAll('.tri-thr-step');

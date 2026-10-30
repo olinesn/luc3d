@@ -47,6 +47,7 @@ import { getActiveSession, state, timeline } from './app-state.js';
 import { drawAllOverlays } from './rendering.js';
 import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js';
 import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js';
+import { buildThresholdExamples } from './threshold-examples-panel.js';
 import { installModalGeometry } from './modal-geometry.js';
 import { refreshIdSwitchHighlight } from './id-switch-highlight.js';
 import { buildDetectionFilterPreview } from './detection-filter-preview.js';
@@ -376,7 +377,12 @@ export function showSettingsModal(initialPanel) {
     // redraws the sketch; its Use and Turn off buttons set the same working value
     // and the wizard's field.
     const reprojThresholdDef = thresholdDefs.find(function (d) { return d.id === 'reprojErrorThreshold'; });
+    const thrExamples = buildThresholdExamples({
+        session: activeSession,
+        isCameraIncluded: function (name) { return working.cameraWeights[name] !== 0; },
+    });
     const triFigure = buildTriangulationMethodsFigure({
+        examples: thrExamples,
         onThreshold: function (value) {
             working.thresholds.reprojErrorThreshold = value;
             const field = reprojThresholdDef && panelContainer.querySelector(
@@ -686,6 +692,7 @@ export function showSettingsModal(initialPanel) {
             // An on/off switch: on = the view takes part in tracking (1), off = excluded (0).
             const sw = makeToggle(working.cameraWeights[name] !== 0, 'Include view ' + name + ' in tracking', function (on) {
                 working.cameraWeights[name] = on ? 1 : 0;
+                thrExamples.invalidate();
                 reflectExcluded();
                 filterPreview.update();
             });
@@ -838,6 +845,7 @@ export function showSettingsModal(initialPanel) {
             panels[key].classList.toggle('active', key === name);
         });
         if (name === 'wizard') filterPreview.start();
+        if (name === 'triangulation') thrExamples.start();
         writeLastPanel(name);
     }
     NAV_ITEMS.forEach(function (item) {
@@ -855,6 +863,7 @@ export function showSettingsModal(initialPanel) {
     function teardown() {
         document.removeEventListener('keydown', onDocKeyDown, true);
         filterPreview.dispose();
+        thrExamples.dispose();
         if (disposeGeometry) { disposeGeometry(); disposeGeometry = null; }
         overlay.remove();
     }
@@ -902,6 +911,11 @@ export function showSettingsModal(initialPanel) {
             pickMethod(choice.dataset.method);
             return;
         }
+        if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && e.target && e.target.closest && e.target.closest('.thr-ex')) {
+            e.preventDefault();
+            thrExamples.step(e.key === 'ArrowLeft' ? -1 : 1);
+            return;
+        }
         if (e.key === 'Escape') {
             e.preventDefault();
             close();
@@ -931,6 +945,7 @@ export function showSettingsModal(initialPanel) {
         minW: 520,
         minH: 320,
         margin: 24,
+        fillHeight: true,
         // The opening size before it widened (to 1040x620, now 1320x800);
         // records holding it were saved without a resize, so they open at the
         // current default. Later records carry `sized`, so they follow it too.
