@@ -293,8 +293,18 @@ try {
         return b && [b.name, b.social, b.mutual, b.detector.conditions[0].feature];
     });
     check(eq(contact, ['contact', true, true, 'min node distance']), 'a template adds "contact" (mutual) with its detector');
+    const tipOff = await page.evaluate(() => (document.getElementById('bdReprojTip') || {}).textContent || '');
+    check(/reprojection error threshold of about 25 px/.test(tipOff) && /Tracking Wizard/.test(tipOff),
+        'with no reprojection error threshold set, the Body section tips to set one (about 25 px)');
     await page.keyboard.press('Escape');
     check(!(await page.$('.behavior-rules-modal')), 'Esc closes it');
+    await page.evaluate(async () => (await import('/ui/settings.js')).setTrackingThresholds({ reprojErrorThreshold: 25 }));
+    await page.click('[data-menu="behavior"]');
+    await page.click('#menuBehaviorRules');
+    await page.waitForSelector('.behavior-rules-modal #bdBody .bd-note', { timeout: 10000 });
+    check(!(await page.$('#bdReprojTip')), 'with one set (25 px), no tip');
+    await page.keyboard.press('Escape');
+    await page.evaluate(async () => (await import('/ui/settings.js')).setTrackingThresholds({ reprojErrorThreshold: 0 }));
     await page.evaluate(async () => {
         const eth = await import('/pose/behavior-ethogram.js');
         eth.removeBehavior('b3');

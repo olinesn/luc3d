@@ -15,9 +15,13 @@
 // detected again. Body and floor settings are saved only once changed
 // (`ethogram.features`). Esc or Close leave; one scroller (the dialog).
 //
+// While the Tracking Wizard's reprojection error threshold is off, the Body
+// section tips to set one (about 25 px) before Triangulate All: on real
+// recordings, without it, stray 3D points read as behavior.
+//
 // Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-detect.js,
 //             ui/info-tip.js, ui/loading-overlay.js, ui/plane-definition.js (the ⓘ icon),
-//             ui/origin-definition.js, pose/behavior-ethogram.js,
+//             ui/origin-definition.js, ui/settings.js, pose/behavior-ethogram.js,
 //             pose/behavior-features.js, pose/behavior-rules.js,
 //             import-export/save-load.js
 
@@ -30,6 +34,7 @@ import { setInfoTip } from './info-tip.js';
 import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { ICON_INFO } from './plane-definition.js';
 import { originState } from './origin-definition.js';
+import { getTrackingThreshold } from './settings.js';
 import {
     behaviors, behaviorById, behaviorByName, addBehavior, setBehaviorDetector, featureSettings, setFeatureSettings,
 } from '../pose/behavior-ethogram.js';
@@ -106,6 +111,10 @@ function bodyHtml(ctx) {
           (ctx.input.mode === '3d' ? ' (calibration units)' : '') + '. '
         : 'No identified animals yet: features are measured per identity (run Track All). ') +
         (ctx.input.mode === '3d' ? 'From the 3D.' : 'No 3D: from camera ' + esc(ctx.input.camera || '?') + '’s 2D, without heights.') + '</p>';
+    if (ctx.input.mode === '3d' && !(getTrackingThreshold('reprojErrorThreshold') > 0)) {
+        html += '<p class="bd-note" id="bdReprojTip">Tip: before Triangulate All, set a reprojection error threshold of about 25 px ' +
+            '(Tracks ▸ Tracking Wizard). Without one, stray 3D points read as behavior.</p>';
+    }
     return html;
 }
 

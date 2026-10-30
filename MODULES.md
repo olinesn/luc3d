@@ -12042,7 +12042,9 @@ save-load are safe. **Imported by** `ui/behavior-panel.js`,
 
 **Purpose.** Behavior ▸ Detection Settings… (and the toolbar Behavior menu's
 Settings…). Body: head and tail base (Auto = the guess, shown), excluded nodes,
-the body lengths; Floor: Automatic / the Set Origin frame / fitted / a plane
+the body lengths, and, in 3D while the Tracking Wizard's reprojection error
+threshold is off, a tip to set one (about 25 px) before Triangulate All
+(`#bdReprojTip`; stray 3D points read as behavior); Floor: Automatic / the Set Origin frame / fitted / a plane
 with a usable fit, and what is in effect; Detectors: one card per behavior —
 conditions (feature name with a searchable datalist, above / below, value,
 unit), shortest bout, join gaps; for the focused condition the feature's
@@ -12059,7 +12061,7 @@ scroller (the dialog).
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js`,
 `./info-tip.js`, `./loading-overlay.js`, `./plane-definition.js` (`ICON_INFO`),
-`./origin-definition.js`, `../pose/behavior-ethogram.js`,
+`./origin-definition.js`, `./settings.js` (`getTrackingThreshold`), `../pose/behavior-ethogram.js`,
 `../pose/behavior-features.js`, `../pose/behavior-rules.js`,
 `../import-export/save-load.js`. **Imported by** `ui/behavior-panel.js`,
 `ui/ui-wiring.js`. **Tests.** `tests/e2e/behavior-rules.mjs` §5.
