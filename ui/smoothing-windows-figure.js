@@ -18,8 +18,8 @@
 // The filtering is NOT hand-drawn: it runs LUC3D's own `smoothSignalInto` on
 // the trace, one segment, so the sketch is exactly what the filter does to it.
 // `update(params)` redraws from the panel's working values, so the cards follow
-// the windows as they are typed. A stage that is off (0) is drawn with an
-// example window instead, labelled as an example.
+// the windows as they are typed. A stage that is off (0) draws no window and no
+// output, only its input.
 //
 // **Trying a value never changes a setting** (`ui/figure-try-controls.js`). Each
 // card has two sliders with text boxes, which only redraw the sketch. Window (1 =
@@ -53,8 +53,8 @@ import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[11, 20]];                 // [frame, mm] one-frame spikes
-var FAST = { frame: 21, height: 30, sigma: 2 };     // fast real movement: a quick dart, mm and frames
-var EXAMPLE = { median: 5, gaussian: 9 };
+var FAST = { frame: 21, height: 30, sigma: 1.2 };     // fast real movement: a quick dart, mm and frames
+var EXAMPLE = { median: 5, gaussian: 9 };  // the gaps card's windows while a stage is off
 var MEDIAN_FOCUS = SPIKES[0][0];         // frame card 1's window starts on (the spike)
 var GAUSSIAN_FOCUS = FAST.frame;         // frame card 2's window starts on (the fast move)
 
@@ -213,33 +213,34 @@ function medianStems(t, window) {
 }
 
 function medianChart(window, out, t, upto) {
+    var on = window > 0;
     return chart('Median filter: a one-frame spike is replaced by the median of the frames around it.',
         '<defs><marker id="sf-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">'
         + '<path d="M0 0 L8 4 L0 8 Z" class="sf-arrowhead"/></marker></defs>'
-        + band(t, window) + medianStems(t, window)
+        + (on ? band(t, window) + medianStems(t, window) : '')
         + '<path d="' + path(RAW) + '" class="sf-raw-line"/>'
-        + outLine(out, 'sf-out sf-out-median', upto)
-        + dots(out, false, 'sf-med', upto)
+        + (on ? outLine(out, 'sf-out sf-out-median', upto) + dots(out, false, 'sf-med', upto) : '')
         + dots(RAW, true)
-        + current(out, t, upto)
-        + SPIKES.map(function (sp) { return spikeArrow(sp[0], out); }).join(''), t);
+        + (on ? current(out, t, upto) : '')
+        + SPIKES.map(function (sp) { return spikeArrow(sp[0], out); }).join(''), on ? t : 0);
 }
 
 function gaussianChart(window, input, out, inputHasSpikes, t, upto) {
-    var r = shownRadius(window, t), sigma = sigmaForWindow(window);
-    // The weights inside the window, as stems rising from the bottom of the band.
-    var stems = '', H = 26;
-    for (var d = -r; d <= r; d++) {
-        var g = Math.exp(-(d * d) / (2 * sigma * sigma));
-        stems += '<line x1="' + f1(px(t + d)) + '" y1="' + Y1 + '" x2="' + f1(px(t + d)) + '" y2="' + f1(Y1 - H * g) + '" class="sf-weight"/>';
+    var on = window > 0, stems = '';
+    if (on) {
+        var r = shownRadius(window, t), sigma = sigmaForWindow(window), H = 26;
+        // The weights inside the window, as stems rising from the bottom of the band.
+        for (var d = -r; d <= r; d++) {
+            var g = Math.exp(-(d * d) / (2 * sigma * sigma));
+            stems += '<line x1="' + f1(px(t + d)) + '" y1="' + Y1 + '" x2="' + f1(px(t + d)) + '" y2="' + f1(Y1 - H * g) + '" class="sf-weight"/>';
+        }
     }
     return chart('Gaussian filter: each frame becomes a weighted average of the frames around it, the frame itself counting most.',
-        band(t, window) + stems
+        (on ? band(t, window) + stems : '')
         + '<path d="' + path(input) + '" class="' + (inputHasSpikes ? 'sf-raw-line' : 'sf-in-median') + '"/>'
-        + outLine(out, 'sf-out', upto)
+        + (on ? outLine(out, 'sf-out', upto) : '')
         + dots(input, inputHasSpikes, inputHasSpikes ? 'sf-raw' : 'sf-med')
-        + outNodes(out, upto)
-        + current(out, t, upto), t);
+        + (on ? outNodes(out, upto) + current(out, t, upto) : ''), on ? t : 0);
 }
 
 // ---- Card 3: gaps and segments ----------------------------------------------
@@ -336,18 +337,22 @@ function legendItems(items) {
     }).join('');
 }
 
-/** The Gaussian's legend: its input is the raw trace when the median is off. */
-function gaussianLegend(rawInput) {
-    return legendItems([KEY_TRUE].concat(rawInput ? [KEY_RAW, KEY_SPIKE] : [KEY_MEDIAN],
-        [['out', 'after the Gaussian'], KEY_BAND, ['weight', 'each frame\'s weight']]));
+/** The median card's legend entries: only its input while it is off. */
+function medianKeys(on) {
+    return [KEY_TRUE, KEY_RAW, KEY_SPIKE].concat(on ? [KEY_MEDIAN, KEY_BAND,
+        ['rank', 'window sorted by value'], ['rank-mid', 'the middle value']] : []);
+}
+
+/** The Gaussian card's: its input is the raw trace when the median is off. */
+function gaussianKeys(on, rawInput) {
+    return [KEY_TRUE].concat(rawInput ? [KEY_RAW, KEY_SPIKE] : [KEY_MEDIAN],
+        on ? [['out', 'after the Gaussian'], KEY_BAND, ['weight', 'each frame\'s weight']] : []);
 }
 
 /** Shown only while a frame is picked, which is when the ring is drawn. */
 var PICKED_KEY = '<span class="sf-picked-key" hidden><i class="sf-key-current"></i>value at the picked frame</span>';
 
-var MEDIAN_LEGEND = '<div class="smooth-fig-legend">' + legendItems([KEY_TRUE, KEY_RAW, KEY_SPIKE, KEY_MEDIAN, KEY_BAND,
-    ['rank', 'window sorted by value'], ['rank-mid', 'the middle value']]) + PICKED_KEY + '</div>';
-var GAUSSIAN_LEGEND = '<div class="smooth-fig-legend"><span class="sf-legend-items"></span>' + PICKED_KEY + '</div>';
+var STAGE_LEGEND = '<div class="smooth-fig-legend"><span class="sf-legend-items"></span>' + PICKED_KEY + '</div>';
 var GAP_LEGEND = '<div class="smooth-fig-legend">' + legendItems([KEY_TRUE, KEY_RAW, ['out', 'after both stages'],
     ['left', 'too short, left as is'], ['hole', 'no 3D, stays a hole'], ['split', 'no 3D, splits the trace'],
     ['seg', 'segment'], ['seg-short', 'segment too short']]) + '</div>';
@@ -371,6 +376,30 @@ function posControl(name) {
 }
 var GAP_CONTROL = { name: 'Max gap', aria: 'Max gap to smooth across (frames)', min: 0, max: GAP_MAX, step: 1, sliderMax: GAP_SLIDER_MAX, unit: 'frames' };
 var MINSEG_CONTROL = { name: 'Min segment', aria: 'Minimum segment length (frames)', min: 1, max: GAP_MAX, step: 1, sliderMax: GAP_SLIDER_MAX, unit: 'frames' };
+
+/**
+ * The Median or Gaussian card's sketch without its controls, for the docs' step
+ * figures (`scripts/smoothing-wiki-figures.mjs`), and the numbers behind it.
+ * @param {'median'|'gaussian'} stage
+ * @param {number} window that stage's window, 0 = off
+ * @param {{medianWindow?: number, frame?: number}} [opts] the Gaussian's input
+ *   (0 = the raw trace), and the frame the window sits on (default the card's own)
+ * @returns {{svg: string, keys: Array, truth: Float64Array, raw: Float64Array,
+ *   medOut: Float64Array, out: Float64Array}} `keys` are the legend's entries
+ */
+export function stageSketch(stage, window, opts) {
+    opts = opts || {};
+    var median = stage === 'median', medWindow = median ? window : opts.medianWindow || 0;
+    var medOut = run(RAW, 'median', medWindow);
+    var input = median ? RAW : medWindow ? medOut : RAW;
+    var out = run(input, median ? 'median' : 'gaussian', window);
+    var t = opts.frame != null ? opts.frame : median ? MEDIAN_FOCUS : GAUSSIAN_FOCUS;
+    return {
+        svg: median ? medianChart(window, out, t, null) : gaussianChart(window, input, out, !medWindow, t, null),
+        keys: median ? medianKeys(window > 0) : gaussianKeys(window > 0, !medWindow),
+        truth: TRUTH, raw: RAW, medOut: medOut, out: out,
+    };
+}
 
 /**
  * Build the figure.
@@ -400,7 +429,7 @@ export function buildSmoothingWindowsFigure(opts) {
         + '<div class="smooth-fig-cols">'
         + '<div class="smooth-fig-col" data-stage="median">'
         + '<div class="smooth-fig-name">1 · Median window<span class="fig-big"></span><small></small></div><div class="smooth-fig-plot"><div class="smooth-fig-chart"></div>'
-        + MEDIAN_LEGEND + '</div>'
+        + STAGE_LEGEND + '</div>'
         + tryStrip(tryControl('size', sizeControl('median')) + tryControl('pos', posControl('median')))
         + settingRow('median')
         + '<p>Each frame takes the middle value of the frames in its window. The stems are the window sorted by '
@@ -409,7 +438,7 @@ export function buildSmoothingWindowsFigure(opts) {
         + 'watch the fast move flatten.</p></div>'
         + '<div class="smooth-fig-col" data-stage="gaussian">'
         + '<div class="smooth-fig-name">2 · Gaussian window<span class="fig-big"></span><small></small></div><div class="smooth-fig-plot"><div class="smooth-fig-chart"></div>'
-        + GAUSSIAN_LEGEND + '</div>'
+        + STAGE_LEGEND + '</div>'
         + tryStrip(tryControl('size', sizeControl('Gaussian')) + tryControl('pos', posControl('Gaussian')))
         + settingRow('gaussian')
         + '<p>Runs on the median\'s output (green: the line on the left). A weighted average over the window: '
@@ -517,12 +546,13 @@ export function buildSmoothingWindowsFigure(opts) {
         if (!data) return;
         var st = state[k], el = cards[k];
         posCtl[k].set(st.pos + 1);
-        el.querySelector('.sf-picked-key').hidden = st.upto == null;
+        var on = (k === 'median' ? data.medShown : data.gauShown) > 0;
+        el.querySelector('.sf-picked-key').hidden = !on || st.upto == null;
         if (k === 'median') {
             el.querySelector('.smooth-fig-chart').innerHTML = medianChart(data.medShown, data.medOut, st.pos, st.upto);
         } else {
             el.querySelector('.smooth-fig-chart').innerHTML =
-                gaussianChart(data.gauShown, data.gauIn, data.gauOut, data.rawIntoGaussian, st.pos, st.upto);
+                gaussianChart(data.gauShown, data.gauIn, data.gauOut, data.rawInput, st.pos, st.upto);
         }
     }
 
@@ -540,30 +570,33 @@ export function buildSmoothingWindowsFigure(opts) {
 
     function redraw() {
         // The filter treats a window under 3 as off (`normalizeWindow`), which
-        // leaves the 3D as it is: drawn as a 1-frame window. Only 0 gets the example.
+        // leaves the 3D as it is: drawn as a 1-frame window. 0 draws no window at all.
         var mSet = +tried.smoothMedianWindow || 0, gSet = +tried.smoothGaussianWindow || 0;
         var mw = normalizeWindow(mSet);
         var gw = normalizeWindow(gSet);
-        var medShown = mw || (mSet > 0 ? 1 : EXAMPLE.median);
+        var medShown = mw || (mSet > 0 ? 1 : 0);
         var medOut = run(RAW, 'median', medShown);
-        // The real pass feeds the Gaussian the median's output; with only the
-        // Gaussian on, it gets the raw 3D, spike and all.
+        // The real pass feeds the Gaussian the median's output; with the median
+        // off, it gets the raw 3D, spike and all.
+        var gauIn = mw ? medOut : RAW;
         var rawIntoGaussian = !mw && !!gw;
-        var gauIn = rawIntoGaussian ? RAW : medOut;
-        var gauShown = gw || (gSet > 0 ? 1 : EXAMPLE.gaussian);
+        var gauShown = gw || (gSet > 0 ? 1 : 0);
         var gauOut = run(gauIn, 'gaussian', gauShown);
         data = { medShown: medShown, medOut: medOut, gauShown: gauShown, gauIn: gauIn, gauOut: gauOut,
-            rawIntoGaussian: rawIntoGaussian };
+            rawIntoGaussian: rawIntoGaussian, rawInput: !mw };
 
         [['median', medShown, mSet], ['gaussian', gauShown, gSet]].forEach(function (c) {
             var k = c[0], shown = c[1], typed = c[2], off = !(typed > 0), el = cards[k], id = PARAM[k];
             el.querySelector('.fig-big').textContent = off ? 'off' : plural(shown);
-            el.querySelector('small').textContent = off ? 'drawn with an example of ' + plural(shown)
-                : shown === 1 ? 'no smoothing' : ' ';
+            el.querySelector('small').textContent = off ? 'set a Window below to try it' : shown === 1 ? 'no smoothing' : ' ';
+            el.querySelector('.sf-legend-items').innerHTML = legendItems(k === 'median' ? medianKeys(!off) : gaussianKeys(!off, !mw));
+            // With no window there is nothing for Frame to move.
+            if (off) stop(k);
+            el.querySelectorAll('[data-try="pos"] input, .sf-play').forEach(function (c) { c.disabled = off; });
             sizeCtl[k].set(typed, Math.min(shown, SIZE_MAX));
             var now = effectiveWindow(+setting[id] || 0);
-            // What Use would set: the tried window, or the example while both are off.
-            var tryNow = candidate[k] = typed > 0 ? effectiveWindow(typed) : now > 0 ? 0 : shown;
+            // What Use would set: the tried window, if one is being tried.
+            var tryNow = candidate[k] = typed > 0 ? effectiveWindow(typed) : 0;
             showSetting[k]({
                 label: 'Your setting',
                 now: now > 0 ? plural(now) : 'off',
@@ -575,12 +608,14 @@ export function buildSmoothingWindowsFigure(opts) {
             render(k);
         });
         cards.gaussian.querySelector('.smooth-fig-warn').hidden = !rawIntoGaussian;
-        cards.gaussian.querySelector('.sf-legend-items').innerHTML = gaussianLegend(rawIntoGaussian);
 
         var maxGap = gapValue('smoothMaxGap', tried), minSeg = gapValue('smoothMinSegment', tried);
         var nowGap = gapValue('smoothMaxGap', setting), nowSeg = gapValue('smoothMinSegment', setting);
         gapCard.querySelector('.fig-big').textContent = 'Max gap ' + maxGap + ' · minimum segment ' + minSeg;
-        gapCard.querySelector('small').textContent = 'with median ' + medShown + ', Gaussian ' + gauShown;
+        // This card is about the segments, so a stage that is off still smooths here.
+        var gapMed = medShown || EXAMPLE.median, gapGau = gauShown || EXAMPLE.gaussian;
+        gapCard.querySelector('small').textContent = 'with median ' + gapMed + (medShown ? '' : ' (example)')
+            + ', Gaussian ' + gapGau + (gauShown ? '' : ' (example)');
         gapCtl.set(maxGap, Math.min(maxGap, GAP_SLIDER_MAX));
         minSegCtl.set(minSeg, Math.min(minSeg, GAP_SLIDER_MAX));
         var differs = maxGap !== nowGap || minSeg !== nowSeg;
@@ -592,7 +627,7 @@ export function buildSmoothingWindowsFigure(opts) {
             off: false,
             reset: differs,
         });
-        gapCard.querySelector('.smooth-fig-chart').innerHTML = gapChart(medShown, gauShown, maxGap, minSeg);
+        gapCard.querySelector('.smooth-fig-chart').innerHTML = gapChart(gapMed, gapGau, maxGap, minSeg);
     }
 
     return { el: fig, update: update };

@@ -11449,11 +11449,12 @@ flattened by long ones (over-smoothing).
 
 **The lines are the real filter, not drawn by hand.** `update(params)` runs
 `smoothSignalInto` (`pose/temporal-smoothing.js`) on the trace with the panel's
-working windows, so the cards follow what is typed. A window that is off (0)
-is drawn with an example (median 5, Gaussian 9) and labelled so. The Gaussian
-card's input is the median's output, except with the median off and the
-Gaussian on: then it is the raw trace and a note says the spike becomes a bump
-(why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
+working windows, so the cards follow what is typed. A stage that is off (0) draws
+no window and no output, only its input, and its Frame control is disabled. The
+Gaussian card's input is the median's output, except with the median off: then it
+is the raw trace, and with the Gaussian on a note says the spike becomes a bump
+(why the median runs first). The gaps card still smooths with an example (median 5,
+Gaussian 9, labelled so) while a stage is off, because it is about the segments. Colours come from `.smooth-fig` in `styles.css`.
 
 **Trying a value never changes a setting** (`ui/figure-try-controls.js`). Each card
 has a Window slider with a text box (slider 1–31 frames, box up to 101; under 3 the
@@ -11477,12 +11478,17 @@ short to smooth) and the segments as bars. Its Max gap and Min segment sliders
 (0–15, 1–15; the text boxes go further) try values the same way; its Use button
 sets both through `onParam`.
 
-**Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`.
+**Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`;
+`stageSketch(stage, window, { medianWindow, frame })` → `{ svg, keys, truth, raw, medOut, out }`,
+one card's sketch with no controls, DOM-free, which `scripts/smoothing-wiki-figures.mjs`
+draws the docs' step figures from.
 
 **Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
-`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`.
+`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`,
+`scripts/smoothing-wiki-figures.mjs`.
 
-**Tests.** `tests/e2e/smoothing-windows-figure.mjs`.
+**Tests.** `tests/e2e/smoothing-windows-figure.mjs`; `tests/test-smoothing-figure-steps.mjs`
+(what the docs' step captions claim about the trace).
 
 ### ui/smoothing-button.js
 

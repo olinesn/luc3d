@@ -5,7 +5,7 @@
  *
  * Asserted, in the real Settings ▸ Temporal Smoothing:
  *  1. Three cards (median, Gaussian, gaps), each with a chart; with both windows off
- *     (the default) each says off, in large text, and that it is drawn with an example.
+ *     (the default) each says off, in large text, and draws no window and no output.
  *  2. Typing a median window in Filter Parameters relabels its card and widens its
  *     shaded window; the blue line drops the spike (its point at the spike frame
  *     sits well below the red dot).
@@ -78,7 +78,13 @@ try {
             medNote: med && med.querySelector('small').textContent,
             gauNote: gau && gau.querySelector('small').textContent,
             bigLarger: parseFloat(getComputedStyle(med.querySelector('.fig-big')).fontSize) > parseFloat(title.fontSize),
-            medBand: med && +med.querySelector('rect.sf-band').getAttribute('width'),
+            medBand: med && +(med.querySelector('rect.sf-band')?.getAttribute('width') || 0),
+            gauBand: gau && +(gau.querySelector('rect.sf-band')?.getAttribute('width') || 0),
+            medLine: !!med.querySelector('path.sf-out-median'),
+            gauLine: !!gau.querySelector('path.sf-out'),
+            framesOff: med.querySelector('[data-try="pos"] input[type="range"]').disabled && med.querySelector('.sf-play').disabled,
+            useOffered: !med.querySelector('.fig-use').disabled,
+            gauRawInput: !!gau.querySelector('path.sf-raw-line') && !gau.querySelector('path.sf-in-median') && !gau.querySelector('circle.sf-med'),
             gap,
             warn: gau && !gau.querySelector('.smooth-fig-warn').hidden,
         };
@@ -89,14 +95,19 @@ try {
     check(d.cards && d.charts === 3, 'three cards with a chart each (median, Gaussian, gaps)');
     check(d.medBig === 'off' && d.gauBig === 'off', `both say off (${d.medBig}, ${d.gauBig})`);
     check(d.bigLarger, 'the value is larger than the card title');
-    check(/example of 5 frames/.test(d.medNote) && /example of 9 frames/.test(d.gauNote), `drawn with examples (${d.medNote} | ${d.gauNote})`);
+    check(!d.medBand && !d.gauBand, 'off: no shaded window');
+    check(!d.medLine && !d.gauLine, 'off: no output line');
+    check(d.gauRawInput, 'both off: the Gaussian card draws the raw trace in grey, as its legend says');
+    check(d.framesOff, 'off: nothing for Frame to move, so it is disabled');
+    check(!d.useOffered, 'off: no value to Use until one is tried');
+    check(/try it/.test(d.medNote) && !/example/.test(d.medNote + d.gauNote), `says how to try one (${d.medNote})`);
     check(!d.warn, 'no spike note with both off');
 
     console.log('2. median window typed in Filter Parameters');
     await type('Median window (frames)', 9);
     const m = await read();
     check(m.medBig === '9 frames', `median card relabelled (${m.medBig})`);
-    check(m.medBand > d.medBand * 1.5, `shaded window widened (${d.medBand} → ${m.medBand})`);
+    check(m.medBand > 50 && m.medLine, `a shaded window and an output line appear (${m.medBand})`);
     check(m.gap > 20, `line drops the spike (${m.gap && m.gap.toFixed(1)} px below it)`);
 
     console.log('3. Gaussian without the median');
@@ -251,6 +262,7 @@ try {
         set(num('median'), 0);
         out.gauRaw = !!card('gaussian').querySelector('path.sf-raw-line') && !card('gaussian').querySelector('path.sf-in-median');
         out.gauRawKeys = keys('gaussian');
+        set(num('median'), 5);
         const pos = card('median').querySelector('[data-try="pos"] input[type="number"]');
         out.pickedBefore = keys('median').includes('current');
         set(pos, 20);

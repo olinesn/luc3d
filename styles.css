@@ -5873,6 +5873,7 @@ kbd {
 .smooth-fig .sf-key-left { width: 14px; height: 2px; border-radius: 1px; background: var(--text-muted); }
 
 /* Card 3 (gaps and segments) spans both columns, with a wider, shorter chart. */
+.smooth-fig [data-try="pos"]:has(input:disabled) { opacity: 0.45; }
 .smooth-fig-wide { margin-top: 10px; }
 .smooth-fig-wide svg { max-height: 300px; }
 .smooth-fig-wide .fig-ctl-name { min-width: 76px; }
