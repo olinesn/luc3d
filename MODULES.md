@@ -2824,11 +2824,13 @@ Pure (the worker loads it).
 
 **Purpose.** Predicted behavior bouts per session (a `WeakMap`), shared by
 every source (rules, classifiers, promoted states; discovery later):
-one RUN per behavior `{behaviorId, source: 'rule'|'model:<16-hex hash>'|'states:<layer>', cfg,
+one RUN per behavior `{behaviorId, source: 'rule'|'model:<16-hex hash>'|'states:<layer>'|'file', cfg,
 labels (a classifier run: the print of the labels its model learned from, null
 for an imported model), states (a states run: the promoted states, sorted), fps, mode, camera,
-bouts: [{animal, target, start, end, score}], scores: Map<'animal\u0001target',
-Float32Array> (in memory only)}`, a mutual pair in name order. STALE when the
+bouts: [{animal, target, start, end, score, ext?}], scores: Map<'animal\u0001target',
+Float32Array> (in memory only)}`, a mutual pair in name order. A `'file'` run is one another
+tool wrote into a `.slp` (`ext` keeps what the file said, written back unchanged); it never goes
+stale. Otherwise STALE when the
 settings changed — `runConfigPrint(behavior, session, {fps, mode, camera,
 floorKey, source})` = detector (a classifier run: its post-processing, its
 exclusive group with the peers' post-processing, `FEATURE_SPEC_VERSION`) +
@@ -2864,7 +2866,7 @@ DOM-free.
 `predictionStaleness(session, env)`, `isRunStale`, `predictionsStand`,
 `renamePredictedAnimal`, `reviewStatus`, `REVIEW_ORDERS`, `reviewQueue`,
 `acceptPredictions`, `rejectPredictions`, `exportPredictionRuns`,
-`importPredictionRuns`, `resetBehaviorPredictions`, `isRunSource`, `runModelHash`, `runStateLayer`,
+`importPredictionRuns`, `exportPredictionHeaders`, `exportPredictionEvents`, `resetBehaviorPredictions`, `isRunSource`, `runModelHash`, `runStateLayer`,
 `runThreshold`, `replaceRunBouts(session, id, bouts, cfg)` (a classifier's
 post-processing changed: bouts re-derived from the scores in memory).
 `predictionStaleness` returns `{input, settings, labels, model}`.
@@ -12021,7 +12023,8 @@ actually stops the corresponding rendering / data work.
 ### ui/behavior-coding.js
 
 **Purpose.** What Label Behaviors mode, the Behavior tab and the behavior
-timeline rows share: the coding state (focal animal, the behavior the
+timeline rows share: the animals (`sessionAnimals`: identity names; on one camera with no
+identities, track names), the coding state (focal animal, the behavior the
 timeline shows, the `[` `]` armed range, a social behavior waiting for its
 target — browser memory only), the coding actions, a repaint bus
 (requests coalesce into one animation frame), the frame navigator, and the
@@ -14197,10 +14200,40 @@ Blender (both files put the tracked corner at (0, 0, 300)).
 
 ---
 
+### import-export/behavior-events.js
+
+**Purpose.** Behavior labels as sleap-io events, the form sleap-app and Python
+sleap-io also read and write (SLP 2.6). `/event_types` is the ethogram (name,
+description; metadata `color`, `key`, `group`, `kind`, `directed`, `mutual`,
+`lucid_id`), `/events` each labelled and predicted bout (span inclusive, the
+session's FIRST camera as `video`, the animal as `subject` by identity else track,
+`source`, `score`, metadata `note`). A "not" label is its own type (`not <name>`,
+metadata `negates`). Reading is by name; an event on any camera of a session is
+that session's. An event the labels cannot hold (no subject; social with no target)
+is kept per session (`setKeptEventRows`) and written back unchanged. DOM-free.
+
+**Exports.** `buildBehaviorEvents(SIO, items)` → `{eventTypes, events}`,
+`fileEventsOf(labels)` → plain `{types, rows}` or null,
+`sessionVideoIdxs(rawSession)` → `Set<number>` or null,
+`eventsToBehaviorData(fileEvents, lucid, videoIdxs)` → `{ethogram, labelRows, runs, kept}`
+(ids are the file's), `setKeptEventRows(session, rows)`.
+
+**Imports.** `pose/behavior-ethogram.js`, `pose/behavior-labels.js`,
+`pose/behavior-predictions.js`. **Imported by** `import-export/behavior-metadata.js`,
+`import-export/file-io.js`, `import-export/slp-streaming-write.js`,
+`loading/session-loader.js`. **Tests.** `tests/test-behavior-events.mjs`, e2e
+`behavior-label-roundtrip`, `behavior-cross-app`.
+
 ### import-export/behavior-metadata.js
 
-**Purpose.** Behavior labels in the project file, under `metadata.lucid`, each
-key only when non-empty (an untouched project's bytes are unchanged):
+**Purpose.** Behavior labels in the project file. In a `.slp`, labels and predicted
+bouts are events (`import-export/behavior-events.js`), and `writeBehaviorSlpMetadata`
+writes under `metadata.lucid` only what no other tool reads: `ethogram`
+(`{v:2, behaviors:[{id, name, detector?, post?}], features?}`), `behaviorLabels`
+(`{v:2, fps}`), `behaviorPredictions` (`{v:2, runs:[each run without its bouts]}`) and
+`behaviorStates`. A project JSON, and `.slp` files saved before events, hold the
+full v1 form below, each key only when non-empty (an untouched project's bytes are
+unchanged); `readBehaviorMetadata` reads both:
 `ethogram` (project-scoped, the same payload in every session, read from the
 first one ingested — later sessions map onto it by name; carries each
 behavior's `detector`, its classifier's `post` and the project's feature
@@ -14217,7 +14250,8 @@ merges its ethogram by name and remaps its bouts' and predictions' ids. The four
 `metadata.lucid` writer module (with visibility, smoothing and plane). DOM-free.
 
 **Exports.** `BEHAVIOR_METADATA_KEYS`, `writeBehaviorMetadata(lucid, session)`,
-`readBehaviorMetadata(session, lucid)` → `{kept, dropped}` (also
+`writeBehaviorSlpMetadata(lucid, session)`,
+`readBehaviorMetadata(session, lucid, fileEvents?, videoIdxs?)` → `{kept, dropped}` (also
 `noteLabelsChanged`, so the cached label prints are redone),
 `resetBehaviorState()` (forget the ethogram, the trained classifiers with
 their row cache, and every session's states; before every load and on New Project).

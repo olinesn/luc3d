@@ -1147,7 +1147,8 @@ export async function handleLoadSlpFile(slpFile) {
         // Temporal Smoothing's last run (the groups' sources come with the 3D).
         readSmoothingMetadata(session, earlyVisibility);
         // The ethogram (first session read) and this session's behavior bouts.
-        readBehaviorMetadata(session, earlyVisibility);
+        readBehaviorMetadata(session, earlyVisibility, slpData.behaviorEvents,
+            sessVideoIndices.size > 0 ? sessVideoIndices : null);
         // Define Planes state — pool/planes/origin from the first session that
         // carries them, this session's per-view 2D onto this session.
         readPlaneMetadata(session, earlyVisibility);

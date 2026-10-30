@@ -105,6 +105,7 @@ import { readVisibilityMetadata } from '../import-export/visibility-metadata.js'
 import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js';
 import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
 import { readBehaviorMetadata, resetBehaviorState } from '../import-export/behavior-metadata.js';
+import { fileEventsOf, sessionVideoIdxs } from '../import-export/behavior-events.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2307,7 +2308,8 @@ export async function handleLoadSessionFolderSingleSlp() {
         readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         // Behavior labels. Into an open project the file's ethogram is merged
         // by behavior name and its bouts remapped onto the project's ids.
-        readBehaviorMetadata(session, sessLucid);
+        readBehaviorMetadata(session, sessLucid, slpData.behaviorEvents,
+            slpData.sessions && slpData.sessions.length > 1 ? sessionVideoIdxs(slpData.sessions[0]) : null);
         var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
         if (planeConflict) {
             console.warn('[single-slp] not reading the plane state in ' + slpFile.name +
@@ -2914,7 +2916,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // eager read in import-export/slp-import.js.
         readVisibilityMetadata(session, lucid);
         readSmoothingMetadata(session, lucid);   // Temporal Smoothing's last run
-        readBehaviorMetadata(session, lucid);    // ethogram + behavior bouts
+        // Ethogram + behavior bouts. Only this file's first session opens here.
+        readBehaviorMetadata(session, lucid, fileEventsOf(labels),
+            (labels.rawSessionsJson || []).length > 1 ? sessionVideoIdxs(labels.rawSessionsJson[0]) : null);
         // Define Planes state — the lazy-reopen mirror of the eager read in
         // `import-export/slp-import.js`.
         readPlaneMetadata(session, lucid);

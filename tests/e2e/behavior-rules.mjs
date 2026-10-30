@@ -330,7 +330,7 @@ try {
         const lucid = slp.sessions[0].metadata.lucid;
         meta.resetBehaviorState();
         const fresh = new pd.Session([], s.skeleton, [], 'reopened');
-        meta.readBehaviorMetadata(fresh, lucid);
+        meta.readBehaviorMetadata(fresh, lucid, slp.behaviorEvents);
         const after = P.predictedBouts(fresh).map(b => [b.behaviorId, b.animal, b.target, b.start, b.end, b.score]);
         const res = { before, after, detector: eth.behaviorById('b1') && eth.behaviorById('b1').detector, features: eth.featureSettings(),
                       stands: P.predictionsStand(fresh, (await import('/ui/behavior-detect.js')).detectionEnv()) };

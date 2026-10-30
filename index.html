@@ -1611,6 +1611,7 @@
             Camera as SioCamera, CameraGroup, RecordingSession,
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
             Identity as SioIdentity, Instance3D, PredictedInstance3D,
+            EventType, UserEvent, PredictedEvent,
             MediaBunnyVideoBackend
         } from './lib/sleap-io/index.browser.js';
         window.SleapIO = {
@@ -1621,6 +1622,7 @@
             Camera: SioCamera, CameraGroup, RecordingSession,
             InstanceGroup: SioInstanceGroup, FrameGroup: SioFrameGroup,
             Identity: SioIdentity, Instance3D, PredictedInstance3D,
+            EventType, UserEvent, PredictedEvent,
             MediaBunnyVideoBackend
         };
         window.dispatchEvent(new Event('sleapio-ready'));

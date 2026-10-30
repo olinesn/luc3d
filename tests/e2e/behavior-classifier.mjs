@@ -328,7 +328,7 @@ try {
         meta.resetBehaviorState();
         const fresh = new pd.Session([], s.skeleton, [], 'Darts');
         fresh.identities = s.identities; fresh.instanceGroups = s.instanceGroups;
-        meta.readBehaviorMetadata(fresh, lucid);
+        meta.readBehaviorMetadata(fresh, lucid, slp.behaviorEvents);
         const run = P.behaviorRunOf(fresh, 'b1');
         AS.state.sessions = [fresh]; AS.state.session = fresh;
         const env = det.detectionEnv();

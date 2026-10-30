@@ -2,11 +2,12 @@
  * behavior-label-roundtrip.mjs — behavior labels survive save -> reopen, in
  * the real app, through BOTH `.slp` writers.
  *
- * `import-export/behavior-metadata.js` puts the ethogram (project-scoped, in
- * every session) and each session's bouts under `metadata.lucid`. The Node
- * test `tests/test-behavior-metadata.mjs` pins the payload; this one pins the
- * seam: that both writers call it, and that the file reads back through the
- * real `parseSlpViaSleapIO` adapter the importer uses.
+ * A `.slp` carries bouts and predicted bouts as sleap-io events
+ * (`import-export/behavior-events.js`) and what only LUC3D reads under
+ * `metadata.lucid` (`import-export/behavior-metadata.js`). The Node tests
+ * `tests/test-behavior-events.mjs` and `tests/test-behavior-metadata.mjs` pin the
+ * payloads; this one pins the seam: that both writers call them, and that the file
+ * reads back through the real `parseSlpViaSleapIO` adapter the importer uses.
  *
  *  1. Eager writer (`buildSlpLabelsAllViews` + `saveSlpToBytes`): the ethogram
  *     and every bout — present, "not", social with a target, a note, an
@@ -54,6 +55,7 @@ try {
         const fileio = await import('/import-export/file-io.js');
         const saveLoad = await import('/import-export/save-load.js');
         const lazyMod = await import('/loading/sio-lazy-loader.js');
+        const events = await import('/import-export/behavior-events.js');
         const meta = await import('/import-export/behavior-metadata.js');
         const eth = await import('/pose/behavior-ethogram.js');
         const L = await import('/pose/behavior-labels.js');
@@ -133,12 +135,14 @@ try {
             for (const sd of (slpData.sessions || [])) {
                 const lucid = (sd.metadata && sd.metadata.lucid) || {};
                 const fresh = new Session([], skelOf(), [], 'reopened');
-                meta.readBehaviorMetadata(fresh, lucid);
+                meta.readBehaviorMetadata(fresh, lucid, slpData.behaviorEvents, events.sessionVideoIdxs(sd));
                 out.push({
                     sessionName: lucid.sessionName,
                     hasEthogramKey: Object.prototype.hasOwnProperty.call(lucid, 'ethogram'),
                     hasLabelsKey: Object.prototype.hasOwnProperty.call(lucid, 'behaviorLabels'),
                     fps: lucid.behaviorLabels ? lucid.behaviorLabels.fps : null,
+                    boutsInLucid: !!(lucid.behaviorLabels && lucid.behaviorLabels.bouts),
+                    predictedBoutsInLucid: !!(lucid.behaviorPredictions && lucid.behaviorPredictions.runs.some(r => r.bouts)),
                     rows: L.exportBoutRows(fresh),
                     predictions: predRows(fresh),
                     states: S.exportStateLayers(fresh),
@@ -146,7 +150,7 @@ try {
                     otherKeys: ['sessionName', 'identities', 'skeleton', 'tracks'].every(k => Object.prototype.hasOwnProperty.call(lucid, k)),
                 });
             }
-            return { sessions: out, ethogram: eth.serializeEthogram(), features: eth.featureSettings() };
+            return { sessions: out, ethogram: eth.serializeEthogram(), features: eth.featureSettings(), fileEvents: slpData.behaviorEvents };
         }
 
         const res = {};
@@ -213,7 +217,14 @@ try {
 
     console.log('\n-- 1. eager writer --');
     const e0 = rt.eager.sessions[0];
-    check(rt.eager.sessions.length === 1 && e0.hasEthogramKey && e0.hasLabelsKey, 'one session, with the ethogram and its bouts');
+    check(rt.eager.sessions.length === 1 && e0.hasEthogramKey && e0.hasLabelsKey, 'one session, with what only LUC3D reads');
+    const fe = rt.eager.fileEvents;
+    check(!e0.boutsInLucid && !e0.predictedBoutsInLucid, 'the bouts are not in metadata.lucid');
+    check(!!fe && fe.types.map(t => t.name).join() === 'rear,groom,chase,bite,not rear', `the file has the shared event catalog (${fe && fe.types.map(t => t.name).join()})`);
+    check(!!fe && fe.rows.length === rt.expectedA.length + rt.expectedPredA.length && fe.rows.every(r => r.video === 0),
+        'every bout is one event, on the session\'s first camera');
+    check(!!fe && fe.rows.some(r => r.type === 'not rear' && !r.predicted) && fe.rows.some(r => r.type === 'rear' && r.predicted && r.source === 'rule' && r.score === 0.9),
+        'a "not" label has its own type; a prediction its source and score');
     check(eq(rt.eager.ethogram, rt.expectedEthogram), 'the ethogram reads back exactly (ids, kinds, social, group, description)');
     check(eq(e0.rows, rt.expectedA), `every bout reads back exactly (${e0.rows.length} rows)`);
     check(rt.stillRunning && e0.rows.some(r => r[1] === 'mouseA' && r[3] === 52 && r[4] === 57),
@@ -233,7 +244,8 @@ try {
         check(false, 'saveAllSessionsStreaming threw: ' + rt.streamErr.slice(0, 400));
     } else {
         check(rt.streaming.sessions.length === 2, `both sessions in the file (got ${rt.streaming.sessions.length})`);
-        check(rt.streaming.sessions.every(s => s.hasEthogramKey), 'the ethogram is in every session');
+        check(rt.streaming.sessions.every(s => s.hasEthogramKey), 'the settings only LUC3D reads are in every session');
+        check(!!rt.streaming.fileEvents && rt.streaming.fileEvents.types.some(t => t.name === 'rear'), 'the file has the shared event catalog');
         check(eq(rt.streaming.sessions.map(s => s.rows), rt.expectedStream), 'each session reopens with its own bouts');
         check(eq(rt.streaming.sessions.map(s => s.predictions), rt.expectedStreamPred) && rt.expectedStreamPred[1].length === 1,
             'and its own predicted bouts (streaming)');
@@ -244,6 +256,7 @@ try {
     console.log('\n-- 3. untouched project --');
     const u = rt.untouched.sessions[0];
     check(!!u && !u.hasEthogramKey && !u.hasLabelsKey && !u.hasStatesKey, 'no ethogram, bouts or states: none of their keys is written');
+    check(rt.untouched.fileEvents === null, 'and no events in the file');
     check(!!u && u.otherKeys, 'and the file still carries the other metadata.lucid keys');
 
     check(errs.length === 0, `no page errors (${errs.join(' | ').slice(0, 300)})`);
