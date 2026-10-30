@@ -7,11 +7,13 @@
 // caller also handles Enter/Space.
 //
 // Every sketch is the SAME scene from above: three cameras, one node. Each
-// camera's 2D detection (orange) sits on its image plane, with the camera's line
+// camera's 2D prediction (white) sits on its image plane, with the camera's line
 // of sight through it (dashed, from the camera on, so it is clear whose it is:
-// grey if the camera is right, orange if stray), the 3D answer (blue), the line
-// from the camera to that answer, where the answer lands back in each camera
-// (blue ring) and the pixel error between the two (red). A cross marks the true
+// grey if the camera is right, orange if stray), the projection (the 3D answer:
+// white ring, translucent blue, so the cross shows through it), the line from the
+// camera to it, the reprojection, where it lands back in each camera (blue ring),
+// and the reprojection error between the two (red). A legend in each sketch's
+// bottom-left corner names them. The target, a green cross, marks the true
 // position. The left and bottom cameras are right; the right one is a stray. DLT
 // is pulled well away. Refined counts the stray less and lands close to the true
 // position, with the stray still counted; the threshold removes it altogether.
@@ -121,9 +123,21 @@ var DOTS = DETECTIONS.map(function (d) {
 }).join('');
 var VIEW_BOX = '5 25 290 172';
 
+// Names the sketch's marks, in its empty bottom-left corner.
+var SKETCH_LEGEND = '<g class="tm-legend">' + [
+    ['<circle cx="15" cy="0" r="3" class="tm-det"/>', 'prediction'],
+    ['<circle cx="15" cy="0" r="4" class="tm-point"/>', 'projection'],
+    [line([11, 0], [19, 0], 'tm-true') + line([15, -4], [15, 4], 'tm-true'), 'target'],
+    ['<circle cx="15" cy="0" r="3.2" class="tm-proj"/>', 'reprojection'],
+    [line([10, 0], [20, 0], 'tm-gap'), 'reprojection error'],
+].map(function (row, i) {
+    return '<g transform="translate(0 ' + (143 + 11 * i) + ')">' + row[0]
+        + '<text x="25" y="3" class="tm-note tm-legend-text">' + row[1] + '</text></g>';
+}).join('') + '</g>';
+
 /**
  * One sketch: the scene, the 3D answer `solve.point` and, for each camera in
- * `counted`, the line back to it, where the answer lands and the pixel error.
+ * `counted`, the line back to it, where the answer lands and the reprojection error.
  * `overlay` (optional) is drawn over the image planes, under the points.
  */
 function sketch(solve, counted, extra, strayLabel, overlay) {
@@ -136,7 +150,7 @@ function sketch(solve, counted, extra, strayLabel, overlay) {
         s += '<circle cx="' + fmt(d[0]) + '" cy="' + fmt(d[1]) + '" r="3" class="tm-det"/>';
         if (q) s += '<circle cx="' + fmt(q[0]) + '" cy="' + fmt(q[1]) + '" r="3.6" class="tm-proj"/>';
     });
-    s += extra + '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="5" class="tm-point"/>' + strayLabel;
+    s += extra + '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="5" class="tm-point"/>' + strayLabel + SKETCH_LEGEND;
     return '<svg viewBox="' + VIEW_BOX + '" role="img" aria-hidden="true">'
         + '<defs><marker id="tm-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">'
         + '<path d="M0 0 L8 4 L0 8 Z" class="tm-arrowhead"/></marker></defs>'
@@ -162,7 +176,7 @@ var DLT_ALL = FIGURE_SCENE.solves.dlt['0,1,2'];
 var BA_ALL = FIGURE_SCENE.solves.ba['0,1,2'];
 
 var PULLED_NOTE = line([132, 44], [168, 49], 'tm-leader') + note(['pulled toward', 'the stray line'], 128, 38);
-var CLOSE_NOTE = line([132, 46], [145, 75], 'tm-leader') + note(['close to the', 'true position'], 128, 38);
+var CLOSE_NOTE = line([132, 46], [145, 75], 'tm-leader') + note(['close to', 'the target'], 128, 38);
 var APART_NOTE = line([132, 48], [144, 77], 'tm-leader') + note(['from above they', 'cross; in 3D they', 'just miss'], 128, 33);
 
 var DLT_SKETCH = sketch(DLT_ALL, ALL, PULLED_NOTE, strayNote(2, ['stray']));
@@ -309,20 +323,20 @@ function resultText(kind, threshold) {
     var lead = 'With ' + threshold + ' px, ';
     if (kind === 'offFar' || kind === 'offClose') {
         return 'With the threshold off, every camera counts, whatever its error. The first solve stands, '
-            + (kind === 'offFar' ? 'far from the true position (the cross).'
-                : 'close to the true position (the cross), with the stray still counted.');
+            + (kind === 'offFar' ? 'far from the target (the cross).'
+                : 'close to the target (the cross), with the stray still counted.');
     }
     return kind === 'lost'
         ? lead + 'this node gets no 3D point in this frame: only two cameras are left and they still miss by more '
             + 'than that, and a node is never solved from fewer than two.'
         : kind === 'far'
             ? lead + 'every camera lands within the threshold, so nothing is dropped. The first solve stands, far '
-                + 'from the true position (the cross).'
+                + 'from the target (the cross).'
             : kind === 'close'
                 ? lead + 'every camera lands within the threshold, so nothing is dropped. The first solve stands, close '
-                    + 'to the true position (the cross), with the stray still counted.'
-                : lead + 'the right camera is left out for this node, and the 3D point comes from the two cameras that '
-                    + 'were right: the true position.';
+                    + 'to the target (the cross), with the stray still counted.'
+                : lead + 'the right camera is left out for this node, and the projection comes from the two cameras that '
+                    + 'were right: the target.';
 }
 
 /**
@@ -342,18 +356,18 @@ export function buildTriangulationMethodsFigure(opts) {
     fig.className = 'tri-methods';
     fig.innerHTML =
         '<p class="tri-methods-lead">Both methods triangulate each node of the skeleton on its own (the sketches '
-        + 'show one node, from above) and start the same way: each camera\'s 2D point is a line of sight, '
-        + 'and the 3D point is where those lines meet. Real detections never meet exactly. Here the right-hand '
-        + 'camera\'s 2D prediction is placed wrong: an outlier, marked stray. The cross is the true position.</p>'
+        + 'show one node, from above) and start the same way: each camera\'s 2D prediction is a line of sight, '
+        + 'and the projection, the 3D point, is where those lines meet. Real detections never meet exactly. Here the right-hand '
+        + 'camera\'s 2D prediction is placed wrong: an outlier, marked stray. The green cross is the target: the true position.</p>'
         + '<div class="tri-methods-cols" role="radiogroup" aria-label="Default triangulation method">'
         + card('dlt', 'Direct Linear Transformation (DLT)', 'one direct solve · fast', DLT_SKETCH,
             'Solves one set of linear equations (algebraic least squares) for the point that fits every '
-            + 'line at once, treating every camera alike. Fast, but an outlier pulls the answer, so every '
+            + 'line at once, treating every camera alike. Fast, but an outlier pulls the projection, so every '
             + 'camera ends up off.')
         + card('ba', 'Refined (Ref)', 'bundle adjustment · slower', REFINED_SKETCH,
             'Bundle adjustment: starts at the DLT point, projects it back into every camera and moves it to '
-            + 'shrink the pixel errors. A camera that disagrees a lot counts less, which helps when one '
-            + 'view\'s 2D prediction is clearly wrong: here the answer lands close to the true position, with the '
+            + 'shrink the reprojection errors. A camera that disagrees a lot counts less, which helps when one '
+            + 'view\'s 2D prediction is clearly wrong: here the projection lands close to the target, with the '
             + 'outlier still counted a little. With other camera layouts it can still be pulled far off. The '
             + 'reprojection error threshold below removes the outlier altogether. When the views roughly agree, it '
             + 'gives about the same point as DLT, '
@@ -365,9 +379,9 @@ export function buildTriangulationMethodsFigure(opts) {
         + '<div class="tri-methods-col tri-thr">'
         + '<div class="tri-methods-name">Reprojection error threshold<span class="fig-big"></span></div>'
         + '<p>Optional, for either method, and off (0) by default. Refined only counts a bad camera less; this '
-        + 'removes it. After the solve, each camera\'s pixel error for the node is compared with the threshold, '
-        + 'drawn as a band on the camera\'s image plane: the 3D answer must land within that many pixels either side '
-        + 'of the 2D detection. If it lands outside any band, the camera that misses by most is dropped for this '
+        + 'removes it. After the solve, each camera\'s reprojection error for the node is compared with the threshold, '
+        + 'drawn as a band on the camera\'s image plane: the reprojection must land within that many pixels either side '
+        + 'of the prediction. If it lands outside any band, the camera that misses by most is dropped for this '
         + 'node and the node is solved again from the rest; this repeats while more than two cameras are left. A '
         + 'node whose last two cameras still miss gets no 3D point in this frame.</p>'
         + tryStrip(tryControl('threshold', THRESHOLD_CONTROL)
@@ -391,14 +405,9 @@ export function buildTriangulationMethodsFigure(opts) {
         + '(gaps in the tracks).</p>'
         + '</div>'
         + '<div class="tri-methods-legend">'
-        + '<span><i class="tm-key-det"></i>2D detection in that camera</span>'
-        + '<span><i class="tm-key-point"></i>3D answer</span>'
-        + '<span><i class="tm-key-proj"></i>where the 3D answer lands in that camera</span>'
-        + '<span><i class="tm-key-gap"></i>pixel error</span>'
         + '<span><i class="tm-key-sight"></i><i class="tm-key-sight tm-key-sight-stray"></i>line of sight: grey if the camera is right, orange if stray</span>'
-        + '<span><i class="tm-key-back"></i>line from the camera to the 3D answer</span>'
-        + '<span><i class="tm-key-true"></i>true position</span>'
-        + '<span><i class="tm-key-band"></i>threshold: where the answer may land in that camera</span>'
+        + '<span><i class="tm-key-back"></i>line from the camera to the projection</span>'
+        + '<span><i class="tm-key-band"></i>threshold: where the reprojection may land in that camera</span>'
         + '</div>';
 
     var thr = fig.querySelector('.tri-thr');

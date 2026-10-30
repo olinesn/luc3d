@@ -23,8 +23,8 @@
  *     you click Apply"; Apply stores it. Turn off sets 0. Reset sketch goes back.
  *  7. The method cards still pick the method; the threshold card is not one of them.
  *  8. Each line of sight starts at its camera, the stray label sits by its line,
- *     the 3D marker lets the true-position cross show through, and the legend
- *     explains the lines.
+ *     the projection marker lets the target show through, each sketch's legend names
+ *     its marks, and the legend below explains the lines.
  *
  * Run: node tests/e2e/triangulation-threshold-figure.mjs   (PORT=… to move the server)
  */
@@ -139,10 +139,10 @@ try {
     await type(15);
     r = await read();
     check(r.name1.includes('Refined') && r.s1 === 'in,in,drop', `Refined's first solve: only the stray is over (${r.s1})`);
-    check(r.s2 === 'in,in,out' && r.kind === 'two' && /true position/.test(r.result), `dropping it reaches the true position (${r.result.slice(0, 60)}…)`);
+    check(r.s2 === 'in,in,out' && r.kind === 'two' && /the target\./.test(r.result), `dropping it reaches the true position (${r.result.slice(0, 60)}…)`);
     await type(60);
     r = await read();
-    check(r.kind === 'close' && r.s2 === '' && /close to the true position/.test(r.result), `60 px drops nothing and stays close (${r.s1})`);
+    check(r.kind === 'close' && r.s2 === '' && /close to the target/.test(r.result), `60 px drops nothing and stays close (${r.s1})`);
     await type(5);
     r = await read();
     check(r.lost && /no 3D point/.test(r.result), 'Refined at 5 px: the last two still miss (5.2 px), no 3D');
@@ -151,7 +151,7 @@ try {
     check(!r.lost && r.kind === 'two', 'DLT at 5 px keeps it (3.5 px)');
     await type(40);
     r = await read();
-    check(r.kind === 'far' && /far from the true position/.test(r.result), 'DLT at 40 px drops nothing and stays far off');
+    check(r.kind === 'far' && /far from the target/.test(r.result), 'DLT at 40 px drops nothing and stays far off');
     await type(0);
 
     console.log('4. one size whatever is tried');
@@ -257,7 +257,22 @@ try {
         };
     });
     check(marker.opacity < 0.6 && marker.overCross, `the 3D marker is translucent, over the cross, so the cross shows through (fill opacity ${marker.opacity})`);
-    check(/line of sight/.test(lines.legend) && /line from the camera to the 3D answer/.test(lines.legend), 'the legend explains the lines');
+    const legend = await page.evaluate(() => {
+        const sketches = Array.from(document.querySelectorAll('.tri-methods svg:not(.tm-idle)'));
+        const svg = sketches[0];
+        const box = svg.querySelector('.tm-legend').getBoundingClientRect(), view = svg.getBoundingClientRect();
+        return {
+            everySketch: sketches.length >= 3 && sketches.every(s => Array.from(s.querySelectorAll('.tm-legend text')).map(t => t.textContent).join() === 'prediction,projection,target,reprojection,reprojection error'),
+            white: getComputedStyle(svg.querySelector('circle.tm-det')).fill,
+            bottomLeft: box.left - view.left < view.width / 2 && box.bottom <= view.bottom + 1 && box.top - view.top > view.height / 2,
+            outer: document.querySelector('.tri-methods-legend').textContent,
+        };
+    });
+    check(legend.everySketch, 'every sketch has the legend, with the five labels');
+    check(legend.bottomLeft, 'it sits in the bottom-left corner');
+    check(legend.white === 'rgb(255, 255, 255)', `predictions are white (${legend.white})`);
+    check(!/prediction|reprojection error/.test(legend.outer), 'the legend below the figures no longer repeats them');
+    check(/line of sight/.test(lines.legend) && /line from the camera to the projection/.test(lines.legend), 'the legend explains the lines');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
