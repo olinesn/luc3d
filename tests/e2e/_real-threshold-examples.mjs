@@ -92,13 +92,14 @@ try {
         await shot('t' + t);
     }
     await page.fill('.tri-thr [data-try="threshold"] .fig-num', '25');
-    for (let i = 0; i < 40; i++) await page.click('.thr-ex-next');
-    await shot('t25-next40');
-    const t1 = Date.now();
     await page.click('.tri-thr [data-demo-method="ba"]');
-    await ready();
-    log(`Refined scan ${((Date.now() - t1) / 1000).toFixed(1)} s: ${await page.textContent('.thr-ex-pos')}`);
+    await page.waitForFunction(() => !/Counting/.test(document.querySelector('.thr-ex-summary').textContent), null, { timeout: 30 * 60000 });
     await shot('ba-t25');
+    await page.click('.tri-thr [data-demo-method="dlt"]');
+    for (let i = 0; i < 4; i++) {
+        await page.click('.thr-ex-prev');
+        await shot('prev' + (i + 1));
+    }
 } finally {
     if (browser) await browser.close();
     server.kill();

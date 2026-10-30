@@ -11,6 +11,10 @@
  *      whether the node keeps a 3D point. Only the worst camera goes per pass.
  *   4. It never writes to the session, and a nulled or missing node is not counted.
  *   5. Fewer than 3 calibrated cameras, or no groups: an empty list, no error.
+ *   7. `pickShownCameras`: the largest errors, no prediction last, session order, the
+ *      top one named.
+ *   8. `pickRepresentativeExamples`: a fixed set spread evenly on a log scale of
+ *      error, reaching the largest, none twice, the same every time.
  *   6. A lazy project's members are read from the store and given back, and it
  *      lists the same nodes with the same errors as the eager project.
  *
@@ -195,6 +199,44 @@ group('6. a lazy project');
     ok(s && s.passes[0].errors[last.worstCamera] === a.examples[a.examples.length - 1].worst, 'an example reads the store too');
     ok(stillLazy(), 'and gives them back');
     ok(s.skeletons.get(last.worstCamera).some(Boolean), 'keeping its own copy of the 2D');
+}
+
+group('7. which cameras get a tile');
+{
+    const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const errors = { a: 55, b: 203, c: 60, d: 14, e: 167, f: 60, g: 102, h: null };
+    const predictions = new Map(names.map(n => [n, n === 'h' ? null : [1, 2]]));
+    const base = { passes: [{ errors }], predictions };
+    let r = ex.pickShownCameras(base, names, 6);
+    ok(r.shown.join() === 'a,b,c,e,f,g', `the six largest, in session order (${r.shown})`);
+    ok(r.first === 'b', `the largest is enlarged first (${r.first})`);
+    ok(r.others.join() === 'd,h', `the rest are named (${r.others})`);
+    r = ex.pickShownCameras(base, ['a', 'h'], 6);
+    ok(r.shown.join() === 'a,h' && r.others.length === 0 && r.first === 'a', 'fewer cameras than slots: all of them, no prediction ranked last');
+    ok(ex.pickShownCameras(base, [], 6).first === null, 'no cameras: nothing to enlarge');
+}
+
+group('8. a representative set');
+{
+    // Like a real session: nearly all small errors, a few enormous.
+    const list = [];
+    for (let i = 0; i < 9000; i++) {
+        const worst = i < 8700 ? 1 + 9 * (i / 8700) : i < 8990 ? 10 + 90 * ((i - 8700) / 290) : 100 + 65 * (i - 8990);
+        list.push({ frame: i % 240, group: 0, node: i % 13, worst, worstCamera: 'a' });
+    }
+    const set = ex.pickRepresentativeExamples(list);
+    ok(set.length === ex.EXAMPLE_SET_SIZE, `the set's size (${set.length})`);
+    ok(set.every((e, i) => !i || e.worst >= set[i - 1].worst), 'smallest error first');
+    ok(new Set(set).size === set.length, 'none twice');
+    ok(set[set.length - 1].worst > 500, `it reaches the largest errors (${set[set.length - 1].worst})`);
+    ok(set[0].worst < 2, `and the smallest (${set[0].worst})`);
+    const inZone = set.filter(e => e.worst >= 10 && e.worst <= 100).length;
+    ok(inZone >= 3, `the recommended range has several, though it is 3% of the nodes (${inZone})`);
+    ok(new Set(set.map(e => e.node)).size >= 6, `body parts vary (${new Set(set.map(e => e.node)).size})`);
+    ok(JSON.stringify(ex.pickRepresentativeExamples(list)) === JSON.stringify(set), 'the same every time');
+    const few = list.slice(0, 5);
+    ok(ex.pickRepresentativeExamples(few).length === 5, 'fewer nodes than the set: all of them');
+    ok(ex.pickRepresentativeExamples([]).length === 0, 'none: an empty set');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

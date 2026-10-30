@@ -6,8 +6,9 @@
 // `scanThresholdExamples` solves a sample of the session's frames with the
 // threshold off and lists every node at least 3 cameras see, smallest worst
 // camera error first. That one number decides a threshold: a node whose worst
-// error is over it has a camera dropped, so the list splits in two at
-// `firstOverThreshold`, and the slider only has to move an index.
+// error is over it has a camera dropped, so `firstOverThreshold` counts them.
+// `pickRepresentativeExamples` takes a small set from that list, spread evenly on
+// a log scale of error, which stays fixed while a threshold is tried.
 //
 // `solveExample` then runs the threshold's rule on one node, solve by solve, so a
 // view can show what each pass did. It solves through `triangulateAndReproject`
@@ -25,6 +26,10 @@ import { isPlaceholderCamera } from './placeholder-cameras.js';
 
 /** Frames solved per scan, at most, spread evenly over the recording. */
 export const EXAMPLE_MAX_FRAMES = 240;
+/** Examples in a representative set, at most. */
+export const EXAMPLE_SET_SIZE = 12;
+/** Worst errors under this look alike, so a set does not spread itself below it. */
+const SET_MIN_ERROR_PX = 1;
 /** Fewer cameras than this can only keep a node or lose it, never drop a camera. */
 export const EXAMPLE_MIN_CAMERAS = 3;
 /** A scan hands the thread back after this long. */
@@ -61,6 +66,43 @@ export function firstOverThreshold(examples, threshold) {
         if (examples[m].worst > threshold) b = m; else a = m + 1;
     }
     return a;
+}
+
+/**
+ * A fixed set from a scan's list: `count` examples spread evenly on a log scale of
+ * worst error, from the smallest to the largest, so every part of the slider has
+ * nodes it acts on. An even spread by count would be nearly all small errors. Near each
+ * step it prefers a body part and a frame it has not used yet.
+ *
+ * @param {Object[]} examples  smallest worst error first
+ * @param {number} [count]
+ * @returns {Object[]} smallest worst error first, none twice
+ */
+export function pickRepresentativeExamples(examples, count) {
+    var n = count || EXAMPLE_SET_SIZE;
+    if (examples.length <= n) return examples.slice();
+    var lo = Math.log(Math.max(SET_MIN_ERROR_PX, examples[0].worst));
+    var hi = Math.log(Math.max(SET_MIN_ERROR_PX, examples[examples.length - 1].worst));
+    var used = new Set(), nodes = new Map(), frames = new Map();
+    var logOf = function (e) { return Math.log(Math.max(SET_MIN_ERROR_PX, e.worst)); };
+    var bump = function (m, k) { m.set(k, (m.get(k) || 0) + 1); };
+    var window = Math.max(0.1, (hi - lo) / (n - 1) / 3);
+    for (var i = n - 1; i >= 0; i--) {
+        var target = lo + (hi - lo) * i / (n - 1);
+        var best = -1, bestScore = Infinity;
+        for (var j = 0; j < examples.length; j++) {
+            if (used.has(j)) continue;
+            var off = Math.abs(logOf(examples[j]) - target);
+            // Out of the step's window, distance decides; inside it, what has been shown first.
+            var score = off > window ? 1000 + off
+                : (nodes.get(examples[j].node) || 0) * 2 + (frames.get(examples[j].frame) || 0) * 2 + off / window;
+            if (score < bestScore) { bestScore = score; best = j; }
+        }
+        used.add(best);
+        bump(nodes, examples[best].node);
+        bump(frames, examples[best].frame);
+    }
+    return Array.from(used).sort(function (a, b) { return a - b; }).map(function (j) { return examples[j]; });
 }
 
 function bracketFrame(session, frame, read) {
@@ -150,6 +192,35 @@ function oneNodeView(group, k) {
 }
 
 function isOver(error, threshold) { return threshold > 0 && error > threshold; }
+
+/**
+ * Which cameras an example shows when only `slots` fit: the largest errors of a solve
+ * with every camera, so the cameras a threshold acts on first are the ones in view. A
+ * camera with no error (no prediction, or not contributing) comes last. Pass the same
+ * solve whatever is being tried, so the choice holds still.
+ *
+ * @param {Object} baseline  `solveExample`'s result with the threshold off
+ * @param {string[]} names  every camera, in the session's order
+ * @param {number} slots
+ * @returns {{shown: string[], first: ?string, others: string[]}} `shown` and `others`
+ *   in the session's order, so a camera keeps its place from one example to the
+ *   next where it can; `first` is the one that ranks highest.
+ */
+export function pickShownCameras(baseline, names, slots) {
+    var errors = baseline.passes[0] ? baseline.passes[0].errors : {};
+    var rank = function (name) {
+        return baseline.predictions.get(name) && errors[name] != null ? errors[name] : -1;
+    };
+    var ranked = names.slice().sort(function (a, b) {
+        return rank(b) - rank(a) || names.indexOf(a) - names.indexOf(b);
+    });
+    var keep = ranked.slice(0, slots);
+    return {
+        shown: names.filter(function (n) { return keep.indexOf(n) >= 0; }),
+        first: keep.length ? keep[0] : null,
+        others: names.filter(function (n) { return keep.indexOf(n) < 0; }),
+    };
+}
 
 /**
  * Run the threshold's rule on one example: after each solve, while more than two

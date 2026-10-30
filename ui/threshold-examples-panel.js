@@ -1,22 +1,27 @@
 // ui/threshold-examples-panel.js — the reprojection error threshold card's right
 // half: what the value being tried does to this session's own nodes.
 //
-// One tile per calibrated camera, all at one scale so errors compare by eye: a
-// crop of that camera's video around the node's prediction, the prediction
+// Up to six small tiles and one large one, all at one scale so errors compare by
+// eye: a crop of a camera's video around the node's prediction, the prediction
 // (white dot), the reprojection after the rule has run (blue ring), the
 // reprojection error (red line), the threshold (dashed green ring) and, where a
-// camera was dropped, the first solve's reprojection (grey ring).
+// camera was dropped, the first solve's reprojection (grey ring). The tiles are the
+// cameras with the largest errors (`pickShownCameras`), and a line names the rest.
+// Clicking a tile enlarges it; the pick holds while that camera has a tile. Otherwise
+// the one with the largest error is enlarged.
 //
-// The arrows walk the session's nodes from the smallest worst-camera error to the
-// largest. Moving the slider jumps to the first node the value catches, so ‹ shows
-// what it keeps and › what it drops. With the threshold off, or nothing over it,
-// the list opens at the largest error. Everything here is read-only: the demo
-// never changes a setting or the session.
+// The arrows walk a fixed set of examples, spread from small errors to large
+// (`pickRepresentativeExamples`). The slider and the DLT / Refined switch never
+// change what is on screen: same node, same cameras, same crops. Only the marks and
+// the numbers move, so the effect of a value can be seen on one example. To hold
+// that, the set, the tiles and the crops all come from a DLT solve with the threshold
+// off (`baselineFor`), whatever is being tried. Everything here is read-only: the
+// demo never changes a setting or the session.
 //
-// The session is solved once per method, a slice per task, when the panel is
-// first shown (`start`), and only the tiles of the example on screen decode video.
-// A decoder's frame may be closed by the next decode, so each tile copies its crop
-// at once, and only the newest request per camera runs.
+// The session is solved once, a slice per task, when the panel is first shown
+// (`start`), and once more for Refined's count if it is tried. Only the example on
+// screen decodes video. A decoder's frame may be closed by the next decode, so each
+// crop is copied at once, and only the newest request per camera runs.
 //
 // Depends on: pose/threshold-examples.js, ui/app-state.js (state),
 // ui/frame-readout.js (formatFrameNumber).
@@ -24,18 +29,24 @@
 import {
     calibratedCameras,
     firstOverThreshold,
+    pickRepresentativeExamples,
     scanThresholdExamples,
     solveExample,
+    pickShownCameras,
     EXAMPLE_MIN_CAMERAS,
 } from '../pose/threshold-examples.js';
 import { state } from './app-state.js';
 import { formatFrameNumber } from './frame-readout.js';
 
-/** A tile's canvas side, in device pixels. */
-const TILE_PX = 240;
+/** Small tiles shown, at most. */
+export const SMALL_TILES = 6;
+/** Canvas sides, in device pixels. Marks keep their pixel size, so they read the same in both. */
+const TILE_PX = 240, LARGE_PX = 640;
 /** A crop's smallest side, in video pixels: a small error still shows its surroundings. */
 const MIN_CROP = 80;
 const DECODE_DELAY_MS = 90;
+/** A set opens on the first example this bad, so trying the recommended range shows a drop. */
+const START_ERROR_PX = 50;
 
 const PREDICTION = '#fff', REPROJECTION = '#7c93ff', FIRST_SOLVE = '#b5b5b5', ERROR = '#e74c3c', RING = '#2ecc71';
 
@@ -103,8 +114,8 @@ export function cropSide(solved, names) {
     return Math.max(MIN_CROP, Math.ceil(worst * 2.6));
 }
 
-function drawMarks(ctx, solved, name, box, threshold, edges) {
-    const scale = TILE_PX / box.side;
+function drawMarks(ctx, size, solved, name, box, threshold, edges) {
+    const scale = size / box.side;
     const X = function (p) { return (p[0] - box.x) * scale; };
     const Y = function (p) { return (p[1] - box.y) * scale; };
     const pts = solved.skeletons.get(name);
@@ -176,8 +187,21 @@ export function buildThresholdExamples(opts) {
     root.appendChild(where);
     const message = el('p', 'thr-ex-message');
     root.appendChild(message);
+    const body = el('div', 'thr-ex-body');
+    root.appendChild(body);
     const grid = el('div', 'thr-ex-grid');
-    root.appendChild(grid);
+    body.appendChild(grid);
+    const large = el('figure', 'thr-ex-large');
+    const largeCanvas = el('canvas');
+    largeCanvas.width = largeCanvas.height = LARGE_PX;
+    const largeCaption = el('figcaption', 'thr-ex-large-caption');
+    const largeName = el('span', 'thr-ex-cam');
+    const largeErr = el('span', 'thr-ex-err');
+    largeCaption.append(largeName, largeErr);
+    large.append(largeCanvas, largeCaption);
+    body.appendChild(large);
+    const others = el('p', 'thr-ex-others');
+    root.appendChild(others);
     const result = el('p', 'thr-ex-result');
     root.appendChild(result);
     const summary = el('p', 'thr-ex-summary');
@@ -190,23 +214,30 @@ export function buildThresholdExamples(opts) {
 
     const cameras = calibratedCameras(session);
     const names = cameras.map(function (c) { return c.name; });
-    const tiles = new Map();
-    names.forEach(function (name) {
-        const tile = el('div', 'thr-ex-tile');
-        tile.dataset.camera = name;
+    const tiles = names.slice(0, SMALL_TILES).map(function () {
+        const tile = el('button', 'thr-ex-tile');
+        tile.type = 'button';
         const canvas = el('canvas');
         canvas.width = canvas.height = TILE_PX;
-        tile.appendChild(canvas);
-        tile.appendChild(el('div', 'thr-ex-cam', name));
-        tile.appendChild(el('div', 'thr-ex-err'));
+        tile.append(canvas, el('span', 'thr-ex-cam'), el('span', 'thr-ex-err'));
         grid.appendChild(tile);
-        tiles.set(name, { tile: tile, canvas: canvas, crop: null, cropKey: null });
+        tile.addEventListener('click', function () {
+            if (!tile.dataset.camera) return;
+            picked = tile.dataset.camera;
+            if (view) { view.selected = picked; paintSelection(); }
+        });
+        return { tile: tile, canvas: canvas };
     });
 
     let started = false, disposed = false;
     let method = 'dlt', threshold = 0, index = -1;
     let scanToken = 0, showToken = 0, decodeTimer = 0;
     let scans = {};
+    let exampleSet = null;  // the fixed examples the arrows walk
+    const baselines = new Map();    // example -> what holds still for it
+    let picked = null;      // the camera the user enlarged
+    let view = null;        // what is on screen: { solved, boxes, verdicts, edges, shown, selected }
+    const crops = new Map();        // camera name -> { key, crop }
     const decodeChains = new Map();
 
     function included() {
@@ -217,15 +248,9 @@ export function buildThresholdExamples(opts) {
         message.textContent = text;
         message.hidden = !text;
         const showing = !text;
-        where.hidden = grid.hidden = result.hidden = summary.hidden = legend.hidden = !showing;
+        where.hidden = body.hidden = others.hidden = result.hidden = summary.hidden = legend.hidden = !showing;
         pos.textContent = '';
         prev.disabled = next.disabled = true;
-    }
-
-    function jumpToThreshold() {
-        const list = scans[method] ? scans[method].examples : [];
-        const at = threshold > 0 ? firstOverThreshold(list, threshold) : list.length;
-        index = at < list.length ? at : list.length - 1;
     }
 
     function nodeName(node) {
@@ -245,109 +270,185 @@ export function buildThresholdExamples(opts) {
         })[0];
     }
 
-    function drawTile(t, name, solved, box, edges) {
-        const ctx = t.canvas.getContext('2d');
+    function paint(canvas, size, name) {
+        const ctx = canvas.getContext('2d');
+        const entry = crops.get(name);
         ctx.fillStyle = '#111';
-        ctx.fillRect(0, 0, TILE_PX, TILE_PX);
-        if (t.crop) ctx.drawImage(t.crop, 0, 0);
-        drawMarks(ctx, solved, name, box, threshold, edges);
+        ctx.fillRect(0, 0, size, size);
+        if (entry && entry.crop) ctx.drawImage(entry.crop, 0, 0, size, size);
+        drawMarks(ctx, size, view.solved, name, view.boxes.get(name), threshold, view.edges);
+    }
+
+    function paintLarge() {
+        const name = view.selected, verdict = view.verdicts.get(name);
+        large.dataset.camera = name;
+        large.dataset.state = verdict.state;
+        largeName.textContent = name;
+        largeErr.textContent = verdict.text;
+        paint(largeCanvas, LARGE_PX, name);
+    }
+
+    function paintSelection() {
+        tiles.forEach(function (t) {
+            t.tile.setAttribute('aria-pressed', t.tile.dataset.camera === view.selected ? 'true' : 'false');
+        });
+        paintLarge();
+    }
+
+    function paintCamera(name) {
+        if (!view) return;
+        tiles.forEach(function (t) { if (t.tile.dataset.camera === name) paint(t.canvas, TILE_PX, name); });
+        if (view.selected === name) paintLarge();
+    }
+
+    // What holds still for an example while values are tried: from a DLT solve with the
+    // threshold off, every tile's camera and crop.
+    function baselineFor(example, use) {
+        let base = baselines.get(example);
+        if (base) return base;
+        const solved = solveExample(session, example, { method: 'dlt', threshold: 0, included: use });
+        if (!solved) return null;
+        const side = cropSide(solved, use);
+        const picks = pickShownCameras(solved, names, SMALL_TILES);
+        const boxes = new Map();
+        picks.shown.forEach(function (name) {
+            // Centred on its own prediction or, without one, its reprojection.
+            const centre = solved.predictions.get(name) || solved.passes[0].reprojections[name];
+            boxes.set(name, centre
+                ? { x: centre[0] - side / 2, y: centre[1] - side / 2, side: side, hasCentre: true }
+                : { x: 0, y: 0, side: side, hasCentre: false });
+        });
+        base = { picks: picks, boxes: boxes };
+        baselines.set(example, base);
+        return base;
+    }
+
+    function summaryText() {
+        const scan = scans[method];
+        if (!scan) return 'Counting for Refined…';
+        const list = scan.examples;
+        const about = ' Nodes from ' + count(scan.frames) + ' frames, seen by ' + EXAMPLE_MIN_CAMERAS + ' or more cameras.';
+        if (!(threshold > 0)) return 'A sample of the ' + count(list.length) + ' nodes solved here, from small errors to large.' + about;
+        const over = list.length - firstOverThreshold(list, threshold);
+        return 'At ' + thresholdText(threshold) + ', ' + count(over) + ' of ' + count(list.length) + ' nodes solved here '
+            + (over === 1 ? 'has' : 'have') + ' a camera dropped.' + about;
     }
 
     function show() {
         const token = ++showToken;
         clearTimeout(decodeTimer);
-        const scan = scans[method];
-        if (!session || !scan) return;
-        const list = scan.examples;
-        if (!list.length) {
+        if (!session || !exampleSet) return;
+        if (!exampleSet.length) {
             setMessage('No node here is predicted by ' + EXAMPLE_MIN_CAMERAS + ' or more cameras in one group. '
                 + 'Group the predictions across cameras (Track All) to see them here.');
             return;
         }
-        const example = list[index];
+        const example = exampleSet[index];
         const use = included();
+        const base = baselineFor(example, use);
         const solved = solveExample(session, example, { method: method, threshold: threshold, included: use });
-        if (!solved) return;
+        if (!base || !solved) return;
         setMessage('');
-        pos.textContent = count(index + 1) + ' of ' + count(list.length);
+        pos.textContent = 'Example ' + count(index + 1) + ' of ' + count(exampleSet.length);
         prev.disabled = index <= 0;
-        next.disabled = index >= list.length - 1;
+        next.disabled = index >= exampleSet.length - 1;
         where.textContent = 'Frame ' + formatFrameNumber(example.frame + 1) + ' · ' + animalName(solved.identityId) + ' · ' + nodeName(example.node);
         result.textContent = exampleResultText(solved, threshold);
-        const over = threshold > 0 ? list.length - firstOverThreshold(list, threshold) : 0;
-        summary.textContent = threshold > 0
-            ? count(over) + ' of these ' + count(list.length) + ' nodes have a camera dropped at ' + thresholdText(threshold) + '. '
-                + '‹ smaller errors, › larger. Nodes from ' + count(scan.frames) + ' frames, seen by ' + EXAMPLE_MIN_CAMERAS + ' or more cameras.'
-            : 'These ' + count(list.length) + ' nodes run from the smallest worst-camera error to the largest. Nodes from '
-                + count(scan.frames) + ' frames, seen by ' + EXAMPLE_MIN_CAMERAS + ' or more cameras.';
+        summary.textContent = summaryText();
 
-        // Every tile at one scale, centred on its own prediction (or, without one, its reprojection).
-        const side = cropSide(solved, use);
-        const edges = session.skeleton && session.skeleton.edges;
-        const toDecode = [];
-        names.forEach(function (name) {
-            const t = tiles.get(name);
-            const verdict = tileVerdict(solved, name, threshold, use);
-            t.tile.dataset.state = verdict.state;
-            t.tile.querySelector('.thr-ex-err').textContent = verdict.text;
-            const centre = solved.predictions.get(name) || solved.passes[solved.passes.length - 1].reprojections[name];
-            const box = centre ? { x: centre[0] - side / 2, y: centre[1] - side / 2, side: side } : { x: 0, y: 0, side: side };
-            const key = example.frame + '|' + box.x + '|' + box.y + '|' + side;
-            if (t.cropKey !== key) { t.crop = null; t.cropKey = key; if (centre) toDecode.push({ name: name, t: t, box: box, key: key }); }
-            drawTile(t, name, solved, box, edges);
-            t.redraw = function () { drawTile(t, name, solved, box, edges); };
+        const picks = base.picks, verdicts = new Map(), toDecode = [];
+        names.forEach(function (name) { verdicts.set(name, tileVerdict(solved, name, threshold, use)); });
+        picks.shown.forEach(function (name) {
+            const box = base.boxes.get(name);
+            const key = example.frame + '|' + box.x + '|' + box.y + '|' + box.side;
+            if (!crops.has(name) || crops.get(name).key !== key) {
+                crops.set(name, { key: key, crop: null });
+                if (box.hasCentre) toDecode.push({ name: name, box: box, key: key });
+            }
         });
+        view = {
+            solved: solved, boxes: base.boxes, verdicts: verdicts, shown: picks.shown,
+            edges: session.skeleton && session.skeleton.edges,
+            selected: picks.shown.indexOf(picked) >= 0 ? picked : picks.first,
+        };
+        tiles.forEach(function (t, i) {
+            const name = picks.shown[i];
+            t.tile.dataset.camera = name;
+            t.tile.dataset.state = verdicts.get(name).state;
+            t.tile.querySelector('.thr-ex-cam').textContent = name;
+            t.tile.querySelector('.thr-ex-err').textContent = verdicts.get(name).text;
+            paint(t.canvas, TILE_PX, name);
+        });
+        paintSelection();
+        const rest = picks.others.map(function (n) { return n + ' ' + verdicts.get(n).text; }).join(', ');
+        others.textContent = rest ? 'Not shown: ' + rest : '';
+        others.title = rest;
         if (toDecode.length) decodeTimer = setTimeout(function () { decodeTiles(token, example.frame, toDecode); }, DECODE_DELAY_MS);
     }
 
     function decodeTiles(token, frame, items) {
         items.forEach(function (it) {
-            const view = viewFor(it.name);
-            if (!view) return;
+            const decoderView = viewFor(it.name);
+            if (!decoderView) return;
             const chain = decodeChains.get(it.name) || Promise.resolve();
             decodeChains.set(it.name, chain.then(async function () {
                 if (token !== showToken || disposed) return;
                 let image = null;
-                try { image = await view.decoder.getFrame(frame); } catch (e) { image = null; }
+                try { image = await decoderView.decoder.getFrame(frame); } catch (e) { image = null; }
                 if (!image || token !== showToken || disposed) return;
-                const crop = new OffscreenCanvas(TILE_PX, TILE_PX);
+                const crop = new OffscreenCanvas(LARGE_PX, LARGE_PX);
                 try {
-                    crop.getContext('2d').drawImage(image, it.box.x, it.box.y, it.box.side, it.box.side, 0, 0, TILE_PX, TILE_PX);
+                    crop.getContext('2d').drawImage(image, it.box.x, it.box.y, it.box.side, it.box.side, 0, 0, LARGE_PX, LARGE_PX);
                 } catch (e) { return; /* a closed frame draws nothing */ }
-                if (it.t.cropKey !== it.key) return;
-                it.t.crop = crop;
-                it.t.redraw();
+                const entry = crops.get(it.name);
+                if (!entry || entry.key !== it.key) return;
+                entry.crop = crop;
+                paintCamera(it.name);
             }));
         });
     }
 
+    // The fixed set comes from DLT's scan alone; another method's only counts nodes.
     async function ensureScan() {
         if (disposed || !started || !session) return;
-        if (scans[method]) { jumpToThreshold(); show(); return; }
         if (cameras.length < EXAMPLE_MIN_CAMERAS) {
             setMessage('This needs a calibration with ' + EXAMPLE_MIN_CAMERAS + ' or more cameras.');
             return;
         }
-        const token = ++scanToken, scanMethod = method;
-        setMessage('Solving this session’s frames…');
-        const scan = await scanThresholdExamples(session, {
-            method: scanMethod,
-            included: included(),
-            isCancelled: function () { return disposed || token !== scanToken; },
-            onProgress: function (done, total) {
+        const token = ++scanToken;
+        const scanOne = function (m, onProgress) {
+            return scanThresholdExamples(session, {
+                method: m,
+                included: included(),
+                isCancelled: function () { return disposed || token !== scanToken; },
+                onProgress: onProgress,
+            });
+        };
+        if (!scans.dlt) {
+            setMessage('Solving this session’s frames…');
+            const scan = await scanOne('dlt', function (done, total) {
                 if (token === scanToken) setMessage('Solving this session’s frames… ' + count(done) + ' of ' + count(total));
-            },
-        });
-        if (!scan || token !== scanToken) return;
-        scans[scanMethod] = scan;
-        jumpToThreshold();
-        show();
+            });
+            if (!scan || token !== scanToken) return;
+            scans.dlt = scan;
+            exampleSet = pickRepresentativeExamples(scan.examples);
+            const at = exampleSet.findIndex(function (e) { return e.worst >= START_ERROR_PX; });
+            index = at >= 0 ? at : exampleSet.length - 1;
+            show();
+        }
+        if (!scans[method]) {
+            const scanMethod = method;
+            const scan = await scanOne(scanMethod);
+            if (!scan || token !== scanToken) return;
+            scans[scanMethod] = scan;
+            summary.textContent = summaryText();
+        }
     }
 
     function step(by) {
-        const list = scans[method] ? scans[method].examples : [];
-        const nextIndex = Math.max(0, Math.min(list.length - 1, index + by));
-        if (!list.length || nextIndex === index) return;
+        if (!exampleSet || !exampleSet.length) return;
+        const nextIndex = Math.max(0, Math.min(exampleSet.length - 1, index + by));
+        if (nextIndex === index) return;
         index = nextIndex;
         show();
     }
@@ -371,15 +472,17 @@ export function buildThresholdExamples(opts) {
             if (!methodChanged && !thresholdChanged) return;
             method = m; threshold = t;
             if (!started) return;
-            if (methodChanged) { ensureScan(); return; }
-            if (scans[method]) { jumpToThreshold(); show(); }
+            show();
+            if (methodChanged) ensureScan();
         },
         step: step,
         /** The working Camera Views changed: what was solved no longer stands. */
         invalidate: function () {
             scans = {};
+            exampleSet = null;
+            baselines.clear();
             scanToken++;
-            names.forEach(function (n) { const t = tiles.get(n); t.crop = null; t.cropKey = null; });
+            crops.clear();
             ensureScan();
         },
         dispose: function () {

@@ -3668,14 +3668,17 @@ order, slot recycling, copies, pooling, freeing); end to end
 **Purpose.** The session's own nodes for the reprojection error threshold card.
 `scanThresholdExamples` solves up to `EXAMPLE_MAX_FRAMES` frames with the threshold
 off, a slice per task, and lists every node 3 or more cameras see, smallest worst
-camera error first; `firstOverThreshold` splits that list at a threshold.
+camera error first; `firstOverThreshold` counts those over a threshold, and
+`pickRepresentativeExamples` takes a fixed set spread on a log scale of error.
 `solveExample` runs the rule on one node solve by solve, through
 `triangulateAndReproject` on a one-node view of the group with `includedCameras`, so
 it matches a real Triangulate. Read-only; a lazy frame's members are hydrated for the
 read and given back.
 
-**Key exports.** `EXAMPLE_MAX_FRAMES`, `EXAMPLE_MIN_CAMERAS`, `calibratedCameras`,
-`sampleExampleFrames`, `firstOverThreshold`, `scanThresholdExamples`, `solveExample`.
+**Key exports.** `EXAMPLE_MAX_FRAMES`, `EXAMPLE_MIN_CAMERAS`, `EXAMPLE_SET_SIZE`,
+`pickRepresentativeExamples`, `calibratedCameras`,
+`sampleExampleFrames`, `firstOverThreshold`, `scanThresholdExamples`, `solveExample`,
+`pickShownCameras`.
 
 **Imports.** `pose/triangulation-core.js`, `pose/lazy-residency.js`,
 `pose/placeholder-cameras.js`. **Imported by** `ui/threshold-examples-panel.js`.
@@ -11359,22 +11362,26 @@ a function showing the setting.
 
 ### ui/threshold-examples-panel.js
 
-**Purpose.** The threshold card's right half, "In this session": one tile per
-calibrated camera, all at one scale, each a crop of that camera's video around the
+**Purpose.** The threshold card's right half, "In this session": up to six small tiles
+and one large one, all at one scale, each a crop of a camera's video around the
 node's prediction with the prediction, the reprojection after the rule has run, the
 reprojection error, the threshold as a dashed ring and, where a camera was dropped,
-the first solve's reprojection. The arrows (and the ← → keys, through the modal's
-`onDocKeyDown`) walk the nodes from the smallest worst-camera error to the largest;
-moving the slider jumps to the first node that value catches, so ‹ shows what it keeps
-and › what it drops. Off, or nothing over it, opens at the largest. Follows the
-demo's threshold and method, and never changes a setting or the session. The session
-is solved once per method, when the panel is first shown; only the example on screen
-decodes video (`view.decoder.getFrame`), a crop is copied at once, and only the newest
-request per camera runs.
+the first solve's reprojection. The tiles are the cameras with the largest errors
+(`pickShownCameras`), and a line names the rest. Clicking a tile enlarges it; the pick
+holds while that camera has a tile, otherwise the largest error is enlarged. The arrows
+(and the ← → keys, through the modal's `onDocKeyDown`) walk a fixed set of 12 examples,
+spread from small errors to large (`pickRepresentativeExamples`), opening on the first
+at 50 px or more. The slider and the DLT / Refined switch never change the example, the
+tiles' cameras or the crops, which all come from a DLT solve with the threshold off
+(`baselineFor`): only the marks and numbers move. Never changes a setting or the
+session. The session is solved once when the panel is first shown, and once more for
+Refined's count if tried; only the example on screen decodes video
+(`view.decoder.getFrame`), a crop is copied at once, and only the newest request per
+camera runs.
 
 **Key exports.** `buildThresholdExamples({ session, isCameraIncluded })` →
 `{ el, start, update({ threshold, method }), step(by), invalidate, dispose }`,
-`exampleResultText`, `tileVerdict`, `cropSide`.
+`SMALL_TILES`, `exampleResultText`, `tileVerdict`, `cropSide`.
 
 **Imports.** `pose/threshold-examples.js`, `ui/app-state.js`, `ui/frame-readout.js`.
 **Imported by** `ui/settings-modal.js`. **Tests.**
