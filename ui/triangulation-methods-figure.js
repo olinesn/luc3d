@@ -12,8 +12,8 @@
 // grey if the camera is right, orange if stray), the projection (the 3D answer:
 // white ring, translucent blue, so the cross shows through it), the line from the
 // camera to it, the reprojection, where it lands back in each camera (blue ring),
-// and the reprojection error between the two (red). A legend in each sketch's
-// bottom-left corner names them. The target, a green cross, marks the true
+// and the reprojection error between the two (red). A legend at the bottom-left of
+// each card names them. The target, a green cross, marks the true
 // position. The left and bottom cameras are right; the right one is a stray. DLT
 // is pulled well away. Refined counts the stray less and lands close to the true
 // position, with the stray still counted; the threshold removes it altogether.
@@ -123,8 +123,10 @@ var DOTS = DETECTIONS.map(function (d) {
 }).join('');
 var VIEW_BOX = '5 25 290 172';
 
-// Names the sketch's marks, in its empty bottom-left corner.
-var SKETCH_LEGEND = '<g class="tm-legend">' + [
+// Names the sketch's marks. Its own small SVG, pinned to the left edge of the card
+// (`.tm-sketch`), so it stays clear of the scene, which is centred in a wide card.
+var SKETCH_LEGEND = '<svg viewBox="8 137 102 58" class="tm-legend" aria-hidden="true">' + [
+
     ['<circle cx="15" cy="0" r="3" class="tm-det"/>', 'prediction'],
     ['<circle cx="15" cy="0" r="4" class="tm-point"/>', 'projection'],
     [line([11, 0], [19, 0], 'tm-true') + line([15, -4], [15, 4], 'tm-true'), 'target'],
@@ -133,7 +135,7 @@ var SKETCH_LEGEND = '<g class="tm-legend">' + [
 ].map(function (row, i) {
     return '<g transform="translate(0 ' + (143 + 11 * i) + ')">' + row[0]
         + '<text x="25" y="3" class="tm-note tm-legend-text">' + row[1] + '</text></g>';
-}).join('') + '</g>';
+}).join('') + '</svg>';
 
 /**
  * One sketch: the scene, the 3D answer `solve.point` and, for each camera in
@@ -150,11 +152,11 @@ function sketch(solve, counted, extra, strayLabel, overlay) {
         s += '<circle cx="' + fmt(d[0]) + '" cy="' + fmt(d[1]) + '" r="3" class="tm-det"/>';
         if (q) s += '<circle cx="' + fmt(q[0]) + '" cy="' + fmt(q[1]) + '" r="3.6" class="tm-proj"/>';
     });
-    s += extra + '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="5" class="tm-point"/>' + strayLabel + SKETCH_LEGEND;
-    return '<svg viewBox="' + VIEW_BOX + '" role="img" aria-hidden="true">'
+    s += extra + '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="5" class="tm-point"/>' + strayLabel;
+    return '<div class="tm-sketch"><svg viewBox="' + VIEW_BOX + '" role="img" aria-hidden="true">'
         + '<defs><marker id="tm-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">'
         + '<path d="M0 0 L8 4 L0 8 Z" class="tm-arrowhead"/></marker></defs>'
-        + s + '</svg>';
+        + s + '</svg>' + SKETCH_LEGEND + '</div>';
 }
 
 function note(lines, x, y) {
@@ -278,7 +280,7 @@ function stepSketch(solve, cameras, states, threshold, stepNote) {
 }
 
 // A step's place while the rule does not reach it: the bare scene, faded.
-var IDLE_SKETCH = '<svg viewBox="' + VIEW_BOX + '" class="tm-idle" aria-hidden="true">' + RAYS + CAMERA_MARKS + DOTS + '</svg>';
+var IDLE_SKETCH = '<div class="tm-sketch"><svg viewBox="' + VIEW_BOX + '" class="tm-idle" aria-hidden="true">' + RAYS + CAMERA_MARKS + DOTS + '</svg></div>';
 
 /**
  * Text that keeps the size of its longest wording, so the card does not grow or

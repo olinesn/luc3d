@@ -5314,6 +5314,23 @@ kbd {
   outline-offset: 2px;
 }
 
+/* A sketch and its legend: the legend sits at the card's left edge, clear of the
+   scene, which is centred in a wide card. */
+.tm-sketch {
+  position: relative;
+  display: flow-root;
+}
+
+.tri-methods-col svg.tm-legend {
+  position: absolute;
+  left: 0;
+  bottom: 8px;
+  width: 120px;
+  max-height: none;
+  margin: 0;
+  pointer-events: none;
+}
+
 /* Selected = the checkbox and a blue outline; the card keeps its background. */
 .tri-method-choice.checked {
   border-color: var(--accent);

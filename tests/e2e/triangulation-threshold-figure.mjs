@@ -97,7 +97,7 @@ try {
             lost: res.classList.contains('tri-thr-lost'),
             bandLen: bottomBand ? Math.abs(+bottomBand.getAttribute('x2') - +bottomBand.getAttribute('x1')) : null,
             bands2: step(2).querySelectorAll('line.tm-band').length,
-            sketches: card.querySelectorAll('.tri-thr-sketch svg').length,
+            sketches: card.querySelectorAll('.tri-thr-sketch svg:not(.tm-legend)').length,
             cameras: step(1).querySelectorAll('.tm-plane').length,
             errText: rows(1).map(li => shown(li)),
             idleLeak: Array.from(card.querySelectorAll('.tri-thr-step.is-idle .tri-thr-verdicts .tri-thr-stack > span')).some(s => getComputedStyle(s).visibility === 'visible'),
@@ -105,7 +105,7 @@ try {
             inRadio: !!card.closest('[role="radiogroup"]') || card.classList.contains('tri-method-choice'),
             field: document.querySelector(f).value,
             picked: Array.from(document.querySelectorAll('.tri-method-choice')).filter(c => c.getAttribute('aria-checked') === 'true').map(c => c.dataset.method).join(),
-            methodCardSketches: Array.from(document.querySelectorAll('.tri-method-choice svg')).map(s => s.querySelectorAll('.tm-plane').length).join(),
+            methodCardSketches: Array.from(document.querySelectorAll('.tri-method-choice svg:not(.tm-legend)')).map(s => s.querySelectorAll('.tm-plane').length).join(),
         };
     }, FIELD);
 
@@ -258,18 +258,23 @@ try {
     });
     check(marker.opacity < 0.6 && marker.overCross, `the 3D marker is translucent, over the cross, so the cross shows through (fill opacity ${marker.opacity})`);
     const legend = await page.evaluate(() => {
-        const sketches = Array.from(document.querySelectorAll('.tri-methods svg:not(.tm-idle)'));
-        const svg = sketches[0];
-        const box = svg.querySelector('.tm-legend').getBoundingClientRect(), view = svg.getBoundingClientRect();
+        const sketches = Array.from(document.querySelectorAll('.tri-methods .tm-sketch')).filter(s => !s.querySelector('.tm-idle'));
+        const wrap = sketches[0], svg = wrap.querySelector('svg');
+        const box = wrap.querySelector('.tm-legend').getBoundingClientRect(), view = svg.getBoundingClientRect();
+        const camera = svg.querySelector('g[transform]').getBoundingClientRect();
         return {
             everySketch: sketches.length >= 3 && sketches.every(s => Array.from(s.querySelectorAll('.tm-legend text')).map(t => t.textContent).join() === 'prediction,projection,target,reprojection,reprojection error'),
             white: getComputedStyle(svg.querySelector('circle.tm-det')).fill,
-            bottomLeft: box.left - view.left < view.width / 2 && box.bottom <= view.bottom + 1 && box.top - view.top > view.height / 2,
+            bottomLeft: Math.abs(box.left - wrap.getBoundingClientRect().left) < 1 && box.bottom <= view.bottom + 1 && box.top - view.top > view.height / 2,
+            clearOfScene: box.right < camera.left || box.top > camera.bottom,
+            notClipped: (() => { const leg = wrap.querySelector('.tm-legend'), vb = leg.viewBox.baseVal; return Array.from(leg.querySelectorAll('text')).every(t => { const b = t.getBBox(); return b.x + b.width <= vb.x + vb.width; }); })(),
             outer: document.querySelector('.tri-methods-legend').textContent,
         };
     });
     check(legend.everySketch, 'every sketch has the legend, with the five labels');
-    check(legend.bottomLeft, 'it sits in the bottom-left corner');
+    check(legend.bottomLeft, 'it sits at the bottom-left of the card');
+    check(legend.clearOfScene, 'it does not overlap the left camera');
+    check(legend.notClipped, 'no label is clipped');
     check(legend.white === 'rgb(255, 255, 255)', `predictions are white (${legend.white})`);
     check(!/prediction|reprojection error/.test(legend.outer), 'the legend below the figures no longer repeats them');
     check(/line of sight/.test(lines.legend) && /line from the camera to the projection/.test(lines.legend), 'the legend explains the lines');

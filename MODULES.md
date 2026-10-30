@@ -11339,8 +11339,8 @@ so they wrap; the sketches are inline SVG coloured by theme variables
 
 Every sketch is the same scene from above: three cameras, one node, a green cross at
 the true position (the target), and each camera's line of sight dashed from the camera
-on (grey if the camera is right, orange if stray). A legend in each sketch's bottom-left
-corner (`SKETCH_LEGEND`) names its prediction, projection, target, reprojection and
+on (grey if the camera is right, orange if stray). A legend at the bottom-left of each card
+(`SKETCH_LEGEND`, pinned by `.tm-sketch`, clear of the centred scene) names its prediction, projection, target, reprojection and
 reprojection error; the legend below the figures covers the rest. The left and bottom cameras are right and the
 right one is a stray. DLT is pulled well away; Refined counts the stray less and
 lands close to the true position, with the stray still counted; the threshold removes
