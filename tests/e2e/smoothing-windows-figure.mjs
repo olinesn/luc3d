@@ -21,6 +21,10 @@
  *     three segments, the middle 3-frame one left as is; trying Max gap 7 merges
  *     them into one; Minimum segment 2 smooths the short one; neither changes a
  *     field until Use, which sets both.
+ *  6. Layers and legends: the true movement is the first thing drawn and solid
+ *     white; a grey line joins the measurements (broken at the gaps card's
+ *     absences); the Gaussian card's input is a line too, green or (median off)
+ *     grey; each card has its own legend, naming what it draws.
  *
  * Run: node tests/e2e/smoothing-windows-figure.mjs
  */
@@ -212,6 +216,44 @@ try {
     check(gp.minSeg2.all === 3 && gp.minSeg2.short === 0 && gp.minField === '5', `trying Minimum segment 2 smooths the short one, the field stays (${JSON.stringify(gp.minSeg2)}, ${gp.minField})`);
     check(gp.big === 'Max gap 5 · minimum segment 2' && gp.useLabel === 'Use max gap 5, minimum segment 2', `says what the sketch shows and offers Use (${gp.big}; ${gp.useLabel})`);
     check(gp.usedGap === '6' && gp.usedSeg === '2' && gp.stored.join() === '6,2', `Use sets both, Apply stores them (${gp.usedGap}, ${gp.usedSeg}; ${gp.stored})`);
+
+    console.log('6. layers and legends');
+    await page.evaluate(() => { document.getElementById('menuSettings').click(); document.querySelector('.settings-nav-item[data-panel="smoothing"]').click(); });
+    const lay = await page.evaluate(() => {
+        const card = (s) => document.querySelector(`.smooth-fig [data-stage="${s}"]`);
+        const num = (s) => card(s).querySelector('[data-try="size"] input[type="number"]');
+        const set = (el, v) => { el.value = String(v); el.dispatchEvent(new Event('input')); };
+        const keys = (s) => [...card(s).querySelectorAll('.smooth-fig-legend i')].filter(i => i.offsetParent).map(i => i.className.replace('sf-key-', ''));
+        const pieces = (el) => el.getAttribute('d').split('M').length - 1;
+        const out = { shared: !!document.querySelector('.smooth-fig > .smooth-fig-legend') };
+        out.first = ['median', 'gaussian', 'gaps'].map(s => card(s).querySelector('svg').firstElementChild.getAttribute('class'));
+        const t = getComputedStyle(card('median').querySelector('.sf-true'));
+        out.stroke = t.stroke; out.dash = t.strokeDasharray;
+        out.medRaw = !!card('median').querySelector('path.sf-raw-line');
+        out.gapRawPieces = pieces(card('gaps').querySelector('path.sf-raw-line'));
+        set(num('median'), 5); set(num('gaussian'), 9);
+        out.gauGreen = !!card('gaussian').querySelector('path.sf-in-median') && !card('gaussian').querySelector('path.sf-raw-line');
+        out.medKeys = keys('median'); out.gauKeys = keys('gaussian'); out.gapKeys = keys('gaps');
+        set(num('median'), 0);
+        out.gauRaw = !!card('gaussian').querySelector('path.sf-raw-line') && !card('gaussian').querySelector('path.sf-in-median');
+        out.gauRawKeys = keys('gaussian');
+        const pos = card('median').querySelector('[data-try="pos"] input[type="number"]');
+        out.pickedBefore = keys('median').includes('current');
+        set(pos, 20);
+        out.pickedAfter = keys('median').includes('current');
+        return out;
+    });
+    check(!lay.shared, 'no legend shared between the cards');
+    check(lay.first.every(c => c === 'sf-true'), `true movement drawn first on every card (${lay.first})`);
+    check(lay.stroke === 'rgb(255, 255, 255)' && lay.dash === 'none', `solid white (${lay.stroke}, ${lay.dash})`);
+    check(lay.medRaw && lay.gapRawPieces === 4, `grey line joins the measurements, broken at the 3 absences (${lay.gapRawPieces} pieces)`);
+    check(lay.gauGreen, 'Gaussian card: the median output has edges');
+    check(lay.gauRaw && lay.gauRawKeys.includes('raw') && lay.gauRawKeys.includes('spike') && !lay.gauRawKeys.includes('med'), `median off: its input and legend are the raw trace (${lay.gauRawKeys})`);
+    const wants = (got, list) => list.every(k => got.includes(k));
+    check(wants(lay.medKeys, ['true', 'raw', 'spike', 'med', 'band', 'rank', 'rank-mid']) && !lay.medKeys.includes('out'), `median legend (${lay.medKeys})`);
+    check(wants(lay.gauKeys, ['true', 'med', 'out', 'band', 'weight']) && !lay.gauKeys.includes('raw'), `Gaussian legend (${lay.gauKeys})`);
+    check(wants(lay.gapKeys, ['true', 'raw', 'out', 'left', 'hole', 'split', 'seg', 'seg-short']), `gaps legend (${lay.gapKeys})`);
+    check(!lay.pickedBefore && lay.pickedAfter, 'the ring is in the legend only while a frame is picked');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

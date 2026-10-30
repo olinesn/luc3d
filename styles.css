@@ -5716,31 +5716,62 @@ kbd {
   color: var(--warning-color);
 }
 
-.smooth-fig-legend {
+.smooth-fig-legend,
+.smooth-fig-legend .sf-legend-items {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 16px;
-  margin-top: 10px;
+  gap: 4px 14px;
   font-size: 12px;
   color: var(--text-muted);
 }
 
-.smooth-fig-legend span {
+.smooth-fig-legend { margin-bottom: 8px; }
+
+.smooth-fig-legend > span:not(.sf-legend-items),
+.smooth-fig-legend .sf-legend-items > span {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
+.smooth-fig-legend > span[hidden] { display: none; }
+
 .smooth-fig-legend i {
   display: inline-block;
 }
 
-.smooth-fig .sf-key-true { width: 14px; border-top: 1.5px dashed var(--text-secondary); }
-.smooth-fig .sf-key-raw { width: 6px; height: 6px; border-radius: 50%; border: 1.2px solid var(--text-secondary); }
+/* Each swatch looks like what the chart draws: a line, its dot on top (::after). */
+.smooth-fig .sf-key-true,
+.smooth-fig .sf-key-raw,
+.smooth-fig .sf-key-med,
+.smooth-fig .sf-key-out { position: relative; width: 16px; height: 2px; border-radius: 1px; }
+.smooth-fig .sf-key-raw::after,
+.smooth-fig .sf-key-med::after,
+.smooth-fig .sf-key-out::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+}
+.smooth-fig .sf-key-true { height: 1.5px; background: #fff; }
+.smooth-fig .sf-key-raw { height: 1px; background: var(--text-secondary); }
+.smooth-fig .sf-key-raw::after { width: 7px; height: 7px; border: 1.1px solid var(--text-secondary); background: var(--bg-secondary); }
+.smooth-fig .sf-key-med { background: var(--success-color); }
+.smooth-fig .sf-key-med::after { width: 5px; height: 5px; background: var(--success-color); }
+.smooth-fig .sf-key-out { background: var(--accent); }
+.smooth-fig .sf-key-out::after { width: 5px; height: 5px; border: 1.1px solid #000; }
 .smooth-fig .sf-key-spike { width: 6px; height: 6px; border-radius: 50%; background: var(--error-color); }
-.smooth-fig .sf-key-med { width: 14px; height: 2px; border-radius: 1px; background: var(--success-color); }
-.smooth-fig .sf-key-out { width: 14px; height: 2px; border-radius: 1px; background: var(--accent); }
 .smooth-fig .sf-key-band { width: 12px; height: 10px; background: var(--accent); opacity: 0.18; }
+.smooth-fig .sf-key-rank,
+.smooth-fig .sf-key-rank-mid,
+.smooth-fig .sf-key-weight { width: 2px; height: 10px; }
+.smooth-fig .sf-key-rank { background: var(--text-muted); }
+.smooth-fig .sf-key-rank-mid { background: var(--success-color); }
+.smooth-fig .sf-key-weight { background: var(--accent); opacity: 0.7; }
+.smooth-fig .sf-key-current { width: 9px; height: 9px; box-sizing: border-box; border-radius: 50%; border: 1.4px solid var(--text-primary); }
 
 .smooth-fig .sf-axis { stroke: var(--border-color); stroke-width: 1; }
 .smooth-fig .sf-band { fill: var(--accent); opacity: 0.16; }
@@ -5748,7 +5779,9 @@ kbd {
 .smooth-fig .sf-rank { stroke: var(--text-muted); stroke-width: 1.5; opacity: 0.7; }
 .smooth-fig .sf-rank-mid { stroke: var(--success-color); stroke-width: 2.5; opacity: 1; }
 .smooth-fig .sf-rank-spike { stroke: var(--error-color); opacity: 0.85; }
-.smooth-fig .sf-true { fill: none; stroke: var(--text-secondary); stroke-width: 1.2; stroke-dasharray: 4 3; opacity: 0.7; }
+.smooth-fig .sf-true { fill: none; stroke: #fff; stroke-width: 1.2; }
+.smooth-fig .sf-raw-line { fill: none; stroke: var(--text-secondary); stroke-width: 0.9; stroke-linejoin: round; }
+.smooth-fig .sf-in-median { fill: none; stroke: var(--success-color); stroke-width: 1.2; stroke-linejoin: round; }
 .smooth-fig .sf-raw { fill: none; stroke: var(--text-secondary); stroke-width: 1.1; }
 .smooth-fig .sf-spike { fill: var(--error-color); stroke: var(--bg-primary); stroke-width: 0.8; }
 .smooth-fig .sf-out { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
@@ -5760,8 +5793,11 @@ kbd {
 .smooth-fig .sf-note.sf-note-split { fill: var(--warning-color); }
 .smooth-fig .sf-seg { fill: var(--accent); }
 .smooth-fig .sf-seg.sf-seg-short { fill: var(--text-muted); }
-.smooth-fig .sf-key-absent { width: 12px; height: 10px; background: var(--warning-color); opacity: 0.35; }
-.smooth-fig .sf-key-seg { width: 14px; height: 5px; border-radius: 2px; background: var(--accent); }
+.smooth-fig .sf-key-hole { width: 12px; height: 10px; background: var(--text-muted); opacity: 0.3; }
+.smooth-fig .sf-key-split { width: 12px; height: 10px; background: var(--warning-color); opacity: 0.35; }
+.smooth-fig .sf-key-seg,
+.smooth-fig .sf-key-seg-short { width: 14px; height: 5px; border-radius: 2px; background: var(--accent); }
+.smooth-fig .sf-key-seg-short { background: var(--text-muted); }
 .smooth-fig .sf-key-left { width: 14px; height: 2px; border-radius: 1px; background: var(--text-muted); }
 
 /* Card 3 (gaps and segments) spans both columns, with a wider, shorter chart. */

@@ -11415,18 +11415,20 @@ matching (`pose/cross-view-tracker.js` solves plain DLT on every view).
 
 **Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
 Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
-Both plot one made-up trace (one node's x over 40 frames: a slow movement,
-dashed, with one fast real move up and back on the right, plus jitter and one
-one-frame spike) and draw what the stage
+Both plot one made-up trace (one node's x over 40 frames: a slow movement, a
+solid white line under everything else, with one fast real move up and back on
+the right, plus jitter and one one-frame spike) and draw what the stage
 makes of its input, the window around one frame (shaded) and stems at the
 bottom of that window: for the Gaussian its weights, for the median the
 window's values sorted low to high, the middle one (the median, what the spike
 frame becomes) green and the spike red. The median's output is green in both
-cards (its line on the left, with the same green dot at every frame as the
-Gaussian's input dots on the right); the Gaussian's output is blue, with an
-open black circle at every frame. Raw samples
-are open grey rings drawn over the green dots, since a median keeps many
-samples exactly and a filled dot would hide under the green one. The Gaussian's
+cards (the same line and dots, on the right as the Gaussian's input); the
+Gaussian's output is blue, with an open black circle at every frame. Raw samples
+are open grey rings joined by a grey line, the rings drawn over the green dots,
+since a median keeps many samples exactly and a filled dot would hide under the
+green one. Each card has its own legend under its chart, naming only what that
+card draws: the Gaussian's follows its input (raw with the median off), and a
+key for the ring appears while a frame is picked. The Gaussian's
 window sits on the fast move, which survives the example windows and is
 flattened by long ones (over-smoothing).
 
@@ -11454,7 +11456,8 @@ segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
 6-frame absence with a 3-frame stretch between them; the node comes back 12 mm
 away after the 7-frame one). It runs both stages at the windows the other cards
 show over the segments `buildSegments` cuts, as the real pass does, and draws
-each absence (labelled hole or split), the output per segment (grey where too
+each absence (labelled hole or split), the measurements' grey line (broken at
+every absence), the output per segment (grey where too
 short to smooth) and the segments as bars. Its Max gap and Min segment sliders
 (0–15, 1–15; the text boxes go further) try values the same way; its Use button
 sets both through `onParam`.
