@@ -11367,8 +11367,8 @@ Which camera is dropped, and whether the node keeps its 3D, comes from
 slider, its text box and the DLT/Refined switch only redraw the sketch. Only Use
 and Turn off change the threshold, through `opts.onThreshold`; Apply saves it.
 `update({ method, threshold, saved })` follows the picked method and the setting;
-the sketch jumps to a value set elsewhere, and opens at 15 px while the setting is
-off. The slider's left end is off: every camera counts, no band, nothing dropped. The large value (`.fig-big`) is what the sketch shows.
+the sketch jumps to a value set elsewhere, and opens at the setting. The slider's left
+end is off: every camera counts, no band, nothing dropped. The large value (`.fig-big`) is what the sketch shows.
 
 **The card never changes size as the value moves.** Every step keeps its place (a
 faded scene when the rule does not reach it, its verdict rows kept but hidden), and

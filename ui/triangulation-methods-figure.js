@@ -35,9 +35,9 @@
 // Use and Turn off buttons change the threshold (`onThreshold`, which sets the
 // panel's working value; Apply saves it), and "Your setting" says what the setting
 // is. `update({ method, threshold, saved })` follows the picked method and the
-// setting; the sketch jumps to a value set elsewhere, and to `THRESHOLD_EXAMPLE`
-// while the setting is off. The slider's left end is off: every camera counts, no
-// band is drawn and nothing is dropped.
+// setting; the sketch jumps to a value set elsewhere, and opens at the setting. The
+// slider's left end is off: every camera counts, no band is drawn and nothing is
+// dropped.
 //
 // The card never changes size: every step keeps its place (a faded scene when not
 // reached), and each line whose wording changes is a `stack`.
@@ -187,7 +187,6 @@ function card(method, name, tagline, sketchSvg, caption, cardNote) {
 
 // --- The reprojection error threshold card ------------------------------
 
-var THRESHOLD_EXAMPLE = 15;      // px, what the sketch opens at while the setting is off
 var THRESHOLD_SLIDER_MAX = 80;   // a larger value still shows; the slider sits at its end
 var THRESHOLD_MAX = 500;         // the setting's own top (`ui/settings.js`)
 var WIDEST_ERROR = 88.8;         // stands in for the error in the hidden wordings
@@ -405,9 +404,7 @@ export function buildTriangulationMethodsFigure(opts) {
     var thr = fig.querySelector('.tri-thr');
     var demoButtons = thr.querySelectorAll('[data-demo-method]');
     // `method` / `setting` / `saved` are real; `tryMethod` / `tryThreshold` are the sketch's.
-    var current = { method: 'dlt', setting: 0, saved: 0, tryMethod: 'dlt', tryThreshold: THRESHOLD_EXAMPLE };
-
-    function baseline() { return current.setting > 0 ? current.setting : THRESHOLD_EXAMPLE; }
+    var current = { method: 'dlt', setting: 0, saved: 0, tryMethod: 'dlt', tryThreshold: 0 };
 
     var control = wireTryControl(thr, 'threshold', THRESHOLD_CONTROL, function (v) {
         current.tryThreshold = v;
@@ -423,7 +420,7 @@ export function buildTriangulationMethodsFigure(opts) {
         use: function () { commit(current.tryThreshold); },
         off: function () { commit(0); },
         reset: function () {
-            current.tryThreshold = baseline();
+            current.tryThreshold = current.setting;
             current.tryMethod = current.method;
             render();
         },
@@ -440,7 +437,7 @@ export function buildTriangulationMethodsFigure(opts) {
         if (next.saved != null) current.saved = Math.max(0, +next.saved || 0);
         if (next.threshold != null) {
             current.setting = Math.max(0, +next.threshold || 0);
-            current.tryThreshold = baseline();
+            current.tryThreshold = current.setting;
         }
         render();
     }
@@ -463,7 +460,7 @@ export function buildTriangulationMethodsFigure(opts) {
             unsaved: set !== current.saved,
             use: !off && t !== set ? 'Use ' + fmt(t) + ' px' : null,
             off: set > 0,
-            reset: t !== baseline() || current.tryMethod !== current.method,
+            reset: t !== set || current.tryMethod !== current.method,
         });
 
         var run = thresholdPasses(ALL, function (cams) { return table[cams.join(',')].errors; }, limit);

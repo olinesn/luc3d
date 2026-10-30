@@ -6,8 +6,9 @@
  * solvers by tests/test-triangulation-threshold-figure.mjs).
  *
  * Asserted, in the real Settings modal:
- *  1. With the threshold off (the default) the sketch opens at a 15 px example,
- *     "Your setting" says off, and the large value is what the sketch shows.
+ *  1. With the threshold off (the default) the sketch opens at off, "Your setting"
+ *     says off, and the large value is what the sketch shows. At 15 px, DLT's first
+ *     solve misses all three cameras by more; only the worst is dropped.
  *  2. A value typed in the Tracking Wizard is the setting, and the sketch follows.
  *  3. Picking a method follows too. Refined at 15 px drops the stray and reaches
  *     the true position; at 60 px nothing is dropped and it stays close; at 5 px the
@@ -111,8 +112,12 @@ try {
     console.log('1. threshold off (default)');
     let r = await read();
     check(r.setting === 'off' && r.field === '0', `"Your setting" says off (${r.setting}, field ${r.field})`);
-    check(r.big === '15 px' && r.num === '15', `the sketch opens at a 15 px example, in large text (${r.big})`);
-    check(r.use === 'Use 15 px' && !r.off && !r.unsaved, 'offers Use; nothing to turn off, nothing unsaved');
+    check(r.big === 'off' && r.num === '0' && r.slider === '0', `the sketch opens at off, in large text (${r.big})`);
+    check(r.s1 === 'off,off,off' && r.s2 === '' && r.kind === 'offFar', `at off every camera counts, nothing dropped (${r.s1})`);
+    check(r.use === null && !r.off && !r.unsaved && !r.reset, 'nothing to use, turn off, reset or save');
+    await tryBox(15);
+    r = await read();
+    check(r.big === '15 px' && r.use === 'Use 15 px' && r.reset && r.setting === 'off', `trying 15 px offers Use and Reset sketch; the setting stays off (${r.use})`);
     check(r.cameras === 3 && r.methodCardSketches === '3,3', `three cameras in every sketch (${r.cameras}; cards ${r.methodCardSketches})`);
     check(r.sketches === 2, 'one sketch per solve: two steps');
     check(r.name1.includes('DLT') && r.s1 === 'over,over,drop', `DLT first solve: all over, only the worst dropped (${r.s1})`);
@@ -167,7 +172,7 @@ try {
     console.log('5. trying changes nothing');
     await page.click('.tri-thr .fig-reset');
     r = await read();
-    check(r.big === '15 px' && r.setting === 'off', `Reset sketch goes back (${r.big})`);
+    check(r.big === 'off' && r.setting === 'off', `Reset sketch goes back to the setting (${r.big})`);
     await trySlider(40);
     r = await read();
     check(r.big === '40 px' && r.num === '40' && r.field === '0' && r.setting === 'off', `the slider redraws the sketch and fills the box, the setting stays off (${r.big}, field ${r.field})`);
