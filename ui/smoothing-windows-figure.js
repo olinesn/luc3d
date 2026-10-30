@@ -5,9 +5,10 @@
 // Both cards plot the same made-up trace: one node's x position over 40 frames
 // (a slow back-and-forth movement, a white line under everything else), as
 // triangulation would give it with a little jitter (grey rings joined by a grey
-// line), one one-frame spike (red) and, on the right, a fast
-// real movement: a quick dart up and back over a few frames, which too long a
-// window flattens (over-smoothing). Each card draws what its
+// line), one one-frame spike (red) and a fast real movement: a quick dart up and
+// back over a few frames, which too long a window flattens (over-smoothing). The
+// movement ends low, and each card's legend sits in the space above that end.
+// Each card draws what its
 // stage makes of its input, the window around one frame (shaded), and for the
 // Gaussian the weights inside that window (a bell of stems). The median's
 // output is the same green line and dots in both cards (on the right, as the
@@ -51,11 +52,17 @@ import { smoothSignalInto, normalizeWindow, sigmaForWindow, buildSegments } from
 import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js';
 
 var N = 40;                              // frames in the trace
-var SPIKES = [[11, 13]];                 // [frame, mm] one-frame spikes
-var FAST = { frame: 25, height: 16, sigma: 2 };     // fast real movement: a quick dart, mm and frames
+var SPIKES = [[11, 20]];                 // [frame, mm] one-frame spikes
+var FAST = { frame: 21, height: 30, sigma: 2 };     // fast real movement: a quick dart, mm and frames
 var EXAMPLE = { median: 5, gaussian: 9 };
 var MEDIAN_FOCUS = SPIKES[0][0];         // frame card 1's window starts on (the spike)
 var GAUSSIAN_FOCUS = FAST.frame;         // frame card 2's window starts on (the fast move)
+
+/** The true movement at frame `t`, which need not be a whole frame. */
+function trueAt(t) {
+    return 6 * Math.sin(2 * Math.PI * (t - 6) / 44)
+        + FAST.height * Math.exp(-(t - FAST.frame) * (t - FAST.frame) / (2 * FAST.sigma * FAST.sigma));
+}
 
 // The true movement and the trace triangulation gives of it. The jitter is a
 // fixed pseudo-random sequence so the figure is the same every time.
@@ -65,8 +72,7 @@ var RAW = new Float64Array(N);
     var seed = 7;
     function rand() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
     for (var t = 0; t < N; t++) {
-        TRUTH[t] = 6 * Math.sin(2 * Math.PI * (t - 2) / 30)
-            + FAST.height * Math.exp(-(t - FAST.frame) * (t - FAST.frame) / (2 * FAST.sigma * FAST.sigma));
+        TRUTH[t] = trueAt(t);
         RAW[t] = TRUTH[t] + 8 * (rand() + rand() - 1);
     }
     SPIKES.forEach(function (s) { RAW[s[0]] = TRUTH[s[0]] + s[1]; });
@@ -86,7 +92,9 @@ function run(src, kernel, window) {
 // Plot area inside a 300 x 150 viewBox; one y scale for both cards.
 var X0 = 6, X1 = 294, Y0 = 10, Y1 = 124;
 var Y_MIN = Infinity, Y_MAX = -Infinity;
-RAW.forEach(function (v) { Y_MIN = Math.min(Y_MIN, v); Y_MAX = Math.max(Y_MAX, v); });
+[RAW, TRUTH].forEach(function (trace) {
+    trace.forEach(function (v) { Y_MIN = Math.min(Y_MIN, v); Y_MAX = Math.max(Y_MAX, v); });
+});
 function px(t) { return X0 + (X1 - X0) * t / (N - 1); }
 function py(v) { return Y1 - (Y1 - Y0) * (v - Y_MIN) / (Y_MAX - Y_MIN); }
 function f1(v) { return Math.round(v * 10) / 10; }
@@ -152,9 +160,14 @@ function outNodes(values, upto) {
     return s;
 }
 
-/** "fast move" beside the true path's peak at the fast movement. */
-function fastLabel() {
-    return '<text x="' + f1(px(FAST.frame) + 9) + '" y="' + f1(py(TRUTH[FAST.frame]) + 3) + '" class="sf-note">fast move</text>';
+/** The true movement as a smooth curve: a real movement has no corners at the frames. */
+function truePath() {
+    var d = '', steps = (N - 1) * 4;
+    for (var i = 0; i <= steps; i++) {
+        var t = i / 4;
+        d += (i ? 'L' : 'M') + f1(px(t)) + ' ' + f1(py(trueAt(t)));
+    }
+    return d;
 }
 
 /** One card's chart, the true movement under everything else. The axis label steps aside when the window's label (centred on `t`) reaches it. */
@@ -162,7 +175,7 @@ function chart(label, inner, t) {
     var axisLabel = px(t) < X1 - 75
         ? '<text x="' + X1 + '" y="' + (Y1 + 11) + '" text-anchor="end" class="sf-note">frames →</text>' : '';
     return '<svg viewBox="0 0 300 140" role="img" aria-label="' + label + '">'
-        + '<path d="' + path(TRUTH) + '" class="sf-true"/>'
+        + '<path d="' + truePath() + '" class="sf-true"/>'
         + '<line x1="' + X0 + '" y1="' + (Y1 + 3) + '" x2="' + X1 + '" y2="' + (Y1 + 3) + '" class="sf-axis"/>'
         + inner + axisLabel
         + '</svg>';
@@ -209,8 +222,7 @@ function medianChart(window, out, t, upto) {
         + dots(out, false, 'sf-med', upto)
         + dots(RAW, true)
         + current(out, t, upto)
-        + SPIKES.map(function (sp) { return spikeArrow(sp[0], out); }).join('')
-        + fastLabel(), t);
+        + SPIKES.map(function (sp) { return spikeArrow(sp[0], out); }).join(''), t);
 }
 
 function gaussianChart(window, input, out, inputHasSpikes, t, upto) {
@@ -227,8 +239,7 @@ function gaussianChart(window, input, out, inputHasSpikes, t, upto) {
         + outLine(out, 'sf-out', upto)
         + dots(input, inputHasSpikes, inputHasSpikes ? 'sf-raw' : 'sf-med')
         + outNodes(out, upto)
-        + current(out, t, upto)
-        + fastLabel(), t);
+        + current(out, t, upto), t);
 }
 
 // ---- Card 3: gaps and segments ----------------------------------------------
@@ -380,7 +391,7 @@ export function buildSmoothingWindowsFigure(opts) {
     fig.className = 'smooth-fig';
     fig.innerHTML =
         '<p class="smooth-fig-lead">One node\'s x position over 40 frames, made up for this sketch: the true '
-        + 'movement (white), with one fast move on the right, and its 3D as triangulated (grey), with jitter and '
+        + 'movement (white), with one fast move, and its 3D as triangulated (grey), with jitter and '
         + 'a one-frame spike (red). The '
         + 'median\'s output (green) is the Gaussian\'s input, and the Gaussian\'s output is blue; both are computed '
         + 'with LUC3D\'s own filter. y and z, and every node, are filtered the same way, each on its own. On each '
@@ -388,8 +399,8 @@ export function buildSmoothingWindowsFigure(opts) {
         + 'your setting.</p>'
         + '<div class="smooth-fig-cols">'
         + '<div class="smooth-fig-col" data-stage="median">'
-        + '<div class="smooth-fig-name">1 · Median window<span class="fig-big"></span><small></small></div><div class="smooth-fig-chart"></div>'
-        + MEDIAN_LEGEND
+        + '<div class="smooth-fig-name">1 · Median window<span class="fig-big"></span><small></small></div><div class="smooth-fig-plot"><div class="smooth-fig-chart"></div>'
+        + MEDIAN_LEGEND + '</div>'
         + tryStrip(tryControl('size', sizeControl('median')) + tryControl('pos', posControl('median')))
         + settingRow('median')
         + '<p>Each frame takes the middle value of the frames in its window. The stems are the window sorted by '
@@ -397,15 +408,15 @@ export function buildSmoothingWindowsFigure(opts) {
         + 'than averaged in. Real movement shorter than about half the window is erased too: raise the window and '
         + 'watch the fast move flatten.</p></div>'
         + '<div class="smooth-fig-col" data-stage="gaussian">'
-        + '<div class="smooth-fig-name">2 · Gaussian window<span class="fig-big"></span><small></small></div><div class="smooth-fig-chart"></div>'
-        + GAUSSIAN_LEGEND
+        + '<div class="smooth-fig-name">2 · Gaussian window<span class="fig-big"></span><small></small></div><div class="smooth-fig-plot"><div class="smooth-fig-chart"></div>'
+        + GAUSSIAN_LEGEND + '</div>'
         + tryStrip(tryControl('size', sizeControl('Gaussian')) + tryControl('pos', posControl('Gaussian')))
         + settingRow('gaussian')
         + '<p>Runs on the median\'s output (green: the line on the left). A weighted average over the window: '
         + 'the frame itself counts most and the weights fall off as a bell curve (stems). Removes the jitter the '
         + 'median leaves. 3 frames barely changes anything (each frame keeps about 98% of its own value); 5 is '
-        + 'the smallest window that smooths. A long window also flattens fast real movement: compare the blue line '
-        + 'with the white true movement at the fast move.</p>'
+        + 'the smallest window that smooths. A long window also damps fast real movement: raise the window and '
+        + 'watch the blue line fall short of the tall white peak.</p>'
         + '<p class="smooth-fig-warn" hidden>The median is off, so the Gaussian spreads the spike into a bump.</p></div>'
         + '</div>'
         + '<div class="smooth-fig-col smooth-fig-wide" data-stage="gaps">'

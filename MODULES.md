@@ -11429,8 +11429,9 @@ matching (`pose/cross-view-tracker.js` solves plain DLT on every view).
 **Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
 Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
 Both plot one made-up trace (one node's x over 40 frames: a slow movement, a
-solid white line under everything else, with one fast real move up and back on
-the right, plus jitter and one one-frame spike) and draw what the stage
+solid white line under everything else that ends low, with one fast real move
+up and back, tall enough that a Gaussian visibly damps it, plus jitter and one
+one-frame spike) and draw what the stage
 makes of its input, the window around one frame (shaded) and stems at the
 bottom of that window: for the Gaussian its weights, for the median the
 window's values sorted low to high, the middle one (the median, what the spike
@@ -11439,8 +11440,9 @@ cards (the same line and dots, on the right as the Gaussian's input); the
 Gaussian's output is blue, with an open black circle at every frame. Raw samples
 are open grey rings joined by a grey line, the rings drawn over the green dots,
 since a median keeps many samples exactly and a filled dot would hide under the
-green one. Each card has its own legend under its chart, naming only what that
-card draws: the Gaussian's follows its input (raw with the median off), and a
+green one. Each card has its own legend, naming only what that card draws (the
+top two stand it in the space above the trace's low end, or under the chart in a
+narrow card; the gaps card keeps it under the chart): the Gaussian's follows its input (raw with the median off), and a
 key for the ring appears while a frame is picked. The Gaussian's
 window sits on the fast move, which survives the example windows and is
 flattened by long ones (over-smoothing).
