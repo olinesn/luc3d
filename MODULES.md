@@ -11316,7 +11316,8 @@ Use, Turn off, plus Reset sketch, and "not saved until you click Apply").
 
 **Key exports.** `tryStrip`, `tryControl`, `wireTryControl(root, key, o, onValue)` →
 `{ set(value, sliderValue) }` (never rewrites the box while it has focus; ignores a
-half-typed or out-of-range entry), `settingRow`, `wireSettingRow(root, key, on)` →
+half-typed or out-of-range entry; a slider may map positions to values, `toSlider` /
+`fromSlider`, with `ticks` under the track and a `zone` behind it), `settingRow`, `wireSettingRow(root, key, on)` →
 a function showing the setting.
 
 **Imports.** None. **Imported by** `ui/triangulation-methods-figure.js`,
@@ -11366,7 +11367,8 @@ copy (`docs/assets/triangulation/` in talmolab/luc3d-docs) too.
 
 A third, full-width card (`.tri-thr`, not a choice) shows the Tracking Wizard's
 **reprojection error threshold** (`reprojErrorThreshold`) in up to three more sketches,
-one per solve, each titled with the method: every re-solve uses the first solve's. On every
+one per solve, each titled with the method: every re-solve uses the first solve's. In a
+re-solve, each camera dropped so far is drawn faded (`.tm-dropped`). On every
 image plane still checked, a band `threshold` px either side of the detection (2 px
 per sketch unit, cut at the plane's ends) is where the answer may land, green /
 orange / red as that camera is within / over / over and dropped; a verdict line per
@@ -11378,8 +11380,11 @@ Which camera is dropped, and whether the node keeps its 3D, comes from
 slider, its text box and the DLT/Refined switch only redraw the sketch. Only Use
 and Turn off change the threshold, through `opts.onThreshold`; Apply saves it.
 `update({ method, threshold, saved })` follows the picked method and the setting;
-the sketch jumps to a value set elsewhere, and opens at the setting. The slider's left
-end is off: every camera counts, no band, nothing dropped. The large value (`.fig-big`) is what the sketch shows.
+the sketch jumps to a value set elsewhere, and opens at the setting. The slider runs from
+off (every camera counts, no band, nothing dropped), then from 640 px (half of a 1280 px
+monitor, also the setting's top) down to 1 px on a log scale (`thresholdSliderPos`,
+`thresholdFromSliderPos`), with a recommended zone from 100 to 10 px. In the scene DLT
+drops camera 3 at 53 px, inside the zone, and a good camera only at 8 px, past it. The large value (`.fig-big`) is what the sketch shows.
 
 **The card never changes size as the value moves.** Every step keeps its place (a
 faded scene when the rule does not reach it, its verdict rows kept but hidden), and

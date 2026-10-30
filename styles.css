@@ -5471,7 +5471,32 @@ kbd {
 
 .fig-ctl-name { flex: none; min-width: 52px; white-space: nowrap; }
 .fig-ctl-unit { flex: none; min-width: 38px; white-space: nowrap; }
-.fig-ctl-end { flex: none; margin-right: -2px; }
+.fig-slider { position: relative; display: block; flex: 1; min-width: 80px; padding: 18px 0 18px; --thumb: 16px; }
+.fig-slider input[type="range"] { position: relative; display: block; width: 100%; margin: 0; }
+.fig-zone,
+.fig-zone-label,
+.fig-tick { position: absolute; pointer-events: none; }
+/* Native thumbs stop half a thumb short of each end, so positions start there. */
+.fig-zone {
+  top: 50%;
+  margin-top: -6px;
+  left: calc(var(--thumb) / 2 + var(--a) * (100% - var(--thumb)));
+  width: calc((var(--b) - var(--a)) * (100% - var(--thumb)));
+  height: 12px;
+  border-radius: 3px;
+  background: var(--success-color);
+  opacity: 0.35;
+}
+.fig-zone-label,
+.fig-tick {
+  left: calc(var(--thumb) / 2 + var(--a) * (100% - var(--thumb)));
+  transform: translateX(-50%);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.fig-zone-label { top: 1px; color: var(--success-color); }
+.fig-tick { bottom: 1px; color: var(--text-muted); }
 
 .fig-ctl input[type="range"] {
   flex: 1;
@@ -5659,6 +5684,8 @@ kbd {
 .tri-methods .is-over.tm-band, .tri-methods .is-over.tm-band-end { stroke: var(--warning-color); }
 .tri-methods .is-drop.tm-band, .tri-methods .is-drop.tm-band-end { stroke: var(--error-color); }
 .tri-methods .tm-idle { opacity: 0.3; }
+/* A camera a re-solve no longer counts: out of the math. */
+.tri-methods .tm-dropped { opacity: 0.35; }
 .tri-methods .tm-key-band { width: 14px; height: 6px; border-radius: 1px; background: var(--success-color); opacity: 0.6; }
 .tri-methods .tm-true { stroke: var(--success-color); stroke-width: 1.6; stroke-linecap: round; }
 

@@ -69,10 +69,13 @@ try {
         const i = document.querySelector('.tri-thr [data-try="threshold"] input[type="number"]');
         i.value = String(val); i.dispatchEvent(new Event('input'));
     }, v);
-    const trySlider = (v) => page.evaluate((val) => {
+    // `v` in px, moved to the slider's position for it.
+    const trySlider = (v) => page.evaluate(async (val) => {
+        const F = await import('/ui/triangulation-methods-figure.js');
         const i = document.querySelector('.tri-thr [data-try="threshold"] input[type="range"]');
-        i.value = String(val); i.dispatchEvent(new Event('input'));
+        i.value = String(F.thresholdSliderPos(val)); i.dispatchEvent(new Event('input'));
     }, v);
+    const sliderPos = (v) => page.evaluate(async (val) => (await import('/ui/triangulation-methods-figure.js')).thresholdSliderPos(val), v);
     const read = () => page.evaluate((f) => {
         const card = document.querySelector('.tri-methods .tri-thr');
         const step = (n) => card.querySelector(`.tri-thr-step[data-step="${n}"]`);
@@ -101,6 +104,9 @@ try {
             lost: res.classList.contains('tri-thr-lost'),
             bandLen: bottomBand ? Math.abs(+bottomBand.getAttribute('x2') - +bottomBand.getAttribute('x1')) : null,
             bands2: step(2).querySelectorAll('line.tm-band').length,
+            dropped: [1, 2, 3].map(n => Array.from(step(n).querySelectorAll('.tm-dropped .tm-camera-number')).map(t => t.textContent).join()),
+            droppedParts: Array.from(step(2).querySelectorAll('.tm-dropped')).map(g => g.firstElementChild.getAttribute('class') || g.firstElementChild.tagName).join(),
+            droppedOpacity: (() => { const g = step(2).querySelector('.tm-dropped'); return g ? +getComputedStyle(g).opacity : null; })(),
             sketches: card.querySelectorAll('.tri-thr-sketch svg:not(.tm-legend):not(.tm-totals)').length,
             cameras: step(1).querySelectorAll('.tm-plane').length,
             errText: rows(1).map(li => shown(li)),
@@ -146,12 +152,15 @@ try {
     check(r.name1.includes('Refined') && r.s1 === 'over,in,in,drop', `Refined's first solve: the worst is dropped (${r.s1})`);
     check(/^2 · Second solve \(Refined\), without camera 3$/.test(r.name2), `every solve's title names the method (${r.name2})`);
     check(r.s2 === 'in,in,in,out' && r.kind === 'one' && /near the target, but still a little wrong/.test(r.result), `dropping it lands near the target (${r.result.slice(0, 60)}…)`);
+    check(r.dropped[0] === '' && r.dropped[1] === '3' && r.droppedOpacity < 0.5, `in the second solve the dropped camera 3 is faded, none in the first (${JSON.stringify(r.dropped)}, opacity ${r.droppedOpacity})`);
+    check(/tm-ray/.test(r.droppedParts) && /tm-plane/.test(r.droppedParts) && /tm-det/.test(r.droppedParts), `its line of sight, image plane and prediction fade too (${r.droppedParts})`);
     await type(75);
     r = await read();
     check(r.kind === 'close' && r.s2 === '' && /closer to the target/.test(r.result), `75 px drops nothing (${r.s1})`);
     await type(8);
     r = await read();
     check(r.kind === 'two' && r.s2 === 'drop,over,in,out' && r.s3 === 'out,in,in,out', `too low: a camera only a little off goes too (${r.s2} → ${r.s3})`);
+    check(r.dropped[2] === '0,3', `in the third solve both dropped cameras are faded (${r.dropped[2]})`);
     check(/^3 · Third solve \(Refined\), without cameras 3 and 0$/.test(r.name3), `the third title names the method and both cameras (${r.name3})`);
     await type(3);
     r = await read();
@@ -172,14 +181,14 @@ try {
     let leak = false;
     for (const m of ['dlt', 'ba']) {
         await page.click(`.tri-thr [data-demo-method="${m}"]`);
-        for (const t of [0, 1, 2, 3, 4, 5, 6, 12, 15, 20, 30, 36, 58, 59, 80, 200]) {
+        for (const t of [0, 1, 2, 3, 4, 5, 6, 12, 15, 20, 30, 36, 58, 59, 80, 200, 640]) {
             await tryBox(t);
             const s = await read();
             sizes.add(s.size);
             leak = leak || s.idleLeak;
         }
     }
-    check(sizes.size === 1, `one size for the card and every step across 32 states (${[...sizes].join(' | ')})`);
+    check(sizes.size === 1, `one size for the card and every step across 34 states (${[...sizes].join(' | ')})`);
     check(!leak, 'no verdict shows through a step not reached');
 
     console.log('5. trying changes nothing');
@@ -191,11 +200,11 @@ try {
     check(r.big === '40 px' && r.num === '40' && r.field === '0' && r.setting === 'off', `the slider redraws the sketch and fills the box, the setting stays off (${r.big}, field ${r.field})`);
     await tryBox(33);
     r = await read();
-    check(r.big === '33 px' && Number(r.slider) === 33 && r.field === '0', `the text box moves the slider, the setting stays off (${r.big})`);
+    check(r.big === '33 px' && Number(r.slider) === await sliderPos(33) && r.field === '0', `the text box moves the slider, the setting stays off (${r.big})`);
     await tryBox(200);
     r = await read();
-    check(r.big === '200 px' && r.slider === '80' && r.field === '0', `a value past the slider's end works (${r.big}, slider ${r.slider})`);
-    await tryBox(600);
+    check(r.big === '200 px' && Number(r.slider) === await sliderPos(200) && r.field === '0', `a typed value moves the slider on its log scale (${r.big}, position ${r.slider})`);
+    await tryBox(700);
     check((await read()).big === '200 px', 'out of range is ignored');
     await trySlider(0);
     r = await read();
@@ -217,6 +226,33 @@ try {
     });
     let st = await stored();
     check(st.threshold === 0 && st.method === 'dlt', `Apply after only trying stores nothing new (${JSON.stringify(st)})`);
+
+    console.log('5b. the slider: off, 640 px, a log scale, a recommended zone');
+    await open();
+    const scale = await page.evaluate(() => {
+        const c = document.querySelector('.tri-thr [data-try="threshold"]'), zone = c.querySelector('.fig-zone');
+        return { ticks: Array.from(c.querySelectorAll('.fig-tick')).map(t => t.textContent).join(), label: c.querySelector('.fig-zone-label').textContent,
+            from: +getComputedStyle(zone).getPropertyValue('--a'), to: +getComputedStyle(zone).getPropertyValue('--b') };
+    });
+    check(scale.ticks === 'off,640,100,10,1', `marked off, 640, 100, 10, 1 (${scale.ticks})`);
+    const [p100, p10] = [await sliderPos(100), await sliderPos(10)];
+    check(scale.label === 'recommended' && Math.abs(scale.from * 1000 - p100) < 1 && Math.abs(scale.to * 1000 - p10) < 1, `a recommended zone from 100 to 10 px (${scale.from}-${scale.to})`);
+    // Moving the slider right with DLT: nothing, then camera 3 drops, in the zone.
+    await page.click('.tri-thr [data-demo-method="dlt"]');
+    const sweep = [];
+    for (let pos = 0; pos <= 1000; pos += 10) {
+        const seen = await page.evaluate((p) => {
+            const i = document.querySelector('.tri-thr [data-try="threshold"] input[type="range"]');
+            i.value = String(p); i.dispatchEvent(new Event('input'));
+            return document.querySelector('.tri-thr-result').dataset.kind;
+        }, pos);
+        if (!sweep.length || sweep[sweep.length - 1].kind !== seen) sweep.push({ pos, kind: seen });
+    }
+    check(sweep.map(x => x.kind).join() === 'offFar,far,one,two,lost', `moving right with DLT: off, nothing, camera 3 drops, then a good camera, then no 3D (${JSON.stringify(sweep)})`);
+    const dropAt = sweep[2].pos, goodAt = sweep[3].pos;
+    check(dropAt > p100 && dropAt < p10, `camera 3 drops inside the recommended zone (position ${dropAt})`);
+    check(goodAt > p10, `a good camera only goes past it (position ${goodAt})`);
+    await page.click('.settings-btn-cancel');
 
     console.log('6. Use, Apply, Turn off');
     await open();
