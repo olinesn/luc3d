@@ -15,8 +15,9 @@
  *  6. Trying values changes no setting and nothing in the session.
  *  7. The large tile starts on the largest error, a click on a small tile enlarges
  *     it, and the pick holds through the slider, the switch and the arrows.
- *  8. The card keeps one size. Text and controls run the full width, then the small
- *     tiles, the large tile and the 3D view on the same columns as the sketches.
+ *  8. The card keeps one size. The text runs the full width, then the small tiles, the
+ *     large tile and the 3D view, the controls, then the sketches. The large tile and
+ *     the 3D view run from the top of the upper crops to the bottom of the lower ones.
  *  10. The 2D skeletons use the Predictions drawing. The 3D view is the app's own
  *     viewer: it draws shaded, turns when dragged, moves its point when a value drops
  *     a camera, keeps its angle, leaves the wheel to the panel, and goes when closed.
@@ -277,11 +278,24 @@ try {
     await page.mouse.move(b3.x + 60, b3.y + 25, { steps: 4 });
     await page.mouse.up();
     const turned = await pixels3d();
-    check(turned !== dropped3d, 'dragging turns it');
+    // Share of pixels that differ between two views, so the last of the orbit damping's
+    // sub-pixel drift does not read as a turn.
+    const differs = (a, b) => page.evaluate(async ([p, q]) => {
+        const load = (u) => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = u; });
+        const [x, y] = await Promise.all([load(p), load(q)]);
+        const read = (i) => { const c = document.createElement('canvas'); c.width = i.width; c.height = i.height; const g = c.getContext('2d'); g.drawImage(i, 0, 0); return g.getImageData(0, 0, i.width, i.height).data; };
+        const d = read(x), e = read(y);
+        let n = 0;
+        for (let k = 0; k < d.length; k += 4) if (Math.abs(d[k] - e[k]) + Math.abs(d[k + 1] - e[k + 1]) + Math.abs(d[k + 2] - e[k + 2]) > 24) n++;
+        return n / (d.length / 4);
+    }, [a, b]);
+    const turnShare = await differs(dropped3d, turned);
+    check(turnShare > 0.005, `dragging turns it (${(100 * turnShare).toFixed(2)}% of pixels change)`);
     await tryBox(39);
     await tryBox(40);
     const again = await pixels3d();
-    check(again === turned, 'and the slider keeps its angle');
+    const keptShare = await differs(turned, again);
+    check(keptShare < turnShare / 5, `and the slider keeps its angle (${(100 * keptShare).toFixed(2)}% change)`);
     const scrollerTop = () => page.evaluate(() => document.querySelector('.settings-panel-container').scrollTop);
     await page.evaluate(() => { document.querySelector('.settings-panel-container').scrollTop = 200; });
     const before = await scrollerTop();
@@ -297,9 +311,15 @@ try {
         const c = R('.tri-thr');
         return {
             full: Math.abs(R('.tri-thr-intro').width - R('.tri-thr-steps').width) < 2,
-            stackedOnSteps: R('.thr-ex').bottom <= steps[0].top + 1 && R('.tri-thr-intro').bottom <= R('.thr-ex').top + 1,
-            columns: [R('.thr-ex-grid'), R('.thr-ex-large'), R('.thr-ex-3d')].map((b, i) => Math.round(b.left - steps[i].left)),
-            widths: [R('.thr-ex-grid'), R('.thr-ex-large'), R('.thr-ex-3d')].map((b, i) => Math.round(b.width - steps[i].width)),
+            stackedOnSteps: R('.tri-thr-intro').bottom <= R('.thr-ex').top + 1
+                && R('.thr-ex').bottom <= R('.tri-thr .fig-try').top + 1
+                && R('.tri-thr .fig-setting').bottom <= steps[0].top + 1,
+            edges: [Math.round(R('.thr-ex-grid').left - steps[0].left), Math.round(R('.thr-ex-3d').right - steps[2].right)],
+            aligned: (() => {
+                const crops = Array.from(document.querySelectorAll('.thr-ex-tile canvas')).map(c => c.getBoundingClientRect());
+                const top = crops[0].top, bottom = Math.max(...crops.map(c => c.bottom));
+                return [R('.thr-ex-large canvas'), R('.thr-ex-3d-host')].map(b => [+(b.top - top).toFixed(1), +(b.bottom - bottom).toFixed(1), +(b.width - b.height).toFixed(1)]);
+            })(),
             border: getComputedStyle(document.querySelector('.thr-ex')).borderLeftWidth,
             tiles: document.querySelectorAll('.thr-ex-tile').length,
             h: Math.round(c.height), w: Math.round(c.width),
@@ -307,9 +327,10 @@ try {
         };
     });
     const l = await layout();
-    check(l.full && l.stackedOnSteps, `one section: full-width text, then the panel, then the sketches (${JSON.stringify(l)})`);
+    check(l.full && l.stackedOnSteps, `one section: full-width text, the panel, the slider, then the sketches (${JSON.stringify(l)})`);
     check(l.border === '0px', `no card of its own (${l.border})`);
-    check(l.columns.every(v => Math.abs(v) <= 1) && l.widths.every(v => Math.abs(v) <= 1), `tiles, large and 3D on the sketches' columns (${l.columns}; ${l.widths})`);
+    check(l.aligned.flat().every(v => Math.abs(v) <= 1), `the large tile and 3D view: same top and bottom as the small crops, and square (${JSON.stringify(l.aligned)})`);
+    check(l.edges.every(v => Math.abs(v) <= 1), `the band spans the sketches' width (${l.edges})`);
     const sizes = new Set();
     for (const t of [0, 5, 12, 40, 90, 200, 640]) {
         await tryBox(t);
@@ -323,7 +344,8 @@ try {
     await page.setViewportSize({ width: 800, height: 900 });
     await page.waitForTimeout(100);
     const narrow = await layout();
-    check(!narrow.overflow, `nothing overflows in a narrow window (${JSON.stringify(narrow.columns)})`);
+    check(narrow.aligned.flat().every(v => Math.abs(v) <= 1), 'and they still line up');
+    check(!narrow.overflow, `nothing overflows in a narrow window (${JSON.stringify(narrow.aligned)})`);
     await page.setViewportSize({ width: 1440, height: 1000 });
     await close();
 

@@ -468,8 +468,8 @@ function resultText(kind, threshold, second) {
  * @returns {{el: HTMLElement, update: function({method?: string, threshold?: number, saved?: number}): void}}
  *   `update` takes the picked method, the working threshold, and the threshold
  *   stored when Settings opened (for "not saved until Apply"). `opts.examples` is
- *   an optional `buildThresholdExamples` panel, shown between the card's controls and
- *   its sketches and told what is being tried.
+ *   an optional `buildThresholdExamples` panel, shown between the card's text and its
+ *   controls and told what is being tried.
  */
 export function buildTriangulationMethodsFigure(opts) {
     opts = opts || {};
@@ -514,13 +514,16 @@ export function buildTriangulationMethodsFigure(opts) {
         + 'node and the node is solved again from the rest; this repeats while more than two cameras are left. A '
         + 'node whose last two cameras still miss gets no 3D point in this frame. Moving the slider right makes the check '
         + 'stricter. Past the recommended zone (100 to 10 px) it can start dropping good views too.</p>'
+        + '</div></div>'
+        // Between the session's examples and the sketches, since it drives both.
+        + '<div class="tri-thr-controls">'
         + tryStrip(tryControl('threshold', THRESHOLD_CONTROL)
             + '<div class="tri-thr-demo-method" role="group" aria-label="First solve to try in the sketch">'
             + '<span>First solve</span>'
             + '<button type="button" data-demo-method="dlt">DLT</button>'
             + '<button type="button" data-demo-method="ba">Refined</button></div>')
         + settingRow('threshold')
-        + '</div></div>'
+        + '</div>'
         + '<div class="tri-thr-steps">'
         + [1, 2, 3].map(function (n) {
             return '<div class="tri-thr-step" data-step="' + n + '"><div class="tri-thr-step-name"></div>'
