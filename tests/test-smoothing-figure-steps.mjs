@@ -3,11 +3,11 @@
  * made-up trace (`scripts/smoothing-wiki-figures.mjs`). These hold them to what the
  * real filter does to it, so a change to the trace cannot quietly make them false.
  */
-import { stageSketch } from '../ui/smoothing-windows-figure.js';
+import { stageSketch, TRACE_FRAMES } from '../ui/smoothing-windows-figure.js';
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
-const SPIKE = 11, PEAK = 21;
+const SPIKE = TRACE_FRAMES.spike, PEAK = TRACE_FRAMES.fast;
 const median = (w) => stageSketch('median', w);
 const gaussian = (w) => stageSketch('gaussian', w, { medianWindow: 3 });
 const lost = (s) => s.truth[PEAK] - s.out[PEAK];
@@ -23,7 +23,7 @@ const stray = (s) => {
 
 console.log('Median');
 const raw = median(0);
-check(raw.raw[SPIKE] - raw.truth[SPIKE] === 20, 'the spike is 20 mm off the true movement');
+check(raw.raw[SPIKE] - raw.truth[SPIKE] === 28, 'the spike is 28 mm off the true movement');
 check(same(median(1).out, raw.raw), '1 frame changes nothing');
 const m3 = median(3), m11 = median(11);
 check(Math.abs(m3.out[SPIKE] - m3.truth[SPIKE]) < 8, `3 frames remove the spike (${(m3.out[SPIKE] - m3.truth[SPIKE]).toFixed(1)} mm left)`);

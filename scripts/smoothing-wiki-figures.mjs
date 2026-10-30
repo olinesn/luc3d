@@ -10,13 +10,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stageSketch } from '../ui/smoothing-windows-figure.js';
+import { stageSketch, TRACE_FRAMES } from '../ui/smoothing-windows-figure.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = process.argv[2];
 if (!outDir) { console.error('usage: smoothing-wiki-figures.mjs <output folder>'); process.exit(1); }
 
-const SPIKE_FRAME = 11, FAST_FRAME = 21;
+const SPIKE_FRAME = TRACE_FRAMES.spike, FAST_FRAME = TRACE_FRAMES.fast;
 
 const FIGURES = [
     {
@@ -110,7 +110,7 @@ function panel(fig, step, x, y, h) {
     const lx = x + PAD + CHART_W + 4 - 20 - widest * 4.9;
     s.keys.forEach((k, i) => {
         if (k[2]) return;
-        const ly = chartY + 8 + i * 11;
+        const ly = chartY + 3 + i * 10;
         o += swatch(k[0], lx, ly) + `<text x="${lx + 20}" y="${ly + 3}" class="key">${esc(k[1])}</text>`;
     });
     return o;

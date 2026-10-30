@@ -52,8 +52,8 @@ import { smoothSignalInto, normalizeWindow, sigmaForWindow, buildSegments } from
 import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js';
 
 var N = 40;                              // frames in the trace
-var SPIKES = [[11, 20]];                 // [frame, mm] one-frame spikes
-var FAST = { frame: 21, height: 30, sigma: 1.2 };     // fast real movement: a quick dart, mm and frames
+var SPIKES = [[8, 28]];                 // [frame, mm] one-frame spikes
+var FAST = { frame: 19, height: 30, sigma: 1.2 };     // fast real movement: a quick dart, mm and frames
 var EXAMPLE = { median: 5, gaussian: 9 };  // the gaps card's windows while a stage is off
 var MEDIAN_FOCUS = SPIKES[0][0];         // frame card 1's window starts on (the spike)
 var GAUSSIAN_FOCUS = FAST.frame;         // frame card 2's window starts on (the fast move)
@@ -73,7 +73,7 @@ var RAW = new Float64Array(N);
     function rand() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
     for (var t = 0; t < N; t++) {
         TRUTH[t] = trueAt(t);
-        RAW[t] = TRUTH[t] + 8 * (rand() + rand() - 1);
+        RAW[t] = TRUTH[t] + 14 * (rand() + rand() - 1);
     }
     SPIKES.forEach(function (s) { RAW[s[0]] = TRUTH[s[0]] + s[1]; });
 })();
@@ -386,6 +386,9 @@ function posControl(name) {
 }
 var GAP_CONTROL = { name: 'Max gap', aria: 'Max gap to smooth across (frames)', min: 0, max: GAP_MAX, step: 1, sliderMax: GAP_SLIDER_MAX, unit: 'frames' };
 var MINSEG_CONTROL = { name: 'Min segment', aria: 'Minimum segment length (frames)', min: 1, max: GAP_MAX, step: 1, sliderMax: GAP_SLIDER_MAX, unit: 'frames' };
+
+/** The frames of the trace's spike and fast move, for the docs' step figures and their test. */
+export var TRACE_FRAMES = { spike: MEDIAN_FOCUS, fast: GAUSSIAN_FOCUS };
 
 /**
  * The Median or Gaussian card's sketch without its controls, for the docs' step
