@@ -21,9 +21,9 @@
  *   3. `FIGURE_SCENE`, which all the figure's sketches draw, is the real solvers'
  *      output: its 3D, landings and errors, for each method and set of cameras,
  *      and the outcome at every threshold from 1 to 120 px. A mismatch prints the
- *      right numbers. The captions' claims hold too: Refined lands close to the true
- *      position with the stray counted, DLT is pulled away, and another layout
- *      pulls Refined far off.
+ *      right numbers. The captions' claims hold too: Refined lands two marker diameters from
+ *      the target with the stray counted, DLT is pulled further, and dropping the stray
+ *      lands nearer.
  *
  * Run: node tests/test-triangulation-threshold-figure.mjs
  */
@@ -192,7 +192,7 @@ group('3. the figure\'s scene is what the real solvers give');
         }
         // Every whole-pixel threshold the slider and most of the box can reach.
         for (let t = 1; t <= 120; t++) {
-            const pred = thresholdPasses([0, 1, 2], (cams2) => FIGURE_SCENE.solves[method][cams2.join(',')].errors, t);
+            const pred = thresholdPasses([0, 1, 2, 3], (cams2) => FIGURE_SCENE.solves[method][cams2.join(',')].errors, t);
             const real = core.triangulateAndReproject(g, cams, { method, reprojErrorThreshold: t });
             const has = pd.hasPoint3d(real.points3d, 0);
             ok(has === pred.kept, `${method} ${t} px: solver ${has ? 'kept' : 'dropped'} the node, the figure says ${pred.kept ? 'kept' : 'dropped'}`);
@@ -206,28 +206,17 @@ group('3. the figure\'s scene is what the real solvers give');
     const truth = FIGURE_SCENE.truth;
     const dist = (p) => Math.hypot(p[0] - truth[0], p[1] - truth[1]);
     const off = (res) => dist(pd.getPoint3d(res.points3d, 0));
-    const ALL = [0, 1, 2];
+    const ALL = [0, 1, 2, 3];
     const refined = off(solveSet('ba', ALL)), dlt = off(solveSet('dlt', ALL));
-    ok(refined < 10 && refined > 1, `Refined lands close to the true position, with the stray still counted (${refined.toFixed(1)} units)`);
+    ok(refined > 18 && refined < 22, `Refined lands two marker diameters (20 units) from the target, with the stray still counted (${refined.toFixed(1)} units)`);
     ok(dlt > 25, `DLT is pulled well away (${dlt.toFixed(1)} units)`);
     const truth3d = (res) => { const p = pd.getPoint3d(res.points3d, 0); return Math.hypot(p[0] - truth[0], p[1] - truth[1], p[2]); };
     const gtDlt = truth3d(solveSet('dlt', ALL)), gtBa = truth3d(solveSet('ba', ALL));
-    ok(gtBa < gtDlt / 5, `the ground truth error shrinks from DLT to Refined (${gtDlt.toFixed(1)} to ${gtBa.toFixed(1)})`);
+    ok(gtBa < gtDlt * 0.6, `the ground truth error shrinks from DLT to Refined (${gtDlt.toFixed(1)} to ${gtBa.toFixed(1)})`);
     for (const method of ['dlt', 'ba']) {
-        const off2 = dist(FIGURE_SCENE.solves[method]['0,1'].point);
-        ok(off2 > 2 && off2 < 8, `${method}: the two cameras a little off land near the target, still a little wrong (${off2.toFixed(1)} units)`);
+        const off3 = dist(FIGURE_SCENE.solves[method]['0,1,2'].point);
+        ok(off3 > 2 && off3 < dist(FIGURE_SCENE.solves[method]['0,1,2,3'].point), `${method}: dropping the stray lands nearer the target, still a little wrong (${off3.toFixed(1)} units)`);
     }
-    // "With other camera layouts it can still be pulled far off": the same scene
-    // with the right camera's image plane further from it.
-    const far = FIGURE_SCENE.cameras[2];
-    const wide = cams.slice(0, 2).concat((() => {
-        const a = far.rot * Math.PI / 180, f = [Math.cos(a), Math.sin(a)], r = [-f[1], f[0]];
-        return new pd.Camera('c2', [[72 * PX, 0, 0], [0, 72 * PX, 0], [0, 0, 1]], [0, 0, 0, 0, 0],
-            [[r[0], r[1], 0], [0, 0, 1], [f[0], f[1], 0]],
-            [-(r[0] * far.at[0] + r[1] * far.at[1]), 0, -(f[0] * far.at[0] + f[1] * far.at[1])], [144, 144]);
-    })());
-    const fooled = off(core.triangulateAndReproject(g, wide, { method: 'ba', reprojErrorThreshold: 0 }));
-    ok(fooled > 20, `another layout pulls Refined far off (${fooled.toFixed(1)} units)`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

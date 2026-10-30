@@ -11337,16 +11337,20 @@ entirely, so it gets no line, landing spot or error (a `null` landing). Captions
 so they wrap; the sketches are inline SVG coloured by theme variables
 (`.tri-methods` in `styles.css`).
 
-Every sketch is the same scene from above: three cameras, one node, a green cross at
+Every sketch is the same scene from above: four cameras, one node, a green cross at
 the true position (the target), and each camera's line of sight dashed from the camera
-on (grey if the camera is a little off, orange if stray). A legend at the bottom-left of each card
+on (grey if the camera is a little off, orange if stray). Cameras 0, 1 and 2 are 10-16 px
+off and camera 3 is a stray. DLT is pulled well away; Refined counts the stray less and
+lands closer, two marker diameters from the target, with the stray still counted; the
+threshold removes it, and set too low it also drops a camera that was only a little off.
+`sketch()` draws them from `FIGURE_SCENE`. A legend at the bottom-left of each card
 (`SKETCH_LEGEND`, pinned by `.tm-sketch`, clear of the centred scene) names its target, projection, prediction, reprojection,
 reprojection error and ground truth error; the legend below the figures covers the rest. Bars at the
 bottom-right (`errorTotals`, one scale in every sketch) stack each numbered camera's
 reprojection error above their sum, so DLT's larger sum can be seen against Refined's. A
 dark red line, over every other line and under the markers, is the ground truth error:
 how far the projection is from the target, also a row in the bars (in 3D, so it counts
-the part out of the page; about 40 for DLT, 7 for Refined, 5 after the threshold). The left and bottom cameras are a little off and
+the part out of the page; about 39 for DLT, 20 for Refined, 13 after the threshold). The left and bottom cameras are a little off and
 the right one is a stray. DLT is pulled well away; Refined counts the stray less and
 lands close to the true position, with the stray still counted; the threshold removes
 it. `sketch()` draws them from `FIGURE_SCENE`.
@@ -11361,8 +11365,8 @@ solvers can make a good camera look worst). Change it and update the wiki's
 copy (`docs/assets/triangulation/` in talmolab/luc3d-docs) too.
 
 A third, full-width card (`.tri-thr`, not a choice) shows the Tracking Wizard's
-**reprojection error threshold** (`reprojErrorThreshold`) in two more sketches: the
-first solve, and the solve again without the dropped camera. On every
+**reprojection error threshold** (`reprojErrorThreshold`) in up to three more sketches,
+one per solve, each titled with the method: every re-solve uses the first solve's. On every
 image plane still checked, a band `threshold` px either side of the detection (2 px
 per sketch unit, cut at the plane's ends) is where the answer may land, green /
 orange / red as that camera is within / over / over and dropped; a verdict line per

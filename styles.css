@@ -5369,7 +5369,7 @@ kbd {
   width: 100%;
   height: auto;
   /* A wide card would otherwise push the captions below the fold. */
-  max-height: 272px;
+  max-height: 314px;
   margin: 6px 0 8px;
   overflow: hidden;
 }
@@ -5587,8 +5587,8 @@ kbd {
 
 .tri-thr-steps {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px 20px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px 16px;
   margin-top: 10px;
 }
 
@@ -5634,7 +5634,7 @@ kbd {
 
 .tri-thr-verdicts li {
   display: grid;
-  grid-template-columns: 8.8em minmax(0, 1fr);
+  grid-template-columns: 5.2em minmax(0, 1fr);
   gap: 6px;
   white-space: nowrap;
 }
