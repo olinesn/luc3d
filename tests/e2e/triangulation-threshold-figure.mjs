@@ -152,6 +152,8 @@ try {
     check(r.name1.includes('Refined') && r.s1 === 'over,in,in,drop', `Refined's first solve: the worst is dropped (${r.s1})`);
     check(/^2 · Second solve \(Refined\), without camera 3$/.test(r.name2), `every solve's title names the method (${r.name2})`);
     check(r.s2 === 'in,in,in,out' && r.kind === 'one' && /near the target, but still a little wrong/.test(r.result), `dropping it lands near the target (${r.result.slice(0, 60)}…)`);
+    const outs = await page.evaluate(() => [1, 2, 3].map(n => document.querySelectorAll(`.tri-thr-step[data-step="${n}"] .tm-det-out`).length));
+    check(outs[0] === 0 && outs[1] === 1, `in the second solve the dropped camera's prediction is orange, none in the first (${outs})`);
     check(r.dropped[0] === '' && r.dropped[1] === '3' && r.droppedOpacity < 0.5, `in the second solve the dropped camera 3 is faded, none in the first (${JSON.stringify(r.dropped)}, opacity ${r.droppedOpacity})`);
     check(/tm-ray/.test(r.droppedParts) && /tm-plane/.test(r.droppedParts) && /tm-det/.test(r.droppedParts), `its line of sight, image plane and prediction fade too (${r.droppedParts})`);
     await type(75);

@@ -227,7 +227,7 @@ function sketch(solve, counted, extra, strayLabel, overlay) {
     s += line(p, FIGURE_SCENE.truth, 'tm-truth-gap') + TRUE_MARK;
     DETECTIONS.forEach(function (d, i) {
         var used = counted.indexOf(i) >= 0, q = used ? onPlane(i, solve.x[i]) : null;
-        s += faded(i, '<circle cx="' + fmt(d[0]) + '" cy="' + fmt(d[1]) + '" r="3" class="tm-det"/>');
+        s += faded(i, '<circle cx="' + fmt(d[0]) + '" cy="' + fmt(d[1]) + '" r="3" class="tm-det' + (used ? '' : ' tm-det-out') + '"/>');
         if (q) s += '<circle cx="' + fmt(q[0]) + '" cy="' + fmt(q[1]) + '" r="3.6" class="tm-proj"/>';
     });
     s += '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="5" class="tm-point"/>' + strayLabel;

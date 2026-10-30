@@ -5,7 +5,8 @@
 // one large one, all at one scale so errors compare by eye: a crop of a camera's
 // video around the node's prediction, the animal's skeleton as Predictions are
 // drawn in the views (`drawSkeleton`, with the Visibility panel's style), the node's
-// prediction (white dot), the reprojection after the rule has run (blue ring), the
+// prediction (white dot, orange once outside the threshold and no longer used), the
+// reprojection after the rule has run (blue ring), the
 // reprojection error (red line), the threshold (dashed green ring) and, where a
 // camera was dropped, the first solve's reprojection (grey ring). The tiles are the
 // cameras with the largest errors (`pickShownCameras`), and a line names the rest.
@@ -60,7 +61,7 @@ const DECODE_DELAY_MS = 90;
 /** A set opens on the first example this bad, so trying the recommended range shows a drop. */
 const START_ERROR_PX = 50;
 
-const PREDICTION = '#fff', REPROJECTION = '#7c93ff', FIRST_SOLVE = '#b5b5b5', ERROR = '#e74c3c', RING = '#2ecc71';
+const PREDICTION = '#fff', PREDICTION_UNUSED = '#f39c12', REPROJECTION = '#7c93ff', FIRST_SOLVE = '#b5b5b5', ERROR = '#e74c3c', RING = '#2ecc71';
 
 function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -177,7 +178,10 @@ function drawMarks(ctx, size, solved, name, box, threshold, skeleton, style) {
     }
     if (drawn) ring(drawn, REPROJECTION, 8, 3);
     if (pred) {
-        ctx.fillStyle = PREDICTION; ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)'; ctx.lineWidth = 1.5;
+        // Orange once it falls outside the threshold: no solve left uses it.
+        const lastErr = solved.passes[solved.passes.length - 1].errors[name];
+        const unused = solved.dropped.indexOf(name) >= 0 || (solved.lost && lastErr != null && lastErr > threshold);
+        ctx.fillStyle = unused ? PREDICTION_UNUSED : PREDICTION; ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)'; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.arc(X(pred), Y(pred), 6, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
     }
 }
@@ -245,7 +249,8 @@ export function buildThresholdExamples(opts) {
     const summary = el('p', 'thr-ex-summary');
     root.appendChild(summary);
     const legend = el('div', 'thr-ex-legend');
-    legend.innerHTML = '<span><i class="thr-key-pred"></i>prediction</span><span><i class="thr-key-rep"></i>reprojection</span>'
+    legend.innerHTML = '<span><i class="thr-key-pred"></i>prediction</span><span><i class="thr-key-pred-out"></i>prediction no longer used</span>'
+        + '<span><i class="thr-key-rep"></i>reprojection</span>'
         + '<span><i class="thr-key-first"></i>first solve</span><span><i class="thr-key-err"></i>reprojection error</span>'
         + '<span><i class="thr-key-ring"></i>threshold</span><span><i class="thr-key-proj"></i>projection</span>'
         + '<span><i class="thr-key-sight"></i><i class="thr-key-sight thr-key-sight-drop"></i>line of sight: orange if dropped</span>';

@@ -144,6 +144,19 @@ try {
     await page.waitForTimeout(40);
     r = await read();
     check(r.tiles.some(t => t.state === 'drop') && /is dropped/.test(r.result), `at 40 px, on the same example, a camera is (${r.tiles.map(t => t.state)}; ${r.result})`);
+    // A tile is centred on its prediction.
+    const centre = (cam) => page.evaluate((c) => {
+        const v = document.querySelector(`.thr-ex-tile[data-camera="${c}"] canvas`);
+        return Array.from(v.getContext('2d').getImageData(v.width / 2, v.height / 2, 1, 1).data).slice(0, 3).join();
+    }, cam);
+    const droppedCam = r.tiles.find(t => t.state === 'drop').cam, keptCam = r.tiles.find(t => t.state !== 'drop').cam;
+    check(await centre(droppedCam) === '243,156,18', `its prediction turns orange: no longer used (${await centre(droppedCam)})`);
+    check(await centre(keptCam) === '255,255,255', `a camera still used stays white (${await centre(keptCam)})`);
+    await tryBox(0);
+    await page.waitForTimeout(40);
+    check(await centre(droppedCam) === '255,255,255', `with the threshold off it is white again (${await centre(droppedCam)})`);
+    await tryBox(40);
+    await page.waitForTimeout(40);
     check(/At 40 px, 1 of [\d,]+ nodes solved here has a camera dropped/.test(r.summary), `and the summary counts the session (${r.summary})`);
 
     console.log('3. so does DLT / Refined');

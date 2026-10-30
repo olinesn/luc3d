@@ -11366,8 +11366,8 @@ a function showing the setting.
 same width as the sketches below them: up to four small tiles, one large one, then the
 animal in 3D. The tiles are all at one scale, each a crop of a camera's video around the
 node's prediction with the skeleton as Predictions are drawn in the views (`drawSkeleton`
-in the Visibility panel's style, `getGroupColor`), the node's prediction, the
-reprojection after the rule has run, the reprojection error, the threshold as a dashed
+in the Visibility panel's style, `getGroupColor`), the node's prediction (orange once
+outside the threshold and no longer used), the reprojection after the rule has run, the reprojection error, the threshold as a dashed
 ring and, where a camera was dropped, the first solve's reprojection. The tiles are the
 cameras with the largest errors (`pickShownCameras`), and a line names the rest. Clicking
 a tile enlarges it; the pick holds while that camera has a tile, otherwise the largest
@@ -11452,7 +11452,8 @@ copy (`docs/assets/triangulation/` in talmolab/luc3d-docs) too.
 A third, full-width card (`.tri-thr`, not a choice) shows the Tracking Wizard's
 **reprojection error threshold** (`reprojErrorThreshold`) in up to three more sketches,
 one per solve, each titled with the method: every re-solve uses the first solve's. In a
-re-solve, each camera dropped so far is drawn faded (`.tm-dropped`). On every
+re-solve, each camera dropped so far is drawn faded (`.tm-dropped`), its prediction
+orange (`.tm-det-out`), as in the session tiles. On every
 image plane still checked, a band `threshold` px either side of the detection (2 px
 per sketch unit, cut at the plane's ends) is where the answer may land, green /
 orange / red as that camera is within / over / over and dropped; a verdict line per

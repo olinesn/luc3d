@@ -5427,6 +5427,7 @@ kbd {
 .tri-methods .tm-cam { fill: var(--bg-button); stroke: var(--text-secondary); stroke-width: 1; }
 .tri-methods .tm-gap { stroke: var(--error-color); stroke-width: 2.5; stroke-linecap: round; }
 .tri-methods .tm-det { fill: #fff; }
+.tri-methods .tm-det-out { fill: var(--warning-color); }
 .tri-methods .tm-proj { fill: none; stroke: var(--accent); stroke-width: 1.6; }
 /* Translucent, so the true-position cross shows through when the answer lands on it. */
 .tri-methods .tm-point { fill: var(--accent); fill-opacity: 0.45; stroke: #fff; stroke-width: 1.2; }
@@ -5705,6 +5706,7 @@ kbd {
 .thr-ex-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .thr-ex-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; box-sizing: border-box; }
 .thr-key-pred { background: #fff; }
+.thr-key-pred-out { background: #f39c12; }
 .thr-key-rep { border: 2px solid #7c93ff; }
 .thr-key-first { border: 2px solid #b5b5b5; }
 .thr-ex-legend .thr-key-err { width: 14px; height: 0; border-top: 2px solid var(--error-color); border-radius: 0; }
