@@ -208,13 +208,14 @@ group('3. the figure\'s scene is what the real solvers give');
     const off = (res) => dist(pd.getPoint3d(res.points3d, 0));
     const ALL = [0, 1, 2];
     const refined = off(solveSet('ba', ALL)), dlt = off(solveSet('dlt', ALL));
-    ok(refined < 5 && refined > 1, `Refined lands close to the true position, with the stray still counted (${refined.toFixed(1)} units)`);
+    ok(refined < 10 && refined > 1, `Refined lands close to the true position, with the stray still counted (${refined.toFixed(1)} units)`);
     ok(dlt > 25, `DLT is pulled well away (${dlt.toFixed(1)} units)`);
     const truth3d = (res) => { const p = pd.getPoint3d(res.points3d, 0); return Math.hypot(p[0] - truth[0], p[1] - truth[1], p[2]); };
     const gtDlt = truth3d(solveSet('dlt', ALL)), gtBa = truth3d(solveSet('ba', ALL));
     ok(gtBa < gtDlt / 5, `the ground truth error shrinks from DLT to Refined (${gtDlt.toFixed(1)} to ${gtBa.toFixed(1)})`);
     for (const method of ['dlt', 'ba']) {
-        ok(dist(FIGURE_SCENE.solves[method]['0,1'].point) < 0.5, `${method}: the two cameras that were right give the true position`);
+        const off2 = dist(FIGURE_SCENE.solves[method]['0,1'].point);
+        ok(off2 > 2 && off2 < 8, `${method}: the two cameras a little off land near the target, still a little wrong (${off2.toFixed(1)} units)`);
     }
     // "With other camera layouts it can still be pulled far off": the same scene
     // with the right camera's image plane further from it.

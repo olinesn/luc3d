@@ -18,7 +18,8 @@
 // line, over every other line and under the markers, is the ground truth error: how
 // far the projection is from the target, in 3D (the bar counts the part out of the
 // page, which the top-down line cannot show). The target, a green cross, marks the true
-// position. The left and bottom cameras are right; the right one is a stray. DLT
+// position. The left and bottom cameras are a little off, as real predictions always are; the
+// right one is a stray. DLT
 // is pulled well away. Refined counts the stray less and lands close to the true
 // position, with the stray still counted; the threshold removes it altogether.
 //
@@ -70,16 +71,16 @@ export var FIGURE_SCENE = {
         { name: 'Camera 1 (bottom)', at: [150, 180], rot: -90, plane: 72 },
         { name: 'Camera 2 (right)', at: [278, 118], rot: -164.2, plane: 40 },
     ],
-    detections: [[2.84, 3], [-2.4, -3], [60.02, 0]],
+    detections: [[-0.96, 3], [-8.33, -3], [60.02, 0]],
     truth: [148.4, 81.3],
     solves: {
         dlt: {
-            '0,1,2': { point: [173, 50.4], z: 0.33, x: [-16.98, 25.52, 24.42], errors: [20, 28.1, 35.6] },
-            '0,1': { point: [148.3, 81.2], z: 0.34, x: [2.86, -2.48, 0.08], errors: [2.6, 3.5, 59.9] },
+            '0,1,2': { point: [168.3, 46.9], z: 0.26, x: [-21.53, 19.81, 24.66], errors: [20.8, 28.3, 35.4] },
+            '0,1': { point: [144.1, 78.9], z: 0.28, x: [-0.95, -8.41, 0.69], errors: [2.7, 3.4, 59.3] },
         },
         ba: {
-            '0,1,2': { point: [148.3, 78], z: -2.12, x: [-0.42, -2.4, 1.86], errors: [6.2, 0, 58.2] },
-            '0,1': { point: [148.4, 81.2], z: -2.05, x: [2.93, -2.4, 0.06], errors: [5.2, 0, 60] },
+            '0,1,2': { point: [144, 76.1], z: -2.16, x: [-3.92, -8.33, 2.19], errors: [6.2, 0, 57.8] },
+            '0,1': { point: [144.2, 78.9], z: -2.08, x: [-0.87, -8.33, 0.67], errors: [5.3, 0, 59.4] },
         },
     },
 };
@@ -137,10 +138,9 @@ var VIEW_BOX = '5 25 290 203';   // room at the bottom for the legend and the ba
 // Names the sketch's marks. Its own small SVG, pinned to the left edge of the card
 // (`.tm-sketch`), so it stays clear of the scene, which is centred in a wide card.
 var SKETCH_LEGEND = '<svg viewBox="8 137 102 69" class="tm-legend" aria-hidden="true">' + [
-
-    ['<circle cx="15" cy="0" r="3" class="tm-det"/>', 'prediction'],
-    ['<circle cx="15" cy="0" r="4" class="tm-point"/>', 'projection'],
     [line([11, 0], [19, 0], 'tm-true') + line([15, -4], [15, 4], 'tm-true'), 'target'],
+    ['<circle cx="15" cy="0" r="4" class="tm-point"/>', 'projection'],
+    ['<circle cx="15" cy="0" r="3" class="tm-det"/>', 'prediction'],
     ['<circle cx="15" cy="0" r="3.2" class="tm-proj"/>', 'reprojection'],
     [line([10, 0], [20, 0], 'tm-gap'), 'reprojection error'],
     [line([10, 0], [20, 0], 'tm-truth-gap'), 'ground truth error'],
@@ -233,16 +233,21 @@ function strayNote(i, lines, lastCls) {
 
 var DLT_ALL = FIGURE_SCENE.solves.dlt['0,1,2'];
 var BA_ALL = FIGURE_SCENE.solves.ba['0,1,2'];
+var BA_TWO = FIGURE_SCENE.solves.ba['0,1'];
 
-var PULLED_NOTE = line([132, 44], [168, 49], 'tm-leader') + note(['pulled toward', 'the stray line'], 128, 38);
-var CLOSE_NOTE = line([132, 46], [145, 75], 'tm-leader') + note(['close to', 'the target'], 128, 38);
-var APART_NOTE = line([132, 48], [144, 77], 'tm-leader') + note(['from above they', 'cross; in 3D they', 'just miss'], 128, 33);
+var PULLED_NOTE = line([132, 44], [DLT_ALL.point[0] - 5, DLT_ALL.point[1] - 1.2], 'tm-leader') + note(['pulled toward', 'the stray line'], 128, 38);
+var CLOSE_NOTE = line([132, 46], [BA_ALL.point[0] - 3.4, BA_ALL.point[1] - 3.8], 'tm-leader') + note(['close to', 'the target'], 128, 38);
+var APART_NOTE = line([132, 48], [BA_TWO.point[0] - 3.4, BA_TWO.point[1] - 3.8], 'tm-leader') + note(['from above they', 'cross; in 3D they', 'just miss'], 128, 33);
 
 var DLT_SKETCH = sketch(DLT_ALL, ALL, PULLED_NOTE, strayNote(2, ['stray']));
 var REFINED_SKETCH = sketch(BA_ALL, ALL,
     '<circle cx="' + DLT_ALL.point[0] + '" cy="' + DLT_ALL.point[1] + '" r="4" class="tm-start"/>'
-    + '<line x1="170" y1="53.7" x2="153" y2="72.8" class="tm-move" marker-end="url(#tm-arrow)"/>'
-    + line([132, 44], [168, 49], 'tm-leader')
+    + (function () {
+        // From the DLT point to Refined's, stopping short of both markers.
+        var a = DLT_ALL.point, b = BA_ALL.point, dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+        return line([a[0] + dx / len * 4.5, a[1] + dy / len * 4.5], [b[0] - dx / len * 6, b[1] - dy / len * 6], 'tm-move" marker-end="url(#tm-arrow)');
+    })()
+    + line([132, 44], [DLT_ALL.point[0] - 4.5, DLT_ALL.point[1] - 1.2], 'tm-leader')
     + note(['DLT start'], 128, 47),
     strayNote(2, ['stray']));
 
@@ -395,7 +400,7 @@ function resultText(kind, threshold) {
                 ? lead + 'every camera lands within the threshold, so nothing is dropped. The first solve stands, close '
                     + 'to the target (the cross), with the stray still counted.'
                 : lead + 'the right camera is left out for this node, and the projection comes from the two cameras that '
-                    + 'were right: almost exactly the target.';
+                    + 'are only a little off: near the target, but still a little wrong.';
 }
 
 /**
@@ -417,7 +422,8 @@ export function buildTriangulationMethodsFigure(opts) {
         '<p class="tri-methods-lead">Both methods triangulate each node of the skeleton on its own (the sketches '
         + 'show one node, from above) and start the same way: each camera\'s 2D prediction is a line of sight, '
         + 'and the projection, the 3D point, is where those lines meet. Real detections never meet exactly. Here the right-hand '
-        + 'camera\'s 2D prediction is placed wrong: an outlier, marked stray. The green cross is the target: the true position. The reprojection is where the '
+        + 'camera\'s 2D prediction is placed wrong: an outlier, marked stray. The other two are a little off, as real predictions always are. The green cross is the '
+        + 'target: the true position. The reprojection is where the '
         + 'projection lands back in a camera\'s 2D image, and the reprojection error is the distance on that 2D image '
         + 'between the prediction and the reprojection. The bars at the bottom right of each sketch add up those errors: Refined\'s sum '
         + 'is lower than DLT\'s, even though its error in the stray camera is larger. The dark red line is the ground '
@@ -470,7 +476,7 @@ export function buildTriangulationMethodsFigure(opts) {
         + '(gaps in the tracks).</p>'
         + '</div>'
         + '<div class="tri-methods-legend">'
-        + '<span><i class="tm-key-sight"></i><i class="tm-key-sight tm-key-sight-stray"></i>line of sight: grey if the camera is right, orange if stray</span>'
+        + '<span><i class="tm-key-sight"></i><i class="tm-key-sight tm-key-sight-stray"></i>line of sight: grey if the camera is a little off, orange if stray</span>'
         + '<span><i class="tm-key-back"></i>line from the camera to the projection</span>'
         + '<span><i class="tm-key-band"></i>threshold: where the reprojection may land in that camera</span>'
         + '</div>';

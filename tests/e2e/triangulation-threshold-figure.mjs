@@ -123,25 +123,25 @@ try {
     check(r.cameras === 3 && r.methodCardSketches === '3,3', `three cameras in every sketch (${r.cameras}; cards ${r.methodCardSketches})`);
     check(r.sketches === 2, 'one sketch per solve: two steps');
     check(r.name1.includes('DLT') && r.s1 === 'over,over,drop', `DLT first solve: all over, only the worst dropped (${r.s1})`);
-    check(/^20 px/.test(r.errText[0]) && /^28\.1 px/.test(r.errText[1]) && /^35\.6 px.*dropped/.test(r.errText[2]), `errors from the real solver (${r.errText.join(' | ')})`);
+    check(/^20\.8 px/.test(r.errText[0]) && /^28\.3 px/.test(r.errText[1]) && /^35\.4 px.*dropped/.test(r.errText[2]), `errors from the real solver (${r.errText.join(' | ')})`);
     check(r.s2 === 'in,in,out', `solved again: the other two within (${r.s2})`);
     check(r.bands2 === 2, `step 2 draws a band only on the cameras still counted (${r.bands2})`);
     check(r.kind === 'two' && /^With 15 px, the right camera is left out/.test(r.result), `result says so (${r.result.slice(0, 50)}…)`);
     check(!r.inRadio, 'the threshold card is not one of the method choices');
 
     console.log('2. the setting, typed in the Tracking Wizard');
-    await type(20);
+    await type(25);
     r = await read();
-    check(r.setting === '20 px' && r.big === '20 px' && r.num === '20', `setting and sketch follow (${r.setting}, ${r.big})`);
-    check(r.s1 === 'in,over,drop', `an error of exactly 20 is within; the worst dropped (${r.s1})`);
-    check(Math.abs(r.bandLen - 20) < 0.11, `bands drawn 20 px either side of the detection (bottom camera: ${r.bandLen} units at 2 px per unit)`);
+    check(r.setting === '25 px' && r.big === '25 px' && r.num === '25', `setting and sketch follow (${r.setting}, ${r.big})`);
+    check(r.s1 === 'in,over,drop', `one within, one over, the worst dropped (${r.s1})`);
+    check(Math.abs(r.bandLen - 25) < 0.11, `bands drawn 25 px either side of the detection (bottom camera: ${r.bandLen} units at 2 px per unit)`);
 
     console.log('3. Refined, and what the threshold does for it');
     await page.click('.tri-method-choice[data-method="ba"]');
     await type(15);
     r = await read();
     check(r.name1.includes('Refined') && r.s1 === 'in,in,drop', `Refined's first solve: only the stray is over (${r.s1})`);
-    check(r.s2 === 'in,in,out' && r.kind === 'two' && /almost exactly the target/.test(r.result), `dropping it reaches the true position (${r.result.slice(0, 60)}…)`);
+    check(r.s2 === 'in,in,out' && r.kind === 'two' && /near the target, but still a little wrong/.test(r.result), `dropping it reaches the true position (${r.result.slice(0, 60)}…)`);
     await type(60);
     r = await read();
     check(r.kind === 'close' && r.s2 === '' && /close to the target/.test(r.result), `60 px drops nothing and stays close (${r.s1})`);
@@ -190,7 +190,7 @@ try {
     r = await read();
     check(r.big === 'off' && r.num === '0' && r.slider === '0', `the slider's left end is off (${r.big}, box ${r.num})`);
     check(r.s1 === 'off,off,off' && r.s2 === '' && r.bands2 === 0 && r.kind === 'offFar' && /every camera counts/.test(r.result), `off: every camera counts, nothing dropped (${r.s1}; ${r.result.slice(0, 40)}…)`);
-    check(r.bandLen === null && /^20 px · counted/.test(r.errText[0]), `no bands, and no verdict against a threshold (${r.errText[0]})`);
+    check(r.bandLen === null && /^20\.8 px · counted/.test(r.errText[0]), `no bands, and no verdict against a threshold (${r.errText[0]})`);
     check(r.use === null && r.field === '0', 'off offers no Use; the setting stays off');
     await tryBox(40);
     await tryBox(0);
@@ -286,12 +286,12 @@ try {
             numberStyle: (() => { const cs = getComputedStyle(wrap.querySelector('.tm-camera-number')); return cs.fill + ' ' + cs.fontWeight; })() };
     });
     check(totals.dlt.labels.join() === 'camera 0,camera 1,camera 2,sum,ground truth', `totals: a row per camera, the sum, the ground truth error (${totals.dlt.labels.join()})`);
-    check(totals.dlt.values[3] === '83.7 px' && totals.ba.values[3] === '64.4 px', `the sums are the errors added up (DLT ${totals.dlt.values[3]}, Refined ${totals.ba.values[3]})`);
+    check(totals.dlt.values[3] === '84.5 px' && totals.ba.values[3] === '64 px', `the sums are the errors added up (DLT ${totals.dlt.values[3]}, Refined ${totals.ba.values[3]})`);
     check(totals.dlt.widths[3] > totals.ba.widths[3], `DLT's sum bar is longer than Refined's (${totals.dlt.widths[3].toFixed(1)} vs ${totals.ba.widths[3].toFixed(1)})`);
-    check(Math.abs(totals.dlt.widths[3] / 83.7 - totals.ba.widths[3] / 64.4) < 0.02, 'one scale in both sketches');
-    check(Math.abs(totals.dlt.widths[2] - 35.6 * totals.dlt.widths[3] / 83.7) < 0.2, 'each bar is in proportion to its error');
+    check(Math.abs(totals.dlt.widths[3] / 84.5 - totals.ba.widths[3] / 64) < 0.02, 'one scale in both sketches');
+    check(Math.abs(totals.dlt.widths[2] - 35.4 * totals.dlt.widths[3] / 84.5) < 0.2, 'each bar is in proportion to its error');
     check(totals.right && totals.clear, 'the totals sit at the bottom-right, clear of the cameras');
-    check(totals.dlt.values[4] === '39.5 mm' && totals.ba.values[4] === '3.9 mm' && totals.dlt.widths[4] > totals.ba.widths[4] * 5, `the ground truth error shrinks from DLT to Refined (${totals.dlt.values[4]} to ${totals.ba.values[4]})`);
+    check(totals.dlt.values[4] === '39.7 mm' && totals.ba.values[4] === '7.1 mm' && totals.dlt.widths[4] > totals.ba.widths[4] * 5, `the ground truth error shrinks from DLT to Refined (${totals.dlt.values[4]} to ${totals.ba.values[4]})`);
     const truthLine = await page.evaluate(() => {
         const svg = document.querySelector('.tri-method-choice[data-method="dlt"] svg');
         const kids = Array.from(svg.children), at = (el) => kids.indexOf(el);
@@ -311,7 +311,7 @@ try {
         const box = wrap.querySelector('.tm-legend').getBoundingClientRect(), view = svg.getBoundingClientRect();
         const camera = svg.querySelector('g[transform]').getBoundingClientRect();
         return {
-            everySketch: sketches.length >= 3 && sketches.every(s => Array.from(s.querySelectorAll('.tm-legend text')).map(t => t.textContent).join() === 'prediction,projection,target,reprojection,reprojection error,ground truth error'),
+            everySketch: sketches.length >= 3 && sketches.every(s => Array.from(s.querySelectorAll('.tm-legend text')).map(t => t.textContent).join() === 'target,projection,prediction,reprojection,reprojection error,ground truth error'),
             white: getComputedStyle(svg.querySelector('circle.tm-det')).fill,
             bottomLeft: Math.abs(box.left - wrap.getBoundingClientRect().left) < 1 && box.bottom <= view.bottom + 1 && box.top - view.top > view.height / 2,
             clearOfScene: box.right < camera.left || box.top > camera.bottom,
@@ -319,7 +319,7 @@ try {
             outer: document.querySelector('.tri-methods-legend').textContent,
         };
     });
-    check(legend.everySketch, 'every sketch has the legend, with the five labels');
+    check(legend.everySketch, 'every sketch has the legend, with its labels in order');
     check(legend.bottomLeft, 'it sits at the bottom-left of the card');
     check(legend.clearOfScene, 'it does not overlap the left camera');
     check(legend.notClipped, 'no label is clipped');
