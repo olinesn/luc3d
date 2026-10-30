@@ -257,6 +257,11 @@ try {
         };
     });
     check(marker.opacity < 0.6 && marker.overCross, `the 3D marker is translucent, over the cross, so the cross shows through (fill opacity ${marker.opacity})`);
+    const defined = await page.evaluate(() => {
+        const says = (el) => /distance on .*2D image between the prediction and the reprojection/.test(el.textContent);
+        return says(document.querySelector('.tri-methods-lead')) && says(document.querySelector('.tri-thr'));
+    });
+    check(defined, 'the text says the reprojection error is the distance on the 2D image between prediction and reprojection');
     const legend = await page.evaluate(() => {
         const sketches = Array.from(document.querySelectorAll('.tri-methods .tm-sketch')).filter(s => !s.querySelector('.tm-idle'));
         const wrap = sketches[0], svg = wrap.querySelector('svg');

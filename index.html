@@ -294,7 +294,7 @@
                         <!-- The reprojection error threshold every Triangulate run uses
                              (the Tracking Wizard's setting). Blank = off.
                              Wired in ui/ui-wiring.js (wireReprojThresholdField). -->
-                        <label class="tri-dropdown-setting" title="Reprojection error threshold: a camera whose 2D point misses the 3D point by more than this many pixels is dropped for that node, the worst first, and the node is solved again. Leave blank for off. Used by the next Triangulate.">
+                        <label class="tri-dropdown-setting" title="Reprojection error threshold: a camera whose reprojection error (the distance on its 2D image between the prediction and the reprojection) is over this many pixels is dropped for that node, the worst first, and the node is solved again. Leave blank for off. Used by the next Triangulate.">
                             <span class="tri-dropdown-setting-label">Reprojection error (px)</span>
                             <input type="number" id="tbReprojThreshold" min="0" max="500" step="1" inputmode="decimal"
                                 placeholder="off" autocomplete="off" aria-label="Reprojection error threshold (px)">
