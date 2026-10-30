@@ -5589,7 +5589,86 @@ kbd {
   margin-top: 10px;
 }
 
-.tri-thr .fig-try-row > .fig-ctl { flex: 1 1 280px; max-width: 480px; }
+/* Text and controls on the left, this session's examples on the right; stacked
+   once the card is too narrow for both. */
+.tri-thr-top {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.tri-thr-intro { min-width: 0; }
+.tri-thr-intro .fig-try-row { flex-wrap: wrap; }
+
+.thr-ex {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  outline: none;
+}
+
+.thr-ex:focus-visible { border-color: var(--accent); }
+.thr-ex-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.thr-ex-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.thr-ex-nav { display: flex; align-items: center; gap: 8px; }
+.thr-ex-pos { min-width: 92px; text-align: center; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+.thr-ex-arrow {
+  width: 36px;
+  height: 30px;
+  padding: 0 0 3px;
+  background: var(--bg-button);
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.thr-ex-arrow:hover:not(:disabled) { background: var(--bg-button-hover); }
+.thr-ex-arrow:disabled { color: var(--text-muted); opacity: 0.5; cursor: default; }
+.thr-ex-where { font-size: 12px; color: var(--text-secondary); }
+.tri-methods-col p.thr-ex-message { margin: auto 0; padding: 24px 0; text-align: center; color: var(--text-muted); }
+.thr-ex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; }
+.thr-ex-tile { min-width: 0; }
+
+.thr-ex-tile canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+.thr-ex-tile[data-state="drop"] canvas { border-color: var(--error-color); opacity: 0.6; }
+.thr-ex-tile[data-state="over"] canvas { border-color: var(--warning-color); }
+.thr-ex-tile[data-state="out"] canvas { opacity: 0.35; }
+.thr-ex-cam, .thr-ex-err { overflow: hidden; font-size: 11px; line-height: 15px; white-space: nowrap; text-overflow: ellipsis; }
+.thr-ex-cam { color: var(--text-secondary); }
+.thr-ex-err { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.thr-ex-tile[data-state="in"] .thr-ex-err { color: var(--success-color); }
+.thr-ex-tile[data-state="over"] .thr-ex-err { color: var(--warning-color); }
+.thr-ex-tile[data-state="drop"] .thr-ex-err { color: var(--error-color); }
+.tri-methods-col p.thr-ex-result { margin: 2px 0 0; min-height: 3em; font-size: 12px; line-height: 1.5; color: var(--text-primary); }
+.tri-methods-col p.thr-ex-summary { margin: 0; min-height: 3em; font-size: 11px; line-height: 1.5; color: var(--text-muted); }
+.thr-ex-legend { display: flex; flex-wrap: wrap; gap: 3px 12px; font-size: 11px; color: var(--text-muted); }
+.thr-ex-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.thr-ex-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; box-sizing: border-box; }
+.thr-key-pred { background: #fff; }
+.thr-key-rep { border: 2px solid #7c93ff; }
+.thr-key-first { border: 2px solid #b5b5b5; }
+.thr-ex-legend .thr-key-err { width: 14px; height: 0; border-top: 2px solid var(--error-color); border-radius: 0; }
+.thr-key-ring { border: 2px dashed var(--success-color); }
+
+/* The slider gets its own line: half a card is too narrow to share one with First solve. */
+.tri-thr .fig-try-row > .fig-ctl { flex: 1 1 100%; max-width: none; }
 
 .tri-thr-demo-method {
   display: flex;
