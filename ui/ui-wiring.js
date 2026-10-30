@@ -901,7 +901,7 @@ export function setupMenus() {
     // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
     setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
     // Behavior labelling: the Behavior menu, toolbar button, tab and mode.
-    setupBehaviorUi({ closeMenus: closeMenus, navigate: navigateToFrame });
+    setupBehaviorUi({ closeMenus: closeMenus, navigate: navigateToFrame, switchSession: switchSession });
     setTrackSummaryNavigator(navigateToFrame);   // the Track All summary's Identities samples and maps
     // After the tab fixes (or un-fixes) a switch, repaint everything that shows identities.
     setIdSwitchRefresher(function () {

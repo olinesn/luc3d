@@ -1,12 +1,14 @@
-// ui/behavior-detect.js — running the behavior detectors on the active
-// session: the toolbar's Behavior button (All frames), This frame, and what
+// ui/behavior-detect.js — running the behavior detectors and classifiers on
+// a session: the toolbar's Behavior button (All frames), This frame, and what
 // the detection settings need to show live numbers (feature columns, the
 // resolved body and floor).
 //
 // A run reads every animal's poses once (pose/behavior-tensor.js), resolves
 // the body (node roles, excluded nodes, body lengths) and the floor, then
-// scores every behavior that has a detector, chunk by chunk on the worker pool
-// (pose/behavior-pool.js), and turns the scores into bouts
+// scores every behavior, chunk by chunk on the worker pool
+// (pose/behavior-pool.js): with its trained classifier when it has one that
+// can run on this session (pose/behavior-classifier.js: its post-processing
+// and exclusive group make the bouts), else with its detector
 // (pose/behavior-rules.js). Each behavior's result replaces its last run in
 // pose/behavior-predictions.js, which the Review section, the timeline and the
 // project file read.
@@ -43,6 +45,11 @@ import {
     setBehaviorRun, noteDetectionPass, runConfigPrint, predictionInputPrintAsync, notePossibleInputChange,
     predictionCheckPending, checkPredictionInputAsync,
 } from '../pose/behavior-predictions.js';
+import {
+    behaviorModelOf, modelHashOf, labelPrintOf, modelProblems, predictModels, predictModelsAtFrame, deriveBouts,
+    modelBoutSettings,
+} from '../pose/behavior-classifier.js';
+import { behaviorPost } from '../pose/behavior-ethogram.js';
 import { setStatus, markDirty, onMarkDirty } from '../import-export/save-load.js';
 
 /** Frames per chunk of a run (each padded by the longest window). */
@@ -81,13 +88,25 @@ export function floorKey() {
     return 'fit';
 }
 
-/** What predictions are checked against now: the frame rate and the floor. */
+/**
+ * What predictions are checked against now: the frame rate and the floor;
+ * for classifier runs, each behavior's training labels (a cached print) and
+ * its current model.
+ */
 export function detectionEnv() {
-    return { fps: detectionFps(), floorKey: floorKey() };
+    return { fps: detectionFps(), floorKey: floorKey(), modelHashOf: modelHashOf,
+             labelPrintOf: function (id) { return labelPrintOf(state.sessions || [], id); } };
 }
 
 function numFramesOf(session) {
-    return session === state.session && state.totalFrames > 0 ? state.totalFrames : 0;
+    if (session === state.session) return state.totalFrames > 0 ? state.totalFrames : 0;
+    return session && session.totalFrames > 0 ? session.totalFrames : 0;
+}
+
+/** A session's frame rate: the app's for the active one, the one it was left at otherwise. */
+export function sessionFps(session) {
+    if (session === state.session || !(session && session.fps > 0)) return detectionFps();
+    return session.fps;
 }
 
 function n(x) {
@@ -119,9 +138,10 @@ export function floorPlanes() {
 
 /**
  * The floor for an input, as the settings ask, with what was used.
+ * @param {Session} [session] whose cameras tell the fit which side is up (default: the active one)
  * @returns {{floor: Object|null, source: string, label: string, warning: string}}
  */
-export function resolveFloor(input, body, settings) {
+export function resolveFloor(input, body, settings, session) {
     if (input.mode !== '3d') return { floor: null, source: 'none', label: 'No floor: 2D, from camera ' + (input.camera || '?'), warning: '' };
     var want = settings && settings.floor ? settings.floor.source : 'auto';
     var warning = '';
@@ -139,7 +159,7 @@ export function resolveFloor(input, body, settings) {
         if (want === 'origin') warning = 'No origin is set: using the fitted floor';
     }
     var all = input.nodeNames.map(function (nm, i) { return i; });
-    var fitted = fitFloor(input, all, { cameraCenters: cameraCenters(state.session), head: body.roles.head, tailBase: body.roles.tailBase });
+    var fitted = fitFloor(input, all, { cameraCenters: cameraCenters(session || state.session), head: body.roles.head, tailBase: body.roles.tailBase });
     if (!fitted) return { floor: null, source: 'none', label: 'No floor: too few 3D points to fit one', warning: warning };
     var why = { cameras: 'the cameras are above it', heights: 'the bodies rise from it', flatness: 'it is the flatter side', 'one envelope': 'only one side could be fitted' }[fitted.upFrom] || '';
     return {
@@ -151,8 +171,9 @@ export function resolveFloor(input, body, settings) {
 }
 
 /**
- * Everything a run reads, for the active session: the poses, the body, the
- * floor, the feature spec and the frames to skip (broken tracking).
+ * Everything a run reads, for a session (the active one, or another whose
+ * poses are resident — at the frame rate it was left at): the poses, the body,
+ * the floor, the feature spec and the frames to skip (broken tracking).
  * @param {Session} session
  * @param {{mode?: '3d'|'2d'}} [opts]
  * @returns {{session, input, body, floorInfo, spec, catalog, fps, broken}}
@@ -161,8 +182,8 @@ export function buildBehaviorContext(session, opts) {
     var settings = featureSettings();
     var input = collectBehaviorInput(session, { numFrames: numFramesOf(session), mode: opts && opts.mode });
     var body = resolveBody(input.nodeNames, input.edges, settings);
-    var floorInfo = resolveFloor(input, body, settings);
-    var fps = detectionFps();
+    var floorInfo = resolveFloor(input, body, settings, session);
+    var fps = sessionFps(session);
     var spec = featureSpec(input, body, floorInfo.floor, fps);
     return { session: session, input: input, body: body, floorInfo: floorInfo, spec: spec, catalog: catalogFor(spec), fps: fps,
              broken: brokenPoseFrames(input, body, spec.bodyLength, fps) };
@@ -220,8 +241,8 @@ function dropContextCache() {
 export function refreshBehaviorContext(ctx) {
     var settings = featureSettings();
     var body = resolveBody(ctx.input.nodeNames, ctx.input.edges, settings);
-    var floorInfo = resolveFloor(ctx.input, body, settings);
-    var fps = detectionFps();
+    var floorInfo = resolveFloor(ctx.input, body, settings, ctx.session);
+    var fps = sessionFps(ctx.session);
     var spec = featureSpec(ctx.input, body, floorInfo.floor, fps);
     return Object.assign({}, ctx, { body: body, floorInfo: floorInfo, spec: spec, catalog: catalogFor(spec), fps: fps,
                                     broken: brokenPoseFrames(ctx.input, body, spec.bodyLength, fps) });
@@ -231,11 +252,35 @@ export function refreshBehaviorContext(ctx) {
 // Running
 // ----------------------------------------------------------------------------
 
-/** The ethogram's behaviors that have a detector, as the planner takes them. */
-function detectorBehaviors() {
-    return behaviors().filter(function (b) { return !!b.detector; }).map(function (b) {
+/**
+ * The ethogram's behaviors that have a detector, as the planner takes them —
+ * leaving out those a classifier predicts on this context (`skip`).
+ */
+function detectorBehaviors(skip) {
+    return behaviors().filter(function (b) { return !!b.detector && !(skip && skip.has(b.id)); }).map(function (b) {
         return { behaviorId: b.id, social: !!b.social, mutual: !!b.mutual, point: b.kind === 'point', detector: b.detector };
     });
+}
+
+/**
+ * The classifiers that can run on a context, and why the others cannot.
+ * @returns {{models: Object[], problems: string[]}}
+ */
+function runnableModels(ctx) {
+    var models = [], problems = [];
+    behaviors().forEach(function (b) {
+        var m = behaviorModelOf(b.id);
+        if (!m) return;
+        var why = modelProblems(m, ctx);
+        if (why.length) problems.push(b.name + ' (classifier): ' + why.join('; '));
+        else models.push(m);
+    });
+    return { models: models, problems: problems };
+}
+
+/** Does any behavior have a detector or a classifier? */
+function anythingToDetect() {
+    return behaviors().some(function (b) { return !!b.detector || !!behaviorModelOf(b.id); });
 }
 
 /** The animal and target names of a score key ('a' or 'a>b'). */
@@ -257,53 +302,47 @@ function openSettings() {
 }
 
 /**
- * Behavior ▸ Detect Behaviors, the toolbar's Behavior button: score every
- * behavior that has a detector on every frame, and keep the bouts.
+ * Score every behavior on every frame of one session (its classifier where
+ * one can run, else its detector), keep each behavior's bouts as its run, and
+ * print the poses read as the run's reference.
+ * @param {Session} session
+ * @param {Object} ctx from `buildBehaviorContext`
+ * @param {{title: string, step?: number, steps?: number, only?: string[]}} ui the progress card's
+ *   title and step; `only`: behavior ids to run (default: all)
+ * @returns {Promise<{total:number, counts:string[], notes:string[], sources:Object}|{error:string, warn?:boolean}>}
  */
-export async function detectAllFrames() {
-    var session = state.session;
-    if (!session) { setStatus('No session loaded'); return null; }
-    if (_running) return null;
-    var list = detectorBehaviors();
-    if (!list.length) {
-        setStatus(behaviors().length ? 'No behavior has a detector yet: set one in the detection settings'
-            : 'No behaviors yet: add them (with detectors) in the detection settings', 'warning');
-        openSettings();
-        return null;
+export async function detectOnContext(session, ctx, ui) {
+    var input = ctx.input;
+    if (!input.animals.length) return { error: 'No identified animals to detect behaviors on: run Track All (behaviors are detected per identity)', warn: true };
+    var only = ui.only ? new Set(ui.only) : null;
+    var mr = runnableModels(ctx);
+    var models = mr.models.filter(function (m) { return !only || only.has(m.behaviorId); });
+    var byModel = new Set(models.map(function (m) { return m.behaviorId; }));
+    var list = detectorBehaviors(byModel).filter(function (b) { return !only || only.has(b.behaviorId); });
+    var plan = planDetectors(ctx.catalog, list);
+    var social = plan.plans.filter(function (p) { return p.social; });
+    var notes = plan.skipped.map(function (sk) {
+        var b = behaviorById(sk.behaviorId);
+        return (b ? b.name : sk.behaviorId) + ': ' + sk.problems.join('; ');
+    }).concat(mr.problems);
+    if (social.length && input.animals.length < 2) {
+        notes.push(social.map(function (p) { return behaviorById(p.behaviorId).name; }).join(', ') + ': social, but only one animal');
+        plan.plans = plan.plans.filter(function (p) { return !p.social; });
     }
-    _running = true;
-    var title = { title: 'Detect Behaviors', unit: 'frames' };
-    try {
-        showLoading('Reading poses…', { title: title.title });
-        await yieldToPaint();
-        var ctx = keepContext(session, buildBehaviorContext(session));
-        var input = ctx.input;
-        if (!input.animals.length) {
-            setStatus('No identified animals to detect behaviors on: run Track All (behaviors are detected per identity)', 'warning');
-            return null;
-        }
-        var plan = planDetectors(ctx.catalog, list);
-        var social = plan.plans.filter(function (p) { return p.social; });
-        var notes = plan.skipped.map(function (s) {
-            var b = behaviorById(s.behaviorId);
-            return (b ? b.name : s.behaviorId) + ': ' + s.problems.join('; ');
-        });
-        if (social.length && input.animals.length < 2) {
-            notes.push(social.map(function (p) { return behaviorById(p.behaviorId).name; }).join(', ') + ': social, but only one animal');
-            plan.plans = plan.plans.filter(function (p) { return !p.social; });
-        }
-        if (!plan.plans.length) {
-            setStatus('Nothing to detect — ' + notes.join(' · '), 'warning');
-            openSettings();
-            return null;
-        }
-        var T = input.numFrames, N = input.nodeNames.length, D = input.dim;
+    if (!plan.plans.length && !models.length) return { error: 'Nothing to detect — ' + notes.join(' · '), warn: true, openSettings: true };
+    var T = input.numFrames, N = input.nodeNames.length, D = input.dim;
+    var fps = ctx.fps;
+    var env = detectionEnv();
+    var counts = [], total = 0;
+    var steps = (ui.steps || 1), step = (ui.step || 1);
+    var where = input.animals.length + ' animal' + (input.animals.length === 1 ? '' : 's') + ' · ' + (input.mode === '3d' ? '3D' : '2D, ' + input.camera) +
+        (ui.session ? ' · ' + ui.session : '');
+    if (plan.plans.length) {
         var chunks = planChunks(T, featurePadFrames(ctx.spec), CHUNK_FRAMES);
         var scores = {};
         plan.plans.forEach(function (p) { scores[p.behaviorId] = {}; });
         var jobPlan = { request: plan.request, plans: plan.plans };
-        var detail = plan.plans.length + ' behavior' + (plan.plans.length === 1 ? '' : 's') + ' · ' +
-            input.animals.length + ' animal' + (input.animals.length === 1 ? '' : 's') + ' · ' + (input.mode === '3d' ? '3D' : '2D, ' + input.camera);
+        var detail = plan.plans.length + ' detector' + (plan.plans.length === 1 ? '' : 's') + ' · ' + where;
         var doneFrames = 0;
         await runBehaviorChunks(chunks.length, function (i) {
             return { kind: 'scores', spec: ctx.spec, chunk: chunks[i], data: sliceChunkData(input.data, chunks[i], N * D, skipOf(ctx)), plan: jobPlan };
@@ -321,12 +360,9 @@ export async function detectAllFrames() {
             doneFrames += ch.end - ch.start;
         }, {
             workload: T * input.animals.length,
-            onProgress: function () { showLoadingProgress('Detecting behaviors', doneFrames, T, Object.assign({ detail: detail }, title)); },
+            onProgress: function () { showLoadingProgress('Detecting behaviors', doneFrames, T, { detail: detail, title: ui.title, step: step, steps: steps }); },
             pause: yieldToPaint,
         });
-        var fps = ctx.fps;
-        var env = detectionEnv();
-        var counts = [], total = 0;
         plan.plans.forEach(function (p) {
             var b = behaviorById(p.behaviorId);
             var bouts = [], scoreMap = new Map();
@@ -346,18 +382,119 @@ export async function detectAllFrames() {
             counts.push(b.name + ' ' + n(bouts.length));
             total += bouts.length;
         });
-        // The poses this run read, as the reference later edits are checked against.
-        showLoadingProgress('Detecting behaviors', T, T, Object.assign({ detail: detail }, title));
-        var print = await predictionInputPrintAsync(session, input.mode, input.camera, { pause: slicePause });
-        noteDetectionPass(session, print, { frames: T });
+    }
+    if (models.length) {
+        var mdetail = models.length + ' classifier' + (models.length === 1 ? '' : 's') + ' · ' + where;
+        showLoadingProgress('Predicting behaviors', 0, T, { detail: mdetail, title: ui.title, step: step, steps: steps });
+        var pr = await predictModels(ctx, models, {
+            onProgress: function (d) { showLoadingProgress('Predicting behaviors', d, T, { detail: mdetail, title: ui.title, step: step, steps: steps }); },
+            pause: yieldToPaint,
+        });
+        var how = {};
+        Object.keys(pr.scores).forEach(function (bid) { how[bid] = modelBoutSettings(behaviorById(bid), fps); });
+        var bouts = deriveBouts(pr.scores, how);
+        Object.keys(pr.scores).forEach(function (bid) {
+            var b = behaviorById(bid), m = behaviorModelOf(bid);
+            var source = 'model:' + m.hash;
+            setBehaviorRun(session, {
+                behaviorId: bid, source: source, labels: m.labelPrint || null,
+                cfg: runConfigPrint(b, session, { fps: fps, mode: input.mode, camera: input.camera, floorKey: env.floorKey, source: source }),
+                fps: fps, mode: input.mode, camera: input.camera, bouts: bouts[bid], scores: pr.scores[bid],
+            });
+            counts.push(b.name + ' ' + n(bouts[bid].length) + ' (classifier)');
+            total += bouts[bid].length;
+        });
+    }
+    // The poses this run read, as the reference later edits are checked against.
+    showLoadingProgress('Detecting behaviors', T, T, { detail: where, title: ui.title, step: step, steps: steps });
+    var print = await predictionInputPrintAsync(session, input.mode, input.camera, { pause: slicePause });
+    noteDetectionPass(session, print, { frames: T });
+    return { total: total, counts: counts, notes: notes };
+}
+
+/**
+ * Behavior ▸ Detect Behaviors, the toolbar's Behavior button: score every
+ * behavior on every frame — with its classifier when it has one, else its
+ * detector — and keep the bouts.
+ * @param {{only?: string[]}} [opts] behavior ids to run (default: all)
+ */
+export async function detectAllFrames(opts) {
+    var session = state.session;
+    if (!session) { setStatus('No session loaded'); return null; }
+    if (_running) return null;
+    if (!anythingToDetect()) {
+        setStatus(behaviors().length ? 'No behavior has a detector or a classifier yet: set a detector in the detection settings, or train a classifier'
+            : 'No behaviors yet: add them (with detectors) in the detection settings', 'warning');
+        openSettings();
+        return null;
+    }
+    _running = true;
+    var title = 'Detect Behaviors';
+    try {
+        showLoading('Reading poses…', { title: title });
+        await yieldToPaint();
+        var ctx = keepContext(session, buildBehaviorContext(session));
+        var res = await detectOnContext(session, ctx, { title: title, only: opts && opts.only });
+        if (res.error) {
+            setStatus(res.error, res.warn ? 'warning' : 'error');
+            if (res.openSettings) openSettings();
+            return null;
+        }
         markDirty();
         // That edit was this run's own: the poses it read are still current.
         if (_ctxCache && _ctxCache.ctx === ctx) _ctxCache.gen = _editGen;
         var broken = brokenNote(ctx);
-        setStatus('Detected ' + n(total) + ' bout' + (total === 1 ? '' : 's') + ': ' + counts.join(', ') + (broken ? ' · ' + broken : '') +
-            (ctx.floorInfo.warning ? ' · ' + ctx.floorInfo.warning : '') + (notes.length ? ' · Skipped ' + notes.join(' · ') : ''),
-            notes.length || ctx.floorInfo.warning ? 'warning' : 'success');
-        return { bouts: total };
+        setStatus('Detected ' + n(res.total) + ' bout' + (res.total === 1 ? '' : 's') + ': ' + res.counts.join(', ') + (broken ? ' · ' + broken : '') +
+            (ctx.floorInfo.warning ? ' · ' + ctx.floorInfo.warning : '') + (res.notes.length ? ' · Skipped ' + res.notes.join(' · ') : ''),
+            res.notes.length || ctx.floorInfo.warning ? 'warning' : 'success');
+        return { bouts: res.total };
+    } catch (e) {
+        console.error('[behavior] detection failed', e);
+        setStatus('Behavior detection failed: ' + (e && e.message || e), 'error');
+        return null;
+    } finally {
+        hideLoading();
+        _running = false;
+    }
+}
+
+/**
+ * Detect on EVERY session whose poses are resident (the active one, and on
+ * an eager project the others; a lazy project's other sessions are named as
+ * left out), one after the other.
+ * @param {{only?: string[]}} [opts]
+ * @returns {Promise<{sessions: number, bouts: number, leftOut: string[]}|null>}
+ */
+export async function detectAllSessions(opts) {
+    if (!state.session) { setStatus('No session loaded'); return null; }
+    if (_running) return null;
+    if (!anythingToDetect()) { setStatus('No behavior has a detector or a classifier yet', 'warning'); return null; }
+    _running = true;
+    var title = 'Detect Behaviors (all sessions)';
+    var sessions = (state.sessions || []).slice();
+    var done = 0, bouts = 0, leftOut = [], notes = [];
+    try {
+        showLoading('Reading poses…', { title: title });
+        await yieldToPaint();
+        for (var i = 0; i < sessions.length; i++) {
+            var s = sessions[i];
+            var name = s.name || 'session ' + (i + 1);
+            showLoading('Reading poses of ' + name + '…', { title: title, step: i + 1, steps: sessions.length });
+            await yieldToPaint();
+            var ctx = s === state.session ? keepContext(s, buildBehaviorContext(s)) : buildBehaviorContext(s);
+            if (!ctx.input.animals.length) { leftOut.push(name); continue; }
+            var res = await detectOnContext(s, ctx, { title: title, step: i + 1, steps: sessions.length, session: name, only: opts && opts.only });
+            if (res.error) { notes.push(name + ': ' + res.error); continue; }
+            done++;
+            bouts += res.total;
+            if (s === state.session && _ctxCache && _ctxCache.ctx === ctx) _ctxCache.gen = _editGen + 1;
+        }
+        markDirty();
+        if (_ctxCache && _ctxCache.session === state.session) _ctxCache.gen = _editGen;
+        setStatus('Detected ' + n(bouts) + ' bout' + (bouts === 1 ? '' : 's') + ' in ' + n(done) + ' session' + (done === 1 ? '' : 's') +
+            (leftOut.length ? ' · Left out (poses not loaded: open each to include it): ' + leftOut.join(', ') : '') +
+            (notes.length ? ' · ' + notes.join(' · ') : ''), leftOut.length || notes.length ? 'warning' : 'success');
+        return { sessions: done, bouts: bouts, leftOut: leftOut };
     } catch (e) {
         console.error('[behavior] detection failed', e);
         setStatus('Behavior detection failed: ' + (e && e.message || e), 'error');
@@ -393,9 +530,8 @@ export function onFrameReadout(fn) {
 export function detectThisFrame() {
     var session = state.session;
     if (!session) { setStatus('No session loaded'); return null; }
-    var list = detectorBehaviors();
-    if (!list.length) {
-        setStatus('No behavior has a detector yet: set one in the detection settings', 'warning');
+    if (!anythingToDetect()) {
+        setStatus('No behavior has a detector or a classifier yet: set one in the detection settings', 'warning');
         openSettings();
         return null;
     }
@@ -406,6 +542,8 @@ export function detectThisFrame() {
         setStatus('No identified animals on this session to detect behaviors on', 'warning');
         return null;
     }
+    var mr = runnableModels(ctx);
+    var list = detectorBehaviors(new Set(mr.models.map(function (m) { return m.behaviorId; })));
     var plan = planDetectors(ctx.catalog, list);
     if (input.animals.length < 2) plan.plans = plan.plans.filter(function (p) { return !p.social; });
     var pad = featurePadFrames(ctx.spec);
@@ -437,6 +575,16 @@ export function detectThisFrame() {
             rows.push({ behaviorId: p.behaviorId, animal: nm[0], target: nm[1], score: score, detected: score >= 0.5, broken: broken, conditions: conds });
         });
     });
+    // Classifiers: their score against their threshold.
+    if (mr.models.length) {
+        predictModelsAtFrame(ctx, mr.models, f).rows.forEach(function (r) {
+            var b = behaviorById(r.behaviorId), thr = behaviorPost(b).threshold;
+            var ai = input.animals.indexOf(r.animal), ti = input.animals.indexOf(r.target);
+            var broken = !!skip && ((ai >= 0 && skip[ai] && skip[ai][f]) || (ti >= 0 && skip[ti] && skip[ti][f]));
+            rows.push({ behaviorId: r.behaviorId, animal: r.animal, target: r.target, score: r.score, detected: r.score >= thr,
+                        broken: !!broken, conditions: [], model: true, threshold: thr });
+        });
+    }
     rows.sort(function (a, b) { return (b.detected - a.detected) || ((b.score || 0) - (a.score || 0)); });
     _readout = { session: session, frame: f, rows: rows };
     _readoutListeners.forEach(function (fn) { try { fn(_readout); } catch (e) { console.error(e); } });

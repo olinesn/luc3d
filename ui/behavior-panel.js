@@ -18,6 +18,13 @@
 //             a confirm) is one undo step. Stale predictions say why. Also the
 //             This frame readout: per animal, each detector's conditions
 //             against their thresholds on one frame.
+//   Classifiers  each behavior's labels against what training needs, its
+//             classifier and how it cross-validated; Train… (the dialog),
+//             Predict all frames / All sessions, Export / Import; and the
+//             active-learning queue: Next uncertain ▸ (unlabelled stretches
+//             scoring near the threshold) and Next disagreement ▸ (labels the
+//             predicted bouts contradict), each shown with Accept / Reject /
+//             Skip ▸ (ui/behavior-train.js)
 //   Summary   per animal × behavior: bouts, seconds, share of the labelled
 //             frames; labels of a deleted identity, to reassign or delete
 //
@@ -44,8 +51,14 @@ import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-mo
 import { showBehaviorImportModal, showBehaviorExportModal } from './behavior-io-modal.js';
 import { ABSENT_COLOR } from './behavior-timeline.js';
 import {
-    detectAllFrames, detectThisFrame, frameReadout, onFrameReadout, detectionEnv, setupBehaviorDetection,
+    detectAllFrames, detectAllSessions, detectThisFrame, frameReadout, onFrameReadout, detectionEnv, setupBehaviorDetection,
 } from './behavior-detect.js';
+import {
+    classifierStatus, activeLearning, setActiveLearningBehavior, nextActiveItem, labelActiveItem, skipActiveItem,
+    exportClassifiers, showImportClassifiers, fmt, setClassifierSessionSwitcher,
+} from './behavior-train.js';
+import { showBehaviorTrainModal } from './behavior-train-modal.js';
+import { onModelsChange, behaviorModels } from '../pose/behavior-classifier.js';
 import { showBehaviorRulesModal } from './behavior-rules-modal.js';
 import { behaviorConfirm } from './behavior-confirm.js';
 import { setInfoTip } from './info-tip.js';
@@ -73,9 +86,13 @@ var panel = { animal: '', behavior: '', showAbsent: false, selectedKey: null, st
 /** The Predictions section's filters and selection (browser memory only). */
 var review = { behavior: '', animal: '', order: 'uncertainty', unreviewedOnly: true, selectedKey: null, selectedIndex: -1 };
 
-var PREDICTIONS_INFO = 'Bouts the detectors found, to check: Accept labels a bout as that behavior, Reject labels it ' +
-    '"not", and each moves on to the next. The labels are what count; predictions are redone by detecting again ' +
-    '(toolbar Behavior button) and go stale when the poses or the settings change.';
+var PREDICTIONS_INFO = 'Bouts the detectors and classifiers found, to check: Accept labels a bout as that behavior, Reject ' +
+    'labels it "not", and each moves on to the next. The labels are what count; predictions are redone by detecting again ' +
+    '(toolbar Behavior button) and go stale when the poses or the settings change — a classifier\'s also when the labels ' +
+    'it learned from change.';
+var CLASSIFIERS_INFO = 'A classifier learns a behavior from your labels and then predicts it in place of its detector. Train… ' +
+    'shows how well each does on labels it never saw. To teach it fast: predict, then Next uncertain ▸ shows the stretches ' +
+    'it is least sure of — Accept or Reject them — and train again.';
 
 function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -123,6 +140,7 @@ export function refreshBehaviorPanel() {
     renderCoding(session, !!msg);
     renderBouts(session);
     renderPredictions(session);
+    renderClassifiers(session);
     renderSummary(session);
 }
 
@@ -291,12 +309,13 @@ var STATUS_TEXT = { accepted: 'accepted', rejected: 'rejected', mixed: 'partly l
 
 function staleHtml(session) {
     var st = predictionStaleness(session, detectionEnv());
-    if (!st.input && !st.settings.length) return '';
+    if (!st.input && !st.settings.length && !st.labels.length && !st.model.length) return '';
     var why = [];
+    var names = function (ids) { return ids.map(function (id) { var b = behaviorById(id); return b ? b.name : 'a removed behavior'; }).join(', '); };
     if (st.input) why.push('the poses changed since they were detected');
-    if (st.settings.length) {
-        why.push('the settings of ' + st.settings.map(function (id) { var b = behaviorById(id); return b ? b.name : 'a removed behavior'; }).join(', ') + ' changed');
-    }
+    if (st.settings.length) why.push('the settings of ' + names(st.settings) + ' changed');
+    if (st.labels.length) why.push('the labels ' + names(st.labels) + ' learned from changed (train again)');
+    if (st.model.length) why.push(names(st.model) + ' has a newer classifier');
     return '<div class="behavior-stale" role="status">Out of date: ' + esc(why.join('; ')) + '. ' +
         '<button class="panel-btn" data-act="detect-all">Detect again</button></div>';
 }
@@ -315,6 +334,8 @@ function readoutHtml() {
             '<span class="behavior-swatch" style="background:' + esc(b.color) + '"></span>' +
             '<b>' + (row.detected ? '' : 'not ') + esc(b.name) + '</b> · ' + esc(row.animal) + (row.target ? esc(pairGlyph(b)) + esc(row.target) : '') +
             ' <span class="behavior-pred-score">' + (Number.isFinite(row.score) ? scorePct(row.score) : row.broken ? 'tracking broken here: skipped' : 'missing data') + '</span>' +
+            (row.model ? '<div class="behavior-readout-conds"><div class="' + (row.detected ? 'is-ok' : 'is-no') + '">' + (row.detected ? '✓ ' : '✗ ') +
+                'classifier score ' + (Number.isFinite(row.score) ? scorePct(row.score) : '–') + ' (threshold ' + scorePct(row.threshold) + ')</div></div>' : '') +
             '<div class="behavior-readout-conds">' + row.conditions.map(function (c) {
                 var ok = Number.isFinite(c.actual) && (c.op === '<' ? c.actual <= c.value : c.actual >= c.value);
                 return '<div class="' + (ok ? 'is-ok' : 'is-no') + '">' + (ok ? '✓ ' : '✗ ') + esc(c.feature) + ' = ' +
@@ -342,7 +363,7 @@ function renderPredictions(session) {
         '</div>';
     var withDetector = behaviors().filter(function (b) { return !!b.detector; }).length;
     if (!hasPredictions(session)) {
-        setReviewFocus(null);
+        if (behaviorUi().review && behaviorUi().review.from === 'predictions') setReviewFocus(null);
         html += '<p class="table-empty">' + (withDetector
             ? 'Nothing detected yet: Detect all frames, then review the bouts here.'
             : 'No detectors yet: Settings… gives a behavior one (templates for rearing, contact, following…).') + '</p>';
@@ -374,7 +395,7 @@ function renderPredictions(session) {
     // The bout boxed on the video (set when one is selected) goes once it is
     // no longer predicted (detected again, cleared).
     var rf = behaviorUi().review;
-    if (rf && (rf.session !== session || !all.some(function (p) { return predKey(p) === predKey(rf); }))) setReviewFocus(null);
+    if (rf && rf.from === 'predictions' && (rf.session !== session || !all.some(function (p) { return predKey(p) === predKey(rf); }))) setReviewFocus(null);
     html += '<div class="behavior-tools">' +
         '<button class="panel-btn" data-act="review-next"' + (queue.length ? '' : ' disabled') + ' title="Go to the next bout in this list">Next ▸</button>' +
         '<button class="panel-btn" data-act="accept-range"' + (queue.length ? '' : ' disabled') +
@@ -524,6 +545,92 @@ var _readoutHidden = null;
 function onFrameReadoutClose() {
     _readoutHidden = frameReadout();
     renderPredictions(state.session);
+}
+
+// ----------------------------------------------------------------------------
+// Classifiers
+// ----------------------------------------------------------------------------
+
+var AL_KIND_TEXT = { uncertain: 'uncertain', missed: 'labelled, not predicted', 'false': 'predicted, labelled "not"' };
+
+function renderClassifiers(session) {
+    var host = document.getElementById('behaviorClassifiersBody');
+    var count = document.getElementById('behaviorClassifiersCount');
+    if (!host) return;
+    var models = behaviorModels();
+    if (count) count.textContent = n(models.length);
+    if (!session || !behaviors().length) { host.innerHTML = ''; return; }
+    var rows = classifierStatus();
+    var html = '<div class="behavior-tools">' +
+        '<button class="panel-btn" data-act="train-open" title="Train classifiers on your labels, and see how well each does">Train…</button>' +
+        '<button class="panel-btn" data-act="predict-all"' + (models.length ? '' : ' disabled') +
+        ' title="Detect every behavior on all frames: with its classifier when it has one (the toolbar Behavior button)">Predict all frames</button>' +
+        '<button class="panel-btn" data-act="predict-frame"' + (models.length ? '' : ' disabled') +
+        ' title="What every classifier and detector says on this frame (in Predictions)">This frame</button>' +
+        '<button class="panel-btn" data-act="predict-sessions"' + (models.length ? '' : ' disabled') +
+        ' title="The same on every session whose poses are loaded">All sessions</button>' +
+        '<button class="panel-btn" data-act="export-models"' + (models.length ? '' : ' disabled') + ' title="Save the classifiers to a file">Export…</button>' +
+        '<button class="panel-btn" data-act="import-models" title="Use classifiers saved from another project">Import…</button></div>';
+    html += '<table class="data-table behavior-classifiers"><thead><tr><th>Behavior</th><th title="Bouts labelled present / &quot;not&quot;">Labels</th>' +
+        '<th title="Its classifier, and the cross-validated F1 on frames">Predicted by</th></tr></thead><tbody>';
+    rows.forEach(function (r) {
+        var b = r.behavior, m = r.model;
+        var labels = r.gate.length ? '<span class="behavior-short" title="' + esc(r.gate.join('; ')) + '">' + n(r.counts.present.bouts) + ' / ' +
+            n(r.counts.absent.bouts) + ' · needs more</span>' : n(r.counts.present.bouts) + ' / ' + n(r.counts.absent.bouts);
+        var cv = m && m.cv;
+        var by = m ? (m.imported ? 'imported' : 'classifier') + (cv && cv.frame ? ' · F1 ' + fmt(cv.frame.f1) : '') : (b.detector ? 'its detector' : '–');
+        html += '<tr><td><span class="behavior-swatch" style="background:' + esc(b.color) + '"></span>' + esc(b.name) + '</td>' +
+            '<td>' + labels + '</td><td' + (cv && cv.bout ? ' title="Cross-validated F1: frames ' + fmt(cv.frame.f1) + ', bouts ' + fmt(cv.bout.f1) + '"' : '') + '>' +
+            esc(by) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    var al = activeLearning();
+    if (al.behaviorId && !models.some(function (m) { return m.behaviorId === al.behaviorId; })) setActiveLearningBehavior('');
+    html += '<div class="behavior-al"><label>Teach <select data-act="al-behavior"><option value="">a behavior…</option>' +
+        models.map(function (m) {
+            var b = behaviorById(m.behaviorId);
+            return b ? '<option value="' + esc(b.id) + '"' + (b.id === al.behaviorId ? ' selected' : '') + '>' + esc(b.name) + '</option>' : '';
+        }).join('') + '</select></label>' +
+        '<button class="panel-btn" data-act="al-uncertain"' + (al.behaviorId ? '' : ' disabled') +
+        ' title="The unlabelled stretch the classifier is least sure of (scores near its threshold)">Next uncertain ▸</button>' +
+        '<button class="panel-btn" data-act="al-disagree"' + (al.behaviorId ? '' : ' disabled') +
+        ' title="The longest stretch where the labels and the predicted bouts disagree">Next disagreement ▸</button></div>';
+    var it = al.current;
+    if (it) {
+        var ib = behaviorById(it.behaviorId);
+        html += '<div class="behavior-al-item"><div><b>' + esc(ib ? ib.name : '?') + '?</b> · ' + esc(it.animal) + (it.target ? esc(pairGlyph(ib)) + esc(it.target) : '') +
+            ' · ' + (it.start === it.end ? fr(it.start) : fr(it.start) + '–' + fr(it.end)) + ' · ' +
+            (it.end - it.start + 1 < fps() / 10 ? n(it.end - it.start + 1) + ' frame' + (it.end === it.start ? '' : 's') : secs(it.end - it.start + 1) + ' s') +
+            (Number.isFinite(it.score) ? ' · score ' + scorePct(it.score) : '') + ' <span class="behavior-tag">' + esc(AL_KIND_TEXT[it.kind] || it.kind) + '</span></div>' +
+            '<div class="behavior-bout-actions"><button class="panel-btn" data-act="al-accept" title="Label this stretch as ' + esc(ib ? ib.name : '') + ', and go on">Accept</button>' +
+            '<button class="panel-btn" data-act="al-reject" title="Label it &quot;not&quot;, and go on">Reject</button>' +
+            '<button class="panel-btn" data-act="al-skip" title="Leave it unlabelled, and go on">Skip ▸</button></div></div>';
+    } else if (!models.length) {
+        html += '<p class="table-empty">Train a classifier, predict, then label what it is least sure of.</p>';
+    }
+    host.innerHTML = html;
+}
+
+function wireClassifiers(host) {
+    host.addEventListener('click', function (e) {
+        var btn = e.target.closest('button');
+        if (!btn || !state.session) return;
+        var act = btn.dataset.act;
+        if (act === 'train-open') showBehaviorTrainModal();
+        else if (act === 'predict-all') detectAllFrames();
+        else if (act === 'predict-sessions') detectAllSessions();
+        else if (act === 'predict-frame') detectThisFrame();
+        else if (act === 'export-models') exportClassifiers();
+        else if (act === 'import-models') showImportClassifiers();
+        else if (act === 'al-uncertain') nextActiveItem('uncertain');
+        else if (act === 'al-disagree') nextActiveItem('disagreement');
+        else if (act === 'al-accept') labelActiveItem(true);
+        else if (act === 'al-reject') labelActiveItem(false);
+        else if (act === 'al-skip') skipActiveItem();
+    });
+    host.addEventListener('change', function (e) {
+        if (e.target.dataset.act === 'al-behavior') setActiveLearningBehavior(e.target.value);
+    });
 }
 
 function renderSummary(session) {
@@ -709,6 +816,7 @@ export function updateBehaviorFrame(frame) {
 export function setupBehaviorUi(deps) {
     deps = deps || {};
     setBehaviorNavigator(deps.navigate);
+    setClassifierSessionSwitcher(deps.switchSession);
     var closeMenus = deps.closeMenus || function () {};
     var on = function (id, fn) {
         var el = document.getElementById(id);
@@ -719,24 +827,33 @@ export function setupBehaviorUi(deps) {
     on('menuBehaviorReviewed', showMarkReviewedModal);
     on('menuBehaviorImport', showBehaviorImportModal);
     on('menuBehaviorExport', showBehaviorExportModal);
-    on('menuBehaviorDetect', detectAllFrames);
+    on('menuBehaviorDetect', function () { detectAllFrames(); });
+    on('menuBehaviorDetectAll', function () { detectAllSessions(); });
     on('menuBehaviorRules', showBehaviorRulesModal);
+    on('menuBehaviorTrain', showBehaviorTrainModal);
+    on('menuBehaviorExportModels', function () { exportClassifiers(); });
+    on('menuBehaviorImportModels', showImportClassifiers);
     on('tbBehaviorMode', toggleBehaviorMode);
     on('behaviorModeBtn', toggleBehaviorMode);
     on('behaviorModeExit', exitBehaviorMode);
     on('behaviorEthogramBtn', showEthogramModal);
     setHandler('behaviorMode', toggleBehaviorMode);
-    persistSectionStates(['behaviorCodingSection', 'behaviorBoutsSection', 'behaviorPredictionsSection', 'behaviorSummarySection'], SECTIONS_KEY);
+    persistSectionStates(['behaviorCodingSection', 'behaviorBoutsSection', 'behaviorPredictionsSection', 'behaviorClassifiersSection',
+        'behaviorSummarySection'], SECTIONS_KEY);
     var coding = document.getElementById('behaviorCodingBody');
     var bouts = document.getElementById('behaviorBoutsBody');
     var preds = document.getElementById('behaviorPredictionsBody');
     var summary = document.getElementById('behaviorSummaryBody');
+    var classifiers = document.getElementById('behaviorClassifiersBody');
+    if (classifiers) wireClassifiers(classifiers);
     if (coding) wireCoding(coding);
     if (bouts) wireBouts(bouts);
     if (preds) wirePredictions(preds);
     if (summary) wireSummary(summary);
     var info = document.getElementById('behaviorPredictionsInfo');
     if (info) { info.innerHTML = ICON_INFO; setInfoTip(info, PREDICTIONS_INFO); }
+    var cinfo = document.getElementById('behaviorClassifiersInfo');
+    if (cinfo) { cinfo.innerHTML = ICON_INFO; setInfoTip(cinfo, CLASSIFIERS_INFO); }
     setupBehaviorDetection({ openSettings: showBehaviorRulesModal });
     var tabBtn = document.querySelector('.panel-tab[data-tab="tabBehavior"]');
     if (tabBtn) tabBtn.addEventListener('click', function () { setTimeout(refreshBehaviorPanel, 0); });
@@ -748,6 +865,8 @@ export function setupBehaviorUi(deps) {
     });
     // A detection run, cleared predictions, or predictions going stale.
     onPredictionsChange(function () { requestBehaviorRepaint({ predictions: true }); });
+    // A classifier trained, imported or forgotten (the toolbar button may turn blue or not).
+    onModelsChange(function () { requestBehaviorRepaint({ predictions: true }); });
     onFrameReadout(function () {
         _readoutHidden = null;
         openBehaviorTabSection();
