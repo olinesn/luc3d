@@ -111,9 +111,12 @@ export function detectorProblems(detector, catalog, social) {
  *     reads faster when tracking jitters (the stillest 1% of frames: 0.056
  *     BL/s on the 5-mouse arena, 0.012–0.021 in the cages) — raise it for
  *     crowded or noisy recordings;
- *   - nose-to-nose 0.2 s with gaps of 0.2 s joined, like the other social
- *     templates: the same time in contact, 7–41% fewer bouts; shorter ones
- *     were mostly noses passing near each other;
+ *   - nose-to-nose 0.1 s, joining gaps of 0.2 s like the other social
+ *     templates: with Triangulate All at a 25 px reprojection error
+ *     threshold, bouts under 0.2 s included real brief touches (heads
+ *     together), so they count; the 0.2 s gap keeps a touch that a
+ *     dropped frame splits as one bout (5-mouse arena: 646 bouts at
+ *     0.1 s / 0.1 s, 596 now);
  *   - following needs the two headed within 60° of each other: without it,
  *     half the bouts on the 5-mouse arena were mice crossing or meeting
  *     head-on.
@@ -136,7 +139,7 @@ export var DETECTOR_TEMPLATES = [
       detector: { conditions: [{ feature: 'min node distance', op: '<', value: 0.15 }], minDuration: 0.2, maxGap: 0.2 } },
     { id: 'nose-to-nose', name: 'nose-to-nose', social: true, mutual: true,
       description: 'The two heads are close together',
-      detector: { conditions: [{ feature: 'head–head distance', op: '<', value: 0.2 }], minDuration: 0.2, maxGap: 0.2 } },
+      detector: { conditions: [{ feature: 'head–head distance', op: '<', value: 0.2 }], minDuration: 0.1, maxGap: 0.2 } },
     { id: 'anogenital', name: 'anogenital approach', social: true, mutual: false,
       description: "The actor's head is at the target's tail base",
       detector: { conditions: [{ feature: 'head–tail base distance', op: '<', value: 0.25 }], minDuration: 0.2, maxGap: 0.2 } },

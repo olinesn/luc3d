@@ -76,7 +76,7 @@ console.log('\n-- 1. detectors --');
         'without a tail base it says so, in words');
     check(rear.detector.conditions[0].value === 0.7, 'rearing: the head more than 0.7 BL above the floor (below it, few bouts on real recordings were clear rears)');
     const n2n = DETECTOR_TEMPLATES.find(t => t.id === 'nose-to-nose').detector;
-    check(n2n.minDuration === 0.2 && n2n.maxGap === 0.2, 'nose-to-nose: at least 0.2 s, gaps of 0.2 s joined (like contact and anogenital approach)');
+    check(n2n.minDuration === 0.1 && n2n.maxGap === 0.2, 'nose-to-nose: at least 0.1 s (brief touches are real), gaps of 0.2 s joined (like contact and anogenital approach)');
     const fol = DETECTOR_TEMPLATES.find(t => t.id === 'following').detector.conditions;
     check(fol.some(c => c.feature === 'relative heading' && c.op === '<' && c.value === 60),
         'following: the two headed within 60° of each other (crossing or meeting head-on is not following)');

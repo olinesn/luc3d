@@ -2774,7 +2774,7 @@ pair feature on a non-social behavior). `DETECTOR_TEMPLATES` (rearing,
 immobile, locomotion, contact ↔, nose-to-nose ↔, anogenital approach →,
 following →; `{head}` and `{tailBase}` filled by `instantiateTemplate`, which names a missing role in words); their values come
 from four real recordings, as the comment above them explains: rearing 0.7 BL
-with the tail base below 0.45 BL (climbing is not rearing), immobile 0.1 BL/s (raise it for jittery tracking), nose-to-nose ≥ 0.2 s with
+with the tail base below 0.45 BL (climbing is not rearing), immobile 0.1 BL/s (raise it for jittery tracking), nose-to-nose ≥ 0.1 s with
 0.2 s gaps joined, following also needs the two headed within 60°. Scores
 (`scoreConditions`): each condition σ(margin / scale), scale = 10% of the
 threshold with a floor per unit (`conditionScale`), the frame's score the
