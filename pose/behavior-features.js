@@ -685,12 +685,16 @@ function pairBase(spec, base, A, B) {
  * @param {Object} spec as for `featureCatalog`, plus {fps, floor, bodyLength: number[], animals: string[]}
  * @param {{start:number, end:number, padStart:number, padEnd:number, data: Float32Array[]}} chunk
  *   `data[a]` holds animal a's points for frames [padStart, padEnd), N × dim per frame, NaN = missing
- * @param {{animal?: string[], pair?: string[], pairs?: number[][]}} request feature names
- *   (animal features for every animal; pair features for each [actor, target] in `pairs`)
+ * @param {{animal?: string[], pair?: string[], pairs?: number[][], only?: number[]}} request feature names
+ *   (animal features for every animal — or only the animals in `only`; pair features for each
+ *   [actor, target] in `pairs`)
+ * @param {Object} [memo] reused across calls on the SAME chunk and spec, so each animal's context
+ *   is built once (the classifier kernels compute one animal at a time, to keep one animal's
+ *   columns in memory rather than every animal's)
  * @returns {{animal: Object<string, Float32Array>[], pair: Object<string, Object<string, Float32Array>>}}
  *   `animal[a][name]` and `pair['a>b'][name]`, each of length end − start
  */
-export function computeFeatureChunk(spec, chunk, request) {
+export function computeFeatureChunk(spec, chunk, request, memo) {
     var cat = catalogFor(spec);
     var L = chunk.padEnd - chunk.padStart;
     var off = chunk.start - chunk.padStart, len = chunk.end - chunk.start;
@@ -698,7 +702,8 @@ export function computeFeatureChunk(spec, chunk, request) {
     var animalNames = (request.animal || []).filter(function (nm) { return cat.byName.has(nm) && cat.byName.get(nm).scope === 'animal'; });
     var pairNames = (request.pair || []).filter(function (nm) { return cat.byName.has(nm) && cat.byName.get(nm).scope === 'pair'; });
     var pairs = request.pairs || [];
-    var contexts = new Array(nA);
+    var only = Array.isArray(request.only) ? request.only : null;
+    var contexts = memo ? (memo.contexts || (memo.contexts = new Array(nA))) : new Array(nA);
     var ctxOf = function (a) {
         if (!contexts[a]) contexts[a] = animalContext(spec, chunk.data[a], L, (spec.bodyLength || [])[a]);
         return contexts[a];
@@ -728,7 +733,7 @@ export function computeFeatureChunk(spec, chunk, request) {
     var animalOut = [];
     for (var a = 0; a < nA; a++) {
         var res = {};
-        if (animalNames.length) {
+        if (animalNames.length && (!only || only.indexOf(a) >= 0)) {
             var ctx = ctxOf(a);
             var near = needsAll ? nearestOf(a, contexts, L) : null;
             var baseCols = new Map(), caches = new Map();
