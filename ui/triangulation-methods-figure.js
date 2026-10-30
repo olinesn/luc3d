@@ -14,7 +14,10 @@
 // camera to it, the reprojection, where it lands back in each camera (blue ring),
 // and the reprojection error between the two (red). A legend at the bottom-left of
 // each card names them, and bars at the bottom-right (`errorTotals`, one scale for
-// every sketch) stack each camera's reprojection error above their sum. The target, a green cross, marks the true
+// every sketch) stack each camera's reprojection error above their sum. A dark red
+// line, over every other line and under the markers, is the ground truth error: how
+// far the projection is from the target, in 3D (the bar counts the part out of the
+// page, which the top-down line cannot show). The target, a green cross, marks the true
 // position. The left and bottom cameras are right; the right one is a stray. DLT
 // is pulled well away. Refined counts the stray less and lands close to the true
 // position, with the stray still counted; the threshold removes it altogether.
@@ -59,7 +62,7 @@ var PLANE_HALF = 36;             // image plane half-width, sketch units
  * `at` and the viewing direction `rot` (degrees) from above, `plane` its focal
  * distance in sketch units. `detections`: each camera's 2D point in image pixels
  * (x along the plane, y out of the top-down view). `solves[method][cameras]`:
- * `point` in sketch units, `x` image x of the landing and `errors` in px per camera.
+ * `point` in sketch units, `z` the part of it out of the page, `x` image x of the landing and `errors` in px per camera.
  */
 export var FIGURE_SCENE = {
     cameras: [
@@ -71,12 +74,12 @@ export var FIGURE_SCENE = {
     truth: [148.4, 81.3],
     solves: {
         dlt: {
-            '0,1,2': { point: [173, 50.4], x: [-16.98, 25.52, 24.42], errors: [20, 28.1, 35.6] },
-            '0,1': { point: [148.3, 81.2], x: [2.86, -2.48, 0.08], errors: [2.6, 3.5, 59.9] },
+            '0,1,2': { point: [173, 50.4], z: 0.33, x: [-16.98, 25.52, 24.42], errors: [20, 28.1, 35.6] },
+            '0,1': { point: [148.3, 81.2], z: 0.34, x: [2.86, -2.48, 0.08], errors: [2.6, 3.5, 59.9] },
         },
         ba: {
-            '0,1,2': { point: [148.3, 78], x: [-0.42, -2.4, 1.86], errors: [6.2, 0, 58.2] },
-            '0,1': { point: [148.4, 81.2], x: [2.93, -2.4, 0.06], errors: [5.2, 0, 60] },
+            '0,1,2': { point: [148.3, 78], z: -2.12, x: [-0.42, -2.4, 1.86], errors: [6.2, 0, 58.2] },
+            '0,1': { point: [148.4, 81.2], z: -2.05, x: [2.93, -2.4, 0.06], errors: [5.2, 0, 60] },
         },
     },
 };
@@ -103,9 +106,11 @@ function line(a, b, cls) {
     return '<line x1="' + fmt(a[0]) + '" y1="' + fmt(a[1]) + '" x2="' + fmt(b[0]) + '" y2="' + fmt(b[1]) + '" class="' + cls + '"/>';
 }
 
-// Each camera's number, by its body, so the totals' rows can be matched to it.
-var CAMERA_NUMBERS = [[8, 104], [128, 188], [288, 106]].map(function (at, i) {
-    return '<text x="' + at[0] + '" y="' + at[1] + '" class="tm-note tm-camera-number">' + i + '</text>';
+// Each camera's number, on its body (centred 6 units behind its origin), so the
+// totals' rows can be matched to it.
+var CAMERA_NUMBERS = CAMS.map(function (c, i) {
+    return '<text x="' + fmt(c.at[0] - FORWARD[i][0] * 6) + '" y="' + fmt(c.at[1] - FORWARD[i][1] * 6 + 3.2)
+        + '" text-anchor="middle" class="tm-camera-number">' + i + '</text>';
 }).join('');
 
 // Shared by every sketch: each camera's line of sight through its detection and
@@ -127,28 +132,37 @@ var TRUE_MARK = (function () {
 var DOTS = DETECTIONS.map(function (d) {
     return '<circle cx="' + fmt(d[0]) + '" cy="' + fmt(d[1]) + '" r="3" class="tm-det"/>';
 }).join('');
-var VIEW_BOX = '5 25 290 192';   // room at the bottom for the legend and the bars, clear of the scene
+var VIEW_BOX = '5 25 290 203';   // room at the bottom for the legend and the bars, clear of the scene
 
 // Names the sketch's marks. Its own small SVG, pinned to the left edge of the card
 // (`.tm-sketch`), so it stays clear of the scene, which is centred in a wide card.
-var SKETCH_LEGEND = '<svg viewBox="8 137 102 58" class="tm-legend" aria-hidden="true">' + [
+var SKETCH_LEGEND = '<svg viewBox="8 137 102 69" class="tm-legend" aria-hidden="true">' + [
 
     ['<circle cx="15" cy="0" r="3" class="tm-det"/>', 'prediction'],
     ['<circle cx="15" cy="0" r="4" class="tm-point"/>', 'projection'],
     [line([11, 0], [19, 0], 'tm-true') + line([15, -4], [15, 4], 'tm-true'), 'target'],
     ['<circle cx="15" cy="0" r="3.2" class="tm-proj"/>', 'reprojection'],
     [line([10, 0], [20, 0], 'tm-gap'), 'reprojection error'],
+    [line([10, 0], [20, 0], 'tm-truth-gap'), 'ground truth error'],
 ].map(function (row, i) {
     return '<g transform="translate(0 ' + (143 + 11 * i) + ')">' + row[0]
         + '<text x="25" y="3" class="tm-note tm-legend-text">' + row[1] + '</text></g>';
 }).join('') + '</svg>';
 
-var TOTAL_BAR_X = 45, TOTAL_BAR_SCALE = 0.54;   // units per pixel: one scale for every sketch
+var TOTAL_BAR_X = 58, TOTAL_BAR_SCALE = 0.44;   // units per pixel: one scale for every sketch
+var TRUTH_BAR_SCALE = 0.85;                         // units per sketch unit, likewise
+
+/** How far a solve's projection is from the target, in 3D. */
+function groundTruthError(solve) {
+    var t = FIGURE_SCENE.truth;
+    return Math.hypot(solve.point[0] - t[0], solve.point[1] - t[1], solve.z);
+}
 
 /**
  * The reprojection errors of one solve as bars: a row per camera, then a row for
  * their sum, made of the same bars end to end. A camera not `counted` is named as
- * left out and adds nothing. Its own small SVG, pinned to the card's right edge.
+ * left out and adds nothing. Under them, the ground truth error on its own scale, in
+ * the scene's units. Its own small SVG, pinned to the card's right edge.
  */
 function errorTotals(solve, counted) {
     function bar(x, px, cls) {
@@ -169,10 +183,13 @@ function errorTotals(solve, counted) {
         sumBars += bar(x, err, 'tm-total-bar');
         x += err * TOTAL_BAR_SCALE;
     });
-    return '<svg viewBox="0 0 130 58" class="tm-totals" aria-hidden="true">'
+    var truth = groundTruthError(solve);
+    return '<svg viewBox="0 0 130 69" class="tm-totals" aria-hidden="true">'
         + '<text x="0" y="8" class="tm-note tm-legend-text">reprojection error</text>' + s
         + '<line x1="0" y1="44.5" x2="130" y2="44.5" class="tm-total-rule"/>'
-        + row(54, 'sum', sumBars, fmt(sum) + ' px', 'tm-total-sum') + '</svg>';
+        + row(54, 'sum', sumBars, fmt(sum) + ' px', 'tm-total-sum')
+        + row(65, 'ground truth', '<rect x="' + TOTAL_BAR_X + '" y="-4" width="' + fmt(truth * TRUTH_BAR_SCALE)
+            + '" height="4" class="tm-truth-bar"/>', fmt(truth) + ' mm', 'tm-total-truth') + '</svg>';
 }
 
 /**
@@ -183,14 +200,16 @@ function errorTotals(solve, counted) {
 function sketch(solve, counted, extra, strayLabel, overlay) {
     var p = solve.point, s = RAYS;
     counted.forEach(function (i) { s += line(CAMS[i].at, p, 'tm-back'); });
-    s += CAMERA_MARKS + (overlay || '') + TRUE_MARK;
+    s += CAMERA_MARKS + (overlay || '') + extra;
+    counted.forEach(function (i) { s += line(DETECTIONS[i], onPlane(i, solve.x[i]), 'tm-gap'); });
+    // Over every other line, under the markers.
+    s += line(p, FIGURE_SCENE.truth, 'tm-truth-gap') + TRUE_MARK;
     DETECTIONS.forEach(function (d, i) {
         var used = counted.indexOf(i) >= 0, q = used ? onPlane(i, solve.x[i]) : null;
-        if (q) s += line(d, q, 'tm-gap');
         s += '<circle cx="' + fmt(d[0]) + '" cy="' + fmt(d[1]) + '" r="3" class="tm-det"/>';
         if (q) s += '<circle cx="' + fmt(q[0]) + '" cy="' + fmt(q[1]) + '" r="3.6" class="tm-proj"/>';
     });
-    s += extra + '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="5" class="tm-point"/>' + strayLabel;
+    s += '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="5" class="tm-point"/>' + strayLabel;
     return '<div class="tm-sketch"><svg viewBox="' + VIEW_BOX + '" role="img" aria-hidden="true">'
         + '<defs><marker id="tm-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">'
         + '<path d="M0 0 L8 4 L0 8 Z" class="tm-arrowhead"/></marker></defs>'
@@ -376,7 +395,7 @@ function resultText(kind, threshold) {
                 ? lead + 'every camera lands within the threshold, so nothing is dropped. The first solve stands, close '
                     + 'to the target (the cross), with the stray still counted.'
                 : lead + 'the right camera is left out for this node, and the projection comes from the two cameras that '
-                    + 'were right: the target.';
+                    + 'were right: almost exactly the target.';
 }
 
 /**
@@ -401,7 +420,9 @@ export function buildTriangulationMethodsFigure(opts) {
         + 'camera\'s 2D prediction is placed wrong: an outlier, marked stray. The green cross is the target: the true position. The reprojection is where the '
         + 'projection lands back in a camera\'s 2D image, and the reprojection error is the distance on that 2D image '
         + 'between the prediction and the reprojection. The bars at the bottom right of each sketch add up those errors: Refined\'s sum '
-        + 'is lower than DLT\'s, even though its error in the stray camera is larger.</p>'
+        + 'is lower than DLT\'s, even though its error in the stray camera is larger. The dark red line is the ground '
+        + 'truth error, how far the projection is from the target, which shrinks from DLT to Refined. A sketch can show '
+        + 'it because it knows the target; on a real recording only the reprojection error can be measured.</p>'
         + '<div class="tri-methods-cols" role="radiogroup" aria-label="Default triangulation method">'
         + card('dlt', 'Direct Linear Transformation (DLT)', 'one direct solve · fast', DLT_SKETCH,
             'Solves one set of linear equations (algebraic least squares) for the point that fits every '

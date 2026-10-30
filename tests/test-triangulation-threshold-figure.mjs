@@ -180,10 +180,12 @@ group('3. the figure\'s scene is what the real solvers give');
             const p = pd.getPoint3d(res.points3d, 0);
             const got = {
                 point: [p[0], p[1]].map((v) => +v.toFixed(1)),
+                z: +p[2].toFixed(2),
                 x: names.map((n) => +res.reprojections[n][0][0].toFixed(2)),
                 errors: names.map((n) => +res.errors[n][0].toFixed(1)),
             };
             const same = want.point.every((v, i) => near(v, got.point[i], 0.11))
+                && near(want.z, got.z, 0.011)
                 && want.x.every((v, i) => near(v, got.x[i], 0.011))
                 && want.errors.every((v, i) => near(v, got.errors[i], 0.11));
             ok(same, `${method} cameras ${key}: FIGURE_SCENE should be ${JSON.stringify(got)}`);
@@ -208,6 +210,9 @@ group('3. the figure\'s scene is what the real solvers give');
     const refined = off(solveSet('ba', ALL)), dlt = off(solveSet('dlt', ALL));
     ok(refined < 5 && refined > 1, `Refined lands close to the true position, with the stray still counted (${refined.toFixed(1)} units)`);
     ok(dlt > 25, `DLT is pulled well away (${dlt.toFixed(1)} units)`);
+    const truth3d = (res) => { const p = pd.getPoint3d(res.points3d, 0); return Math.hypot(p[0] - truth[0], p[1] - truth[1], p[2]); };
+    const gtDlt = truth3d(solveSet('dlt', ALL)), gtBa = truth3d(solveSet('ba', ALL));
+    ok(gtBa < gtDlt / 5, `the ground truth error shrinks from DLT to Refined (${gtDlt.toFixed(1)} to ${gtBa.toFixed(1)})`);
     for (const method of ['dlt', 'ba']) {
         ok(dist(FIGURE_SCENE.solves[method]['0,1'].point) < 0.5, `${method}: the two cameras that were right give the true position`);
     }

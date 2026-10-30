@@ -141,7 +141,7 @@ try {
     await type(15);
     r = await read();
     check(r.name1.includes('Refined') && r.s1 === 'in,in,drop', `Refined's first solve: only the stray is over (${r.s1})`);
-    check(r.s2 === 'in,in,out' && r.kind === 'two' && /the target\./.test(r.result), `dropping it reaches the true position (${r.result.slice(0, 60)}…)`);
+    check(r.s2 === 'in,in,out' && r.kind === 'two' && /almost exactly the target/.test(r.result), `dropping it reaches the true position (${r.result.slice(0, 60)}…)`);
     await type(60);
     r = await read();
     check(r.kind === 'close' && r.s2 === '' && /close to the target/.test(r.result), `60 px drops nothing and stays close (${r.s1})`);
@@ -280,24 +280,38 @@ try {
         return { dlt: { labels: dlt.labels, values: dlt.values, widths: dlt.widths }, ba: { values: ba.values, widths: ba.widths },
             right: Math.abs(box.right - wrap.getBoundingClientRect().right) < 1, clear: cams.every(clear),
             barsClearOfLabels: label.x + label.width < +firstBar.getAttribute('x'),
-            sumClearOfValue: (() => { const rows = dlt.svg.querySelectorAll('g'), sum = rows[rows.length - 1], rects = sum.querySelectorAll('rect'), last = rects[rects.length - 1]; return +last.getAttribute('x') + +last.getAttribute('width') + 1 < sum.querySelector('text:last-of-type').getBBox().x; })(),
-            numbers: Array.from(wrap.querySelectorAll('.tm-camera-number')).map(t => t.textContent).join() };
+            sumClearOfValue: [3, 4].every((n) => { const row = dlt.svg.querySelectorAll('g')[n], rects = row.querySelectorAll('rect'), last = rects[rects.length - 1], name = row.querySelector('text').getBBox(); return +last.getAttribute('x') + +last.getAttribute('width') + 1 < row.querySelector('text:last-of-type').getBBox().x && name.x + name.width < +rects[0].getAttribute('x'); }),
+            numbers: Array.from(wrap.querySelectorAll('.tm-camera-number')).map(t => t.textContent).join(),
+            onBodies: Array.from(wrap.querySelectorAll('.tm-camera-number')).every((t, i) => { const b = t.getBoundingClientRect(), c = cams[i]; const x = (b.left + b.right) / 2, y = (b.top + b.bottom) / 2; return x > c.left && x < c.right && y > c.top && y < c.bottom; }),
+            numberStyle: (() => { const cs = getComputedStyle(wrap.querySelector('.tm-camera-number')); return cs.fill + ' ' + cs.fontWeight; })() };
     });
-    check(totals.dlt.labels.join() === 'camera 0,camera 1,camera 2,sum', `totals: a row per camera, then the sum (${totals.dlt.labels.join()})`);
+    check(totals.dlt.labels.join() === 'camera 0,camera 1,camera 2,sum,ground truth', `totals: a row per camera, the sum, the ground truth error (${totals.dlt.labels.join()})`);
     check(totals.dlt.values[3] === '83.7 px' && totals.ba.values[3] === '64.4 px', `the sums are the errors added up (DLT ${totals.dlt.values[3]}, Refined ${totals.ba.values[3]})`);
     check(totals.dlt.widths[3] > totals.ba.widths[3], `DLT's sum bar is longer than Refined's (${totals.dlt.widths[3].toFixed(1)} vs ${totals.ba.widths[3].toFixed(1)})`);
     check(Math.abs(totals.dlt.widths[3] / 83.7 - totals.ba.widths[3] / 64.4) < 0.02, 'one scale in both sketches');
     check(Math.abs(totals.dlt.widths[2] - 35.6 * totals.dlt.widths[3] / 83.7) < 0.2, 'each bar is in proportion to its error');
     check(totals.right && totals.clear, 'the totals sit at the bottom-right, clear of the cameras');
+    check(totals.dlt.values[4] === '39.5 mm' && totals.ba.values[4] === '3.9 mm' && totals.dlt.widths[4] > totals.ba.widths[4] * 5, `the ground truth error shrinks from DLT to Refined (${totals.dlt.values[4]} to ${totals.ba.values[4]})`);
+    const truthLine = await page.evaluate(() => {
+        const svg = document.querySelector('.tri-method-choice[data-method="dlt"] svg');
+        const kids = Array.from(svg.children), at = (el) => kids.indexOf(el);
+        const lineEl = svg.querySelector('line.tm-truth-gap');
+        const lastLine = Math.max(...Array.from(svg.querySelectorAll(':scope > line:not(.tm-truth-gap):not(.tm-true)')).map(at));
+        const firstMarker = Math.min(...['circle.tm-det', 'circle.tm-proj', 'circle.tm-point', 'line.tm-true'].map(q => at(svg.querySelector(q))));
+        return { overLines: at(lineEl) > lastLine, underMarkers: at(lineEl) < firstMarker, stroke: getComputedStyle(lineEl).stroke };
+    });
+    check(truthLine.overLines && truthLine.underMarkers, 'the ground truth line is over every other line and under the markers');
+    check(truthLine.stroke === 'rgb(168, 28, 28)', `it is a dark red solid line (${truthLine.stroke})`);
     check(totals.barsClearOfLabels && totals.sumClearOfValue, 'the bars do not touch the labels or the values');
-    check(totals.numbers === '0,1,2', 'each camera is numbered, to match the rows');
+    check(totals.numbers === '0,1,2' && totals.onBodies, 'each camera body is numbered, 0 to 2 from left to right, to match the rows');
+    check(totals.numberStyle === 'rgb(255, 255, 255) 700', `the numbers are bold and white (${totals.numberStyle})`);
     const legend = await page.evaluate(() => {
         const sketches = Array.from(document.querySelectorAll('.tri-methods .tm-sketch')).filter(s => !s.querySelector('.tm-idle'));
         const wrap = sketches[0], svg = wrap.querySelector('svg');
         const box = wrap.querySelector('.tm-legend').getBoundingClientRect(), view = svg.getBoundingClientRect();
         const camera = svg.querySelector('g[transform]').getBoundingClientRect();
         return {
-            everySketch: sketches.length >= 3 && sketches.every(s => Array.from(s.querySelectorAll('.tm-legend text')).map(t => t.textContent).join() === 'prediction,projection,target,reprojection,reprojection error'),
+            everySketch: sketches.length >= 3 && sketches.every(s => Array.from(s.querySelectorAll('.tm-legend text')).map(t => t.textContent).join() === 'prediction,projection,target,reprojection,reprojection error,ground truth error'),
             white: getComputedStyle(svg.querySelector('circle.tm-det')).fill,
             bottomLeft: Math.abs(box.left - wrap.getBoundingClientRect().left) < 1 && box.bottom <= view.bottom + 1 && box.top - view.top > view.height / 2,
             clearOfScene: box.right < camera.left || box.top > camera.bottom,

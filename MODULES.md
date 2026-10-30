@@ -11343,7 +11343,10 @@ on (grey if the camera is right, orange if stray). A legend at the bottom-left o
 (`SKETCH_LEGEND`, pinned by `.tm-sketch`, clear of the centred scene) names its prediction, projection, target, reprojection and
 reprojection error; the legend below the figures covers the rest. Bars at the
 bottom-right (`errorTotals`, one scale in every sketch) stack each numbered camera's
-reprojection error above their sum, so DLT's larger sum can be seen against Refined's. The left and bottom cameras are right and the
+reprojection error above their sum, so DLT's larger sum can be seen against Refined's. A
+dark red line, over every other line and under the markers, is the ground truth error:
+how far the projection is from the target, also a row in the bars (in 3D, so it counts
+the part out of the page; 39.5 for DLT, 3.9 for Refined). The left and bottom cameras are right and the
 right one is a stray. DLT is pulled well away; Refined counts the stray less and
 lands close to the true position, with the stray still counted; the threshold removes
 it. `sketch()` draws them from `FIGURE_SCENE`.
