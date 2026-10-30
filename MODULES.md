@@ -3678,7 +3678,7 @@ read and given back.
 **Key exports.** `EXAMPLE_MAX_FRAMES`, `EXAMPLE_MIN_CAMERAS`, `EXAMPLE_SET_SIZE`,
 `pickRepresentativeExamples`, `calibratedCameras`,
 `sampleExampleFrames`, `firstOverThreshold`, `scanThresholdExamples`, `solveExample`,
-`solveExample3d`, `lineOfSight`, `pickShownCameras`.
+`solveExample3d`, `solveFrame3d`, `frameFromPoints`, `lineOfSight`, `pickShownCameras`.
 
 **Imports.** `pose/triangulation-core.js`, `pose/lazy-residency.js`,
 `pose/placeholder-cameras.js`. **Imported by** `ui/threshold-examples-panel.js`.
@@ -11383,7 +11383,7 @@ Refined's count if tried; only the example on screen decodes video
 camera runs.
 
 **Key exports.** `buildThresholdExamples({ session, isCameraIncluded })` →
-`{ el, start, update({ threshold, method }), step(by), invalidate, dispose }`,
+`{ el, start, update({ threshold, method }), step(by), setActive(on), invalidate, dispose }`,
 `SMALL_TILES`, `exampleResultText`, `tileVerdict`, `cropSide`.
 
 **Imports.** `pose/threshold-examples.js`, `ui/threshold-examples-3d.js`,
@@ -11394,17 +11394,18 @@ camera runs.
 
 ### ui/threshold-examples-3d.js
 
-**Purpose.** The 3D view in "In this session": the animal's skeleton from the solve being
-tried (`drawSkeleton`, Predictions style), the example node's 3D point, the first solve's
-point if a camera was dropped, and each camera's line of sight (orange if dropped),
-over a floor grid. An orthographic drawing on a 2D canvas, Z up, in a framing the
-caller holds still (`frameFromPoints`, from a DLT solve with the threshold off), so what
-moves is the point. Dragged to turn; the angle holds between examples.
+**Purpose.** The 3D view in "In this session": the app's own `Viewport3D`, styled from
+Visibility ▸ 3D Viewer as the overlay export's tile is, with no cameras and with sizes
+grown to suit the close framing, showing every animal in the example's frame from the solve being tried. On top go the example node's 3D point, the
+first solve's point if a camera was dropped, and each camera's line of sight (orange if
+dropped). The framing is set per example and holds as values are tried; a drag turns it,
+the angle holds between examples, and the wheel is left to the panel's scroller.
 
-**Key exports.** `draw3dScene(ctx, size, scene)`, `frameFromPoints(flat)`,
-`makeProjector(frame, size, yaw, pitch)`.
+**Key exports.** `build3dView(host, { session, getGroupColor })` →
+`{ setScene, setFraming, setVisible, dispose }`; throws without WebGL or three.js.
 
-**Imports.** `ui/overlays.js`. **Imported by** `ui/threshold-examples-panel.js`.
+**Imports.** `ui/viewport3d.js`, `ui/overlays.js`. **Imported by**
+`ui/threshold-examples-panel.js`.
 
 ### ui/triangulation-methods-figure.js
 

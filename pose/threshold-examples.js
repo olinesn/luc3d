@@ -245,6 +245,55 @@ export function lineOfSight(camera, prediction) {
 }
 
 /**
+ * What a 3D view should frame: the middle of a flat [x,y,z,...] list's solved points,
+ * and how far the furthest of them is.
+ * @param {ArrayLike<number>} flat
+ * @returns {?{centre: number[], radius: number}} null with no solved point
+ */
+export function frameFromPoints(flat) {
+    var axes = [[], [], []];
+    for (var i = 0; i + 2 < flat.length; i += 3) {
+        if (isFinite(flat[i]) && isFinite(flat[i + 1]) && isFinite(flat[i + 2])) {
+            for (var a = 0; a < 3; a++) axes[a].push(flat[i + a]);
+        }
+    }
+    if (!axes[0].length) return null;
+    var centre = axes.map(function (v) { v.sort(function (p, q) { return p - q; }); return v[v.length >> 1]; });
+    var radius = 0;
+    for (var j = 0; j + 2 < flat.length; j += 3) {
+        if (isFinite(flat[j]) && isFinite(flat[j + 1]) && isFinite(flat[j + 2])) {
+            radius = Math.max(radius, Math.hypot(flat[j] - centre[0], flat[j + 1] - centre[1], flat[j + 2] - centre[2]));
+        }
+    }
+    return { centre: centre, radius: Math.max(radius, 1) };
+}
+
+/**
+ * Every animal in an example's frame, as a real Triangulate would leave it at this
+ * threshold: objects a 3D view can draw, with `source` the real group.
+ * @param {Object} session
+ * @param {number} frame
+ * @param {{method: string, threshold: number, included?: string[]}} opts
+ * @returns {Array<{points3d: Float64Array, identityId: number, source: Object}>}
+ */
+export function solveFrame3d(session, frame, opts) {
+    var cameras = calibratedCameras(session);
+    var included = opts.included || cameras.map(function (c) { return c.name; });
+    var method = opts.method;
+    return bracketFrame(session, frame, function () {
+        return (session.instanceGroups.get(frame) || []).map(function (group) {
+            return {
+                points3d: triangulateAndReproject(group, cameras, {
+                    method: method, reprojErrorThreshold: opts.threshold, includedCameras: included, triangulateOnly: true,
+                }).points3d,
+                identityId: group.identityId,
+                source: group,
+            };
+        });
+    });
+}
+
+/**
  * The whole animal's 3D as a real Triangulate would leave it at this threshold.
  * @param {Object} session
  * @param {{frame: number, group: number}} example

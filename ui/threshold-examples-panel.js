@@ -10,8 +10,9 @@
 // camera was dropped, the first solve's reprojection (grey ring). The tiles are the
 // cameras with the largest errors (`pickShownCameras`), and a line names the rest.
 // Clicking a tile enlarges it; the pick holds while that camera has a tile. Otherwise
-// the one with the largest error is enlarged. Beside the large tile, the animal in 3D
-// from the same solve (ui/threshold-examples-3d.js), which can be dragged to turn.
+// the one with the largest error is enlarged. Beside the large tile, the frame's
+// animals in the app's own 3D viewer from the same solve (ui/threshold-examples-3d.js),
+// which can be dragged to turn.
 //
 // The arrows walk a fixed set of examples, spread from small errors to large
 // (`pickRepresentativeExamples`). The slider and the DLT / Refined switch never
@@ -33,19 +34,21 @@
 import {
     calibratedCameras,
     firstOverThreshold,
+    frameFromPoints,
     pickRepresentativeExamples,
     scanThresholdExamples,
     solveExample,
     lineOfSight,
     pickShownCameras,
     solveExample3d,
+    solveFrame3d,
     EXAMPLE_MIN_CAMERAS,
 } from '../pose/threshold-examples.js';
 import { state } from './app-state.js';
 import { formatFrameNumber } from './frame-readout.js';
 import { desaturateColor, drawSkeleton, getGroupColor } from './overlays.js';
 import { getVisibilitySettings } from './rendering.js';
-import { draw3dScene, frameFromPoints } from './threshold-examples-3d.js';
+import { build3dView } from './threshold-examples-3d.js';
 
 /** Small tiles shown, at most. */
 export const SMALL_TILES = 4;
@@ -228,13 +231,12 @@ export function buildThresholdExamples(opts) {
     large.append(largeCanvas, largeCaption);
     body.appendChild(large);
     const solid = el('figure', 'thr-ex-3d');
-    const solidCanvas = el('canvas');
-    solidCanvas.width = solidCanvas.height = LARGE_PX;
+    const solidHost = el('div', 'thr-ex-3d-host');
     const solidCaption = el('figcaption', 'thr-ex-large-caption');
     const solidName = el('span', 'thr-ex-cam', '3D, drag to turn');
     const solidNote = el('span', 'thr-ex-err');
     solidCaption.append(solidName, solidNote);
-    solid.append(solidCanvas, solidCaption);
+    solid.append(solidHost, solidCaption);
     body.appendChild(solid);
     const others = el('p', 'thr-ex-others');
     root.appendChild(others);
@@ -274,7 +276,7 @@ export function buildThresholdExamples(opts) {
     const baselines = new Map();    // example -> what holds still for it
     let picked = null;      // the camera the user enlarged
     let view = null;        // what is on screen: { solved, boxes, verdicts, colors, shown, selected, scene3d }
-    let yaw = -0.7, pitch = 0.45;
+    let view3d = null, view3dFailed = false, framedExample = null;
     const crops = new Map();        // camera name -> { key, crop }
     const decodeChains = new Map();
 
@@ -320,18 +322,31 @@ export function buildThresholdExamples(opts) {
         drawMarks(ctx, size, view.solved, name, view.boxes.get(name), threshold, session.skeleton, style);
     }
 
-    function paint3d() {
-        const scene = view && view.scene3d;
-        if (!scene) {
-            const ctx = solidCanvas.getContext('2d');
-            ctx.fillStyle = '#111';
-            ctx.fillRect(0, 0, LARGE_PX, LARGE_PX);
-            return;
+    // The viewer holds a WebGL context, so it waits until the panel is first shown.
+    function ensure3dView() {
+        if (view3d || view3dFailed || !session) return view3d;
+        try {
+            view3d = build3dView(solidHost, {
+                session: session,
+                getGroupColor: function (g) {
+                    return getGroupColor(g.source || g, session, state.colorByIdentity, view ? view.frame : 0);
+                },
+            });
+        } catch (err) {
+            view3dFailed = true;
+            console.warn('[threshold examples] 3D view unavailable:', err);
+            solidHost.textContent = '3D view unavailable (WebGL required)';
         }
-        const shown = solidCanvas.clientWidth > 0 ? LARGE_PX / solidCanvas.clientWidth : 2;
-        draw3dScene(solidCanvas.getContext('2d'), LARGE_PX, Object.assign({}, scene, {
-            yaw: yaw, pitch: pitch, style: predictionStyle(scene.color, shown),
-        }));
+        return view3d;
+    }
+
+    function paint3d() {
+        if (!view || !view.scene3d || !ensure3dView()) return;
+        if (view.example !== framedExample && view.scene3d.frame) {
+            framedExample = view.example;
+            view3d.setFraming(view.scene3d.frame);
+        }
+        view3d.setScene(view.scene3d);
     }
 
     function paintLarge() {
@@ -388,7 +403,6 @@ export function buildThresholdExamples(opts) {
         base = {
             picks: picks, boxes: boxes, colors: colors, rays: rays,
             frame: off3d ? frameFromPoints(off3d) : null,
-            color: colors.get(picks.first) || '#888888',
         };
         baselines.set(example, base);
         return base;
@@ -396,18 +410,18 @@ export function buildThresholdExamples(opts) {
 
     // The 3D view at what is being tried, in the example's fixed framing.
     function scene3dFor(example, base, solved, use) {
-        if (!base.frame) return null;
-        const points = solveExample3d(session, example, { method: method, threshold: threshold, included: use });
-        if (!points) return null;
+        const groups = solveFrame3d(session, example.frame, { method: method, threshold: threshold, included: use });
+        const mine = groups[example.group];
+        const k = example.node;
+        const pointOf = function (pts) {
+            return pts && isFinite(pts[3 * k]) && isFinite(pts[3 * k + 1]) && isFinite(pts[3 * k + 2]) ? [pts[3 * k], pts[3 * k + 1], pts[3 * k + 2]] : null;
+        };
         let first = null;
         if (solved.dropped.length || solved.lost) {
-            const f = solveExample3d(session, example, { method: method, threshold: 0, included: use });
-            const k = example.node;
-            if (f && Number.isFinite(f[3 * k])) first = [f[3 * k], f[3 * k + 1], f[3 * k + 2]];
+            first = pointOf(solveExample3d(session, example, { method: method, threshold: 0, included: use }));
         }
         return {
-            frame: base.frame, points: points, node: example.node, first: first, color: base.color,
-            skeleton: session.skeleton,
+            frame: base.frame, groups: groups, point: pointOf(mine && mine.points3d), first: first,
             rays: base.rays.map(function (r) {
                 return { origin: r.origin, dir: r.dir, dropped: solved.dropped.indexOf(r.name) >= 0 };
             }),
@@ -461,6 +475,7 @@ export function buildThresholdExamples(opts) {
             solved: solved, boxes: base.boxes, verdicts: verdicts, shown: picks.shown, colors: base.colors,
             selected: picks.shown.indexOf(picked) >= 0 ? picked : picks.first,
             scene3d: scene3dFor(example, base, solved, use),
+            example: example, frame: example.frame,
         };
         solidNote.textContent = solved.lost ? 'no 3D point here' : '';
         paint3d();
@@ -546,23 +561,6 @@ export function buildThresholdExamples(opts) {
         show();
     }
 
-    // Drag to turn. The view holds its angle from one example to the next.
-    let turning = null;
-    solidCanvas.addEventListener('pointerdown', function (e) {
-        turning = { x: e.clientX, y: e.clientY, yaw: yaw, pitch: pitch };
-        solidCanvas.setPointerCapture(e.pointerId);
-        e.preventDefault();
-    });
-    solidCanvas.addEventListener('pointermove', function (e) {
-        if (!turning) return;
-        yaw = turning.yaw + (e.clientX - turning.x) * 0.01;
-        pitch = Math.max(-1.5, Math.min(1.5, turning.pitch + (e.clientY - turning.y) * 0.01));
-        paint3d();
-    });
-    const endTurn = function () { turning = null; };
-    solidCanvas.addEventListener('pointerup', endTurn);
-    solidCanvas.addEventListener('pointercancel', endTurn);
-
     prev.addEventListener('click', function () { step(-1); });
     next.addEventListener('click', function () { step(1); });
 
@@ -586,11 +584,16 @@ export function buildThresholdExamples(opts) {
             if (methodChanged) ensureScan();
         },
         step: step,
+        /** Whether the panel is on screen: the 3D viewer draws continuously while it is. */
+        setActive: function (active) {
+            if (view3d) view3d.setVisible(active);
+        },
         /** The working Camera Views changed: what was solved no longer stands. */
         invalidate: function () {
             scans = {};
             exampleSet = null;
             baselines.clear();
+            framedExample = null;
             scanToken++;
             crops.clear();
             ensureScan();
@@ -598,6 +601,7 @@ export function buildThresholdExamples(opts) {
         dispose: function () {
             disposed = true;
             clearTimeout(decodeTimer);
+            if (view3d) { view3d.dispose(); view3d = null; }
         },
     };
 }

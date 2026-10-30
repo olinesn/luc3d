@@ -255,14 +255,6 @@ function noteAt(lines) {
     return lines.map(function (text, i) { return '<text x="170" y="' + (y + 11 * i) + '" class="tm-note">' + text + '</text>'; }).join('');
 }
 
-// A note with a line to what it names, for a mark that is not the projection.
-function noteTo(lines, p) {
-    var x = 170, y = 60, ax = 185, ay = y + 11 * lines.length - 7;
-    var dx = ax - p[0], dy = ay - p[1], len = Math.hypot(dx, dy);
-    return line([ax, ay], [p[0] + dx / len * 7, p[1] + dy / len * 7], 'tm-leader')
-        + lines.map(function (text, i) { return '<text x="' + x + '" y="' + (y + 11 * i) + '" class="tm-note">' + text + '</text>'; }).join('');
-}
-
 var DLT_SKETCH = sketch(DLT_ALL, ALL, noteAt(['Projection gets pulled', 'toward the stray line', 'of Camera 3']), strayNote(3, ['stray']));
 var REFINED_SKETCH = sketch(BA_ALL, ALL,
     '<circle cx="' + DLT_ALL.point[0] + '" cy="' + DLT_ALL.point[1] + '" r="4" class="tm-start"/>'
@@ -271,7 +263,7 @@ var REFINED_SKETCH = sketch(BA_ALL, ALL,
         var a = DLT_ALL.point, b = BA_ALL.point, dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
         return line([a[0] + dx / len * 4.5, a[1] + dy / len * 4.5], [b[0] - dx / len * 6, b[1] - dy / len * 6], 'tm-move" marker-end="url(#tm-arrow)');
     })()
-    + noteTo(['DLT start'], DLT_ALL.point),
+    + '<text x="' + DLT_ALL.point[0] + '" y="' + (DLT_ALL.point[1] + 14) + '" text-anchor="middle" class="tm-note">DLT start</text>',
     strayNote(3, ['stray']));
 
 /** One selectable card: indicator, name, tagline, sketch, caption, optional note. */

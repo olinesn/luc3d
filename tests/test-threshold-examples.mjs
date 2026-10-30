@@ -266,7 +266,13 @@ group('9. the 3D view\'s geometry');
         const real = core.triangulateAndReproject(g, cams, { method: 'dlt', reprojErrorThreshold: t, includedCameras: included });
         const mine = ex.solveExample3d(session, e, { method: 'dlt', threshold: t, included });
         ok(Array.from(mine).every((v, i) => Object.is(v, real.points3d[i]) || Math.abs(v - real.points3d[i]) < 1e-9), `at ${t} px: a real Triangulate's 3D`);
+        const all = ex.solveFrame3d(session, e.frame, { method: 'dlt', threshold: t, included });
+        ok(all.length === session.instanceGroups.get(e.frame).length && all[e.group].source === g, 'every animal in the frame, each with its group');
+        ok(Array.from(all[e.group].points3d).every((v, i) => Object.is(v, mine[i]) || Math.abs(v - mine[i]) < 1e-9), 'with the same 3D');
     }
+    const fr = ex.frameFromPoints([0, 0, 0, 10, 0, 0, 20, 0, 0, NaN, NaN, NaN]);
+    ok(fr.centre.join() === '10,0,0' && fr.radius === 10, `a frame around the solved points (${JSON.stringify(fr)})`);
+    ok(ex.frameFromPoints([NaN, NaN, NaN]) === null, 'no solved point: no frame');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

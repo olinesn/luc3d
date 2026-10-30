@@ -17,9 +17,9 @@
  *     it, and the pick holds through the slider, the switch and the arrows.
  *  8. The card keeps one size. Text and controls run the full width, then the small
  *     tiles, the large tile and the 3D view on the same columns as the sketches.
- *  10. Skeletons use the Predictions drawing: the animal's colour and the Visibility
- *     panel's style. The 3D view draws, turns when dragged, moves its point (not its
- *     framing) when a value drops a camera, and keeps its angle.
+ *  10. The 2D skeletons use the Predictions drawing. The 3D view is the app's own
+ *     viewer: it draws shaded, turns when dragged, moves its point when a value drops
+ *     a camera, keeps its angle, leaves the wheel to the panel, and goes when closed.
  *  9. No session: says so, and the figure still works.
  *
  * Run: node tests/e2e/threshold-session-examples.mjs   (PORT=… to move the server)
@@ -237,47 +237,58 @@ try {
     check(await page.evaluate(() => document.querySelector('.thr-ex-large canvas').getContext('2d').getImageData(4, 4, 1, 1).data[1]) > 100, 'the large tile draws the video too');
 
     console.log('10. the skeleton and the 3D view');
-    const hasColour = (sel) => page.evaluate((q) => {
-        const c = document.querySelector(q), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-        // Black-and-white marks and a green stand-in video aside, how many pixels are the animal's colour?
-        const seen = new Set();
-        for (let i = 0; i < d.length; i += 4) { const k = d[i] >> 4 << 8 | d[i + 1] >> 4 << 4 | d[i + 2] >> 4; seen.add(k); }
+    const pixels3d = async () => {
+        // Until the orbit controls' damping has settled.
+        const grab = () => page.evaluate(() => document.querySelector('.thr-ex-3d canvas').toDataURL());
+        let last = await grab();
+        for (let i = 0; i < 40; i++) {
+            await page.waitForTimeout(150);
+            const now = await grab();
+            if (now === last) return now;
+            last = now;
+        }
+        return last;
+    };
+    const colours3d = () => page.evaluate(() => {
+        const src = document.querySelector('.thr-ex-3d canvas');
+        const c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
+        const x = c.getContext('2d'); x.drawImage(src, 0, 0);
+        const d = x.getImageData(0, 0, c.width, c.height).data, seen = new Set();
+        for (let i = 0; i < d.length; i += 4) seen.add(d[i] << 16 | d[i + 1] << 8 | d[i + 2]);
         return seen.size;
-    }, sel);
-    check(await hasColour('.thr-ex-3d canvas') > 5, 'the 3D view draws');
-    const usesStyle = await page.evaluate(async () => {
-        const R = await import('/ui/rendering.js');
-        return R.getVisibilitySettings().predictedOpts.nodeStyle;
     });
-    check(!!usesStyle, `the Visibility panel gives the Predictions style (${usesStyle})`);
+    await page.waitForTimeout(400);
+    check(await page.evaluate(() => !!document.querySelector('.thr-ex-3d canvas') && !document.querySelector('.thr-ex-3d-host').textContent), 'the 3D view is on screen');
+    const shades = await colours3d();
+    check(shades > 40, `and drawn shaded, not flat (${shades} colours)`);
+    const usesStyle = await page.evaluate(async () => (await import('/ui/rendering.js')).getVisibilitySettings().predictedOpts.nodeStyle);
+    check(!!usesStyle, `the 2D tiles get the Visibility panel's Predictions style (${usesStyle})`);
     for (let i = 0; i < 12; i++) await page.evaluate(() => document.querySelector('.thr-ex-next').click());
-    const pixels = () => page.evaluate(() => {
-        const c = document.querySelector('.thr-ex-3d canvas');
-        return Array.from(c.getContext('2d').getImageData(0, 0, c.width, c.height).data.filter((_, i) => i % 400 === 0)).join();
-    });
     await tryBox(0);
-    await page.waitForTimeout(40);
-    const off3d = await pixels();
+    const off3d = await pixels3d();
     await tryBox(40);
-    await page.waitForTimeout(40);
-    const dropped3d = await pixels();
-    check(off3d !== dropped3d, 'dropping a camera moves the 3D point');
-    const note = await page.textContent('.thr-ex-3d .thr-ex-err');
-    check(note === '', `it still has one (${JSON.stringify(note)})`);
-    const box3d = await page.evaluate(() => { const r = document.querySelector('.thr-ex-3d canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    const dropped3d = await pixels3d();
+    check(off3d !== dropped3d, 'dropping a camera changes the 3D view');
+    check(await page.textContent('.thr-ex-3d .thr-ex-err') === '', 'and the node still has a point');
     await page.evaluate(() => document.querySelector('.thr-ex-3d canvas').scrollIntoView());
     const b3 = await page.evaluate(() => { const r = document.querySelector('.thr-ex-3d canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
     await page.mouse.move(b3.x, b3.y);
     await page.mouse.down();
     await page.mouse.move(b3.x + 60, b3.y + 25, { steps: 4 });
     await page.mouse.up();
-    const turned = await pixels();
-    check(turned !== dropped3d && box3d.x > 0, 'dragging turns it');
+    const turned = await pixels3d();
+    check(turned !== dropped3d, 'dragging turns it');
     await tryBox(39);
-    await page.waitForTimeout(40);
     await tryBox(40);
-    await page.waitForTimeout(40);
-    check(await pixels() === turned, 'and the slider keeps its angle');
+    const again = await pixels3d();
+    check(again === turned, 'and the slider keeps its angle');
+    const scrollerTop = () => page.evaluate(() => document.querySelector('.settings-panel-container').scrollTop);
+    await page.evaluate(() => { document.querySelector('.settings-panel-container').scrollTop = 200; });
+    const before = await scrollerTop();
+    await page.mouse.move(b3.x, Math.max(120, Math.min(b3.y, 700)));
+    await page.mouse.wheel(0, 120);
+    await page.waitForTimeout(150);
+    check(await scrollerTop() !== before, 'the wheel over it scrolls the panel');
 
     console.log('8. layout');
     const layout = () => page.evaluate(() => {

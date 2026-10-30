@@ -846,6 +846,7 @@ export function showSettingsModal(initialPanel) {
         });
         if (name === 'wizard') filterPreview.start();
         if (name === 'triangulation') thrExamples.start();
+        thrExamples.setActive(name === 'triangulation');
         writeLastPanel(name);
     }
     NAV_ITEMS.forEach(function (item) {
