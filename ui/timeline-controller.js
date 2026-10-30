@@ -19,13 +19,13 @@
  *                   via the test accessors `getCachedTimelineHeight()` /
  *                   `setCachedTimelineHeight(px)`.
  *
- * The module reads the Timeline instance via `state.timeline` from
- * `ui/app-state.js`. That module is intentionally lightweight — it does not
- * transitively import `app.js` — so this module can be safely bridged into
- * the test runner.
+ * The module reads the Timeline instance through the live `timeline` export
+ * of `ui/app-state.js` (set by `setTimeline()`; there is no `state.timeline`).
+ * That module is intentionally lightweight — it does not transitively import
+ * `app.js` — so this module can be safely bridged into the test runner.
  */
 
-import { state } from './app-state.js';
+import { timeline } from './app-state.js';
 
 // ----------------------------------------------------------------------------
 // Module-level state
@@ -39,10 +39,11 @@ var _installed = false;
 // ----------------------------------------------------------------------------
 
 function _getTimeline() {
-    // `state.timeline` is the canonical reference — `setTimeline()` from
-    // `app-state.js` writes to it. We read it lazily on every call so the
-    // controller works regardless of module-load order.
-    return state && state.timeline ? state.timeline : null;
+    // The live `timeline` binding — `setTimeline()` from `app-state.js`
+    // writes it. Read on every call so the controller works regardless of
+    // module-load order. (Reading `state.timeline` here, which nothing
+    // sets, left `fitTimelineToData()` a silent no-op in the app.)
+    return timeline || null;
 }
 
 function _getContainer() {
@@ -65,7 +66,6 @@ export function toggleTimeline() {
     var container = _getContainer();
     if (!container) return;
 
-    var timeline = _getTimeline();
     var willCollapse = !container.classList.contains('collapsed');
 
     if (willCollapse) {
@@ -94,12 +94,8 @@ export function toggleTimeline() {
         } else {
             fitTimelineToData();
         }
-        if (timeline && typeof timeline.resize === 'function') {
-            setTimeout(function () {
-                var tl = _getTimeline();
-                if (tl && typeof tl.resize === 'function') tl.resize();
-            }, 16);
-        }
+        // No resize call here: the Timeline's own ResizeObserver resizes
+        // the canvas before the expanded timeline is first painted.
     }
 
     syncTimelineToggleButton();
