@@ -5342,7 +5342,7 @@ kbd {
   width: 100%;
   height: auto;
   /* A wide card would otherwise push the captions below the fold. */
-  max-height: 190px;
+  max-height: 260px;
   margin: 6px 0 8px;
   overflow: hidden;
 }
@@ -5399,40 +5399,168 @@ kbd {
 .tri-methods .tm-arrowhead { fill: var(--text-secondary); }
 .tri-methods .tm-leader { stroke: var(--text-muted); stroke-width: 0.8; }
 
-/* The reprojection error threshold card: two more sketches of the same scene,
-   the first solve and the solve again without the dropped camera. Step 2 keeps
-   its place and the text under each sketch has a fixed height, so the card
-   does not change size as the threshold moves. */
-.tri-thr {
-  margin-top: 10px;
+/* The controls of the Settings figures (ui/figure-try-controls.js). The value a
+   card's sketch shows is larger than its title. */
+.fig-big {
+  display: block;
+  margin-top: 2px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
 }
 
-.tri-thr-ctl {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 440px;
-  margin: 10px 0 2px;
+/* The "try it" strip: dashed, because nothing in it changes a setting. */
+.fig-try {
+  margin-top: 10px;
+  padding: 8px 10px 10px;
+  border: 1px dashed var(--border-light);
+  border-radius: 6px;
+}
+
+.fig-try-title {
+  margin-bottom: 6px;
   font-size: 12px;
   color: var(--text-muted);
 }
 
-.tri-thr-ctl input[type="range"] {
-  flex: 1;
-  min-width: 0;
-  accent-color: var(--accent);
+.fig-try-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 24px;
 }
 
-.tri-thr-ctl output {
-  min-width: 48px;
+.fig-ctl {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.fig-ctl-name { flex: none; min-width: 52px; white-space: nowrap; }
+.fig-ctl-unit { flex: none; min-width: 38px; white-space: nowrap; }
+
+.fig-ctl input[type="range"] {
+  flex: 1;
+  min-width: 40px;
+  accent-color: var(--text-secondary);
+}
+
+.fig-num {
+  flex: none;
+  width: 58px;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.fig-num:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* The one place in a card that changes a setting. */
+.fig-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 8px 0;
+  padding: 7px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  font-size: 13px;
   color: var(--text-secondary);
+}
+
+.fig-setting-now strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fig-unsaved {
+  font-size: 12px;
+  color: var(--warning-color);
+}
+
+.fig-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.fig-btn {
+  min-width: 84px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.fig-btn.fig-use {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.fig-btn:hover:not(:disabled) { border-color: var(--border-light); }
+.fig-btn.fig-use:hover:not(:disabled) { background: var(--accent-hover); }
+.is-unavailable { visibility: hidden; }
+
+/* The reprojection error threshold card: more sketches of the same scene, one
+   per solve. A step keeps its place when the rule does not reach it and the
+   text under each sketch has a fixed height, so the card does not change size
+   as the threshold moves. */
+.tri-thr {
+  margin-top: 10px;
+}
+
+.tri-thr .fig-try-row > .fig-ctl { flex: 1 1 280px; max-width: 480px; }
+
+.tri-thr-demo-method {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tri-thr-demo-method span { margin-right: 4px; }
+
+.tri-thr-demo-method button {
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tri-thr-demo-method button[aria-pressed="true"] {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
 }
 
 .tri-thr-steps {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px 20px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px 16px;
   margin-top: 10px;
 }
 
@@ -5440,9 +5568,6 @@ kbd {
   font-size: 13px;
   color: var(--text-primary);
 }
-
-/* Taller than the method sketches: the bands are narrow at small thresholds. */
-.tri-thr .tri-thr-sketch svg { max-height: 250px; }
 
 .tri-thr-step.is-idle .tri-thr-step-name { color: var(--text-muted); }
 
@@ -5481,8 +5606,9 @@ kbd {
 
 .tri-thr-verdicts li {
   display: grid;
-  grid-template-columns: 7.5em minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: 7.2em minmax(0, 1fr);
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .tri-thr-verdicts li > span:first-child { color: var(--text-secondary); }
@@ -5505,6 +5631,10 @@ kbd {
 .tri-methods .is-drop.tm-band, .tri-methods .is-drop.tm-band-end { stroke: var(--error-color); }
 .tri-methods .tm-idle { opacity: 0.3; }
 .tri-methods .tm-key-band { width: 14px; height: 6px; border-radius: 1px; background: var(--success-color); opacity: 0.6; }
+.tri-methods .tm-true { stroke: var(--success-color); stroke-width: 1.6; stroke-linecap: round; }
+.tri-methods .tm-key-true { width: 10px; height: 10px; border-radius: 0; background:
+  linear-gradient(var(--success-color), var(--success-color)) center / 100% 2px no-repeat,
+  linear-gradient(var(--success-color), var(--success-color)) center / 2px 100% no-repeat; }
 
 /* Settings ▸ Temporal Smoothing: what the Median and Gaussian windows do
    (ui/smoothing-windows-figure.js). */
@@ -5611,39 +5741,8 @@ kbd {
 /* Card 3 (gaps and segments) spans both columns, with a wider, shorter chart. */
 .smooth-fig-wide { margin-top: 10px; }
 .smooth-fig-wide svg { max-height: 300px; }
-.smooth-fig .smooth-fig-wide .sf-ctl-name { width: 96px; white-space: nowrap; }
+.smooth-fig-wide .fig-ctl-name { min-width: 76px; }
 .smooth-fig .sf-current { fill: none; stroke: var(--text-primary); stroke-width: 1.4; }
-
-.smooth-fig-ctrl {
-  display: grid;
-  gap: 4px;
-  margin: 0 0 8px;
-}
-
-.smooth-fig .sf-ctl {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.smooth-fig .sf-ctl-name {
-  width: 52px;
-  flex: none;
-}
-
-.smooth-fig .sf-ctl input[type="range"] {
-  flex: 1;
-  min-width: 0;
-  accent-color: var(--accent);
-}
-
-.smooth-fig .sf-ctl-val {
-  min-width: 76px;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-secondary);
-}
 
 .smooth-fig .sf-play {
   flex: none;

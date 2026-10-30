@@ -9316,9 +9316,9 @@ clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
 DLT or "Refined (Ref)" = bundle adjustment — no separate rows; Enter/Space on a
 focused card is handled in `onDocKeyDown`, which stops every keydown in the
 capture phase, so a listener on the card would never run; the figure's third
-card draws the wizard's reprojection error threshold for the picked method:
-`pickMethod` and the wizard field's `onEdit` redraw it, and its slider sets
-`working.thresholds.reprojErrorThreshold` and the wizard field through
+card draws the wizard's reprojection error threshold: `pickMethod` and the wizard
+field's `onEdit` redraw it, its slider only tries values, and its Use and Turn off
+buttons set `working.thresholds.reprojErrorThreshold` and the wizard field through
 `onThreshold`), **Keyboard Shortcuts** (the
 `getActions()` catalog by category; an editable entry's key chip captures a
 **chord or multi-key sequence** — keys accumulate, Ctrl/Cmd normalized to `Mod`
@@ -9334,9 +9334,9 @@ tracking and greys the row), and **Tracking Thresholds** (one field per
 `tests/e2e/settings-wizard-toggles.mjs`. And **Temporal Smoothing** (luc3d
 #134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
 median window, Gaussian window, max gap, minimum segment, under a figure from
-`ui/smoothing-windows-figure.js` that the two window fields redraw through
-`onEdit`, and whose sliders set the window, max gap and minimum segment fields
-back through `onParam`. Its own panel because
+`ui/smoothing-windows-figure.js` that the fields redraw through `onEdit`. Its
+sliders only try values; its Use and Turn off buttons set the window, max gap and
+minimum segment fields back through `onParam`. Its own panel because
 it is not a tracking parameter — it runs after triangulation, on 3D the tracker
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
@@ -11306,6 +11306,22 @@ function, so the cycle through the info panel is hoist-safe).
 
 **Tests.** `tests/e2e/campy-session-folder.mjs`.
 
+### ui/figure-try-controls.js
+
+**Purpose.** The controls shared by the Settings figures, so that someone playing
+with a demo cannot change a setting by accident: `tryStrip` / `tryControl` (a dashed
+"changes the sketch only" strip of sliders, each with a text box) and `settingRow`
+(an outlined row saying what the setting is, with the only buttons that change it:
+Use, Turn off, plus Reset sketch, and "not saved until you click Apply").
+
+**Key exports.** `tryStrip`, `tryControl`, `wireTryControl(root, key, o, onValue)` →
+`{ set(value, sliderValue) }` (never rewrites the box while it has focus; ignores a
+half-typed or out-of-range entry), `settingRow`, `wireSettingRow(root, key, on)` →
+a function showing the setting.
+
+**Imports.** None. **Imported by** `ui/triangulation-methods-figure.js`,
+`ui/smoothing-windows-figure.js`.
+
 ### ui/triangulation-methods-figure.js
 
 **Purpose.** The Settings ▸ Default Triangulation choice: two cards that each
@@ -11321,34 +11337,43 @@ entirely, so it gets no line, landing spot or error (a `null` landing). Captions
 so they wrap; the sketches are inline SVG coloured by theme variables
 (`.tri-methods` in `styles.css`).
 
+Every sketch is the same scene from above: four cameras, one node, a cross at the
+true position. The left and bottom cameras are right; the right one is badly off
+and the top one less so. So DLT is pulled away, and Refined settles on the top
+stray's line, which is why Refined can still need the threshold (with only the
+right camera wrong it lands close to the true position). `sketch()` draws them from
+`FIGURE_SCENE`.
+
+**The answers are the real solvers', not hand-drawn.** `FIGURE_SCENE.solves` holds
+`triangulateAndReproject`'s output (3D, landings, errors) for each method and set of
+cameras. `tests/test-triangulation-threshold-figure.mjs` re-solves it, checks every
+threshold from 1 to 120 px and the captions' claims, and on a mismatch prints the
+right numbers. The layout itself is hand-picked. Change it and update the wiki's
+copy (`docs/assets/triangulation/` in talmolab/luc3d-docs) too.
+
 A third, full-width card (`.tri-thr`, not a choice) shows the Tracking Wizard's
-**reprojection error threshold** (`reprojErrorThreshold`) in two more top-down
-sketches of the same scene, drawn by the same `sketch()`: step 1 is the first
-solve with the picked method (DLT misses the cameras by 17 / 24 / 30 px,
-Refined by 3 / 3 / 65), step 2 the solve again without the dropped camera
-(3 / 3 px; the 3 px is the miss a view from above cannot show, said in the
-sketch). On every image plane still checked, a band `threshold` px either side
-of the detection (2 px per sketch unit, cut at the plane's ends) is where the
-answer may land, green / orange / red as that camera is within / over / over
-and dropped; a verdict line per camera sits under each sketch. Which camera is
-dropped, and whether the node keeps its 3D, comes from `thresholdPasses`, the
-rule `triangulateAndReproject` applies; the pixel errors are the sketches'
-gaps. `update({ method, threshold })` redraws it; at 0 (off, the default) it is
-drawn with a 15 px example, labelled as one. Its slider reports through
-`opts.onThreshold`.
+**reprojection error threshold** (`reprojErrorThreshold`) in up to three more
+sketches: the first solve, then the solve again after each dropped camera. On every
+image plane still checked, a band `threshold` px either side of the detection (2 px
+per sketch unit, cut at the plane's ends) is where the answer may land, green /
+orange / red as that camera is within / over / over and dropped; a verdict line per
+camera sits under each sketch, and a sentence says what becomes of the node.
+Which camera is dropped, and whether the node keeps its 3D, comes from
+`thresholdPasses`, the rule `triangulateAndReproject` applies.
 
-**The card never changes size as the threshold moves.** Step 2 keeps its place
-when nothing is dropped (a faded scene under "No second solve", its verdict rows
-kept but hidden), and every line whose wording changes is a `stack()`: all its
-wordings in one grid cell, only the current one visible, so it is always as tall
-as its longest wording at any width. Keep new changing text in a `stack()`;
-`tests/e2e/triangulation-threshold-figure.mjs` §3b checks one size across 28
-states.
+**Trying a value never changes a setting** (`ui/figure-try-controls.js`). The
+slider, its text box and the DLT/Refined switch only redraw the sketch. Only Use
+and Turn off change the threshold, through `opts.onThreshold`; Apply saves it.
+`update({ method, threshold, saved })` follows the picked method and the setting;
+the sketch jumps to a value set elsewhere, and opens at 15 px while the setting is
+off. The large value (`.fig-big`) is what the sketch shows.
 
-**The coordinates are an illustration, not solver output.** They were computed
-once for this layout (an equal-weight least-squares point for DLT, a robust
-pixel-error minimum for Refined) and are hard-coded; the real solvers are
-`triangulatePointDLT` / `triangulatePointBA` (`pose/triangulation-core.js`).
+**The card never changes size as the value moves.** Every step keeps its place (a
+faded scene when the rule does not reach it, its verdict rows kept but hidden), and
+every line whose wording changes is a `stack()`: all its wordings in one grid cell,
+only the current one visible, so it is always as tall as its longest wording at any
+width. Keep new changing text in a `stack()`;
+`tests/e2e/triangulation-threshold-figure.mjs` §4 checks one size across 30 states.
 
 **Don't call Refined more accurate in general.** Measured on held-out cameras
 (9 proofread SLAP sessions), shipped Refined beat DLT in only 1 of 9 (median
@@ -11367,9 +11392,9 @@ both together. The card also says the threshold is not used by Track All's
 matching (`pose/cross-view-tracker.js` solves plain DLT on every view).
 
 **Key exports.** `buildTriangulationMethodsFigure(opts)` → `{ el, update }`
-(`opts.onThreshold(px)`); `thresholdPasses` (pure, Node-importable).
+(`opts.onThreshold(px)`); `thresholdPasses` and `FIGURE_SCENE` (pure, Node-importable).
 
-**Imports.** None. **Imported by** `ui/settings-modal.js`,
+**Imports.** `./figure-try-controls.js`. **Imported by** `ui/settings-modal.js`,
 `tests/test-triangulation-threshold-figure.mjs`. e2e:
 `tests/e2e/triangulation-threshold-figure.mjs`.
 
@@ -11400,13 +11425,16 @@ card's input is the median's output, except with the median off and the
 Gaussian on: then it is the raw trace and a note says the spike becomes a bump
 (why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
 
-**Sliders.** Each card has a Window slider (1–31 frames; under 3 the filter
-leaves the 3D as it is, drawn as a 1-frame window) that redraws the card
-and calls `onParam(id, value)` so the panel sets its working value and field
-(Apply then stores it), and a Frame slider with ▶ that slides the shaded window
-along the 40 frames (90 ms a frame; stops at the end, on a second click, or once
-the figure leaves the page). While a frame is picked, that stage's output is
-solid up to it and faint after it, with a ring on its value.
+**Trying a value never changes a setting** (`ui/figure-try-controls.js`). Each card
+has a Window slider with a text box (slider 1–31 frames, box up to 101; under 3 the
+filter leaves the 3D as it is, drawn as a 1-frame window) and a Frame slider with a
+text box and ▶ that slides the shaded window along the 40 frames (90 ms a frame;
+stops at the end, on a second click, or once the figure leaves the page). They only
+redraw the sketch (`tried`, kept apart from `setting`). While a frame is picked,
+that stage's output is solid up to it and faint after it, with a ring on its value.
+Only a card's Use and Turn off buttons change a setting, through `onParam(id, value)`
+(the panel sets its working value and field; Apply stores it). The large value
+(`.fig-big`) is what the sketch shows.
 
 **Card 3, gaps and segments** (full width, below the two): Max gap and Minimum
 segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
@@ -11414,10 +11442,11 @@ segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
 away after the 7-frame one). It runs both stages at the windows the other cards
 show over the segments `buildSegments` cuts, as the real pass does, and draws
 each absence (labelled hole or split), the output per segment (grey where too
-short to smooth) and the segments as bars. Its Max gap (0–15) and Min segment
-(1–15) sliders report through `onParam` like the Window sliders.
+short to smooth) and the segments as bars. Its Max gap and Min segment sliders
+(0–15, 1–15; the text boxes go further) try values the same way; its Use button
+sets both through `onParam`.
 
-**Key exports.** `buildSmoothingWindowsFigure({ onParam })` → `{ el, update(params) }`.
+**Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`.
 
 **Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
 `sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`.

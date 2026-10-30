@@ -359,8 +359,9 @@ export function showSettingsModal(initialPanel) {
 
     // The two methods are chosen by clicking their diagram cards
     // (`ui/triangulation-methods-figure.js`), not separate rows. Its third card
-    // shows the Tracking Wizard's reprojection error threshold for the picked
-    // method; its slider sets the same working value and the wizard's field.
+    // shows the Tracking Wizard's reprojection error threshold. Its slider only
+    // redraws the sketch; its Use and Turn off buttons set the same working value
+    // and the wizard's field.
     const reprojThresholdDef = thresholdDefs.find(function (d) { return d.id === 'reprojErrorThreshold'; });
     const triFigure = buildTriangulationMethodsFigure({
         onThreshold: function (value) {
@@ -385,7 +386,7 @@ export function showSettingsModal(initialPanel) {
     methodCards.forEach(function (c) {
         c.addEventListener('click', function () { pickMethod(c.dataset.method); });
     });
-    triFigure.update({ threshold: working.thresholds.reprojErrorThreshold });
+    triFigure.update({ threshold: working.thresholds.reprojErrorThreshold, saved: working.thresholds.reprojErrorThreshold });
     pickMethod(working.method);
     triPanel.appendChild(triFigure.el);
 
@@ -752,9 +753,11 @@ export function showSettingsModal(initialPanel) {
     smPanel.appendChild(smHint);
 
     // What the two windows do, redrawn as they are typed
-    // (`ui/smoothing-windows-figure.js`). Its sliders set the same working
-    // values and the matching field.
+    // (`ui/smoothing-windows-figure.js`). Its sliders only redraw the sketch;
+    // its Use and Turn off buttons set the same working values and the
+    // matching field.
     const smFigure = buildSmoothingWindowsFigure({
+        saved: Object.assign({}, working.smoothing),
         onParam: function (id, value) {
             working.smoothing[id] = value;
             const def = smoothingDefs.find(function (d) { return d.id === id; });

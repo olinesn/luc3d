@@ -1,26 +1,27 @@
 /**
  * triangulation-threshold-figure.mjs — Settings ▸ Default Triangulation shows
- * the reprojection error threshold on the three cameras of its sketches, and
- * the card follows the threshold and the picked method
- * (ui/triangulation-methods-figure.js; the keep/drop rule itself is pinned to
- * the solver by tests/test-triangulation-threshold-figure.mjs).
+ * the reprojection error threshold on the four cameras of its sketches, and
+ * trying a value there never changes a setting (ui/triangulation-methods-figure.js,
+ * ui/figure-try-controls.js; the keep/drop rule and the numbers are pinned to the
+ * solvers by tests/test-triangulation-threshold-figure.mjs).
  *
  * Asserted, in the real Settings modal:
- *  1. With the threshold off (the default) the card is drawn with a 15 px
- *     example, labelled as one: DLT's first solve misses all three cameras by
- *     more, only the worst (right) is dropped, the other two are checked again
- *     and land within it after the second solve.
- *  2. Typing 20 in the Tracking Wizard's field redraws it: the left camera is
- *     within, the middle over but kept, the right dropped; each step is a
- *     top-down sketch, with a band 20 px either side of each detection.
- *  3. Picking Refined: the first solve already fits the left and middle
- *     cameras, so only the right is over. At 40 px Refined still drops it but
- *     DLT drops nothing (step 2 hidden). At 2 px the last two cameras still
- *     miss and the node loses its 3D. The card and both steps keep one size
- *     whatever the threshold and method (step 2 keeps its place).
- *  4. The card's slider sets the wizard field, and Apply stores the value.
- *  5. The method cards still pick the method; the threshold card is not one of
- *     them.
+ *  1. With the threshold off (the default) the sketch opens at a 15 px example,
+ *     "Your setting" says off, and the large value is what the sketch shows.
+ *  2. A value typed in the Tracking Wizard is the setting, and the sketch follows.
+ *  3. Picking a method follows too. Refined at 15 px needs two drops (three
+ *     sketches) to reach the true position; at 25 px it stops after one; at 45 px
+ *     nothing is dropped and it stays fooled; at 5 px the node loses its 3D. DLT at
+ *     5 px keeps it.
+ *  4. The card keeps one size whatever is tried, and the sketch of a step not
+ *     reached stays in place with no verdict showing through.
+ *  5. TRYING CHANGES NOTHING: the slider, the text box and the DLT/Refined switch
+ *     redraw the sketch only. The wizard field, the picked method and what Apply
+ *     stores stay as they were. A typed value past the slider's end works; out of
+ *     range is ignored.
+ *  6. Use sets the working value and the wizard field and says "not saved until
+ *     you click Apply"; Apply stores it. Turn off sets 0. Reset sketch goes back.
+ *  7. The method cards still pick the method; the threshold card is not one of them.
  *
  * Run: node tests/e2e/triangulation-threshold-figure.mjs   (PORT=… to move the server)
  */
@@ -38,7 +39,7 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 1200));
 
-const FIELD = 'Reprojection error threshold (px)';
+const FIELD = '.settings-panel[data-panel="wizard"] input[aria-label="Reprojection error threshold (px)"]';
 let browser;
 try {
     browser = await chromium.launch();
@@ -53,108 +54,169 @@ try {
     });
     await open();
 
-    const type = (v) => page.evaluate(([l, val]) => {
-        const i = document.querySelector(`.settings-panel[data-panel="wizard"] input[aria-label="${l}"]`);
+    // The real setting, from the Tracking Wizard's field.
+    const type = (v) => page.evaluate(([f, val]) => {
+        const i = document.querySelector(f);
         i.value = String(val); i.dispatchEvent(new Event('input'));
     }, [FIELD, v]);
-    const read = () => page.evaluate(() => {
+    // Trying, from the card.
+    const tryBox = (v) => page.evaluate((val) => {
+        const i = document.querySelector('.tri-thr [data-try="threshold"] input[type="number"]');
+        i.value = String(val); i.dispatchEvent(new Event('input'));
+    }, v);
+    const trySlider = (v) => page.evaluate((val) => {
+        const i = document.querySelector('.tri-thr [data-try="threshold"] input[type="range"]');
+        i.value = String(val); i.dispatchEvent(new Event('input'));
+    }, v);
+    const read = () => page.evaluate((f) => {
         const card = document.querySelector('.tri-methods .tri-thr');
         const step = (n) => card.querySelector(`.tri-thr-step[data-step="${n}"]`);
         const rows = (n) => Array.from(step(n).querySelectorAll('.tri-thr-verdicts li'));
-        const states = (n) => rows(n).map(li => (li.className.match(/is-(\w+)/) || [])[1]).join(',');
-        const res = card.querySelector('.tri-thr-result');
+        const states = (n) => step(n).classList.contains('is-idle') ? '' : rows(n).map(li => (li.className.match(/is-(\w+)/) || [])[1]).join(',');
         const shown = (el) => { const on = el.querySelector('.tri-thr-stack > .on'); return (on || el).textContent; };
-        // The middle camera's band in step 1 (its image plane is the level one, y = 108).
-        const mid = Array.from(step(1).querySelectorAll('line.tm-band')).find(l => l.getAttribute('y1') === '108');
+        const res = card.querySelector('.tri-thr-result');
         const box = (el) => { const r = el.getBoundingClientRect(); return Math.round(r.width) + 'x' + Math.round(r.height); };
+        const bottomBand = Array.from(step(1).querySelectorAll('line.tm-band')).find(l => l.getAttribute('y1') === '108');
+        const avail = (cls) => !card.querySelector(cls).classList.contains('is-unavailable');
         return {
-            tag: shown(card.querySelector('.tri-thr-tag')),
+            big: card.querySelector('.fig-big').textContent,
+            setting: card.querySelector('.fig-setting-now strong').textContent,
+            unsaved: avail('.fig-unsaved'),
+            use: avail('.fig-use') ? card.querySelector('.fig-use').textContent : null,
+            off: avail('.fig-off'),
+            reset: avail('.fig-reset'),
+            num: card.querySelector('[data-try="threshold"] input[type="number"]').value,
+            slider: card.querySelector('[data-try="threshold"] input[type="range"]').value,
             name1: shown(step(1).querySelector('.tri-thr-step-name')),
-            s1: states(1),
-            step2: !step(2).classList.contains('is-idle'),
-            s2: step(2).classList.contains('is-idle') ? '' : states(2),
+            s1: states(1), s2: states(2), s3: states(3),
+            kind: res.dataset.kind,
             result: shown(res),
             lost: res.classList.contains('tri-thr-lost'),
-            midBand: mid ? Math.abs(+mid.getAttribute('x2') - +mid.getAttribute('x1')) : null,
+            bandLen: bottomBand ? Math.abs(+bottomBand.getAttribute('x2') - +bottomBand.getAttribute('x1')) : null,
             bands2: step(2).querySelectorAll('line.tm-band').length,
-            // Visible text in step 2's verdict rows (none while it shows no second solve).
-            rows2Visible: rows(2).some(li => Array.from(li.querySelectorAll('span')).some(sp => getComputedStyle(sp).visibility === 'visible' && sp.textContent && !sp.children.length && sp.parentElement.classList.contains('tri-thr-stack'))),
-            errText: rows(1).map(li => shown(li)),
             sketches: card.querySelectorAll('.tri-thr-sketch svg').length,
+            cameras: step(1).querySelectorAll('.tm-plane').length,
+            errText: rows(1).map(li => shown(li)),
+            idleLeak: Array.from(card.querySelectorAll('.tri-thr-step.is-idle .tri-thr-verdicts .tri-thr-stack > span')).some(s => getComputedStyle(s).visibility === 'visible'),
             size: box(card) + ' ' + Array.from(card.querySelectorAll('.tri-thr-step')).map(box).join(' '),
             inRadio: !!card.closest('[role="radiogroup"]') || card.classList.contains('tri-method-choice'),
+            field: document.querySelector(f).value,
+            picked: Array.from(document.querySelectorAll('.tri-method-choice')).filter(c => c.getAttribute('aria-checked') === 'true').map(c => c.dataset.method).join(),
+            methodCardSketches: Array.from(document.querySelectorAll('.tri-method-choice svg')).map(s => s.querySelectorAll('.tm-plane').length).join(),
         };
-    });
+    }, FIELD);
 
-    console.log('1. threshold off (default): drawn with a 15 px example');
+    console.log('1. threshold off (default)');
     let r = await read();
-    check(/off \(0\).*example of 15 px/.test(r.tag), `labelled as an example (${r.tag})`);
-    check(r.name1.includes('DLT') && r.s1 === 'over,over,drop', `DLT first solve: all over, only the worst dropped (${r.s1})`);
-    check(/^17 px/.test(r.errText[0]) && /^24 px/.test(r.errText[1]) && /^30 px.*dropped/.test(r.errText[2]), `errors 17 / 24 / 30 px (${r.errText.join(' | ')})`);
-    check(r.step2 && r.s2 === 'in,in,out', `solved again without it: the other two within (${r.s2})`);
-    check(r.sketches === 2, 'each step is a top-down sketch of the three cameras');
-    check(r.bands2 === 2, `step 2 draws a band only on the two cameras still counted (${r.bands2})`);
-    check(/^With 15 px, the right camera is left out/.test(r.result) && !r.lost, `result says so (${r.result.slice(0, 60)}…)`);
+    check(r.setting === 'off' && r.field === '0', `"Your setting" says off (${r.setting}, field ${r.field})`);
+    check(r.big === '15 px' && r.num === '15', `the sketch opens at a 15 px example, in large text (${r.big})`);
+    check(r.use === 'Use 15 px' && !r.off && !r.unsaved, 'offers Use; nothing to turn off, nothing unsaved');
+    check(r.cameras === 4 && r.methodCardSketches === '4,4', `four cameras in every sketch (${r.cameras}; cards ${r.methodCardSketches})`);
+    check(r.sketches === 3, 'one sketch per solve: three steps');
+    check(r.name1.includes('DLT') && r.s1 === 'over,over,drop,over', `DLT first solve: all over, only the worst dropped (${r.s1})`);
+    check(/^20 px/.test(r.errText[0]) && /^26 px/.test(r.errText[1]) && /^32\.7 px.*dropped/.test(r.errText[2]) && /^18\.1 px/.test(r.errText[3]), `errors from the real solver (${r.errText.join(' | ')})`);
+    check(r.s2 === 'in,in,out,in' && r.s3 === '', `solved again: the other three within; no third solve (${r.s2})`);
+    check(r.bands2 === 3, `step 2 draws a band only on the cameras still counted (${r.bands2})`);
+    check(r.kind === 'three' && /^With 15 px, the right camera is left out/.test(r.result), `result says so (${r.result.slice(0, 50)}…)`);
     check(!r.inRadio, 'the threshold card is not one of the method choices');
 
-    console.log('2. typing 20 px in the Tracking Wizard field');
+    console.log('2. the setting, typed in the Tracking Wizard');
     await type(20);
     r = await read();
-    check(r.tag === '20 px · DLT', `tag follows (${r.tag})`);
-    check(r.s1 === 'in,over,drop' && /checked again/.test(r.errText[1]), `left within, middle over and checked again, right dropped (${r.s1})`);
-    check(Math.abs(r.midBand - 20) < 0.11, `bands drawn 20 px either side of the detection (middle camera: ${r.midBand} units at 2 px per unit)`);
+    check(r.setting === '20 px' && r.big === '20 px' && r.num === '20', `setting and sketch follow (${r.setting}, ${r.big})`);
+    check(r.s1 === 'in,over,drop,in', `an error of exactly 20 is within; the worst dropped (${r.s1})`);
+    check(Math.abs(r.bandLen - 20) < 0.11, `bands drawn 20 px either side of the detection (bottom camera: ${r.bandLen} units at 2 px per unit)`);
 
-    console.log('3. Refined, and other thresholds');
+    console.log('3. Refined, and what the threshold does for it');
     await page.click('.tri-method-choice[data-method="ba"]');
+    await type(15);
     r = await read();
-    check(r.name1.includes('Refined') && r.s1 === 'in,in,drop', `Refined first solve: only the stray is over (${r.s1})`);
-    check(/stays where it was/.test(r.result), `Refined's point does not move (${r.result.slice(0, 70)}…)`);
-    await type(40);
+    check(r.name1.includes('Refined') && r.s1 === 'over,in,drop,in', `Refined's first solve fits the top stray; the right camera is worst (${r.s1})`);
+    check(r.s2 === 'in,in,out,drop' && r.s3 === 'in,in,out,out', `then the top camera goes too (${r.s2} → ${r.s3})`);
+    check(r.kind === 'two' && /true position/.test(r.result), `two drops reach the true position (${r.result.slice(0, 60)}…)`);
+    await type(25);
     r = await read();
-    check(r.s1 === 'in,in,drop', `Refined at 40 px still drops the stray (65 px) (${r.s1})`);
+    check(r.kind === 'three' && r.s3 === '', `25 px stops after one drop (${r.s2})`);
+    await type(45);
+    r = await read();
+    check(r.kind === 'first' && r.s2 === '' && /far from the true position/.test(r.result), `45 px drops nothing and stays fooled (${r.s1})`);
+    await type(5);
+    r = await read();
+    check(r.lost && /no 3D point/.test(r.result), 'Refined at 5 px: the last two still miss (5.2 px), no 3D');
     await page.click('.tri-method-choice[data-method="dlt"]');
     r = await read();
-    check(r.s1 === 'in,in,in' && !r.step2 && /nothing is dropped/.test(r.result), `DLT at 40 px drops nothing; step 2 shows no second solve (${r.s1})`);
-    check(!r.rows2Visible, 'no step-2 verdict shows through while there is no second solve');
-    await type(2);
-    r = await read();
-    check(r.s1 === 'over,over,drop' && r.s2 === 'over,over,out', `2 px: the last two still miss (${r.s1} → ${r.s2})`);
-    check(r.lost && /No 3D point for this node/.test(r.result), `the node loses its 3D (${r.result.slice(0, 50)}…)`);
+    check(!r.lost && r.kind === 'two', 'DLT at 5 px keeps it (3.5 px)');
+    await type(0);
 
-    console.log('3b. the card keeps its size whatever the threshold and method');
+    console.log('4. one size whatever is tried');
     const sizes = new Set();
+    let leak = false;
     for (const m of ['dlt', 'ba']) {
-        await page.click(`.tri-method-choice[data-method="${m}"]`);
-        for (const t of [0, 1, 2, 3, 15, 17, 20, 24, 29, 30, 40, 64, 65, 80]) { await type(t); sizes.add((await read()).size); }
+        await page.click(`.tri-thr [data-demo-method="${m}"]`);
+        for (const t of [1, 2, 3, 5, 6, 12, 13, 15, 19, 20, 30, 33, 42, 80, 200]) {
+            await tryBox(t);
+            const s = await read();
+            sizes.add(s.size);
+            leak = leak || s.idleLeak;
+        }
     }
-    await page.click('.tri-method-choice[data-method="dlt"]');
-    check(sizes.size === 1, `one size for the card and both steps across 28 states (${[...sizes].join(' | ')})`);
+    check(sizes.size === 1, `one size for the card and every step across 30 states (${[...sizes].join(' | ')})`);
+    check(!leak, 'no verdict shows through a step not reached');
 
-    console.log('4. the slider sets the wizard field; Apply stores it');
-    const sl = await page.evaluate(async ([l]) => {
-        const range = document.querySelector('.tri-thr .tri-thr-range');
-        range.value = '25'; range.dispatchEvent(new Event('input'));
-        const out = {
-            field: document.querySelector(`.settings-panel[data-panel="wizard"] input[aria-label="${l}"]`).value,
-            tag: document.querySelector('.tri-thr .tri-thr-tag .on').textContent,
-            val: document.querySelector('.tri-thr .tri-thr-val').textContent,
-        };
-        document.querySelector('.settings-btn-apply').click();
+    console.log('5. trying changes nothing');
+    await page.click('.tri-thr .fig-reset');
+    r = await read();
+    check(r.big === '15 px' && r.setting === 'off', `Reset sketch goes back (${r.big})`);
+    await trySlider(40);
+    r = await read();
+    check(r.big === '40 px' && r.num === '40' && r.field === '0' && r.setting === 'off', `the slider redraws the sketch and fills the box, the setting stays off (${r.big}, field ${r.field})`);
+    await tryBox(33);
+    r = await read();
+    check(r.big === '33 px' && Number(r.slider) === 33 && r.field === '0', `the text box moves the slider, the setting stays off (${r.big})`);
+    await tryBox(200);
+    r = await read();
+    check(r.big === '200 px' && r.slider === '80' && r.field === '0', `a value past the slider's end works (${r.big}, slider ${r.slider})`);
+    await tryBox(600);
+    check((await read()).big === '200 px', 'out of range is ignored');
+    await tryBox(0);
+    check((await read()).big === '200 px', 'and 0 too: off is the Turn off button');
+    await page.click('.tri-thr [data-demo-method="ba"]');
+    r = await read();
+    check(r.name1.includes('Refined') && r.picked === 'dlt', `the DLT/Refined switch redraws, the picked method stays (${r.picked})`);
+    await page.evaluate(() => document.querySelector('.settings-btn-apply').click());
+    const stored = () => page.evaluate(async () => {
         const S = await import('/ui/settings.js');
-        out.stored = S.getTrackingThreshold('reprojErrorThreshold');
-        return out;
-    }, [FIELD]);
-    check(sl.field === '25' && sl.tag === '25 px · DLT' && sl.val === '25 px', `field and card follow the slider (${sl.field}, ${sl.tag}, ${sl.val})`);
-    check(sl.stored === 25, `Apply stores it (${sl.stored})`);
+        return { threshold: S.getTrackingThreshold('reprojErrorThreshold'), method: S.getDefaultTriangulationMethod() };
+    });
+    let st = await stored();
+    check(st.threshold === 0 && st.method === 'dlt', `Apply after only trying stores nothing new (${JSON.stringify(st)})`);
+
+    console.log('6. Use, Apply, Turn off');
+    await open();
+    await tryBox(25);
+    r = await read();
+    check(r.use === 'Use 25 px' && r.reset, `offers Use 25 px and Reset sketch (${r.use})`);
+    await page.click('.tri-thr .fig-use');
+    r = await read();
+    check(r.setting === '25 px' && r.field === '25' && r.unsaved && r.use === null, `Use sets the working value and the wizard field, and says it is not saved yet (${r.setting}, ${r.field})`);
+    await page.evaluate(() => document.querySelector('.settings-btn-apply').click());
+    st = await stored();
+    check(st.threshold === 25, `Apply stores it (${st.threshold})`);
     await open();
     r = await read();
-    check(r.tag === '25 px · DLT', `reopened Settings shows the stored threshold (${r.tag})`);
+    check(r.setting === '25 px' && !r.unsaved && r.off, `reopened Settings shows the stored threshold (${r.setting})`);
+    await page.click('.tri-thr .fig-off');
+    r = await read();
+    check(r.setting === 'off' && r.field === '0' && r.unsaved, `Turn off sets 0 (${r.setting}, ${r.field})`);
+    await page.click('.settings-btn-cancel');
+    st = await stored();
+    check(st.threshold === 25, `Cancel keeps what was stored (${st.threshold})`);
+    await open();
 
-    console.log('5. the method cards still pick the method');
+    console.log('7. the method cards still pick the method');
     await page.click('.tri-method-choice[data-method="ba"]');
-    const picked = await page.evaluate(() => Array.from(document.querySelectorAll('.tri-method-choice'))
-        .map(c => c.dataset.method + ':' + c.getAttribute('aria-checked')).join(' '));
-    check(picked === 'dlt:false ba:true', `clicking Refined picks it (${picked})`);
+    r = await read();
+    check(r.picked === 'ba' && r.name1.includes('Refined'), `clicking Refined picks it and the sketch follows (${r.picked})`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

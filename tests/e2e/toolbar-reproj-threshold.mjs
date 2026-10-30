@@ -103,7 +103,7 @@ try {
     const settings = await page.evaluate((w) => {
         document.getElementById('menuSettings').click();
         document.querySelector('.settings-nav-item[data-panel="triangulation"]').click();
-        const out = { field: document.querySelector(w).value, tag: document.querySelector('.tri-thr-tag .on').textContent };
+        const out = { field: document.querySelector(w).value, tag: document.querySelector('.tri-thr .fig-setting-now strong').textContent };
         const i = document.querySelector(w);
         i.value = '40'; i.dispatchEvent(new Event('input'));
         document.querySelector('.settings-btn-apply').click();

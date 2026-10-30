@@ -18,11 +18,14 @@
 // the windows as they are typed. A stage that is off (0) is drawn with an
 // example window instead, labelled as an example.
 //
-// Each card has two sliders. Window (1 = no smoothing) sets that stage's window size and reports
-// it through `onParam(id, value)`, so the panel can set its number field (and
-// the stage turns on). Frame slides the shaded window along the trace, and its
-// play button animates the slide: while a frame is picked, the output is drawn
-// solid up to that frame and faint after it, so the line builds frame by frame.
+// **Trying a value never changes a setting** (`ui/figure-try-controls.js`). Each
+// card has two sliders with text boxes, which only redraw the sketch. Window (1 =
+// no smoothing) tries a window size. Frame slides the shaded window along the
+// trace, and its play button animates the slide: while a frame is picked, the
+// output is drawn solid up to that frame and faint after it, so the line builds
+// frame by frame. Only the card's Use and Turn off buttons change a setting, through
+// `onParam(id, value)`, so the panel can set its working value and number field;
+// Apply saves it. Each card's large value is what its sketch shows.
 // The Gaussian
 // card's input is the median's output, as in the real pass, except when the
 // median is off and the Gaussian is on: then it is the raw trace, and the card
@@ -35,12 +38,15 @@
 // the segments `buildSegments` cuts, exactly as the real pass does: a short
 // absence stays a hole inside its segment, a longer one splits the trace and no
 // window crosses it, and a segment shorter than the minimum is left as is. Its
-// two sliders report through the same `onParam`.
+// two sliders try values the same way, and its Use button reports both through
+// `onParam`.
 //
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
-// `sigmaForWindow`, `buildSegments`). Colours come from `styles.css` (`.smooth-fig`).
+// `sigmaForWindow`, `buildSegments`), ui/figure-try-controls.js. Colours come from
+// `styles.css` (`.smooth-fig`).
 
 import { smoothSignalInto, normalizeWindow, sigmaForWindow, buildSegments } from '../pose/temporal-smoothing.js';
+import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js';
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[11, 13]];                 // [frame, mm] one-frame spikes
@@ -300,39 +306,40 @@ function gapChart(medWindow, gauWindow, maxGap, minSegment) {
         + '<text x="' + GX1 + '" y="139" text-anchor="end" class="sf-note">frames →</text></svg>';
 }
 
-function tagline(window, example) {
-    if (example) return 'off (0) · example with ' + window + ' frames';
-    return window === 1 ? '1 frame · no smoothing' : window + ' frames';
-}
-
 var SIZE_MAX = 31;     // the Window sliders' top; a longer typed window still shows, the slider sits at its end
+var WINDOW_MAX = 101;  // the settings' own top (`SMOOTHING_PARAMS`, `ui/settings.js`)
+var GAP_MAX = 1000;
 var STEP_MS = 90;      // play: one frame of the slide
 
-/** A card's sliders: window size, then the frame the window sits on, with play. */
-function controls(stage) {
-    var name = stage === 'median' ? 'median' : 'Gaussian';
-    return '<div class="smooth-fig-ctrl">'
-        + '<label class="sf-ctl"><span class="sf-ctl-name">Window</span>'
-        + '<input type="range" class="sf-size" min="1" max="' + SIZE_MAX + '" step="2" aria-label="' + name + ' window size (frames)">'
-        + '<output class="sf-ctl-val sf-size-val"></output></label>'
-        + '<div class="sf-ctl"><span class="sf-ctl-name">Frame</span>'
-        + '<input type="range" class="sf-pos" min="0" max="' + (N - 1) + '" step="1" aria-label="Frame the ' + name + ' window is on">'
-        + '<output class="sf-ctl-val sf-pos-val"></output>'
-        + '<button type="button" class="sf-play" aria-label="Play: slide the ' + name + ' window across the frames">▶</button></div>'
-        + '</div>';
+function plural(n) { return n + (n === 1 ? ' frame' : ' frames'); }
+
+/** A stage's window as the filter takes it: 0 = off, under 3 = 1 frame, else odd. */
+function effectiveWindow(v) { return v > 0 ? (normalizeWindow(v) || 1) : 0; }
+
+function sizeControl(name) {
+    return { name: 'Window', aria: name + ' window (frames)', min: 0, max: WINDOW_MAX, step: 2, sliderMin: 1, sliderMax: SIZE_MAX, unit: 'frames' };
 }
+function posControl(name) {
+    return { name: 'Frame', aria: 'Frame the ' + name + ' window is on', min: 1, max: N, step: 1, unit: '/ ' + N,
+        extra: '<button type="button" class="sf-play" aria-label="Play: slide the ' + name + ' window across the frames">▶</button>' };
+}
+var GAP_CONTROL = { name: 'Max gap', aria: 'Max gap to smooth across (frames)', min: 0, max: GAP_MAX, step: 1, sliderMax: GAP_SLIDER_MAX, unit: 'frames' };
+var MINSEG_CONTROL = { name: 'Min segment', aria: 'Minimum segment length (frames)', min: 1, max: GAP_MAX, step: 1, sliderMax: GAP_SLIDER_MAX, unit: 'frames' };
 
 /**
  * Build the figure.
- * @param {{onParam?: function(string, number): void}} [opts] `onParam(id, value)`
- *   is called when a card's slider sets a setting (`smoothMedianWindow`,
- *   `smoothGaussianWindow`, `smoothMaxGap`, `smoothMinSegment`), so the panel can
- *   set its field to match.
+ * @param {{onParam?: function(string, number): void, saved?: Object}} [opts]
+ *   `onParam(id, value)` is called when a card's Use or Turn off button sets a
+ *   setting (`smoothMedianWindow`, `smoothGaussianWindow`, `smoothMaxGap`,
+ *   `smoothMinSegment`), so the panel can set its field to match. The sliders and
+ *   text boxes never call it. `saved` is those settings as stored when Settings
+ *   opened (for "not saved until Apply").
  * @returns {{el: HTMLElement, update: function(Object): void}} `update` takes the
  *   panel's working map (those four ids).
  */
 export function buildSmoothingWindowsFigure(opts) {
     opts = opts || {};
+    var saved = opts.saved || {};
     var fig = document.createElement('figure');
     fig.className = 'smooth-fig';
     fig.innerHTML =
@@ -340,20 +347,22 @@ export function buildSmoothingWindowsFigure(opts) {
         + 'movement (dashed), with one fast move on the right, and its 3D as triangulated (grey rings), with jitter and '
         + 'a one-frame spike (red). The '
         + 'median\'s output (green) is the Gaussian\'s input, and the Gaussian\'s output is blue; both are computed '
-        + 'with LUC3D\'s own filter and follow the windows you enter below. y and z, and every node, are filtered '
-        + 'the same way, each on its own. On each card, Window changes the window size (and the field below), and '
-        + 'Frame or ▶ slides the window along the frames.</p>'
+        + 'with LUC3D\'s own filter. y and z, and every node, are filtered the same way, each on its own. On each '
+        + 'card, Window tries a window size and Frame or ▶ slides the window along the frames; only Use changes '
+        + 'your setting.</p>'
         + '<div class="smooth-fig-cols">'
         + '<div class="smooth-fig-col" data-stage="median">'
-        + '<div class="smooth-fig-name">1 · Median window<small></small></div><div class="smooth-fig-chart"></div>'
-        + controls('median')
+        + '<div class="smooth-fig-name">1 · Median window<span class="fig-big"></span><small></small></div><div class="smooth-fig-chart"></div>'
+        + tryStrip(tryControl('size', sizeControl('median')) + tryControl('pos', posControl('median')))
+        + settingRow('median')
         + '<p>Each frame takes the middle value of the frames in its window. The stems are the window sorted by '
         + 'value: the middle one (green) is what the frame becomes, so a one-frame spike (red) is dropped rather '
         + 'than averaged in. Real movement shorter than about half the window is erased too: raise the window and '
         + 'watch the fast move flatten.</p></div>'
         + '<div class="smooth-fig-col" data-stage="gaussian">'
-        + '<div class="smooth-fig-name">2 · Gaussian window<small></small></div><div class="smooth-fig-chart"></div>'
-        + controls('gaussian')
+        + '<div class="smooth-fig-name">2 · Gaussian window<span class="fig-big"></span><small></small></div><div class="smooth-fig-chart"></div>'
+        + tryStrip(tryControl('size', sizeControl('Gaussian')) + tryControl('pos', posControl('Gaussian')))
+        + settingRow('gaussian')
         + '<p>Runs on the median\'s output (green dots: the line on the left). A weighted average over the window: '
         + 'the frame itself counts most and the weights fall off as a bell curve (stems). Removes the jitter the '
         + 'median leaves. 3 frames barely changes anything (each frame keeps about 98% of its own value); 5 is '
@@ -362,14 +371,9 @@ export function buildSmoothingWindowsFigure(opts) {
         + '<p class="smooth-fig-warn" hidden>The median is off, so the Gaussian spreads the spike into a bump.</p></div>'
         + '</div>'
         + '<div class="smooth-fig-col smooth-fig-wide" data-stage="gaps">'
-        + '<div class="smooth-fig-name">3 · Gaps and segments<small></small></div><div class="smooth-fig-chart"></div>'
-        + '<div class="smooth-fig-ctrl">'
-        + '<label class="sf-ctl"><span class="sf-ctl-name">Max gap</span>'
-        + '<input type="range" class="sf-gap" min="0" max="' + GAP_SLIDER_MAX + '" step="1" aria-label="Max gap to smooth across (frames)">'
-        + '<output class="sf-ctl-val sf-gap-val"></output></label>'
-        + '<label class="sf-ctl"><span class="sf-ctl-name">Min segment</span>'
-        + '<input type="range" class="sf-minseg" min="1" max="' + GAP_SLIDER_MAX + '" step="1" aria-label="Minimum segment length (frames)">'
-        + '<output class="sf-ctl-val sf-minseg-val"></output></label></div>'
+        + '<div class="smooth-fig-name">3 · Gaps and segments<span class="fig-big"></span><small></small></div><div class="smooth-fig-chart"></div>'
+        + tryStrip(tryControl('gap', GAP_CONTROL) + tryControl('minseg', MINSEG_CONTROL))
+        + settingRow('gaps')
         + '<p>Another made-up node, 60 frames, smoothed by both stages at the windows above. Frames with no 3D are '
         + 'never filled in. An absence up to Max gap frames long is a hole inside its segment, and the windows skip '
         + 'over it. A longer one splits the trace into segments (bars), and no window reaches across a split, so the '
@@ -391,26 +395,31 @@ export function buildSmoothingWindowsFigure(opts) {
         + '</div>';
 
     var PARAM = { median: 'smoothMedianWindow', gaussian: 'smoothGaussianWindow' };
-    var cards = {}, state = {}, params = {}, data = null;
+    // `setting` is the panel's working map; `tried` is what the sketch shows, the
+    // same ids, and never leaves this figure except through a Use button.
+    var setting = {}, tried = {};
+    var cards = {}, state = {}, sizeCtl = {}, posCtl = {}, showSetting = {}, candidate = {}, data = null;
     ['median', 'gaussian'].forEach(function (k) {
-        var el = fig.querySelector('[data-stage="' + k + '"]');
-        cards[k] = el;
+        var el = cards[k] = fig.querySelector('[data-stage="' + k + '"]');
+        var name = k === 'median' ? 'median' : 'Gaussian';
         // `pos` is the frame the window sits on; `upto` is set while a frame is
         // picked (the output is solid only up to it), null = the whole line.
         state[k] = { pos: k === 'median' ? MEDIAN_FOCUS : GAUSSIAN_FOCUS, upto: null, timer: 0 };
-        var size = el.querySelector('.sf-size'), pos = el.querySelector('.sf-pos'), play = el.querySelector('.sf-play');
-        size.addEventListener('input', function () {
-            var v = +size.value, next = {};
-            Object.keys(params).forEach(function (id) { next[id] = params[id]; });
-            next[PARAM[k]] = v;
-            update(next);
-            if (opts.onParam) opts.onParam(PARAM[k], v);
+        sizeCtl[k] = wireTryControl(el, 'size', sizeControl(name), function (v) {
+            tried[PARAM[k]] = v;
+            redraw();
         });
-        pos.addEventListener('input', function () {
+        posCtl[k] = wireTryControl(el, 'pos', posControl(name), function (v) {
             stop(k);
-            state[k].pos = state[k].upto = +pos.value;
+            state[k].pos = state[k].upto = v - 1;
             render(k);
         });
+        showSetting[k] = wireSettingRow(el, k, {
+            use: function () { commit(PARAM[k], candidate[k]); redraw(); },
+            off: function () { commit(PARAM[k], 0); redraw(); },
+            reset: function () { tried[PARAM[k]] = setting[PARAM[k]] || 0; redraw(); },
+        });
+        var play = el.querySelector('.sf-play');
         play.addEventListener('click', function () {
             if (state[k].timer) { stop(k); return; }
             if (state[k].upto == null || state[k].pos >= N - 1) state[k].pos = 0;
@@ -428,18 +437,34 @@ export function buildSmoothingWindowsFigure(opts) {
         });
     });
 
-    // Card 3's sliders: Max gap and Minimum segment length.
+    // Card 3's controls: Max gap and Minimum segment length.
     var gapCard = fig.querySelector('[data-stage="gaps"]');
-    [['.sf-gap', 'smoothMaxGap'], ['.sf-minseg', 'smoothMinSegment']].forEach(function (c) {
-        var input = gapCard.querySelector(c[0]);
-        input.addEventListener('input', function () {
-            var v = +input.value, next = {};
-            Object.keys(params).forEach(function (id) { next[id] = params[id]; });
-            next[c[1]] = v;
-            update(next);
-            if (opts.onParam) opts.onParam(c[1], v);
-        });
+    var gapCtl = wireTryControl(gapCard, 'gap', GAP_CONTROL, function (v) { tried.smoothMaxGap = Math.floor(v); redraw(); });
+    var minSegCtl = wireTryControl(gapCard, 'minseg', MINSEG_CONTROL, function (v) { tried.smoothMinSegment = Math.floor(v); redraw(); });
+    var showGapSetting = wireSettingRow(gapCard, 'gaps', {
+        use: function () {
+            commit('smoothMaxGap', gapValue('smoothMaxGap', tried));
+            commit('smoothMinSegment', gapValue('smoothMinSegment', tried));
+            redraw();
+        },
+        off: function () {},
+        reset: function () {
+            tried.smoothMaxGap = setting.smoothMaxGap;
+            tried.smoothMinSegment = setting.smoothMinSegment;
+            redraw();
+        },
     });
+
+    function commit(id, value) {
+        setting[id] = value;
+        tried[id] = value;
+        if (opts.onParam) opts.onParam(id, value);
+    }
+
+    function gapValue(id, from) {
+        if (id === 'smoothMaxGap') return from.smoothMaxGap == null ? GAP_DEFAULT.maxGap : Math.max(0, Math.floor(+from.smoothMaxGap) || 0);
+        return from.smoothMinSegment == null ? GAP_DEFAULT.minSegment : Math.max(1, Math.floor(+from.smoothMinSegment) || 1);
+    }
 
     function stop(k) {
         clearInterval(state[k].timer);
@@ -452,8 +477,7 @@ export function buildSmoothingWindowsFigure(opts) {
     function render(k) {
         if (!data) return;
         var st = state[k], el = cards[k];
-        el.querySelector('.sf-pos').value = String(st.pos);
-        el.querySelector('.sf-pos-val').textContent = (st.pos + 1) + ' / ' + N;
+        posCtl[k].set(st.pos + 1);
         if (k === 'median') {
             el.querySelector('.smooth-fig-chart').innerHTML = medianChart(data.medShown, data.medOut, st.pos, st.upto);
         } else {
@@ -463,10 +487,20 @@ export function buildSmoothingWindowsFigure(opts) {
     }
 
     function update(next) {
-        params = next || {};
+        next = next || {};
+        // A value set elsewhere (a field below, or the first call) shows in the
+        // sketch; values only being tried stay.
+        Object.keys(next).forEach(function (id) {
+            if (next[id] !== setting[id]) tried[id] = next[id];
+            setting[id] = next[id];
+        });
+        redraw();
+    }
+
+    function redraw() {
         // The filter treats a window under 3 as off (`normalizeWindow`), which
         // leaves the 3D as it is: drawn as a 1-frame window. Only 0 gets the example.
-        var mSet = +params.smoothMedianWindow || 0, gSet = +params.smoothGaussianWindow || 0;
+        var mSet = +tried.smoothMedianWindow || 0, gSet = +tried.smoothGaussianWindow || 0;
         var mw = normalizeWindow(mSet);
         var gw = normalizeWindow(gSet);
         var medShown = mw || (mSet > 0 ? 1 : EXAMPLE.median);
@@ -480,23 +514,42 @@ export function buildSmoothingWindowsFigure(opts) {
         data = { medShown: medShown, medOut: medOut, gauShown: gauShown, gauIn: gauIn, gauOut: gauOut,
             rawIntoGaussian: rawIntoGaussian };
 
-        [['median', medShown, !(mSet > 0)], ['gaussian', gauShown, !(gSet > 0)]].forEach(function (c) {
-            var el = cards[c[0]];
-            el.querySelector('small').textContent = tagline(c[1], c[2]);
-            el.querySelector('.sf-size').value = String(Math.min(c[1], SIZE_MAX));
-            el.querySelector('.sf-size-val').textContent = c[1] + (c[2] ? ' (example)' : '');
-            render(c[0]);
+        [['median', medShown, mSet], ['gaussian', gauShown, gSet]].forEach(function (c) {
+            var k = c[0], shown = c[1], typed = c[2], off = !(typed > 0), el = cards[k], id = PARAM[k];
+            el.querySelector('.fig-big').textContent = off ? 'off' : plural(shown);
+            el.querySelector('small').textContent = off ? 'drawn with an example of ' + plural(shown)
+                : shown === 1 ? 'no smoothing' : ' ';
+            sizeCtl[k].set(typed, Math.min(shown, SIZE_MAX));
+            var now = effectiveWindow(+setting[id] || 0);
+            // What Use would set: the tried window, or the example while both are off.
+            var tryNow = candidate[k] = typed > 0 ? effectiveWindow(typed) : now > 0 ? 0 : shown;
+            showSetting[k]({
+                label: 'Your setting',
+                now: now > 0 ? plural(now) : 'off',
+                unsaved: (+setting[id] || 0) !== (+saved[id] || 0),
+                use: tryNow > 0 && tryNow !== now ? 'Use ' + plural(tryNow) : null,
+                off: now > 0,
+                reset: typed !== (+setting[id] || 0),
+            });
+            render(k);
         });
         cards.gaussian.querySelector('.smooth-fig-warn').hidden = !rawIntoGaussian;
 
-        var maxGap = params.smoothMaxGap == null ? GAP_DEFAULT.maxGap : Math.max(0, Math.floor(+params.smoothMaxGap) || 0);
-        var minSeg = params.smoothMinSegment == null ? GAP_DEFAULT.minSegment : Math.max(1, Math.floor(+params.smoothMinSegment) || 1);
-        gapCard.querySelector('small').textContent = 'max gap ' + maxGap + ' · minimum segment ' + minSeg
-            + ' · median ' + medShown + ', Gaussian ' + gauShown;
-        gapCard.querySelector('.sf-gap').value = String(Math.min(maxGap, GAP_SLIDER_MAX));
-        gapCard.querySelector('.sf-gap-val').textContent = maxGap + (maxGap === 1 ? ' frame' : ' frames');
-        gapCard.querySelector('.sf-minseg').value = String(Math.min(minSeg, GAP_SLIDER_MAX));
-        gapCard.querySelector('.sf-minseg-val').textContent = minSeg + (minSeg === 1 ? ' frame' : ' frames');
+        var maxGap = gapValue('smoothMaxGap', tried), minSeg = gapValue('smoothMinSegment', tried);
+        var nowGap = gapValue('smoothMaxGap', setting), nowSeg = gapValue('smoothMinSegment', setting);
+        gapCard.querySelector('.fig-big').textContent = 'Max gap ' + maxGap + ' · minimum segment ' + minSeg;
+        gapCard.querySelector('small').textContent = 'with median ' + medShown + ', Gaussian ' + gauShown;
+        gapCtl.set(maxGap, Math.min(maxGap, GAP_SLIDER_MAX));
+        minSegCtl.set(minSeg, Math.min(minSeg, GAP_SLIDER_MAX));
+        var differs = maxGap !== nowGap || minSeg !== nowSeg;
+        showGapSetting({
+            label: 'Your settings',
+            now: 'max gap ' + nowGap + ', minimum segment ' + nowSeg,
+            unsaved: nowGap !== gapValue('smoothMaxGap', saved) || nowSeg !== gapValue('smoothMinSegment', saved),
+            use: differs ? 'Use max gap ' + maxGap + ', minimum segment ' + minSeg : null,
+            off: false,
+            reset: differs,
+        });
         gapCard.querySelector('.smooth-fig-chart').innerHTML = gapChart(medShown, gauShown, maxGap, minSeg);
     }
 

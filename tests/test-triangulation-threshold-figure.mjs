@@ -18,6 +18,11 @@
  *      the solver's loop applies) — predicts exactly which nodes keep a 3D
  *      point, and a kept node's 3D is the solve from the cameras the rule
  *      keeps, value for value.
+ *   3. `FIGURE_SCENE`, which all the figure's sketches draw, is the real solvers'
+ *      output: its 3D, landings and errors, for each method and set of cameras,
+ *      and the outcome at every threshold from 1 to 120 px. A mismatch prints the
+ *      right numbers. The captions' claims hold too: one stray and Refined lands
+ *      close to the true position, two and it is fooled.
  *
  * Run: node tests/test-triangulation-threshold-figure.mjs
  */
@@ -32,12 +37,11 @@ function group(name) { console.log('\n• ' + name); }
 
 const pd = await import(pathToFileURL(path.join(ROOT, 'pose', 'pose-data.js')).href);
 const core = await import(pathToFileURL(path.join(ROOT, 'pose', 'triangulation-core.js')).href);
-const { thresholdPasses } = await import(pathToFileURL(path.join(ROOT, 'ui', 'triangulation-methods-figure.js')).href);
+const { thresholdPasses, FIGURE_SCENE } = await import(pathToFileURL(path.join(ROOT, 'ui', 'triangulation-methods-figure.js')).href);
 
 // ---------------------------------------------------------------------------
-group('1. the rule on the figure\'s numbers');
+group('1. the rule on hand-made numbers');
 {
-    // DLT first solve 17 / 24 / 30 px; without the right camera 3 / 3 px.
     const table = { '0,1,2': [17, 24, 30], '0,1': [3, 3, 65] };
     const solve = (cams) => table[cams.join(',')];
     const at = (t) => thresholdPasses([0, 1, 2], solve, t);
@@ -146,6 +150,69 @@ for (const method of ['dlt', 'ba']) {
     }
     console.log(`  ${nodes} node × threshold cases (${dropped} with a camera dropped, ${multi} with two or more cameras dropped, ${lost} losing their 3D; ${nearTie} near-ties skipped)`);
     ok(dropped > 50 && multi > 20 && lost > 20, `${method}: every branch of the rule is exercised (${dropped} / ${multi} / ${lost})`);
+}
+
+// ---------------------------------------------------------------------------
+group('3. the figure\'s scene is what the real solvers give');
+{
+    const PX = 2;   // image pixels per sketch unit
+    const cams = FIGURE_SCENE.cameras.map((c, i) => {
+        const a = c.rot * Math.PI / 180, f = [Math.cos(a), Math.sin(a)], r = [-f[1], f[0]];
+        return new pd.Camera('c' + i, [[c.plane * PX, 0, 0], [0, c.plane * PX, 0], [0, 0, 1]], [0, 0, 0, 0, 0],
+            [[r[0], r[1], 0], [0, 0, 1], [f[0], f[1], 0]],
+            [-(r[0] * c.at[0] + r[1] * c.at[1]), 0, -(f[0] * c.at[0] + f[1] * c.at[1])], [144, 144]);
+    });
+    const names = cams.map((c) => c.name);
+    const groupOf = (dets) => {
+        const g = new pd.InstanceGroup(1, 0);
+        cams.forEach((c, i) => g.addInstance(c.name, new pd.Instance([dets[i]], 0, 'predicted', 1)));
+        return g;
+    };
+    const g = groupOf(FIGURE_SCENE.detections);
+    const solveSet = (method, set, dets) => core.triangulateAndReproject(dets ? groupOf(dets) : g, cams,
+        { method, reprojErrorThreshold: 0, includedCameras: set.map((c) => names[c]) });
+    const near = (a, b, tol) => Math.abs(a - b) <= tol;
+    for (const method of ['dlt', 'ba']) {
+        for (const key of Object.keys(FIGURE_SCENE.solves[method])) {
+            const want = FIGURE_SCENE.solves[method][key];
+            const res = solveSet(method, key.split(',').map(Number));
+            const p = pd.getPoint3d(res.points3d, 0);
+            const got = {
+                point: [p[0], p[1]].map((v) => +v.toFixed(1)),
+                x: names.map((n) => +res.reprojections[n][0][0].toFixed(2)),
+                errors: names.map((n) => +res.errors[n][0].toFixed(1)),
+            };
+            const same = want.point.every((v, i) => near(v, got.point[i], 0.11))
+                && want.x.every((v, i) => near(v, got.x[i], 0.011))
+                && want.errors.every((v, i) => near(v, got.errors[i], 0.11));
+            ok(same, `${method} cameras ${key}: FIGURE_SCENE should be ${JSON.stringify(got)}`);
+        }
+        // Every whole-pixel threshold the slider and most of the box can reach.
+        for (let t = 1; t <= 120; t++) {
+            const pred = thresholdPasses([0, 1, 2, 3], (cams2) => FIGURE_SCENE.solves[method][cams2.join(',')].errors, t);
+            const real = core.triangulateAndReproject(g, cams, { method, reprojErrorThreshold: t });
+            const has = pd.hasPoint3d(real.points3d, 0);
+            ok(has === pred.kept, `${method} ${t} px: solver ${has ? 'kept' : 'dropped'} the node, the figure says ${pred.kept ? 'kept' : 'dropped'}`);
+            if (!has) continue;
+            const last = pred.passes[pred.passes.length - 1].cameras.join(',');
+            const want = FIGURE_SCENE.solves[method][last].point, got = pd.getPoint3d(real.points3d, 0);
+            ok(near(got[0], want[0], 0.11) && near(got[1], want[1], 0.11), `${method} ${t} px: the 3D is the sketch's for cameras ${last}`);
+        }
+    }
+    // The captions' claims.
+    const truth = FIGURE_SCENE.truth;
+    const off = (res) => { const p = pd.getPoint3d(res.points3d, 0); return Math.hypot(p[0] - truth[0], p[1] - truth[1]); };
+    const ALL = [0, 1, 2, 3];
+    const topHonest = FIGURE_SCENE.detections.slice(0, 3).concat([[cams[3].project([truth[0], truth[1], 0])[0], 0]]);
+    const oneStray = off(solveSet('ba', ALL, topHonest)), twoStrays = off(solveSet('ba', ALL));
+    ok(oneStray < 5, `with only the right camera wrong, Refined lands close to the true position (${oneStray.toFixed(1)} units)`);
+    ok(twoStrays > 25, `with both strays, Refined is fooled (${twoStrays.toFixed(1)} units off)`);
+    const ba = FIGURE_SCENE.solves.ba['0,1,2,3'].errors;
+    ok(ba[3] < 0.1 && ba[0] > 20, `Refined settles on the top stray's line (${ba[3]} px) and the left camera looks wrong (${ba[0]} px)`);
+    for (const method of ['dlt', 'ba']) {
+        const two = FIGURE_SCENE.solves[method]['0,1'].point;
+        ok(Math.hypot(two[0] - truth[0], two[1] - truth[1]) < 0.5, `${method}: the two cameras that were right give the true position`);
+    }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
