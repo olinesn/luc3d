@@ -127,7 +127,7 @@ var TRUE_MARK = (function () {
 var DOTS = DETECTIONS.map(function (d) {
     return '<circle cx="' + fmt(d[0]) + '" cy="' + fmt(d[1]) + '" r="3" class="tm-det"/>';
 }).join('');
-var VIEW_BOX = '5 25 290 172';
+var VIEW_BOX = '5 25 290 192';   // room at the bottom for the legend and the bars, clear of the scene
 
 // Names the sketch's marks. Its own small SVG, pinned to the left edge of the card
 // (`.tm-sketch`), so it stays clear of the scene, which is centred in a wide card.

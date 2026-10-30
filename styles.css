@@ -5369,7 +5369,7 @@ kbd {
   width: 100%;
   height: auto;
   /* A wide card would otherwise push the captions below the fold. */
-  max-height: 230px;
+  max-height: 256px;
   margin: 6px 0 8px;
   overflow: hidden;
 }
