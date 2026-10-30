@@ -98,7 +98,8 @@ helpers used by every load path. Calls `init()` at module-load.
 - `../ui/ui-wiring.js` — `setupUI`, `setupMenus`, `updateSeekbar`,
   `onPlaybackStateChange`, `fitTimelineToData`.
 - `../ui/frame-readout.js` — `refreshReadoutTotals`, from `updateFpsDisplay`.
-- `../ui/timeline-controller.js` — `installTimelineShortcuts`.
+- `../ui/timeline-controller.js` — `installTimelineShortcuts`;
+  `setTimelineDisplayMode`, which the timeline's Tracks / IDs / Both buttons call.
 - `../ui/info-tip.js` — `installInfoTips`, called FIRST in `init()`, before any
   panel renders: the listeners are delegated, so they must be in place before
   the first `[data-infotip]` element exists.
@@ -2092,7 +2093,13 @@ drifts upward.
   it shows the Identities section, `ui/identity-gallery.js`);
   `rememberTrackSummary`: keeps it for reopening.
 - `../ui/timeline-controller.js` — `collapseTimeline`: a successful Track All
-  (not a range) closes the Timeline if it is open.
+  (not a range) closes the Timeline if it is open. `getTimelineDisplayMode` /
+  `setTimelineDisplayMode`: a successful Track All that assigned identities moves
+  the timeline's Tracks / IDs / Both toggle from Tracks to IDs (buttons and mode;
+  `{ refresh: false }`, so the `refreshTracks` that follows builds the rows once).
+  IDs and Both are left alone, and so is the toggle after Track Frame or Track
+  Frame Range. No status text: the timeline is closed right after. Covered by
+  `tests/e2e/track-all-switches-to-id.mjs`.
 - `../ui/panel-visibility.js` — `collapseViewport3D`: the same, for the 3D viewer
   (passed `viewport3d` from `../ui/app-state.js`, which is also imported).
   No cycle: that module imports app-state, save-load, loading-overlay, settings,
@@ -9406,10 +9413,17 @@ bar stays visible, and `scrollbar-gutter: stable` keeps the canvas width steady.
 - `Timeline` — class. Selected methods: `setData(session)`,
   `setCurrentFrame(frameIdx, opts?)`, `setTotalFrames(n)`, `setZoom(level)`,
   `scrollTo(frameIdx)`, `resize`, `redraw`, `destroy`,
-  `setDisplayMode(mode)`, `refreshTracks(session, opts?)`, `recolorTracks()`,
+  `setDisplayMode(mode, opts?)` (`opts.refresh === false` sets the mode
+  without rebuilding the rows), `getDisplayMode()`,
+  `refreshTracks(session, opts?)`, `recolorTracks()`,
   `setFrameModified(frameIdx, modified)`, `getPreferredHeight`,
   `getCameraGroups`, `getLabelLines`, `getRowCount`,
   `getTrackAreaElement`.
+
+**The display mode** (`'tracks' | 'identities' | 'both'`, default Tracks, not
+stored) is set from outside through `setTimelineDisplayMode`
+(`ui/timeline-controller.js`), which also moves the `#timelineModeToggle` buttons'
+highlight; `setDisplayMode` itself never touches them.
 
 **Track rows follow the Tracks / Identity coloring.** The constructor takes
 `options.getColorByIdentity` (`pose/initialization.js` passes a reader of
@@ -9588,7 +9602,13 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
 **Key exports.**
 - `toggleTimeline`, `collapseTimeline`, `fitTimelineToData`,
   `syncTimelineToggleButton`, `installTimelineShortcuts`,
+  `getTimelineDisplayMode`, `setTimelineDisplayMode`,
   `getCachedTimelineHeight`, `setCachedTimelineHeight`.
+- `setTimelineDisplayMode(mode, opts?)` is the one setter for the Tracks / IDs /
+  Both toggle: it moves the `#timelineModeToggle` highlight and calls the
+  Timeline's `setDisplayMode(mode, opts)`; returns whether the mode changed.
+  `getTimelineDisplayMode()` reads the Timeline's mode (the highlighted button
+  before one exists). Not persisted anywhere, never the `.slp`.
 - `collapseTimeline()` closes the timeline only if it is open (never opens
   it), via `toggleTimeline()` so the height cache and toolbar button match a
   manual collapse. Returns whether it collapsed anything.
@@ -9610,11 +9630,14 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
 **Imports from project modules.**
 - `./app-state.js` — `timeline` (the live binding `setTimeline()` writes;
   nothing sets `state.timeline`, and reading it made `fitTimelineToData()` a
-  silent no-op). Test: `tests/e2e/timeline-fit-on-load.mjs`.
+  silent no-op). Test: `tests/e2e/timeline-fit-on-load.mjs`. The display mode
+  reads and sets it too.
 
-**Imported by.** `pose/initialization.js`, `pose/tracker.js`
-(`collapseTimeline`, after Track All), `import-export/save-load.js`
-(`fitTimelineToData`, JSON project open), `ui/ui-wiring.js`
+**Imported by.** `pose/initialization.js` (`installTimelineShortcuts`, and
+`setTimelineDisplayMode` for the toggle's buttons),
+`pose/tracker.js` (`collapseTimeline` and the display mode, after Track All),
+`import-export/save-load.js` (`fitTimelineToData`, JSON project open),
+`ui/ui-wiring.js`
 (re-exports the same surface so legacy `import { toggleTimeline, … } from
 './ui-wiring.js'` keeps working).
 
