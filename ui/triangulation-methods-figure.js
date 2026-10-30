@@ -452,11 +452,11 @@ export function buildTriangulationMethodsFigure(opts) {
         + 'truth error, how far the projection is from the target, which shrinks from DLT to Refined. A sketch can show '
         + 'it because it knows the target; on a real recording only the reprojection error can be measured.</p>'
         + '<div class="tri-methods-cols" role="radiogroup" aria-label="Default triangulation method">'
-        + card('dlt', 'Direct Linear Transformation (DLT)', 'one direct solve · fast', DLT_SKETCH,
+        + card('dlt', 'Direct Linear Transformation (DLT), per node', 'one direct solve · fast', DLT_SKETCH,
             'Solves one set of linear equations (algebraic least squares) for the point that fits every '
             + 'line at once, treating every camera alike. Fast, but an outlier pulls the projection, so every '
             + 'camera ends up off.')
-        + card('ba', 'Refined (Ref)', 'bundle adjustment · slower', REFINED_SKETCH,
+        + card('ba', 'Refined (Bundle adjustment), per node', 'slower', REFINED_SKETCH,
             'Bundle adjustment: starts at the DLT point, projects it back into every camera and moves it to '
             + 'shrink the reprojection errors. A camera that disagrees a lot counts less, which helps when one '
             + 'view\'s 2D prediction is clearly wrong: here the projection lands closer to the target than DLT\'s, though the '
@@ -469,7 +469,7 @@ export function buildTriangulationMethodsFigure(opts) {
             + 'sees well.')
         + '</div>'
         + '<div class="tri-methods-col tri-thr">'
-        + '<div class="tri-methods-name">Reprojection error threshold<span class="fig-big"></span></div>'
+        + '<div class="tri-methods-name">Reprojection error threshold (RPE), per node<span class="fig-big"></span></div>'
         + '<p>Optional, for either method, and off (0) by default. Refined only counts a bad camera less; this '
         + 'removes it. After the solve, each camera\'s reprojection error for the node ('
         + 'the distance on the camera\'s 2D image between the prediction and the reprojection) is compared with the threshold, '

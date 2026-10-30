@@ -2750,7 +2750,7 @@ stop being a diagnostic — are spelled out in the "LUCID DOES NON-LINEAR
 TRIANGULATION ONLY" comment in `pose/triangulation-core.js`.
 
 Naming note: the user-facing label is **"Refined" / "Ref"** (Settings ▸ Default
-Triangulation shows "Refined (Ref)"; the Triangulate / Triangulate All dropdowns
+Triangulation shows "Refined (Bundle adjustment), per node"; the Triangulate / Triangulate All dropdowns
 show "Ref"), not "Bundle Adjustment", which wrongly implied camera refinement.
 The method key is still `'ba'` in `options.method`,
 `group.triangulationMethod`, `localStorage`, and the per-group
@@ -9313,7 +9313,7 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 Wizard, Default Triangulation, Temporal Smoothing, then Keyboard Shortcuts):
 **Default Triangulation** (the method is picked by
 clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
-DLT or "Refined (Ref)" = bundle adjustment — no separate rows; Enter/Space on a
+DLT or "Refined (Bundle adjustment)" — no separate rows; Enter/Space on a
 focused card is handled in `onDocKeyDown`, which stops every keydown in the
 capture phase, so a listener on the card would never run; the figure's third
 card draws the wizard's reprojection error threshold: `pickMethod` and the wizard

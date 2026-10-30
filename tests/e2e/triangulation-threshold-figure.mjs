@@ -317,6 +317,8 @@ try {
     check(totals.barsClearOfLabels && totals.sumClearOfValue, 'the bars do not touch the labels or the values');
     check(totals.numbers === '0,1,2,3' && totals.onBodies, 'each camera body is numbered, 0 to 3 from left to right, to match the rows');
     check(totals.numberStyle === 'rgb(255, 255, 255) 700', `the numbers are bold and white (${totals.numberStyle})`);
+    const titles = await page.evaluate(() => Array.from(document.querySelectorAll('.tri-methods .tri-methods-name')).map(n => n.firstChild.textContent).join(' | '));
+    check(titles === 'Direct Linear Transformation (DLT), per node | Refined (Bundle adjustment), per node | Reprojection error threshold (RPE), per node', `each card's title says it is per node (${titles})`);
     const legend = await page.evaluate(() => {
         const sketches = Array.from(document.querySelectorAll('.tri-methods .tm-sketch')).filter(s => !s.querySelector('.tm-idle'));
         const wrap = sketches[0], svg = wrap.querySelector('svg');
