@@ -582,6 +582,18 @@ export function setTrackingThresholds(map) {
     }
     _settings.trackingThresholds = next;
     persist();
+    for (var i = 0; i < _thresholdListeners.length; i++) {
+        try { _thresholdListeners[i](); } catch (e) { /* ignore */ }
+    }
+}
+
+// Told after every commit of the thresholds, so a control outside Settings can
+// show them (the Triangulate menu's Reprojection error field). A listener that
+// throws must not stop the others.
+var _thresholdListeners = [];
+
+export function onTrackingThresholdsChange(fn) {
+    if (typeof fn === 'function') _thresholdListeners.push(fn);
 }
 
 // Commit SOME thresholds (Track All's first-use dialog: the image check's

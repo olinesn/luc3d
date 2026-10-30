@@ -6443,6 +6443,30 @@ stays reachable at its original path) and `ui/plane-nodes-panel.js`;
 `ui/plane-angle.js` and `ui/origin-definition.js` reach it through the
 `ui/plane-definition.js` re-export.
 
+### ui/reproj-threshold-field.js
+
+**Purpose.** The toolbar's **Reprojection error (px)** field
+(`#tbReprojThreshold`), in the Triangulate menu (hover **Triangulate ▾**) below
+Method: shows and edits the Tracking Wizard's `reprojErrorThreshold`, which every
+Triangulate run reads when it starts. Blank is off (`placeholder="off"`); the
+setting's 0 shows as blank and typing 0 means the same. Browser-wide, not per
+session, so it only follows the setting (`onTrackingThresholdsChange`, e.g.
+Settings ▸ Apply).
+
+**Editing.** As the Animals field: commits on `change` (Enter or blur), Enter
+blurs, Esc reverts and blurs. An entry out of the setting's range, or text
+`value` reports as `''` (`validity.badInput`, a stray "e"), reverts with an error
+status rather than being read as blank, and changes nothing. A change does not
+touch 3D already solved. Not in Defining Plane Mode's toolbar lock: a setting, not
+an action.
+
+**Key exports.** `wireReprojThresholdField()`.
+
+**Imports.** `./settings.js` (`getTrackingThreshold`, `getTrackingThresholdDefs`,
+`updateTrackingThresholds`, `onTrackingThresholdsChange`),
+`../import-export/save-load.js` (`setStatus`). **Imported by** `ui/ui-wiring.js`.
+Test: `tests/e2e/toolbar-reproj-threshold.mjs`.
+
 ### ui/animal-count-field.js
 
 **Purpose.** The toolbar's **Animals** field (`#tbNumAnimals`), in the Track
@@ -9136,6 +9160,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   persist). `isCameraTracked` is the boolean the tracker filters cameras by
   (`pose/tracker.js` `trackAll`/`trackCurrentFrame`); at least 2 views must stay
   included or tracking aborts with a warning.
+- `onTrackingThresholdsChange(fn)` — told after every commit of the thresholds
+  (`ui/reproj-threshold-field.js` follows it).
 - `updateTrackingThresholds(map)` — commit SOME thresholds, keeping every other
   stored override (the two tracking dialogs write the image-check settings
   through it).
@@ -10596,6 +10622,8 @@ Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
 dropdown item),
 `animal-count-field.js` (`wireAnimalCountField`, the Track group's Animals
 field),
+`reproj-threshold-field.js` (`wireReprojThresholdField`, the Triangulate menu's
+Reprojection error field),
 `view-align-modal.js` (`showAlignViewsModal`, View ▸ "Align Views to
 References…"),
 `seekbar-tooltip.js` (`installSeekbarTooltip`),
