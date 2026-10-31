@@ -67,6 +67,7 @@ import { exportBoutRows, importBoutRows, behaviorFps, noteBehaviorFps } from '..
 import { exportPredictionRuns, exportPredictionHeaders, importPredictionRuns } from '../pose/behavior-predictions.js';
 import { resetBehaviorModels, noteLabelsChanged } from '../pose/behavior-classifier.js';
 import { exportStateLayers, importStateLayers, resetBehaviorStates } from '../pose/behavior-states.js';
+import { resetDiscoveryResults } from '../pose/behavior-discovery.js';
 import { eventsToBehaviorData, setKeptEventRows } from './behavior-events.js';
 
 /** Every `metadata.lucid` key this module may write. */
@@ -212,4 +213,5 @@ export function resetBehaviorState() {
     resetEthogram();
     resetBehaviorModels();
     resetBehaviorStates();
+    resetDiscoveryResults();
 }

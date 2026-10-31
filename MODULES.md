@@ -2888,7 +2888,7 @@ Identity). **Tests.** `tests/test-behavior-rules.mjs` §6–7,
 **Purpose.** Behavioral STATES per session (a `WeakMap`; never on
 FrameGroups): one categorical label per animal and frame from an
 unsupervised model — keypoint-MoSeq's syllables (Phase 4), the in-browser
-discovery's clusters later — as named LAYERS `{name, source:
+discovery's clusters (Phase 5) — as named LAYERS `{name, source:
 'keypoint-MoSeq'|'discovery', stateNames: Map<state, name>, animals:
 Map<animal NAME, Int32Array [start, end, state, …]>, version}`. Runs are the
 only form (sorted, non-overlapping, touching runs of a state joined; 3 ints
@@ -2924,10 +2924,147 @@ DOM-free.
 **Tests.** `tests/test-kpms-io.mjs` §8–12, `tests/test-track-identity-palette.mjs` §11,
 `tests/e2e/behavior-kpms-roundtrip.mjs`, `tests/e2e/behavior-label-roundtrip.mjs`.
 
+### pose/hdbscan.js
+
+**Purpose.** HDBSCAN in typed arrays, as the Python `hdbscan` package runs it:
+kd-tree (points copied in tree order), core distances (k-th nearest other point,
+`minSamples`), the minimum spanning tree of mutual reachability by Borůvka with
+pruning (subtrees all one component, or too far), single linkage, the condensed tree
+(`minClusterSize`; a distance of 0 counts as the smallest above 0, so identical points
+do not mean infinite stability), Excess of Mass selection, labels (−1 noise). The
+hierarchy does not depend on the cluster size, so `clusterAtSize` re-runs only the last
+steps. `bestTreeOverlaps` asks whether a condensed tree holds a group of points at any
+level, the root aside. Points that cannot all be joined (a NaN or Infinity coordinate, or
+a distance too large to square) throw, because the unfilled edges would otherwise give wrong
+labels or a tree that never finishes walking. Deterministic; pure and import-free; no JS
+object per point.
+
+**Exports.** `buildKdTree(X, n, d, leafSize)`, `coreDistances2(tree, k)`,
+`mutualReachabilityMst(tree, core2)` → `{a, b, w}` (throws, as above), `singleLinkage(mst, n)`,
+`condenseTree(L, minClusterSize)`, `selectClusters(cond)` → `{labels, count, noise,
+stability}`, `bestTreeOverlaps(labels, count, cond)`, `clusterAtSize(linkage, minClusterSize)`,
+`hdbscanLinkage(X, n, d, {minSamples})`, `hdbscan(X, n, d, {minClusterSize, minSamples})`,
+`mstWeight(mst)`.
+
+**Imports.** Nothing. **Imported by** `pose/behavior-embedding.js`. **Tests.**
+`tests/test-behavior-discovery.mjs` §1 (brute-force Prim; labels equal the Python package's
+on `tests/fixtures/hdbscan/`, remade by its `make_fixture.py`), §1b (coordinates that cannot
+be clustered, with a time limit), `tests/e2e/behavior-discovery.mjs` §1b.
+
+### pose/behavior-umap.js
+
+**Purpose.** UMAP through the vendored umap-js (`lib/umap-js/`), with the neighbours and
+the fuzzy graph in typed arrays. A subclass (`TypedGraphUMAP`) replaces what cannot run at
+30,000 bins × 60 neighbours (umap-js's Map-of-strings sparse matrix: 1.75 GB of heap at
+10,000 points) with `fuzzyGraph`, the same values in the same (row, col) order, in a small
+read-only object answering the calls umap-js makes on its graph; skips the search graph
+(only `transform` reads it); takes exact neighbours through `setPrecomputedKNN`.
+`prepareUmap` starts from `init` (scaled to ±10, as umap-learn) or umap-js's random
+positions, seeded. Loads only when discovery runs (never in the startup graph). If a
+umap-js bump moves the private methods it overrides, the Node test's §3 fails.
+
+**Exports.** `fuzzyGraph(indices, distances, sigmas, rhos, n, k)`, `prepareUmap(knn, {nComponents,
+minDist, seed, nEpochs, init})` → `{epochs, step, embedding}`.
+
+**Imports.** `../lib/umap-js/umap-js.esm.js`. **Imported by**
+`pose/behavior-discovery-worker.js`, `pose/behavior-discovery.js` (dynamically, inline).
+**Tests.** `tests/test-behavior-discovery.mjs` §3.
+
+### pose/behavior-embedding.js
+
+**Purpose.** The discovery steps that read the whole sample. `standardizeAndReduce`:
+z-scores (speeds through a log first, `SPEED_LOG_OFFSET`; cut at ±`Z_LIMIT`; a missing
+value is the mean; a row missing over `MAX_MISSING_SHARE` of its features sits out; a
+constant or mostly missing feature is left out), then PCA to `VARIANCE_KEPT` (70%) with
+`symmetricEigen` up to `PCA_EXACT_MAX` features, `fitPCA`'s top `PCA_TOP` past that, no
+whitening. `clusterLayouts`: HDBSCAN on two layouts at each size of `clusterSizes`
+(0.5–1% of the bins, from a floor); a cluster counts only where the second layout's tree
+holds a group sharing `MIN_REPEAT` of their bins (`bestTreeOverlaps`, Jaccard) and it has
+bins from `MIN_EPISODES` separate stretches of time (`clusterEpisodes`), or `BIG_CLUSTER_SHARE`
+of all the bins, and the size kept has
+the most such clusters among those covering nearly the most bins. UMAP + HDBSCAN finds
+clusters even in Gaussian noise (3 to 91, measured) and in one long rest, which is why.
+Numbered by size.
+
+**Exports.** `VARIANCE_KEPT`, `Z_LIMIT`, `MAX_MISSING_SHARE`, `PCA_EXACT_MAX`, `PCA_TOP`,
+`SPEED_LOG_OFFSET`, `MIN_REPEAT`, `MIN_EPISODES`, `EPISODE_GAP_SECONDS`, `BIG_CLUSTER_SHARE`,
+`standardizeAndReduce(rows, M, F, {variance, zLimit, maxMissing, logFeatures})`,
+`clusterSizes(n, share, floor)`, `clusterEpisodes(labels, count, series, times, order, gap)`,
+`clusterLayouts(E, E2, n, d, {share, floor, minSamples, minRepeat, minEpisodes, series, times})`.
+
+**Imports.** `./id-switch-check.js` (`symmetricEigen`, `fitPCA`), `./hdbscan.js`. **Imported
+by** `pose/behavior-discovery-worker.js`, `pose/behavior-discovery.js` (dynamically, inline).
+**Tests.** `tests/test-behavior-discovery.mjs` §4, §4b.
+
+### pose/behavior-discovery-core.js
+
+**Purpose.** The discovery jobs of the behavior pool. Bins: every column averaged over
+`binFrames(fps)` frames (100 ms; a value needs half of them; a frame's bin holds ⌊w / 2⌋
+frames before it, so it is centered and labels are not late). `binRowsChunk`: rows of
+some bins. `clusterLabelsChunk`: every frame's bin scored by every cluster's forest, the
+best wins, −1 where the bin has a pose on under half its frames — B-SOiD's frameshift.
+`knnRows`: exact neighbours, the row itself first, the same however rows are split into
+jobs. `trainClusterTrees`: a cluster's trees against everything else (`trainTree`,
+seeded from (seed, cluster, tree)). `heldOutAgreement`: the share of held-out rows whose
+best forest is their own cluster's. `randomView`: rows on two random orthonormal directions,
+the second layout's start. Pure, and imports only the features and forests, so the behavior
+worker runs exactly this.
+
+**Exports.** `BIN_SECONDS`, `binFrames`, `binCenters(T, w)`, `discoveryFeatureNames(catalog)`,
+`speedFeatures(catalog, names)`, `binRowsChunk(spec, chunk, {names, w, rows})`,
+`clusterLabelsChunk(spec, chunk, {names, w}, forests)`, `knnRows({Y, n, d}, range, k)`,
+`trainClusterTrees(shared, job)`, `heldOutAgreement(forestsTrees, data, rows)`, `randomView(Y, n, d, seed)`.
+
+**Imports.** `./behavior-features.js`, `./behavior-forest.js`. **Imported by**
+`pose/behavior-pool.js`, `pose/behavior-worker.js`, `pose/behavior-discovery.js`. **Tests.**
+`tests/test-behavior-discovery.mjs` §2, §5, §6.
+
+### pose/behavior-discovery-worker.js
+
+**Purpose.** Module worker for discovery's whole-sample steps (`reduce`, `umap`,
+`cluster`). Two per run, so the two layouts run side by side; each has its own heap, and
+terminating it frees what UMAP held. Worker URL: the literal `new
+URL('pose/behavior-discovery-worker.js', document.baseURI)`. No bare imports in its graph;
+not in the startup graph. A step's error goes back as its message alone (the status bar
+shows it), with the stack in the console.
+
+**Imports.** `./behavior-embedding.js`, `./behavior-umap.js`. **Spawned by**
+`pose/behavior-discovery.js`.
+
+### pose/behavior-discovery.js
+
+**Purpose.** Finding behaviors without labels: B-SOiD's pipeline over the behavior
+features. `discoverBehaviors`: per session one context at a time, the usable bins, the
+≤ `MAX_BINS` with the smallest seeded hash; rows on the pool in a fixed chunk layout;
+standardize + PCA; exact neighbours on the pool; two UMAP layouts (n_neighbors 60, min_dist 0;
+one from the principal components, one from a random view) side by side; HDBSCAN keeping
+the clusters that come back and recur, never smaller than `clusterFloor` (UMAP's clumps); a forest per
+cluster plus one for the bins in no cluster, with whole 10 s stretches held out; every
+frame's bin labelled, frames that look like the bins in no cluster left without a state.
+Split a behavior (`opts.split`): the same on that behavior's present frames, states only
+there. Deterministic: the same poses give the same clusters however the work was spread.
+`storeDiscovery` keeps the result as a states layer per session and the map in memory
+(`discoveryResult`), gone after a load (`resetDiscoveryResults`, from `resetBehaviorState`).
+Steps that read the whole sample go to `pose/behavior-discovery-worker.js`, else inline.
+DOM-free.
+
+**Exports.** `MAX_BINS`, `NEIGHBORS`, `MIN_DIST`, `CLUSTER_SHARE`, `MIN_CLUSTER_BINS`, `MIN_BINS`,
+`clusterFloor(n, neighbors)`, `behaviorFramesByAnimal(session, behaviorId, mutual)`,
+`discoverBehaviors(opts)` → `{clusters, sources, map, report, leftOut}` | `{error}` |
+`{cancelled}`, `storeDiscovery(result, name)`, `discoveryResult(session, name)`,
+`renameDiscoveryAnimal(session, old, new)`, `resetDiscoveryResults()`.
+
+**Imports.** `./behavior-discovery-core.js`, `./behavior-pool.js`, `./behavior-features.js`,
+`./behavior-forest.js`, `./behavior-labels.js`, `./behavior-states.js`; dynamically
+`./behavior-embedding.js`, `./behavior-umap.js`. **Imported by** `ui/behavior-discovery.js`,
+`ui/behavior-discovery-modal.js`, `ui/behavior-states.js`, `ui/ui-wiring.js`,
+`import-export/behavior-metadata.js`. **Tests.** `tests/test-behavior-discovery.mjs`,
+`tests/e2e/behavior-discovery.mjs`; real data `tests/e2e/_real-behavior-discovery.mjs`.
+
 ### pose/behavior-pool.js
 
-**Purpose.** Run behavior chunk jobs (`{kind: 'scores'|'features'|'rows'|'forest'|'trees',
-spec, chunk, data, plan?, extra?, request?, trees?}`) on a pool of module workers
+**Purpose.** Run behavior chunk jobs (`{kind: 'scores'|'features'|'rows'|'forest'|'trees'|'binrows'|'knn'|'clusterTrees'|'clusterLabels',
+spec, chunk, data, plan?, extra?, request?, trees?, range?, k?}`) on a pool of module workers
 (`pose/behavior-worker.js`) — the `pose/triangulation-pool.js` pattern:
 `min(hardwareConcurrency − 1, 8)` workers, kept between runs and terminated
 after 30 s idle, one run owns the pool at a time (a concurrent one goes
@@ -2946,7 +3083,10 @@ keeps its own copy, the last one sent), the job carrying only the key;
 `opts.releaseShared` drops the copies when the run ends, `opts.maxWorkers`
 limits how many hold one. Kinds: 'rows' (classifier training rows,
 `extractTrainingRows`), 'forest' (classifier scores, `scoreForestsChunk`),
-'trees' (some trees of a forest, `trainTrees`; no poses).
+'trees' (some trees of a forest, `trainTrees`; no poses); for discovery
+(`pose/behavior-discovery-core.js`) 'binrows' (features in 100 ms bins), 'knn'
+(exact nearest neighbours; no poses), 'clusterTrees' (a cluster's trees; no
+poses), 'clusterLabels' (every frame's cluster).
 
 **Exports.** `MIN_WORKLOAD`, `runJob(job, shared)` (one job, on this thread),
 `runBehaviorChunks`.
@@ -2959,7 +3099,7 @@ trained inline and on 3 workers), `tests/e2e/stamped-build.mjs`.
 
 ### pose/behavior-worker.js
 
-**Purpose.** Module worker for `pose/behavior-pool.js`: one chunk's features
+**Purpose.** Module worker for `pose/behavior-pool.js` (and its discovery jobs, `pose/behavior-discovery-core.js`): one chunk's features
 (`computeFeatureChunk`), detector scores (`scoreDetectorsChunk`), classifier
 training rows (`extractTrainingRows`) or classifier scores
 (`scoreForestsChunk`), or some trees of a forest (`trainTrees`), every typed
@@ -12041,7 +12181,7 @@ with `{live: true}` (the viewer, never an exported video) also the coding
 state: a light numbered box on the animal Label Behaviors mode labels, the
 actor of a social behavior waiting for its target, and — while the playhead
 is in it — the predicted bout selected in the Predictions list, or the
-stretch the active-learning queue shows (`setReviewFocus(session, bout|null,
+stretch the active-learning queue shows, or a state's example (a `label` and `color` in place of a behavior) (`setReviewFocus(session, bout|null,
 from)`, `from` 'predictions' or 'learning': each clears only its own), dashed,
 labelled "behavior? · animal · score%"; on/off is browser-local
 `lucid.behaviorOnVideo`). `noteBehaviorMode(on)` is how the mode tells it.
@@ -12141,7 +12281,7 @@ states of a session just left (so `switchSession` needs no hook).
 `./info-tip.js`, `./plane-definition.js` (`ICON_INFO`),
 `./panel-visibility.js`, `./section-state.js`, `./settings.js`,
 `./rendering.js`, `./behavior-train.js`, `./behavior-train-modal.js`, `./behavior-states.js`,
-`./behavior-kpms-modal.js`, `../pose/behavior-ethogram.js`,
+`./behavior-kpms-modal.js`, `./behavior-discovery-modal.js`, `../pose/behavior-ethogram.js`,
 `../pose/behavior-labels.js`, `../pose/behavior-predictions.js`, `../pose/behavior-classifier.js`,
 `../import-export/save-load.js`. **Imported by** `ui/ui-wiring.js`,
 `ui/info-panel.js`. **Tests.** `tests/e2e/behavior-labelling.mjs` §4, `tests/e2e/behavior-rules.mjs` §2–4,
@@ -12418,18 +12558,58 @@ is replaced after a confirm). `stateTimelineRows` is the timeline's "States"
 group: a row per animal of the shown layer, runs in `stateColor`, segments
 cached per layer version (no frame walk). `setupBehaviorStates` wires the
 section and its ⓘ, and makes every states change `markDirty()` and repaint
-(`{states: true}`), showing a layer just imported.
+(`{states: true}`), showing a layer just imported. A discovery layer says "cluster", its
+number steps through examples (longest first, boxed on the video), its row says how well it
+repeats, from how many separate stretches of time, and what stands out, and from a run in
+this page it has its map (a press goes to that moment; the canvas stays across repaints and
+is drawn only when the run, the selected state or its size changed). Promote can also make a
+new ethogram entry named after the checked states.
 
 **Exports.** `STATES_GROUP_NAME`, `shownLayer`, `stateTimelineRows`,
 `renderStatesSection`, `setupBehaviorStates`.
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-confirm.js`,
-`./behavior-detect.js` (`sessionFps`), `./behavior-kpms-modal.js`, `./info-tip.js`,
-`./plane-definition.js` (`ICON_INFO`), `../pose/behavior-states.js`,
+`./behavior-detect.js` (`sessionFps`), `./behavior-kpms-modal.js`, `./behavior-discovery.js`,
+`./behavior-discovery-modal.js`, `./behavior-train.js` (`openSessionByName`), `./info-tip.js`,
+`./plane-definition.js` (`ICON_INFO`), `../pose/behavior-states.js`, `../pose/behavior-discovery.js`,
 `../pose/behavior-predictions.js`, `../pose/behavior-ethogram.js`,
 `../pose/behavior-tensor.js`, `../import-export/save-load.js`. **Imported by**
 `ui/behavior-panel.js`, `ui/behavior-timeline.js`. **Tests.**
-`tests/e2e/behavior-kpms-roundtrip.mjs` §2–3, §5.
+`tests/e2e/behavior-kpms-roundtrip.mjs` §2–3, §5, `tests/e2e/behavior-discovery.mjs` §4–5.
+
+### ui/behavior-discovery.js
+
+**Purpose.** Behavior discovery in the app. `runDiscovery`: the active session, or every
+session whose poses are resident, read one at a time through `buildBehaviorContext`; the
+progress card with its eight steps; Esc cancels; the result stored as a states layer, the
+Behavior tab brought up. `nextStateExample`: a state's runs from the longest down, boxed on
+the video (`setReviewFocus` with a `label`). The map: `drawDiscoveryMap` (a point per bin in
+its state color, gray in no cluster, each cluster's number at its middle, the selected
+cluster over the others), `discoveryBinAt`, `showDiscoveryBin`.
+
+**Exports.** `DEFAULT_DISCOVERY_LAYER`, `splitLayerName`, `isDiscovering`, `runDiscovery(opts)`,
+`nextStateExample(session, layer, k, word)`, `clearStateExample`, `drawDiscoveryMap(canvas,
+result, selected)`, `discoveryBinAt(canvas, result, x, y)`, `showDiscoveryBin(session, layer, bin, word)`.
+
+**Imports.** `./app-state.js`, `./loading-overlay.js`, `./behavior-detect.js`, `./behavior-coding.js`,
+`../pose/behavior-discovery.js`, `../pose/behavior-states.js`, `../pose/behavior-ethogram.js`,
+`../import-export/save-load.js`. **Imported by** `ui/behavior-discovery-modal.js`,
+`ui/behavior-states.js`. **Tests.** `tests/e2e/behavior-discovery.mjs`.
+
+### ui/behavior-discovery-modal.js
+
+**Purpose.** Behavior ▸ Discover Behaviors…: all frames, or the frames of a behavior with
+present labels (Split a behavior); this session or all; the layer's name (warns before
+replacing); B-SOiD's settings folded away (bins, neighbors, smallest cluster), remembered in
+this browser only. Esc or Cancel leave.
+
+**Exports.** `showBehaviorDiscoveryModal({split})`.
+
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-discovery.js`, `./info-tip.js`,
+`./plane-definition.js` (`ICON_INFO`), `./section-state.js`, `../pose/behavior-discovery.js`,
+`../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`, `../pose/behavior-states.js`,
+`../import-export/save-load.js`. **Imported by** `ui/behavior-panel.js`, `ui/behavior-states.js`.
+**Tests.** `tests/e2e/behavior-discovery.mjs` §1, §6.
 
 ### ui/behavior-kpms-modal.js
 
@@ -14313,7 +14493,8 @@ merges its ethogram by name and remaps its bouts' and predictions' ids. The four
 their row cache, and every session's states; before every load and on New Project).
 
 **Imports.** `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
-`../pose/behavior-predictions.js`, `../pose/behavior-classifier.js`, `../pose/behavior-states.js`.
+`../pose/behavior-predictions.js`, `../pose/behavior-classifier.js`, `../pose/behavior-states.js`,
+`../pose/behavior-discovery.js` (`resetDiscoveryResults`).
 **Imported by** the writers `import-export/file-io.js`
 (`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
 (`buildSessionRefGraph`), `import-export/save-load.js` (project JSON v2/v3
