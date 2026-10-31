@@ -20,7 +20,7 @@ import {
 import { isNewerSlpFormatError, slpReadErrorStatus } from '../loading/slp-format-check.js';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
-    mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
+    mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames, videosClaimedBy,
 } from './slp-merge.js';
 import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js';
 import {
@@ -43,6 +43,7 @@ import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js';
 import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
 import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
+import { keepOutsideFrames, keptOutsideCounts, outsideFramesNote } from './outside-frames.js';
 import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js';
 import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js';
 import {
@@ -1022,6 +1023,8 @@ export async function handleLoadSlpFile(slpFile) {
 
         // Whether the session loaded last — the one left active — has 3D.
         var lastSessionHas3d = false;
+        // Video indices some session reads; frames on any other are kept aside below.
+        var claimedVideos = new Set();
         for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
         showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
         await new Promise(function (r) { setTimeout(r, 0); });
@@ -1128,6 +1131,7 @@ export async function handleLoadSlpFile(slpFile) {
         for (var svk in videoIdxToCameraName) {
             sessVideoIndices.add(parseInt(svk));
         }
+        videosClaimedBy(videoIdxToCameraName, cameras.length).forEach(function (v) { claimedVideos.add(v); });
 
         // Ensure enough track slots for instances in this session. Only for
         // non-lucid SLPs, where the per-instance trackIdx is used as-is against
@@ -1169,7 +1173,10 @@ export async function handleLoadSlpFile(slpFile) {
 
             var camName = videoIdxToCameraName[fd2.videoIdx];
             if (!camName && cameras.length > 0) {
-                camName = cameras[fd2.videoIdx % cameras.length].name;
+                // No camera at this index: wrapping round would merge this
+                // video's poses into another camera's. Kept aside after the loop.
+                if (fd2.videoIdx >= cameras.length) continue;
+                camName = cameras[fd2.videoIdx].name;
             }
             if (!camName) camName = 'cam_' + fd2.videoIdx;
 
@@ -1602,6 +1609,8 @@ export async function handleLoadSlpFile(slpFile) {
         if (state.sessions.length > 0) {
             state.activeSessionIdx = 0;
             state.session = state.sessions[0];
+            // Poses on a video no session names: not shown, kept for the save.
+            keepOutsideFrames(state.sessions[0], slpData, claimedVideos);
         }
 
         // Create views for the active session only
@@ -1708,6 +1717,8 @@ export async function handleLoadSlpFile(slpFile) {
                 campyWarn.push(state.sessions.length > 1 ? cs.name + ': ' + w : w);
             });
         });
+        var outsideNote = outsideFramesNote(keptOutsideCounts(state.sessions[0]));
+        if (outsideNote) campyWarn.push(outsideNote);
         setStatus('SLP loaded (' + statusParts.join(', ') + ')'
             + (campyWarn.length ? ' — ' + campyWarn.join('; ') : ''), campyWarn.length ? 'warning' : 'success');
 
@@ -1891,6 +1902,11 @@ export async function handleAddSlp() {
 
         // Merge frames (with node reorder map if needed)
         var affectedFrames = mergeSlpFramesIntoSession(state.session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap);
+        // Its poses on a video no camera has: not shown, kept for the save. The
+        // lazy writer never writes these, so a lazy session cannot hold them.
+        if (!state.session.lazyLoader) {
+            keepOutsideFrames(state.session, slpData, videosClaimedBy(videoIdxToCameraName, cameras.length), nodeReorderMap);
+        }
 
         // Rebuild instance groups for affected frames
         rebuildInstanceGroupsForFrames(state.session, affectedFrames);
@@ -2136,7 +2152,9 @@ export async function handleAddSlp() {
         hideLoading();
         var dockPanelCount = paneManager.api ? paneManager.api.panels.length : 0;
         console.log('[add-slp] Done. Dock panels: ' + dockPanelCount + ', Views: ' + state.views.length);
-        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length.toLocaleString('en-US') + ' frames merged. Panels: ' + dockPanelCount, 'success');
+        var addOutsideNote = outsideFramesNote(keptOutsideCounts(state.session));
+        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length.toLocaleString('en-US') + ' frames merged. Panels: ' + dockPanelCount
+            + (addOutsideNote ? ' — ' + addOutsideNote : ''), addOutsideNote ? 'warning' : 'success');
     } catch (err) {
         console.error('[add-slp] FATAL:', err);
         hideLoading();
