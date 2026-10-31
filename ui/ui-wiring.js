@@ -41,6 +41,7 @@ import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.j
 import { renameAnimal } from '../pose/behavior-labels.js';
 import { renamePredictedAnimal } from '../pose/behavior-predictions.js';
 import { renameStateAnimal } from '../pose/behavior-states.js';
+import { renameDiscoveryAnimal } from '../pose/behavior-discovery.js';
 import { behaviors } from '../pose/behavior-ethogram.js';
 import { setupBehaviorUi, updateBehaviorFrame } from './behavior-panel.js';
 import { detectAllFrames, detectThisFrame } from './behavior-detect.js';
@@ -232,6 +233,7 @@ function showRenameModal(kind) {
             renameAnimal(state.session, oldIdName, newName);   // behavior labels are keyed by name
             renamePredictedAnimal(state.session, oldIdName, newName);   // and so are predictions
             renameStateAnimal(state.session, oldIdName, newName);   // and behavioral states
+            renameDiscoveryAnimal(state.session, oldIdName, newName);
             setStatus('Renamed identity to: ' + newName, 'success');
         }
         drawAllOverlays(state.currentFrame);
