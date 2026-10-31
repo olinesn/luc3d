@@ -378,7 +378,11 @@ try {
         const vfs = CAMS.map(cn => ({ name: cn, assignedCamera: cn, videoPath: cn + '.mp4' }));
         AS.state.views = views; AS.state.videoFiles = vfs;
         window.__saved = await window.SleapIO.saveSlpToBytes(fileio.buildSlpLabelsAllViews(s, views, vfs));
+        // A view does not always carry its frame count; the video file does.
+        const bare = fileio.buildSlpLabelsAllViews(s, views.map(v => ({ ...v, frameCount: undefined })), vfs.map(v => ({ ...v, frameCount: 77 })));
+        window.__frameCountFromFile = bare.videos[0].shape[0];
     });
+    check(await luc3d.evaluate(() => window.__frameCountFromFile) === 77, 'the file records a video\'s frame count when only the video file knows it');
     const fileA1 = await getBytes(luc3d, '__saved');
     if (process.env.WRITE_FIXTURES) fs.writeFileSync(path.join(process.env.WRITE_FIXTURES, 'luc3d_behavior.slp'), fileA1);
     const before = await luc3dState(luc3d);

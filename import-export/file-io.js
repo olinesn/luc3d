@@ -2261,6 +2261,9 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 var vf = videoFiles[vfi];
                 if ((vf.name === cam.name || vf.assignedCamera === cam.name) && vf.videoPath) {
                     videoPath = vf.videoPath;
+                    // A view does not always carry it. Without it another app opens this
+                    // video as 0 frames until the video itself is found.
+                    if (!fc) fc = vf.frameCount || 0;
                     break;
                 }
             }
