@@ -410,9 +410,10 @@ async function uncalibratedTwoSessions(loader, opensAll) {
         : aRead.concat([rearOn('b0.mp4', 110, 119, 'animal_B'), rearOn('b1.mp4', 130, 139, 'animal_B')]);
     check(eq(one.shown, shows), 'each session shows its first camera\'s bouts', one.shown);
     check(eq(one.read.events, expected), 'saved: each on its own session\'s camera', one.read.events);
-    // The single-.slp folder loader makes the other session's frames cameras of its own
-    // (`cam_2`, `cam_3`), so there those videos are listed twice: poses, then events.
-    if (loader !== 'single .slp folder') check(one.read.videos.length === 4, 'no copy of a video', one.read.videos);
+    // Only where every session opens, so each kept event has a camera to go back to. A loader
+    // of one session writes the other session's videos back instead, and what it does with
+    // their poses is another matter (the single-.slp folder loader makes them extra cameras).
+    if (opensAll) check(one.read.videos.length === 4, 'no copy of a video', one.read.videos);
     const two = await openAndSave(loader, one.saved);
     check(eq(two.shown, shows) && eq(two.read.events, expected) && eq(two.read.videos, one.read.videos), 'reopened and saved again: the same', two.read);
 }
