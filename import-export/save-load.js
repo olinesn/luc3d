@@ -39,7 +39,7 @@ import {
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { fitTimelineToData } from '../ui/timeline-controller.js';
 import { handleLoadSlpFile } from './slp-import.js';
-import { outsideFramesForSave } from './outside-frames.js';
+import { outsideFramesForSave, unopenedSessionsForEagerSave } from './outside-frames.js';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
@@ -54,6 +54,7 @@ import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-me
 import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { buildSaveProvenance } from './slp-provenance.js';
+import { withUnopenedSessions } from './unopened-sessions.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 
 /**
@@ -734,7 +735,7 @@ async function buildSlpBytes(opts) {
             console.log('[save-slp] lazy session → streaming writer (', lazySess.lazyLoader.nFrames, 'frames ×',
                 lazySess.cameras.length, 'cameras )');
             return await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles,
-                { sink: opts.sink || undefined, provenance: buildSaveProvenance([lazySess]), onProgress: onProgress });
+                { sink: opts.sink || undefined, provenance: buildSaveProvenance(withUnopenedSessions([lazySess])), onProgress: onProgress });
         }
         return await saveAllSessionsStreaming(sessionsToExport, { sink: opts.sink, onProgress: onProgress });
     }
@@ -804,6 +805,8 @@ async function buildSlpBytes(opts) {
         // Poses on a video no session names go back on their own video.
         var sessOutside = outsideFramesForSave(sess, sessLabels.skeletons[0]);
 
+        var sessOutsideBase = allLabeledFrames.length + (sessLabels.labeledFrames || []).length;
+
         // Merge into combined Labels
         allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFrames : []);
         allVideos = allVideos.concat(sessLabels.videos || [], sessOutside ? sessOutside.videos : []);
@@ -824,6 +827,10 @@ async function buildSlpBytes(opts) {
         }
         allIdentities = allIdentities.concat(sessLabels.identities || []);
         allSessions = allSessions.concat(sessLabels.sessions || []);
+        // The sessions of this session's file that nobody opened go right after it.
+        if (sess.unopenedSessions) {
+            allSessions = allSessions.concat(unopenedSessionsForEagerSave(SIO, sess, sessLabels, sessOutside, sessOutsideBase, allVideos, allIdentities));
+        }
     }
 
     // Re-point every instance's track to the canonical (deduped) Track object
@@ -858,7 +865,7 @@ async function buildSlpBytes(opts) {
         identities: allIdentities,
         sessions: allSessions,
         // Keeps the loaded files' provenance (slp-provenance.js).
-        provenance: buildSaveProvenance(sessionsToExport),
+        provenance: buildSaveProvenance(withUnopenedSessions(sessionsToExport)),
     });
 
     // PR 5.2: export sleap-io.js's canonical bytes directly. The typed graph
@@ -1073,8 +1080,10 @@ export async function finalizeMultiSessionSave(handle, opts) {
     // same stages, with the 2D step counted over sessions.
     var onProgress = (opts && opts.onProgress) || null;
     if (onProgress) await onProgress('header');
-    var writer = await openProjectWriter(handle.ctx, handle.pending.map(function (p) { return p.refGraph.sioSession; }),
-        buildSaveProvenance(handle.pending.map(function (p) { return p.session; })));
+    var writerSessions = [];
+    handle.pending.forEach(function (p) { writerSessions.push.apply(writerSessions, [p.refGraph.sioSession].concat(p.refGraph.unopened)); });
+    var writer = await openProjectWriter(handle.ctx, writerSessions,
+        buildSaveProvenance(withUnopenedSessions(handle.pending.map(function (p) { return p.session; }))));
     _lap('openProjectWriter (writes /session_data + sessions_json)');
     try {
         for (var j = 0; j < handle.pending.length; j++) {

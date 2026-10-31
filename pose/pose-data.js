@@ -1838,6 +1838,13 @@ export class Session {
          * @type {{videos: Array, tracks: string[], frames: Array<{video: number, frameIdx: number, instances: Instance[]}>}|null}
          */
         this.outsideFrames = null;
+        /**
+         * Lazy opens only: the other recording sessions of the file, as typed
+         * columns (`import-export/unopened-sessions.js`). Not shown and not
+         * editable; a save writes them back whole. Null when the file has no other.
+         * @type {{sessions: Array, identities: Array}|null}
+         */
+        this.unopenedSessions = null;
     }
 
     addIdentity(name, color) {

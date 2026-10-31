@@ -154,6 +154,10 @@ export class SioLazyLoader {
         // video no camera names use (`_keepOutsideRowTracks`); `trackNames` stops
         // before them.
         this._tracksPastSession = new Map();
+        // Set when a session of this file nobody opened names rows of a video this
+        // loader's cameras have: `deleteInstanceRows` calls it before renumbering
+        // (`renumberUnopenedMembers`, import-export/unopened-sessions.js).
+        this.onInstanceRowsDeleted = null;
         this.videos = new Map();
         this.trackOccupancy = new Map(); // left empty (see file header)
 
@@ -519,7 +523,9 @@ export class SioLazyLoader {
                 this.videos.set(cam, vobj ? { filename: vobj.filename, shape: vobj.shape } : null);
             }
             var fi = Number(frameIdxCol[r]);
-            this.frameRowByCam.get(cam).set(fi, r);
+            // A file can list one (video, frame) twice. The first row is the camera's,
+            // the second is written back untouched like any row no camera shows.
+            if (!this.frameRowByCam.get(cam).has(fi)) this.frameRowByCam.get(cam).set(fi, r);
             if (fi > maxFrameIdx) maxFrameIdx = fi;
         }
         this.nFrames = maxFrameIdx + 1;
@@ -1469,6 +1475,8 @@ export class SioLazyLoader {
                 }
             }
 
+            if (this.onInstanceRowsDeleted) this.onInstanceRowsDeleted(fd, kill, survBefore);
+
             // ---- 5. Re-range EVERY frame row of this store (not just this
             // camera's): on a shared store the rows of all cameras interleave in
             // one instance column, so every range shifts. Rows are kept, ranges
@@ -1542,6 +1550,7 @@ export class SioLazyLoader {
         this._skeletonByCam.clear();
         this._ownVideoByCam.clear();
         this._tracksPastSession.clear();
+        this.onInstanceRowsDeleted = null;
         this._storeEditedInMemory = false;
         this.cache.clear();
         this.cacheOrder = [];

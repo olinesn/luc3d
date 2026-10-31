@@ -56,6 +56,7 @@
 import { _buildSioPoints } from './file-io.js';
 import { points3dNodeCount } from '../pose/pose-data.js';
 import { headerVideoForOutsideFrames } from './outside-frames.js';
+import { identityEntriesOfOpenSession, unopenedSessionsForSave } from './unopened-sessions.js';
 import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { writePlaneMetadata } from './plane-metadata.js';
@@ -241,7 +242,8 @@ export function createProjectWriterContext() {
  * over the session's grouped frames, at the loop's existing yield points; a
  * promise it returns is awaited.
  *
- * @returns {{ sioSession: Object, overlayLfs: Array, cam: Array<{name:string, videoIndex:number, trackBase:number}> }}
+ * @returns {{ sioSession: Object, unopened: Array, overlayLfs: Array, cam: Array<{name:string, videoIndex:number, trackBase:number}> }}
+ *   `unopened`: this file's sessions nobody opened, for the writer's list after `sioSession`.
  */
 export async function buildSessionRefGraph(session, views, videoFiles, ctx, onProgress) {
     var SIO = window.SleapIO;
@@ -254,6 +256,8 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     // exactly ONCE (not once per camera) or the re-save duplicates them.
     var _sharedStore = !!loader._sharedStore;
     var _sharedTrackBase = -1;
+    // The file's other sessions: `unopened-sessions.js`.
+    var unopenedSessions = _sharedStore ? session.unopenedSessions : null;
 
     // MEMORY (#134 follow-up): "Track All" materializes EVERY frame into
     // `frameGroups` (the cross-view tracker is sequential), so a
@@ -322,6 +326,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             lucidIdToSioId.set(lucidId.id, sioId);
         }
     }
+    var identityOfEntry = unopenedSessions ? identityEntriesOfOpenSession(unopenedSessions, session.identities, lucidIdToSioId) : null;
 
     // ---- Per-camera stores, cameras, videos, and concatenated tracks ----
     // The header carries a Camera + Video for EVERY session camera (calibration
@@ -585,15 +590,17 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             var sioInsts = [];
             var byInst = new Map();
             var byTrack = new Map();
+            var byRaw = new Map();   // store offset in this frame -> place in the overlay
             for (var lii = 0; lii < lucidInsts.length; lii++) {
                 var linst = lucidInsts[lii];
                 sioInsts.push(buildOverlayInstance(linst, ocInfo.trackBase, ocInfo.name, fgIdx));
                 byInst.set(linst, lii);
                 var lt = (linst.trackIdx != null && linst.trackIdx >= 0) ? linst.trackIdx : -1;
                 if (lt >= 0 && !byTrack.has(lt)) byTrack.set(lt, lii);
+                if (linst._rawInstIndex != null && linst._rawInstIndex >= 0) byRaw.set(linst._rawInstIndex, lii);
             }
             var okey = ocInfo.name + ':' + fgIdx;
-            overlayByKey.set(okey, { lfIndex: overlayLfs.length, byInst: byInst, byTrack: byTrack });
+            overlayByKey.set(okey, { lfIndex: overlayLfs.length, byInst: byInst, byTrack: byTrack, byRaw: byRaw });
             overlaidKeys.add(okey);
             overlayLfs.push(new SIO.LabeledFrame({ video: ctx.allVideos[ocInfo.videoIndex], frameIdx: fgIdx, instances: sioInsts }));
         }
@@ -606,10 +613,14 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     var overlayBase = ctx.runningOut;
     var E = overlayLfs.length;
     var runningOut = overlayBase + E;
+    var sharedOut = null;          // store row -> output frame, when a camera has rows
+    var firstStoreRow = runningOut;
+    var nStoreRows = 0;
     if (_sharedStore && cam.length === 0) {
-        // No camera has a row: nothing refers to these rows, but they are
-        // written, so the next session's refs must count them.
-        if (outsideVideos.length > 0) runningOut += ((sharedStoreData.framesData || {}).video || []).length;
+        // No camera has a row: nothing refers to these rows but the file's other
+        // sessions, and they are written, so the next session's refs must count them.
+        if (outsideVideos.length > 0) nStoreRows = ((sharedStoreData.framesData || {}).video || []).length;
+        runningOut += nStoreRows;
     } else if (_sharedStore) {
         // Shared multi-camera store, appended ONCE: build a SINGLE store-row →
         // output-lf map that every camera reuses. A store row belongs to one
@@ -619,7 +630,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         // a user correction for that camera. A row on a video no camera names
         // is written too, so it counts here like any other.
         var sInfo = cam[0];
-        var sharedOut = new Map();
+        sharedOut = new Map();
         var sFidx = sInfo.framesData.frame_idx || sInfo.framesData.frame_id || [];
         var sVideo = sInfo.framesData.video || [];
         var videoToCam = new Map(); // NATIVE store video id -> camera name
@@ -796,6 +807,41 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         _refStats.total, 'refs,', _refStats.tagged, 'via _rawInstIndex,', _refStats.fallback,
         'via trackIdx fallback (', _refStats.ambiguous, 'of those genuinely ambiguous — >1 raw instance, no track match; would have silently defaulted to instIndex=0 before this fix)');
 
+    // ---- The file's sessions nobody opened ----
+    // Written after this one, with each group member sent to where its store row
+    // lands in this save. Their videos are in the header already when they have rows.
+    var unopened = [];
+    if (unopenedSessions) {
+        var headerOfNative = new Map();
+        session.cameras.forEach(function (c, i) {
+            if (loader.videoIdByCam && loader.videoIdByCam.has(c.name)) headerOfNative.set(loader.videoIdByCam.get(c.name), sessionVideoIndices[i]);
+        });
+        outsideVideos.forEach(function (o) { headerOfNative.set(o.native, o.videoIndex); });
+        unopened = unopenedSessionsForSave(unopenedSessions, {
+            SIO: SIO,
+            identities: ctx.allIdentities,
+            identityOfEntry: identityOfEntry,
+            firstLucid: sioSession.metadata.lucid,
+            headerVideo: function (id, video) {
+                if (!headerOfNative.has(id)) {
+                    headerOfNative.set(id, ctx.allVideos.length);
+                    ctx.allVideos.push(headerVideoForOutsideFrames(SIO, video, id));
+                }
+                return ctx.allVideos[headerOfNative.get(id)];
+            },
+            outputRow: sharedOut
+                ? function (row) { return sharedOut.get(row); }
+                : function (row) { return row >= 0 && row < nStoreRows ? firstStoreRow + row : undefined; },
+            // A row on a video this session shares with a closed one, replaced by a correction.
+            movedRef: sharedOut ? function (row, inst) {
+                var movedCam = videoToCam.get(numAt(sVideo, row));
+                var ov = movedCam !== undefined ? overlayByKey.get(movedCam + ':' + numAt(sFidx, row)) : undefined;
+                var at = ov ? ov.byRaw.get(inst) : undefined;
+                return at === undefined ? null : [ov.lfIndex, at];
+            } : null,
+        });
+    }
+
     // Returned `cam` is intentionally slim — no `framesData`/`instancesData`/
     // `rowMap` references, so the caller's eviction of `session.lazyLoader`
     // actually frees that memory instead of it surviving via this result.
@@ -807,7 +853,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     });
 
     return {
-        sioSession: sioSession, overlayLfs: overlayLfs, cam: camOut,
+        sioSession: sioSession, unopened: unopened, overlayLfs: overlayLfs, cam: camOut,
         outsideVideos: outsideVideos, sharedTrackBase: _sharedTrackBase, sharedSkeletonPairs: sharedSkeletonPairs,
     };
 }
@@ -1077,7 +1123,7 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
     var refGraph = await buildSessionRefGraph(session, views, videoFiles, ctx, onProgress);
     _lap('1/4 buildSessionRefGraph');
     if (onProgress) await onProgress('header');
-    var writer = await openProjectWriter(ctx, [refGraph.sioSession], (opts || {}).provenance);
+    var writer = await openProjectWriter(ctx, [refGraph.sioSession].concat(refGraph.unopened), (opts || {}).provenance);
     _lap('2/4 openProjectWriter (writes /session_data + sessions_json)');
     try {
         await streamSessionIntoWriter(writer, session, refGraph, onProgress);
