@@ -23,12 +23,15 @@
  * first `k` times. §5 builds the frame index and every packet of the committed
  * B-frame fixture through mediabunny — exactly as `MediaBunnyVideoBackend`
  * does — over the guard, with the unguarded read as the negative control.
+ *
+ * §6 is `createReadWatch`: telling a file that has gone away from one still
+ * downloading (real files: tests/e2e/video-file-gone.mjs).
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-    zeroRuns, readBlobRange, readBlobArrayBuffer, guardedRangeSource,
+    zeroRuns, readBlobRange, readBlobArrayBuffer, guardedRangeSource, createReadWatch, isWatchedReadFailure,
     coldReadStats, COLD_READ_RETRY_MS,
 } from '../loading/cold-read-guard.js';
 
@@ -320,6 +323,194 @@ for (const [label, faults] of CASES) {
     const good = await indexOf(guardedRangeSource(faultyBlob(video, faults)));
     check(!same(bad), `${label}: negative control — unguarded ${bad.err ? 'fails (' + bad.err.slice(0, 60) + ')' : 'gives a different index or frames'}`);
     check(same(good), `${label}: guarded index and every packet equal the clean read`);
+}
+
+// =====================================================================
+console.log('\n§6 createReadWatch: a file that has gone away, told from one downloading');
+{
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const until = async (cond, ms = 2000) => { const t0 = Date.now(); while (!cond() && Date.now() - t0 < ms) await sleep(2); return cond(); };
+    /** A Blob stand-in: `state.mode` is 'ok', 'gone' (every read throws) or 'hung' (reads stay unanswered until `release()`). */
+    function fileBlob(size = 1 << 16) {
+        const bytes = new Uint8Array(size).map((_, i) => 1 + i % 200);
+        const state = { mode: 'ok', reads: 0, waiting: [], cold: new Map() };
+        const blob = {
+            name: 'gone.mp4', size, state,
+            release() { state.mode = 'ok'; state.waiting.splice(0).forEach(r => r()); },
+            slice(a, b) {
+                return {
+                    async arrayBuffer() {
+                        state.reads++;
+                        if (state.mode === 'hung') await new Promise(r => state.waiting.push(r));
+                        if (state.mode === 'gone') throw new Error('NotFoundError: A requested file or directory could not be found');
+                        if (state.badFrom != null && b > state.badFrom) throw new Error('NotReadableError: not downloaded');
+                        return bytes.slice(a, b).buffer;
+                    },
+                };
+            },
+        };
+        return blob;
+    }
+    const watched = (blob, extra) => {
+        const changes = [];
+        const watch = createReadWatch(blob, { onChange: (f, e) => changes.push(e ? [f, e.message] : [f]), recheckMs: 20, ...extra });
+        return { watch, changes };
+    };
+    const fails = async (p) => { try { await p; return false; } catch (e) { return true; } };
+
+    // Not armed: exactly as without a watch.
+    {
+        const blob = fileBlob(); blob.state.mode = 'gone';
+        const { watch, changes } = watched(blob);
+        check(await fails(readBlobRange(blob, 0, 10, watch)), 'not armed: a read that keeps failing still throws');
+        check(blob.state.reads === RETRIES + 1, `not armed: it used every retry (${blob.state.reads} reads)`);
+        check(!watch.failing && changes.length === 0, 'not armed: the file does not count as failing (a file being opened keeps its retries)');
+        watch.stop();
+    }
+    // Armed, and retries still do their job.
+    {
+        const blob = fileBlob(); blob.state.mode = 'gone';
+        const { watch, changes } = watched(blob);
+        watch.arm();
+        const p = readBlobRange(blob, 0, 10, watch);
+        await until(() => blob.state.reads >= 2);
+        blob.state.mode = 'ok';
+        const got = await p;
+        check(got.length === 10 && !watch.failing && changes.length === 0, 'armed: a read that works on a retry is no failure');
+        watch.stop();
+    }
+    // Armed: gone, then back.
+    {
+        const blob = fileBlob(); blob.state.mode = 'gone';
+        const { watch, changes } = watched(blob);
+        watch.arm();
+        check(await fails(readBlobRange(blob, 100, 200, watch)), 'armed: a read that uses up its retries throws');
+        check(blob.state.reads === RETRIES + 1, `after every retry (${blob.state.reads} reads)`);
+        check(watch.failing && changes.length === 1 && changes[0][0] === true && /could not be found/.test(changes[0][1]), 'and the file is failing: onChange(true, err), once', changes);
+        watch.stop();
+    }
+    // The error of a read a watch saw fail can be told from any other.
+    {
+        const blob = fileBlob(); blob.state.mode = 'gone';
+        const { watch } = watched(blob);
+        const errorOf = (p) => p.then(() => null, (e) => e);
+        const before = await errorOf(readBlobRange(blob, 0, 10, watch));
+        check(before && !isWatchedReadFailure(before), 'not armed: its failed reads are not the watch\'s');
+        watch.arm();
+        const seen = await errorOf(readBlobRange(blob, 0, 10, watch));
+        check(seen && isWatchedReadFailure(seen), 'armed: they are');
+        check(!isWatchedReadFailure(new Error('other')) && !isWatchedReadFailure(null) && !isWatchedReadFailure('text'), 'nothing else is');
+        watch.stop();
+    }
+    // Armed and failing: one try per read. No recheck in the way of the counts.
+    {
+        const blob = fileBlob(); blob.state.mode = 'gone';
+        const { watch, changes } = watched(blob, { recheckMs: 100000 });
+        watch.arm();
+        await fails(readBlobRange(blob, 100, 200, watch));
+        const reads = blob.state.reads;
+        resetStats();
+        check(await fails(readBlobRange(blob, 300, 400, watch)), 'failing: the next read throws too');
+        check(blob.state.reads === reads + 1 && coldReadStats.retries === 0, 'with one try, no retry', blob.state.reads - reads);
+        blob.state.mode = 'ok';
+        check((await readBlobRange(blob, 300, 400, watch)).length === 100, 'a read that works gives its bytes');
+        check(!watch.failing && changes.length === 2 && changes[1][0] === false, 'and ends it: onChange(false)', changes);
+        watch.stop();
+    }
+    // Back by itself: the recheck reads what failed.
+    {
+        const blob = fileBlob(); blob.state.mode = 'gone';
+        const { watch, changes } = watched(blob);
+        watch.arm();
+        await fails(readBlobRange(blob, 100, 200, watch));
+        const before = blob.state.reads;
+        await until(() => blob.state.reads >= before + 3);
+        check(blob.state.reads >= before + 3 && watch.failing, 'failing: the read is tried again on a timer, one try at a time', blob.state.reads - before);
+        blob.state.mode = 'ok';
+        check(await until(() => !watch.failing), 'with nothing else reading, it ends when the file is back');
+        check(changes.length === 2 && changes[1][0] === false, 'onChange(false), once', changes);
+        const after = blob.state.reads;
+        await sleep(80);
+        check(blob.state.reads === after, 'and the rechecks stop');
+        watch.stop();
+    }
+    // A cloud file: only part of it can't be read. The recheck must not read byte 0 and call it back.
+    {
+        const blob = fileBlob(); blob.state.badFrom = 4096;
+        const { watch, changes } = watched(blob);
+        watch.arm();
+        await fails(readBlobRange(blob, 8192, 8292, watch));
+        const reads = blob.state.reads;
+        await until(() => blob.state.reads >= reads + 3);
+        check(watch.failing && changes.length === 1, 'part of a file unreadable: the recheck reads what failed, so it stays failing', changes);
+        check((await readBlobRange(blob, 0, 100, watch)).length === 100 && !watch.failing, 'a read of a part that works gives its bytes and ends it');
+        watch.stop();
+    }
+    // check(): for what a <video> can't report.
+    {
+        const blob = fileBlob();
+        const { watch, changes } = watched(blob);
+        watch.arm();
+        check(await watch.check() === true && !watch.failing, 'check(): true on a file that reads');
+        blob.state.mode = 'gone';
+        const a = watch.check(), b = watch.check();
+        check(a === b, 'check(): one at a time');
+        check(await a === false && watch.failing && changes.length === 1, 'check(): false once every retry is used, and it is failing', changes);
+        blob.state.mode = 'ok';
+        check(await until(() => !watch.failing), 'and it ends when the file is back');
+        watch.stop();
+    }
+    // A read that hangs.
+    {
+        const blob = fileBlob(); blob.state.mode = 'hung';
+        const { watch, changes } = watched(blob, { stallMs: 30, stallFailingMs: 30 });
+        watch.arm();
+        check(await fails(readBlobRange(blob, 100, 200, watch)), 'a read past its deadline throws');
+        check(blob.state.reads === 1 && watch.failing && /did not answer/.test(changes[0][1]), 'with no retry, and the file is failing', changes);
+        const reads = blob.state.reads;
+        check(await fails(readBlobRange(blob, 300, 400, watch)), 'failing, with a read still unanswered: the next read throws');
+        await sleep(60);
+        check(blob.state.reads === reads, 'without touching the file (the rechecks neither)', blob.state.reads - reads);
+        blob.release();
+        check(await until(() => !watch.failing), 'when the hung read answers, it ends');
+        check(watch.stalled === 0 && changes.length === 2, 'nothing left outstanding', changes);
+        watch.stop();
+    }
+    // A hung read that ends in a failure leaves the file failing, and the recheck takes over.
+    {
+        const blob = fileBlob(); blob.state.mode = 'hung';
+        const { watch } = watched(blob, { stallMs: 30, stallFailingMs: 30 });
+        watch.arm();
+        await fails(readBlobRange(blob, 100, 200, watch));
+        blob.state.mode = 'gone';
+        blob.state.waiting.splice(0).forEach(r => r());
+        await until(() => watch.stalled === 0);
+        check(watch.failing, 'a hung read that fails in the end: still failing');
+        blob.state.mode = 'ok';
+        check(await until(() => !watch.failing), 'and the recheck finds it back');
+        watch.stop();
+    }
+    // Through guardedRangeSource, and after stop().
+    {
+        const blob = fileBlob(1 << 22);
+        const { watch, changes } = watched(blob);
+        watch.arm();
+        const src = guardedRangeSource(blob, { watch });
+        check((await src.readRange(0, 1000)).length === 1000, 'guardedRangeSource reads through the watch');
+        blob.state.mode = 'gone';
+        check((await src.readRange(1000, 1000)).length === 1000, 'a window already read needs no read');
+        check(await fails(src.readRange(3 << 20, 1000)) && watch.failing, 'a window not read yet fails, and the file is failing');
+        blob.state.mode = 'ok';
+        check((await src.readRange(3 << 20, 1000)).length === 1000 && !watch.failing, 'and is read again once it is back');
+        blob.state.mode = 'gone';
+        await fails(src.readRange(2 << 20, 1000));
+        check(watch.failing, 'failing again');
+        const n = changes.length;
+        watch.stop();
+        const reads = blob.state.reads;
+        await sleep(60);
+        check(!watch.failing && blob.state.reads === reads && changes.length === n, 'stop(): no more reads or calls');
+    }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

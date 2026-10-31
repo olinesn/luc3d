@@ -105,6 +105,8 @@ helpers used by every load path. Calls `init()` at module-load.
   the first `[data-infotip]` element exists.
 - `../ui/node-tooltip.js` — `installNodeTooltip`, right after it (the listeners
   that put the node tooltip away on a press, key, wheel, scroll or resize).
+- `../ui/video-read-status.js` — `installVideoReadStatus`, once: what the app does
+  when a video's file can't be read.
 - `../ui/info-panel.js` — `setupPanelTabs`, `setupSkeletonEditing`,
   `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
   because `updateInfoPanel` returns early with no session),
@@ -11120,6 +11122,27 @@ constants).
 
 ---
 
+### ui/video-read-status.js
+
+**Purpose.** What the app does when a video's file can't be read
+(`fileUnreadable` on its decoder, `loading/video.js`): says so in the status bar,
+pauses playback, and redraws the current frame once the file is back. The decoder
+gives each such view no picture and the view goes blank under its poses, so this line
+is the reason for the blank; it is written again whenever a frame or Play runs into
+the same file, since any other message can have replaced it.
+
+**Key exports.** `installVideoReadStatus()` (once, at startup: the one
+`setVideoReadListener`), `unreadableVideosText(views)` (the line, by view name since
+campy names every camera's video `0.mp4`, the first 3 and "and N more"; images
+embedded in a `.slp` get their own sentence, as they don't come back by themselves).
+
+**Imports from project modules.** `./app-state.js` (`state`, `videoController`),
+`../import-export/save-load.js` (`setStatus`), `../loading/video.js`.
+
+**Imported by.** `pose/initialization.js`.
+
+**Tests.** `tests/e2e/video-file-gone.mjs`.
+
 ### ui/video-filters.js
 
 **Purpose.** Per-CAMERA video display settings — brightness, contrast and
@@ -13116,8 +13139,20 @@ sessions, and stays open as long as the project does (`state.frameWorkers`,
   `{type: 'videos', videos}`, `{type: 'frame', videoKey, embeddedIdx, pngBytes,
   format, ...}`, `{type: 'error', error}`.
 - A `getFrame` that fails still answers: `{type: 'frame', videoKey, embeddedIdx,
-  error}`. Whoever asked is waiting (`seekToFrame`, a load's size probe), and a plain
-  `error` reaches none of them, which left the load stuck behind its overlay.
+  error, failedRead}`. Whoever asked is waiting (`seekToFrame`, a load's size probe),
+  and a plain `error` reaches none of them, which left the load stuck behind its
+  overlay.
+
+**After a failed read it reads nothing more.** `FS.read` is wrapped at init. When a
+read of the file throws (moved, or a share dropped) HDF5 stops mid-call and does not
+recover. Measured without the wrap, on a real file moved away: once one read has
+failed, every later read "succeeds" with all zeros and no error, also once the file is
+back. Raw pixels then show as a black picture, and an encoded image fails to decode
+with nothing to say why. So from then on every answer is that error
+(`failedRead: true` on a frame; `EmbeddedVideoDecoder.fileUnreadable`) and nothing is
+asked of HDF5 again. The images stay blank until the project is opened again, which
+starts a new worker. A hole the h5wasm `cold-read` patch repairs never reaches the
+wrap; a re-read of its that throws does. Test: `tests/e2e/video-file-gone.mjs` part 9.
 
 **Imports from project modules.**
 - `./slp-package-reader.js` — `SLPPackageReader`.
@@ -14214,9 +14249,33 @@ console warning and are counted in `coldReadStats`.
   mediabunny's `BlobSource`); keeps the most recent `RANGE_CACHE_BYTES` (4 MiB)
   and answers with copies so mediabunny's cache never pins a window. A failed
   window is dropped, so the next request reads again.
-- `zeroRuns(bytes, position)`, `repairZeroRuns(blob, bytes, position, depth)`,
-  `coldReadStats`, `COLD_READ_BLOCK`, `COLD_READ_RETRY_MS`,
-  `RANGE_WINDOW_BYTES`, `RANGE_CACHE_BYTES`.
+- `createReadWatch(blob, opts?)` → a watch, for a file kept open: pass it to
+  `readBlobRange(blob, start, end, watch)` and `guardedRangeSource(blob, {watch})`.
+  See below. `isWatchedReadFailure(err)`: is this the error of a read a watch has seen
+  fail (`loading/video.js`'s `unhandledrejection` listener).
+- `zeroRuns(bytes, position)`, `repairZeroRuns(blob, bytes, position, depth, watch)`,
+  `coldReadStats`, `COLD_READ_BLOCK`, `COLD_READ_RETRY_MS`, `FILE_RECHECK_MS`,
+  `READ_STALL_MS`, `READ_STALL_FAILING_MS`, `RANGE_WINDOW_BYTES`, `RANGE_CACHE_BYTES`.
+
+**A file that has gone away.** It fails like a file still downloading, but for
+good, and the retries then cost 4.2 s per read for nothing. A watch tells the two
+apart for one open file. Until `arm()` it does nothing, since a read made while a
+file is being opened must keep all its retries. Armed:
+- a read that has used up its retries makes the file `failing` (`onChange(true,
+  err)`), and from then on each read gets one try;
+- any read that works ends that (`onChange(false)`). Any read, because a cloud file
+  can be readable in the parts downloaded. For the same reason the recheck, every
+  `FILE_RECHECK_MS`, reads what failed: byte 0 would call such a file back when it
+  is not;
+- a read has a deadline, `READ_STALL_MS` (15 s), or `READ_STALL_FAILING_MS` (2 s)
+  once the file is failing, for a share that hangs a read for minutes instead of
+  failing it. Past it the read counts as failed with no retry; while one is
+  unanswered (`stalled`) new reads fail at once without touching the file, so they
+  don't pile up, and its late answer still ends the failure;
+- `check()` reads the file now (what failed, else byte 0), with the same retries,
+  for what the watch can't see: a `<video>` reads natively. One at a time.
+`stop()` ends it for good. Tests: §6 of `tests/test-cold-read-guard.mjs` (fake Blob),
+`tests/e2e/video-file-gone.mjs` (real files).
 
 **Imports from project modules.** None, so a Node test can load it.
 
@@ -14302,6 +14361,58 @@ position `_getFrameHTML5` set itself skips the seek** (`_html5Moved`, set by
 next `_getFrameHTML5` seek and by `switchSource`): after playback the picture
 need not match `currentTime`, and skipping the seek on a pause re-decode drew
 the NEXT frame.
+
+**A video file that has gone away.** Moved, or its share dropped, while open.
+Before this each frame took 8.4–18.4 s and then gave the last picture the `<video>`
+showed, cached as frame N, with nothing said. What a `<video>` does then (measured on
+real files). Chrome 156 and Chromium 153: a seek it can't serve from what it has read
+hangs, `seeking` true and `readyState` 1, no `seeked` and no error, and `drawImage`
+gives the old picture; the seek finishes by itself when the file is back. After ~30 s
+of failed reads with no new seek it fires `error` (code 2), stays dead until `load()`,
+and from then taints any canvas it is drawn on, for good. While playing it plays on
+from what it has read, and `error` came 64 s later. WebKit 26.6: `seeked` fires at once
+with the old picture, and the clock plays on. Firefox 155: `error` (code 3) at the
+first read that fails, and `load()` brings it back.
+- `fileUnreadable` is `createReadWatch`'s `failing`
+  (`loading/cold-read-guard.js`) for this file, which mediabunny's reads go through
+  (`_watchFile` per source; armed at the end of `init` / `switchSource`, so a file
+  being opened keeps every retry).
+- While it holds, `getFrame` gives a frame only if it can give the right one: from the
+  backend's cache, or decoded from what is still readable, or a shared-cache hit, and
+  otherwise null at once. No second decode (`_mbGetFrameOnce` rethrows), no back-step
+  prefetch, no `<video>`. `peekFrame` the same. So the first failure costs one read's
+  retries (4.2 s) and later ones almost nothing. A read that works, or the recheck,
+  ends it (`_onFileReadChange`): the shared cache is dropped, the playback `<video>` is
+  loaded again and the preview one released, whatever they were left doing (a seek
+  hanging, given up, or in WebKit parked on the old picture at the frame asked for,
+  where seeking to that same frame shows nothing new).
+- `_getFrameHTML5` and `_peekHTML5` return null unless the element landed AND the file
+  reads (`check()`, one small read per frame on this path): without a backend nothing
+  else reads the file, and in WebKit landing proves nothing. A failed attempt sets
+  `_html5Moved`, since `currentTime` then says the target and the picture does not.
+  Nothing is written to the shared cache unless it landed.
+- `_getFrameHTML5` waits for a slow seek as long as the file reads, up to
+  `HTML5_WAIT_LIMIT_MS` (20 s), asking the file every 5 s (`_whileFileReads`). The old
+  5 s limit drew whatever was showing; a limit that blank would leave the view blank
+  until the next step, on a healthy file on a busy machine or a slow share.
+- `drawCurrentFrame`, `_getFrameHTML5` and `_peekHTML5` never draw an element with
+  `.error` set. `_onVideoElError` asks the file, and reloads the element if it reads and
+  the element gave up reading (code 2). Any other code waits for whoever next needs it
+  (`_getFrameHTML5`, `seekNativeSettled`), since loading could bring a decode error
+  straight back.
+- mediabunny rethrows a failed read-ahead nobody is waiting for
+  (`ReadOrchestrator.runWorker`), so when a file goes at the wrong moment there is an
+  unhandled rejection. A module-level `unhandledrejection` listener silences those
+  (`isWatchedReadFailure`), and only those.
+- While playing, `playNative` starts `_checkWhilePlaying`: `check()` every
+  `FILE_RECHECK_MS`, until `pauseNative`. The app pauses on failure, and
+  `startPlayback` refuses while a shown view's file is gone, saying why.
+- `VideoController.seekToFrame` blanks a view with no picture for a frame it has
+  (and any frame of embedded images), so the last picture does not stay up under this
+  frame's poses, and says it again (`notifyVideoRead`), as another message may have
+  replaced it. `redrawCurrentFrame()` is what the app calls when a file is back.
+Not covered: a video export or the image check don't stop for it. They get no picture
+for those frames, quickly now, and carry on. Test: `tests/e2e/video-file-gone.mjs`.
 
 **A codec WebCodecs cannot decode drops the backend up front
 (`_mbCannotDecode`).** Firefox demuxes HEVC — `MediaBunnyVideoBackend`
@@ -14646,7 +14757,10 @@ How it behaves:
   `tests/test-release-views-frames.mjs`.
 - `scaledBitmap(src, width)` — an ImageBitmap / VideoFrame / `<video>` as a new
   ImageBitmap `width` px wide, aspect kept (full size when not smaller).
-- `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
+- `setVideoReadListener(fn)` — `fn(decoder, failing)` when a decoder's file stops
+  being readable, when a frame or Play runs into that again, and when it can be read
+  again (see "A video file that has gone away"). One listener: `ui/video-read-status.js`.
+- `OnDemandVideoDecoder` — class. Selected methods: `init(source)`, `fileUnreadable`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`),
   `peekFrame(frameIndex, width)` (a caller-owned copy scaled to `width`, for the
   seekbar's hover thumbnail, `ui/seekbar-preview.js` — it touches NOTHING
@@ -14795,16 +14909,17 @@ applies; that module imports nothing itself — and
 `loading/video-codec-diagnosis.js` (`diagnoseUnplayableVideo`, for
 `_awaitPlayable`) — and `loading/cold-read-guard.js`: `_initMediabunny` builds
 the frame-accurate backend with `MediaBunnyVideoBackend.fromRangeSource` over
-`guardedRangeSource(file)` (falling back to `fromBlob` when a bundle lacks it),
-and `readChunk` (mp4box's index scan) reads through `readBlobRange`, so both
+`guardedRangeSource(file, {watch})` (falling back to `fromBlob` when a bundle lacks
+it), and `readChunk` (mp4box's index scan) reads through `readBlobRange`, so both
 retry a failed read and re-read zeroed pages of a cloud file still downloading
-(see that module and CLAUDE.md). `mediabunny` (`EncodedPacketSink`, for
+(see that module and CLAUDE.md); `createReadWatch`, `FILE_RECHECK_MS` for a file that
+has gone away. `mediabunny` (`EncodedPacketSink`, for
 `getKeyPacket`) is imported lazily by `_keyTimestamp`. Otherwise none (uses the global `MP4Box` from script tag, and
 `window.SleapIO.MediaBunnyVideoBackend`).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
-`ui/sessions-panes.js`, `ui/ui-wiring.js`.
+`ui/sessions-panes.js`, `ui/ui-wiring.js`, `ui/video-read-status.js`.
 
 **User-facing features.** All video playback (play/pause/seek/scrub),
 zoom-in-on-rectangle, multi-view zoom sync, frame-accurate stepping,
