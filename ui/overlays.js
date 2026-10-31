@@ -1456,6 +1456,164 @@ function drawNamePill(ctx, cp, text, color, fontSize, uprightRad) {
     ctx.restore();
 }
 
+/** Grow `box` by the placed points of `inst` (an Instance) in `mask` (all when null); @returns points used. */
+function extendBoxByInstance(box, inst, mask) {
+    var used = 0, n = inst && inst.numNodes != null ? inst.numNodes : 0;
+    for (var k = 0; k < n; k++) {
+        if (mask && !mask[k]) continue;
+        if (inst.hasPoint && !inst.hasPoint(k)) continue;
+        var x = inst.getX(k), y = inst.getY(k);
+        if (!isFinite(x) || !isFinite(y)) continue;
+        if (x < box.x0) box.x0 = x; if (y < box.y0) box.y0 = y;
+        if (x > box.x1) box.x1 = x; if (y > box.y1) box.y1 = y;
+        used++;
+    }
+    return used;
+}
+
+/** Same for raw reprojection points (`[[x, y] | null, …]`). */
+function extendBoxByPoints(box, pts, mask) {
+    var used = 0;
+    for (var k = 0; pts && k < pts.length; k++) {
+        if (mask && !mask[k]) continue;
+        var p = pts[k];
+        if (!p || !isFinite(p[0]) || !isFinite(p[1])) continue;
+        if (p[0] < box.x0) box.x0 = p[0]; if (p[1] < box.y0) box.y0 = p[1];
+        if (p[0] > box.x1) box.x1 = p[0]; if (p[1] > box.y1) box.y1 = p[1];
+        used++;
+    }
+    return used;
+}
+
+/**
+ * The animal's extent in one view, in video px: its 2D detection and its
+ * reprojection together, over the nodes in `mask` — or over all nodes when
+ * none of those is placed (an animal is never dropped for its weights).
+ */
+function animalBoxInView(group, viewName, mask) {
+    var box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    var inst = group.getInstance ? group.getInstance(viewName) : null;
+    var reprojInst = group.reprojectedInstances && group.reprojectedInstances.size > 0 && group.getReprojectedInstance
+        ? group.getReprojectedInstance(viewName) : null;
+    var reprojPts = group.reprojections ? group.reprojections[viewName] : null;
+    var take = function (m) {
+        var used = 0;
+        if (inst) used += extendBoxByInstance(box, inst, m);
+        if (reprojInst) used += extendBoxByInstance(box, reprojInst, m);
+        else if (reprojPts) used += extendBoxByPoints(box, reprojPts, m);
+        return used;
+    };
+    if (!take(mask) && mask) take(null);
+    return box.x1 >= box.x0 ? box : null;
+}
+
+/**
+ * Boxes around the animals engaged in labelled behaviors (Behavior tab ▸ On
+ * video). `spec` (ui/behavior-coding.js `behaviorBoxesAt`):
+ *
+ *   { items: [{ animals: [name, …], color, dashed, light?, parts: [[text, color], …] }],
+ *     nodeMask: boolean[] | null }      // nodes the boxes enclose (Tracking Wizard weights > 0)
+ *
+ * One box per item enclosing all of its animals visible in this view, in the
+ * behavior's color over a dark halo; dashed for a bout still being coded or a
+ * target still to pick; `light` items (the animal Label Behaviors mode labels)
+ * a thin translucent outline. Its label (`parts`, each in its own color) sits above
+ * the box's top-left corner, upright in a rotated view. A box whose animals
+ * another box already enclosed is drawn wider, so nested boxes and their labels
+ * do not sit on each other. Sizes are in screen pixels.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {string} viewName
+ * @param {InstanceGroup[]} instanceGroups - this frame's groups
+ * @param {Session} session
+ * @param {number} frameIdx
+ * @param {Object} spec
+ * @param {Object} options - geometry (`videoWidth`, `videoHeight`, `canvasWidth`,
+ *   `canvasHeight`, `labelDisplayScale`, `labelRotation`)
+ */
+export function drawBehaviorBoxes(ctx, viewName, instanceGroups, session, frameIdx, spec, options) {
+    if (!spec || !spec.items || !spec.items.length || !instanceGroups) return;
+    options = options || {};
+    var wanted = new Set();
+    spec.items.forEach(function (it) { it.animals.forEach(function (a) { wanted.add(a); }); });
+    var boxes = new Map();
+    for (var g = 0; g < instanceGroups.length; g++) {
+        var group = instanceGroups[g];
+        var inst = group.getInstance ? group.getInstance(viewName) : null;
+        var ident = inst ? resolveLabelIdentity(session, inst, group, viewName, frameIdx)
+            : (group.identityId != null && group.identityId >= 0 && session.getIdentity ? session.getIdentity(group.identityId) : null);
+        if (!ident || !wanted.has(ident.name) || boxes.has(ident.name)) continue;
+        var b = animalBoxInView(group, viewName, spec.nodeMask || null);
+        if (b) boxes.set(ident.name, b);
+    }
+    if (!boxes.size) return;
+    var vw = options.videoWidth, vh = options.videoHeight;
+    var cw = options.canvasWidth != null ? options.canvasWidth : ctx.canvas.width;
+    var ch = options.canvasHeight != null ? options.canvasHeight : ctx.canvas.height;
+    var toCanvas = vw != null && vh != null ? makeVideoToCanvasTransform(vw, vh, cw, ch) : null;
+    var ds = resolveLabelDisplayScale(ctx, cw, options);
+    var fontPx = Math.max(9, Math.round(12 * ds));
+    var basePad = 8 * ds, nestStep = fontPx + 8 * ds;
+    var rad = uprightLabelRadians(options);
+    var order = spec.items.slice().sort(function (a, b) { return a.animals.length - b.animals.length; });
+    var drawn = [];
+    ctx.save();
+    for (var i = 0; i < order.length; i++) {
+        var it = order[i];
+        var u = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+        var any = false;
+        it.animals.forEach(function (a) {
+            var ab = boxes.get(a);
+            if (!ab) return;
+            any = true;
+            u.x0 = Math.min(u.x0, ab.x0); u.y0 = Math.min(u.y0, ab.y0);
+            u.x1 = Math.max(u.x1, ab.x1); u.y1 = Math.max(u.y1, ab.y1);
+        });
+        if (!any) continue;
+        var nest = drawn.filter(function (d) { return d.some(function (a) { return it.animals.indexOf(a) >= 0; }); }).length;
+        drawn.push(it.animals);
+        var p0 = toCanvas ? toCanvas(u.x0, u.y0) : { x: u.x0, y: u.y0 };
+        var p1 = toCanvas ? toCanvas(u.x1, u.y1) : { x: u.x1, y: u.y1 };
+        var pad = basePad + nest * nestStep;
+        var x = Math.min(p0.x, p1.x) - pad, y = Math.min(p0.y, p1.y) - pad;
+        var w = Math.abs(p1.x - p0.x) + 2 * pad, h = Math.abs(p1.y - p0.y) + 2 * pad;
+        ctx.setLineDash([]);
+        if (it.light) {
+            ctx.lineWidth = 1.25 * ds;                                // a light marker, not a label
+            ctx.strokeStyle = it.color;
+            ctx.strokeRect(x, y, w, h);
+        } else {
+            ctx.lineWidth = 4 * ds;
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+            ctx.strokeRect(x, y, w, h);                               // dark halo: readable on any video
+            ctx.lineWidth = 2 * ds;
+            ctx.strokeStyle = it.color;
+            if (it.dashed) ctx.setLineDash([8 * ds, 5 * ds]);
+            ctx.strokeRect(x, y, w, h);
+            ctx.setLineDash([]);
+        }
+        // The label, above the top-left corner, upright on screen.
+        beginUprightFrame(ctx, rad, x, y);
+        var ox = uprightOriginX(rad, x), oy = uprightOriginY(rad, y);
+        ctx.font = '600 ' + fontPx + 'px system-ui, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+        var tw = 0;
+        it.parts.forEach(function (pt) { tw += ctx.measureText(pt[0]).width; });
+        var ly = oy - 5 * ds;
+        ctx.fillStyle = it.light ? 'rgba(0, 0, 0, 0.4)' : 'rgba(0, 0, 0, 0.65)';
+        ctx.fillRect(ox, ly - fontPx, tw + 8 * ds, fontPx + 5 * ds);
+        var lx = ox + 4 * ds;
+        it.parts.forEach(function (pt) {
+            ctx.fillStyle = pt[1] || '#ffffff';
+            ctx.fillText(pt[0], lx, ly);
+            lx += ctx.measureText(pt[0]).width;
+        });
+        ctx.restore();
+    }
+    ctx.restore();
+}
+
 /**
  * The identity a LINKED instance's label should name, resolved in the same two
  * steps `getGroupColor` uses so the pill's text and its color can never name
@@ -2829,6 +2987,16 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             session: session,
             frameIdx: _frameIdx,
         }));
+    }
+
+    // 4c. Behavior boxes: around the animals engaged in each labelled
+    // behavior on this frame (both animals of a social one), in every view and
+    // whatever the User / Predictions toggles show — the extent comes from the
+    // 2D detection and the reprojection. `options.behaviorBoxes` comes from
+    // ui/behavior-coding.js `behaviorBoxesAt` (null when there is nothing).
+    if (options.behaviorBoxes && instanceGroups && session) {
+        drawBehaviorBoxes(ctx, viewName, instanceGroups, session, _frameIdx, options.behaviorBoxes,
+            Object.assign({}, geoOpts));
     }
 
     // 5. Selection highlight

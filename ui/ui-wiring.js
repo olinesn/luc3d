@@ -38,6 +38,10 @@ import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
+import { renameAnimal } from '../pose/behavior-labels.js';
+import { behaviors } from '../pose/behavior-ethogram.js';
+import { setupBehaviorUi, updateBehaviorFrame } from './behavior-panel.js';
+import { confirmRetrackWithBehaviorLabels } from './behavior-confirm.js';
 // View ▸ Define Planes — "Defining Plane Mode".
 import { togglePlaneMode, syncPlanes3D } from './plane-definition.js';
 // The Visibility panel's `Planes` section — the four ids, named from the one
@@ -222,6 +226,7 @@ function showRenameModal(kind) {
             if (newName === oldIdName) { close(); return; }
             idObj.name = newName;
             renameHiddenIdentity(state.session, oldIdName, newName);
+            renameAnimal(state.session, oldIdName, newName);   // behavior labels are keyed by name
             setStatus('Renamed identity to: ' + newName, 'success');
         }
         drawAllOverlays(state.currentFrame);
@@ -737,6 +742,14 @@ function showHotkeysHelp() {
         }
         rows += '<tr><td><code>' + esc(formatBinding(a.binding)) + '</code></td><td>' + esc(a.label) + '</td></tr>';
     });
+    // This project's behavior keys: set in the ethogram, not the catalog.
+    var keyed = behaviors().filter(function (b) { return b.key; });
+    if (keyed.length) {
+        rows += '<tr><td colspan="2" style="height:8px;"></td></tr><tr><td><b>Behavior keys (this project)</b></td><td></td></tr>';
+        keyed.forEach(function (b) {
+            rows += '<tr><td><code>' + esc(b.key) + '</code></td><td>' + esc('Code "' + b.name + '" (in Label Behaviors mode)') + '</td></tr>';
+        });
+    }
 
     modal.innerHTML =
         '<h3>Keyboard Shortcuts</h3>' +
@@ -885,6 +898,8 @@ export function setupMenus() {
     // Tracks ▸ Check ID Switches (Body Size): flag close encounters whose
     // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
     setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
+    // Behavior labelling: the Behavior menu, toolbar button, tab and mode.
+    setupBehaviorUi({ closeMenus: closeMenus, navigate: navigateToFrame });
     setTrackSummaryNavigator(navigateToFrame);   // the Track All summary's Identities samples and maps
     // After the tab fixes (or un-fixes) a switch, repaint everything that shows identities.
     setIdSwitchRefresher(function () {
@@ -906,10 +921,11 @@ export function setupMenus() {
     // Propagate Tracks → IDs (one-shot): each track label becomes an identity,
     // stamped per-frame on every instance. (Was the "Trust Track Labels"
     // toggle; now a single action.)
-    document.getElementById('menuPropagateTracksToIds').addEventListener('click', function () {
+    document.getElementById('menuPropagateTracksToIds').addEventListener('click', async function () {
         closeMenus();
         if (!state.session) { setStatus('No session loaded', 'warning'); return; }
         var session = state.session;
+        if (!(await confirmRetrackWithBehaviorLabels(session, 'Propagate Tracks → IDs'))) return;
         var res = session.propagateTracksToIdentities();
         // Mark tracks as trusted (persisted in project metadata) and show IDs.
         session.trustTracks = true;
@@ -3233,6 +3249,7 @@ export function updateSeekbarVisual(frameIdx) {
     setSeekbarMarkerFrames(state.totalFrames);       // no-op unless the frame count changed
     refreshSeekbarTicks();                           // no-op unless the frame count or FPS changed
     updateIdSwitchProgress(frameIdx);                // the ID Switches tab's selected-row bar (no-op without one)
+    updateBehaviorFrame(frameIdx);                   // behavior labels: save cursor, running states, lit buttons
 }
 
 export function onPlaybackStateChange(isPlaying) {

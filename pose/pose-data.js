@@ -1496,6 +1496,23 @@ export class FrameGroup {
 
 var _identityIdCounter = 0;
 
+// Who else must follow when two identities are exchanged over a range
+// (`Session.swapIdentitiesInRange`: an ID-switch fix or its undo, an identity
+// reassignment that swaps to the end of the timeline). Behavior labels are
+// keyed by identity name, so pose/behavior-labels.js registers here to move
+// them with the poses. A hook rather than an import keeps this module
+// import-free.
+var _identitySwapHooks = [];
+
+/**
+ * Be called after `Session.swapIdentitiesInRange` exchanged two identities:
+ * `fn(session, nameA, nameB, startFrame, endFrame)` (endFrame may be Infinity).
+ * @param {Function} fn
+ */
+export function onIdentitySwap(fn) {
+    if (typeof fn === 'function' && _identitySwapHooks.indexOf(fn) < 0) _identitySwapHooks.push(fn);
+}
+
 // Identity N takes entry N, so a project with N animals uses the first N.
 // The first 7 are the original neon set. Entries 7-19 were chosen one at a
 // time, each as far as possible (CIEDE2000) from every entry before it, so the
@@ -3043,6 +3060,16 @@ export class Session {
                 else if (g.identityId === identityB) { g.identityId = identityA; groups++; touched = true; }
             }
             if (touched) frames++;
+        }
+        // Whatever else is keyed by these identities' names (behavior labels)
+        // is exchanged on the same frames.
+        if (_identitySwapHooks.length) {
+            var idA = this.getIdentity(identityA), idB = this.getIdentity(identityB);
+            if (idA && idB) {
+                for (var hi = 0; hi < _identitySwapHooks.length; hi++) {
+                    _identitySwapHooks[hi](this, idA.name, idB.name, startFrame, endFrame);
+                }
+            }
         }
         return { entries: entries, groups: groups, frames: frames };
     }

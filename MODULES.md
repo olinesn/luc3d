@@ -141,6 +141,8 @@ edit-group remove/add).
 
 ---
 
+**Behavior labels.** `setupTimeline` passes `behaviorRows: behaviorTimelineRows` and `onRangeSelect: onTimelineRangeSelect` (ui/behavior-timeline.js); the sample-session reset also calls `resetBehaviorState()`.
+
 ### pose/plane-fit.js
 
 **Purpose.** The **one least-squares plane fit in the app**, and the symmetric
@@ -1758,6 +1760,8 @@ bookkeeping, session save/load.
 
 ---
 
+**Behavior labels.** `onIdentitySwap(fn)`: hooks called as `fn(session, nameA, nameB, start, end)` at the end of `Session.swapIdentitiesInRange` (so also `swapIdentitiesForward`). `pose/behavior-labels.js` registers here so behavior bouts move with the poses; a hook keeps this module import-free.
+
 ### pose/tracker-worker.js
 
 **Purpose.** Module worker that runs Track All's `CrossViewTracker` off the
@@ -2269,6 +2273,8 @@ the benchmark harness (`scripts/bench/speed_test.mjs`, `bench_driver.mjs`) and
 
 ---
 
+**Behavior labels.** `runTrackingPass` (Track All, Track Frame Range) asks `confirmRetrackWithBehaviorLabels` (ui/behavior-confirm.js) after the animal-count dialog when the session has behavior labels, which follow identity names.
+
 ### pose/cross-view-tracker.js
 
 **Purpose.** `CrossViewTracker` — LUCID's cross-view 3D tracker and the app's
@@ -2578,6 +2584,65 @@ walked until the next run.
 `pose/triangulation.js`, `pose/tracker.js`, `ui/export-modals.js`,
 `ui/run-buttons.js`. **Tests.** `tests/test-run-state.mjs`,
 `tests/e2e/run-buttons-blue.mjs`.
+
+### pose/behavior-ethogram.js
+
+**Purpose.** The project's ethogram: the behaviors a user decided ahead of time
+to label (Behavior ▸ Edit Ethogram…). One per PROJECT, on a module singleton
+like the plane model, reset before every load
+(`import-export/behavior-metadata.js` `resetBehaviorState`). A behavior is
+`{id, name, key, color, kind: 'state'|'point', social, group, description}`.
+`id` (`b<n>`, never reused) is what bouts reference, so a rename never touches
+a bout. `social` = has a target animal. Behaviors sharing a non-empty `group`
+are mutually exclusive for one animal. `key` is one lower-case letter (digits
+pick the animal in Label Behaviors mode). `BEHAVIOR_COLORS` is held to the
+palette test's §10. DOM-free.
+
+**Exports.** `BEHAVIOR_KINDS`, `BEHAVIOR_COLORS`, `resetEthogram`,
+`behaviors`, `ethogramIsEmpty`, `behaviorById`, `behaviorByKey`,
+`behaviorByName`, `exclusivePeers`, `nextBehaviorColor`,
+`normalizeBehaviorKey`, `validateBehaviorFields`, `addBehavior`,
+`updateBehavior`, `removeBehavior`, `moveBehavior`, `serializeEthogram`
+(null when empty), `ingestEthogram(payload)` (into an empty ethogram keeps
+ids; into a non-empty one matches BY NAME and returns the file-id → project-id
+map for remapping bouts).
+
+**Imports.** None. **Imported by** `pose/behavior-labels.js`,
+`import-export/behavior-metadata.js`, every `ui/behavior-*.js`,
+`ui/ui-wiring.js` (Hot Keys help). **Tests.** `tests/test-behavior-labels.mjs`
+§1–2, `tests/test-behavior-metadata.mjs`, `tests/test-track-identity-palette.mjs` §10.
+
+### pose/behavior-labels.js
+
+**Purpose.** Labelled behavior bouts, per session (a `WeakMap`, so the Session
+class is untouched and an evicted lazy session keeps its labels). One sorted,
+non-overlapping interval list per (behavior id, animal NAME, target NAME);
+an interval is `{start, end (inclusive), present, source 'm'|'a'|'i', note}`.
+Present vs explicit absent vs unlabelled are distinct (training reads only
+labelled frames). Animals are identity NAMES because ids are renumbered on
+reopen; it registers on `pose/pose-data.js`'s `onIdentitySwap`, so every
+`Session.swapIdentitiesInRange` (ID-switch Fix and its Undo, identity
+reassignment) swaps the bouts on the same frames, splitting at the edges.
+Interval objects are never mutated, so undo snapshots are list references.
+Running states (Label Behaviors mode) are kept apart until stopped; a save
+writes them as ending at the cursor without stopping them. DOM-free.
+
+**Exports.** Edits (each notifies `onBehaviorChange` listeners and is one
+undo step): `labelRange`, `clearRange`, `toggleState`, `closeRunning`,
+`closeRunningAtCursor`, `cancelRunning`, `markReviewed`, `deleteBout`,
+`editBout`, `deleteBehaviorBouts`, `reassignAnimal`; identity:
+`renameAnimal`, `swapAnimalsInRange`, `orphanedAnimals`; undo:
+`undoBehaviorEdit`, `redoBehaviorEdit`, `canUndoBehaviorEdit`,
+`canRedoBehaviorEdit`; queries: `hasBehaviorData`, `boutIntervals`,
+`listBouts`, `runningStates`, `isRunning`, `activeAt`, `timeBudget`,
+`countBehaviorBouts`; `setBehaviorCursor`, `noteBehaviorFps`, `behaviorFps`;
+save/load: `exportBoutRows`, `importBoutRows` (replaces; never notifies),
+`resetBehaviorLabels`; `onBehaviorChange`.
+
+**Imports.** `./behavior-ethogram.js`, `./pose-data.js` (`onIdentitySwap`).
+**Imported by** `import-export/behavior-metadata.js`, `ui/behavior-*.js`,
+`ui/ui-wiring.js` (Rename Identity). **Tests.** `tests/test-behavior-labels.mjs`,
+`tests/e2e/behavior-labelling.mjs`.
 
 ### pose/triangulation.js
 
@@ -4931,6 +4996,8 @@ Every static checkbox in the panel uses the `.toggle-switch` markup.
 
 ---
 
+**Behavior labels.** `updateInfoPanel` also calls `refreshBehaviorPanel()` (ui/behavior-panel.js), which skips itself while the Behavior tab is hidden.
+
 ### ui/interaction.js
 
 **Purpose.** Mouse and keyboard interaction system — node selection,
@@ -5888,6 +5955,8 @@ leaves the export range *unchanged*.
 
 ---
 
+**Behavior labels.** Passes `behaviorBoxes` (`behaviorBoxesAt`) for each exported frame, so overlay videos show the behavior boxes as the live view does.
+
 ### ui/video-encode.js
 
 **Purpose.** The app's **only** video-encoding seam. Both video exports
@@ -6218,6 +6287,8 @@ labels, occluded/null markers.
 
 ---
 
+**Behavior labels.** `drawBehaviorBoxes(ctx, viewName, instanceGroups, session, frameIdx, spec, options)` and the `behaviorBoxes` option of `drawFrameOverlays` (§4c): one box per labelled behavior around its animals (both for a social one) in every view, in the behavior's color over a dark halo, dashed while being coded or waiting for a target, a thin translucent outline for `light` items (the animal Label Behaviors mode labels, live view only), labelled above its top-left corner (upright in rotated views); nested boxes widen so labels do not collide. An animal's extent is its 2D detection plus its reprojection over the spec's node mask, so the User / Predictions toggles do not hide it. The spec comes from `ui/behavior-coding.js` `behaviorBoxesAt`, so this module stays import-free.
+
 ### ui/rendering.js
 
 **Purpose.** Per-frame multi-view overlay rendering pipeline. Glues
@@ -6480,6 +6551,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 re-triangulate, identity assignment, or visibility-toggle change.
 
 ---
+
+**Behavior labels.** Passes `behaviorBoxes: behaviorBoxesAt(state.session, frameIdx, {live: true})` (ui/behavior-coding.js) to `drawFrameOverlays`, computed once per frame; `live` adds the coding state (the mode's selected animal, a pending target) that exports leave out.
 
 ### ui/plane-dialog.js
 
@@ -7395,6 +7468,8 @@ the Planes section's "+ Add" deliberately have neither paragraph nor ⓘ.
 `tests/e2e/plane-section-info.mjs` (an ⓘ click does not fold its section).
 
 ---
+
+**Behavior labels.** `enterPlaneMode` leaves Label Behaviors mode first (`ui/behavior-mode.js`, circular, call-time only); the behavior mode does the reverse.
 
 ### ui/origin-definition.js
 
@@ -9298,6 +9373,8 @@ bridgeable.
 
 ---
 
+**Behavior labels.** Behavior catalog entries: `behaviorMode` (`Mod+Shift+L`, dispatched, editable) and reference rows for the keys Label Behaviors mode handles itself (`behaviorFocal`, `behaviorRange`, `behaviorNot`, `behaviorBoutNav`, `behaviorUndo`).
+
 ### ui/detection-filter-preview.js
 
 **Purpose.** The Tracking Wizard's readout, right under the three detection-
@@ -9696,6 +9773,8 @@ empty, leaving unfiltered output byte-identical. Per camera group:
 the no-data placeholder.
 
 ---
+
+**Behavior labels.** A synthetic "Behavior" row group (`BEHAVIOR_GROUP_NAME`) after the mode's rows, from the `behaviorRows` constructor option / `setBehaviorRowsProvider(fn)` (ui/behavior-timeline.js): rows tagged `_isBehavior`, hidden with their identity, drawn per segment color and lane (`_drawBehaviorSegments`), outside the per-camera row cap. `refreshBehaviorRows()` swaps their segments without walking frames (full `refreshTracks` only when which rows show changes). `onRangeSelect(start, end, {animal})` now also names the behavior row a Shift+drag began on (`_rowAtY`).
 
 ### ui/timeline-controller.js
 
@@ -10949,6 +11028,8 @@ so a hidden entity stays hidden under its new name.
 
 ---
 
+**Behavior labels.** Behavior labels: `setupMenus` calls `setupBehaviorUi({closeMenus, navigate})` (ui/behavior-panel.js); `updateSeekbarVisual` calls `updateBehaviorFrame`; Rename Identity calls `renameAnimal` next to `renameHiddenIdentity`; Propagate Tracks → IDs asks first on a labelled session (`confirmRetrackWithBehaviorLabels`); Hot Keys help appends this project's ethogram keys.
+
 ### ui/viewport3d.js
 
 **Purpose.** Three.js 3D viewport that renders triangulated skeletons,
@@ -11831,6 +11912,144 @@ actually stops the corresponding rendering / data work.
 
 ---
 
+### ui/behavior-coding.js
+
+**Purpose.** What Label Behaviors mode, the Behavior tab and the behavior
+timeline rows share: the coding state (focal animal, the behavior the
+timeline shows, the `[` `]` armed range, a social behavior waiting for its
+target — browser memory only), the coding actions, a repaint bus
+(requests coalesce into one animation frame), the frame navigator, and the
+video boxes (`behaviorBoxesAt`, the `behaviorBoxes` option of
+`drawFrameOverlays`: one item per behavior active on the frame — dashed while
+running — with the Tracking Wizard node mask of `ui/id-switch-highlight.js`;
+with `{live: true}` (the viewer, never an exported video) also the coding
+state: a light numbered box on the animal Label Behaviors mode labels, and the
+actor of a social behavior waiting for its target; on/off is browser-local
+`lucid.behaviorOnVideo`). `noteBehaviorMode(on)` is how the mode tells it.
+`codeBehavior` labels the armed or given range, else starts/stops a state or
+codes a point at the playhead; a social behavior takes its target from a
+running bout of its own, else the only other animal, else asks.
+
+**Exports.** `behaviorUi`, `registerBehaviorRepaint`, `requestBehaviorRepaint`,
+`setBehaviorNavigator`, `goToBehaviorFrame`, `BOUT_LEAD_IN_SECONDS`,
+`openBehaviorTab`, `behaviorBoxesVisible`, `setBehaviorBoxesVisible`,
+`noteBehaviorMode`, `behaviorBoxesAt`, `sessionAnimals`, `animalColor`, `focalAnimal`,
+`setFocalAnimal`, `selectedBehaviorId`, `selectBehavior`, `setRangeIn`,
+`setRangeOut`, `armRange`, `clearArmedRange`, `armedRange`, `codeBehavior`,
+`pickBehaviorTarget`, `cancelPendingTarget`, `clearBehaviorRange`,
+`adjacentBout`.
+
+**Imports.** `./app-state.js`, `./id-switch-highlight.js` (`idSwitchBoxNodeMask`),
+`../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+`../import-export/save-load.js`. **Imported by**
+`ui/behavior-mode.js`, `ui/behavior-panel.js`, `ui/behavior-timeline.js`,
+`ui/behavior-ethogram-modal.js`, `ui/rendering.js`, `ui/overlay-export-modal.js`.
+**Tests.** `tests/e2e/behavior-labelling.mjs`.
+
+### ui/behavior-mode.js
+
+**Purpose.** Label Behaviors mode. Enter/leave only via `toggleBehaviorMode`
+(Behavior menu, toolbar Behavior button, `Mod+Shift+L` = catalog
+`behaviorMode`); leaving closes running states at the playhead. Excludes
+Defining Plane Mode both ways. A capture-phase keydown listener (only while
+on, only outside text fields and dialogs) takes: behavior letters (Shift+letter
+= label the armed range "not"; without a range Shift+letter is left to the
+catalog), `1`–`9` (focal animal or pending target, instead of assigning an
+identity), `[` `]` (armed range; Option/AltGr allowed), `,` `.` (adjacent
+bout), `Mod+Z` / `Mod+Shift+Z` (behavior undo/redo), Esc (cancel, else
+leave). Everything else falls through. Also renders the mode bar, and tells
+`ui/behavior-coding.js` (`noteBehaviorMode`) so the viewer draws a light
+numbered box on the animal the keys label.
+
+**Exports.** `isBehaviorModeActive`, `enterBehaviorMode`, `exitBehaviorMode`,
+`toggleBehaviorMode`.
+
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./keyboard-target.js`,
+`./plane-definition.js` (circular, call-time only), `../pose/behavior-ethogram.js`,
+`../pose/behavior-labels.js`, `../import-export/save-load.js`. **Imported by**
+`ui/behavior-panel.js`, `ui/plane-definition.js`. **Tests.**
+`tests/e2e/behavior-labelling.mjs` §2–3.
+
+### ui/behavior-panel.js
+
+**Purpose.** The Behavior tab (last in the info panel) and the feature's
+wiring. Its three `<details>` sections are static in index.html (folds
+browser-local via `persistSectionStates`, key `lucid.behaviorSections`); the
+bodies are rendered here: Coding (animals, behavior buttons that code at the
+playhead with or without the mode, running states, armed range, target
+question, timeline behavior, Undo, Mark reviewed…, On video), Bouts
+(filterable list, capped at 500 rows; a click lands
+`BOUT_LEAD_IN_SECONDS` early; set start/end to the playhead, behavior,
+target, note, delete) and Summary (time budget, orphaned labels of a deleted
+identity to reassign or delete). Skips rendering while hidden.
+`setupBehaviorUi` (from `setupMenus`) binds the menu, toolbar, tab buttons and
+catalog handler and makes every label edit `markDirty()` and repaint.
+`updateBehaviorFrame` (every frame, from `updateSeekbarVisual`) keeps the save
+cursor, grows running states, lights the buttons, and closes the running
+states of a session just left (so `switchSession` needs no hook).
+
+**Exports.** `refreshBehaviorPanel`, `updateBehaviorFrame`, `setupBehaviorUi`.
+
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-mode.js`,
+`./behavior-ethogram-modal.js`, `./behavior-timeline.js`,
+`./panel-visibility.js`, `./section-state.js`, `./settings.js`,
+`./rendering.js`, `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+`../import-export/save-load.js`. **Imported by** `ui/ui-wiring.js`,
+`ui/info-panel.js`. **Tests.** `tests/e2e/behavior-labelling.mjs` §4.
+
+### ui/behavior-timeline.js
+
+**Purpose.** Behavior labels on the timeline. `behaviorTimelineRows` is the
+`Timeline` `behaviorRows` provider: one row per animal (plus orphaned names)
+in a synthetic "Behavior" group, showing the selected behavior or every
+behavior with bouts as stacked lanes (at most 5); present in the behavior's
+color, "not" as faint gray (`ABSENT_COLOR`), a running state growing to the
+playhead; null (no group at all) without an ethogram or bouts.
+`onTimelineRangeSelect` is the timeline's `onRangeSelect`: with an ethogram
+and animals, a menu above the selection labels the range for the animal whose
+row the drag began on (Shift-click = "not"), arms it as the `[` `]` range, or
+clears it; otherwise it reports the range as before.
+
+**Exports.** `ABSENT_COLOR`, `behaviorTimelineRows`, `onTimelineRangeSelect`.
+
+**Imports.** `./app-state.js`, `./behavior-coding.js`,
+`../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+`../import-export/save-load.js`. **Imported by** `pose/initialization.js`
+(`setupTimeline`), `ui/behavior-panel.js`. **Tests.**
+`tests/e2e/behavior-labelling.mjs` §1, §5.
+
+### ui/behavior-ethogram-modal.js
+
+**Purpose.** Behavior ▸ Edit Ethogram… and Mark Range Reviewed…. The editor
+applies each field on change (a refused change says why and reverts; the
+table is NOT re-rendered on a valid edit, which would steal focus); removing a
+behavior with bouts asks (`confirmRemoveBehavior`) and deletes its bouts in
+every loaded session; ethogram JSON export/import (merged by name). Mark
+Range Reviewed turns unlabelled frames of a range into "not" labels for the
+chosen animals and behaviors. Both close on Esc; one scroller (the modal).
+
+**Exports.** `showEthogramModal`, `showMarkReviewedModal`.
+
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-confirm.js`,
+`../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+`../import-export/save-load.js`. **Imported by** `ui/behavior-panel.js`.
+**Tests.** `tests/e2e/behavior-labelling.mjs` §4.
+
+### ui/behavior-confirm.js
+
+**Purpose.** The confirmations behavior labels need, in the skeleton-edit
+dialog's shape (title, one sentence, counts; Esc cancels): before a pass that
+hands identity names out afresh on a labelled session (Track All, Track
+Frame Range — `runTrackingPass` — and Propagate Tracks → IDs; labels follow
+names), and before removing a behavior that has bouts.
+
+**Exports.** `behaviorConfirm`, `confirmRetrackWithBehaviorLabels`,
+`confirmRemoveBehavior`.
+
+**Imports.** `./app-state.js`, `../pose/behavior-labels.js`. **Imported by**
+`pose/tracker.js`, `ui/ui-wiring.js`, `ui/behavior-ethogram-modal.js`.
+**Tests.** `tests/e2e/behavior-labelling.mjs` §6.
+
 ## loading/
 
 ### loading/frame-worker.js
@@ -12486,6 +12705,8 @@ auto-matching, session-folder mode chooser. `handleLoadSessionFolder` calls
 skeleton-only 3D-points import prompts before discarding it.
 
 ---
+
+**Behavior labels.** `handleLoadProjectSlpLazy` resets and reads behavior metadata like the eager reader; `handleLoadSessionFolderSingleSlp` resets only when it starts a project, and otherwise merges the file's ethogram by name (its bouts remapped).
 
 ### loading/sio-lazy-loader.js
 
@@ -13765,6 +13986,32 @@ Blender (both files put the tracked corner at (0, 0, 300)).
 
 ---
 
+### import-export/behavior-metadata.js
+
+**Purpose.** Behavior labels in the project file, under `metadata.lucid`, each
+key only when non-empty (an untouched project's bytes are unchanged):
+`ethogram` (project-scoped, the same payload in every session, read from the
+first one ingested — later sessions map onto it by name) and `behaviorLabels`
+(`{v:1, fps?, bouts:[[behaviorId, animal, target, start, end, present, source, note]]}`).
+Reading REPLACES the session's bouts; a session file added to an open project
+merges its ethogram by name and remaps its bouts' ids. The fourth
+`metadata.lucid` writer module (with visibility, smoothing and plane). DOM-free.
+
+**Exports.** `BEHAVIOR_METADATA_KEYS`, `writeBehaviorMetadata(lucid, session)`,
+`readBehaviorMetadata(session, lucid)` → `{kept, dropped}`,
+`resetBehaviorState()` (forget the ethogram; before every load and on New
+Project).
+
+**Imports.** `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`.
+**Imported by** the writers `import-export/file-io.js`
+(`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
+(`buildSessionRefGraph`), `import-export/save-load.js` (project JSON v2/v3
+and `_restoreProjectV2`), and the readers `import-export/slp-import.js`
+(`handleLoadSlpFile`), `loading/session-loader.js`
+(`handleLoadSessionFolderSingleSlp`, `handleLoadProjectSlpLazy`), plus
+`pose/initialization.js` (sample session reset). **Tests.**
+`tests/test-behavior-metadata.mjs`, `tests/e2e/behavior-label-roundtrip.mjs`.
+
 ### import-export/plane-metadata.js
 
 **Purpose.** The `metadata.lucid` ↔ plane-state mapping. The Define Planes
@@ -14118,6 +14365,8 @@ Videos / Export TOML / Export SLP / Export H5; spawns SLP-parse worker.
 
 ---
 
+**Behavior labels.** `buildSlpLabelsAllViews` calls `writeBehaviorMetadata` (import-export/behavior-metadata.js) after the smoothing writer: the ethogram and the session's bouts, only when non-empty.
+
 ### import-export/slp-streaming-write.js
 
 **Purpose.** Memory-bounded SLP *save* for large lazy sessions — the write-side
@@ -14285,6 +14534,8 @@ same reason).
 **Imported by.** `import-export/save-load.js`
 (`buildSlpBytes`, `saveAllSessionsStreaming`, `commitSessionForMultiSessionSave`,
 `finalizeMultiSessionSave`).
+
+**Behavior labels.** `buildSessionRefGraph` calls `writeBehaviorMetadata`, the streaming mirror of the eager writer.
 
 ### import-export/save-load.js
 
@@ -14504,6 +14755,8 @@ Open Project, dirty-state tracking, the loading spinner overlay, and
 the status bar at the bottom.
 
 ---
+
+**Behavior labels.** The project JSON writes `writeBehaviorMetadata` per session (v3) / at top level (v2) and `_restoreProjectV2` reads it; New Project and the project-JSON load call `resetBehaviorState()` next to `resetPlaneState()`.
 
 ### import-export/slp-import.js
 
@@ -14743,6 +14996,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
 when a session is already open), File ▸ Load 3D Points (H5).
 
 ---
+
+**Behavior labels.** `handleLoadSlpFile` calls `resetBehaviorState()` with `resetPlaneState()` and `readBehaviorMetadata` per session.
 
 ### import-export/import-track-resolve.js
 

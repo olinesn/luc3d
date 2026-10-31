@@ -54,6 +54,7 @@ import { clearReadout } from '../ui/frame-readout.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
 import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
+import { writeBehaviorMetadata, readBehaviorMetadata, resetBehaviorState } from './behavior-metadata.js';
 import { buildSaveProvenance } from './slp-provenance.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 
@@ -170,6 +171,8 @@ export function newProject(force) {
     // so it survives `state.session = null` — clear it explicitly or a new
     // project opens carrying the previous one's nodes, planes and origin.
     resetPlaneState();
+    // The ethogram is project-scoped the same way.
+    resetBehaviorState();
 
     // Clear 3D viewport (remove skeletons and camera pyramids)
     if (viewport3d) {
@@ -1356,6 +1359,7 @@ export function saveProject() {
                 // `metadata.lucid`.
                 writeVisibilityMetadata(sessData, sess);
                 writeSmoothingMetadata(sessData, sess);
+                writeBehaviorMetadata(sessData, sess);
                 // Define Planes state, at the same session-dict level and under
                 // the same keys the `.slp` writers use.
                 return writePlaneMetadata(sessData, sess);
@@ -1404,6 +1408,7 @@ export function saveProject() {
     // reads these at this same level for both the v2 and v3 shapes.
     writeVisibilityMetadata(projectData, state.session);
     writeSmoothingMetadata(projectData, state.session);
+    writeBehaviorMetadata(projectData, state.session);
     writePlaneMetadata(projectData, state.session);
 
     // Serialize each frame
@@ -1567,6 +1572,7 @@ export async function handleLoadProject(prePickedFile) {
         // `readPlaneMetadata` only restores into an EMPTY model, so without
         // this the previous project's planes survive and this file's are lost.
         resetPlaneState();
+        resetBehaviorState();   // the ethogram, likewise project-scoped
         var cameras;
         if (data.version === 3) {
             cameras = _restoreProjectV3(data);
@@ -1992,6 +1998,8 @@ function _restoreProjectV2(data) {
     // and v3 (per-session dict) shapes — both put these keys at this level.
     readVisibilityMetadata(session, data);
     readSmoothingMetadata(session, data);
+    // The ethogram (first session read) and this session's behavior bouts.
+    readBehaviorMetadata(session, data);
     // Define Planes state. Project-scoped keys are ingested by whichever
     // session is read first; placements land on this one.
     readPlaneMetadata(session, data);

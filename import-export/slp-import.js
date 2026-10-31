@@ -75,6 +75,7 @@ import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
+import { readBehaviorMetadata, resetBehaviorState } from './behavior-metadata.js';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -1106,6 +1107,7 @@ export async function handleLoadSlpFile(slpFile) {
         // only restores into an EMPTY model, so without this the previous
         // project's planes would survive and the new one's be dropped.
         resetPlaneState();
+        resetBehaviorState();   // the ethogram, likewise project-scoped
         // Reset decoder pool + cold reserve on new project load. Old decoders
         // point at the previous project's files and must be released to avoid
         // dangling mp4box references / leaked file handles.
@@ -1311,6 +1313,8 @@ export async function handleLoadSlpFile(slpFile) {
         readVisibilityMetadata(session, earlyVisibility);
         // Temporal Smoothing's last run (the groups' sources come with the 3D).
         readSmoothingMetadata(session, earlyVisibility);
+        // The ethogram (first session read) and this session's behavior bouts.
+        readBehaviorMetadata(session, earlyVisibility);
         // Define Planes state — pool/planes/origin from the first session that
         // carries them, this session's per-view 2D onto this session.
         readPlaneMetadata(session, earlyVisibility);
