@@ -411,7 +411,10 @@ function checkSave(what, saved, want) {
 }
 
 const FILES = ['plain', 'last', 'first', 'both_ends', 'name_like', 'two_sessions', 'no_map', 'all_outside', 'kinds'];
-const firstSessionOnly = { lazy: true, folder: true, eager: false };
+// What a save writes of a file's other sessions. The lazy loader opens only the first
+// and keeps the rest whole (`tests/e2e/lazy-keeps-other-sessions.mjs` is its full test);
+// the folder loader keeps only their poses, and says so.
+const firstSessionOnly = { lazy: false, folder: true, eager: false };
 
 function expectedFor(source, name, loader) {
     const want = { poses: source.poses };
@@ -448,7 +451,9 @@ try {
                     if (name === 'plain') {
                         check(!/not shown/.test(status), what + ': nothing to say in the status', status);
                     } else if (name === 'two_sessions' && firstSessionOnly[loader]) {
-                        check(/Only the first of 2 sessions/.test(status), what + ': the status says only the first session is open', status);
+                        check(/Only the first of 2 sessions.*not their cameras or 3D/.test(status), what + ': the status says only the first session is open', status);
+                    } else if (name === 'two_sessions' && loader === 'lazy') {
+                        check(/Only the first of 2 sessions.*keeps the others as they are/.test(status), what + ': the status says only the first session is open', status);
                     } else {
                         check(/not shown; saving keeps/.test(status), what + ': the status says what is not shown', status);
                     }

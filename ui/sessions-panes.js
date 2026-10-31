@@ -1673,7 +1673,10 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
 }
 
 export function removeSession(idx) {
-    if (!confirm('Delete session "' + state.sessions[idx].name + '"?')) return;
+    // The other sessions of a lazily opened file live on this one, and only it writes them back.
+    var nUnopened = state.sessions[idx].unopenedSessions ? state.sessions[idx].unopenedSessions.sessions.length : 0;
+    if (!confirm('Delete session "' + state.sessions[idx].name + '"?' + (nUnopened > 0
+        ? ' The ' + nUnopened + ' other session' + (nUnopened === 1 ? '' : 's') + ' in its file, not open here, will not be saved with this project.' : ''))) return;
 
     // Clean up lazy loader if present
     var sess = state.sessions[idx];
