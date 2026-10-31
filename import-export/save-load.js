@@ -14,11 +14,13 @@ import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
 } from '../pose/triangulation.js';
-import { OnDemandVideoDecoder } from '../loading/video.js';
+import { OnDemandVideoDecoder, hasEmbeddedVideos, closeEmbeddedFrames } from '../loading/video.js';
+import { readBlobRange } from '../loading/cold-read-guard.js';
 import { createDemoSkeleton } from '../demo-data.js';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
 } from './file-io.js';
+import { STORE_ROW_KEYED_FIELDS } from './detection-labels.js';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
@@ -37,6 +39,8 @@ import {
 } from '../pose/initialization.js';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
+import { fitTimelineToData } from '../ui/timeline-controller.js';
+import { slpHasEmbeddedImages } from './slp-import.js';
 import { handleLoadSlpFile } from './slp-import.js';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
@@ -161,6 +165,7 @@ export function newProject(force) {
 
     // Clear views and video files
     state.views = [];
+    closeEmbeddedFrames(state);
     state.videoFiles = [];
 
     // Define Planes state is project-scoped and lives on a module singleton,
@@ -696,6 +701,22 @@ async function buildSlpBytes(opts) {
 
     var sessionsToExport = sessionsToSave();
 
+    // A multi-session save releases its sessions' data from memory
+    // (`commitSessionForMultiSessionSave`), and nothing reads it back until the
+    // project is opened again, so these would go on to the eager path below with no
+    // frames or groups: Save would write an EMPTY project over the file and report
+    // success, as it used to after any multi-session save, failed or not.
+    var _released = sessionsToExport.filter(function (s) { return s && s._releasedBySave && !s.lazyLoader; });
+    if (_released.length > 0) {
+        var _relMsg = 'Cannot save: the last save released ' + _released.map(function (s) {
+            return '"' + (s.name || 'session') + '"';
+        }).join(', ') + ' from memory, so saving now would write nothing for ' +
+            (_released.length > 1 ? 'them' : 'it') + '. Open the project again to keep working.';
+        console.error('[save-slp] ' + _relMsg);
+        setStatus(_relMsg, 'error');
+        throw new Error(_relMsg);
+    }
+
     // Every path below writes one video per `session.cameras` entry and picks
     // the views, videos and poses to write by that list — a view or pose whose
     // camera is missing is dropped without a word. An uncalibrated session
@@ -921,14 +942,22 @@ async function buildSlpBytes(opts) {
  * the largest part of a store — are still evicted with the loader. A shared
  * project store (`openProjectSlp`) maps every camera to the same two objects.
  *
- * @returns {Map<string, {framesData: Object, instancesData: Object}>|null}
+ * What else a store keys by instance row (`STORE_ROW_KEYED_FIELDS`) goes along, as it was
+ * compacted with them.
+ *
+ * @returns {Map<string, {framesData: Object, instancesData: Object, rowKeyed: Object}>|null}
  */
 function keepEditedStoreColumns(loader) {
     if (!loader || !loader._storeEditedInMemory) return null;
     var kept = new Map();
     for (var camName of loader.labelsByCam.keys()) {
         var store = loader.labelsByCam.get(camName)._lazyDataStore;
-        if (store) kept.set(camName, { framesData: store.framesData, instancesData: store.instancesData });
+        if (!store) continue;
+        var rowKeyed = {};
+        for (var f = 0; f < STORE_ROW_KEYED_FIELDS.length; f++) {
+            rowKeyed[STORE_ROW_KEYED_FIELDS[f]] = store[STORE_ROW_KEYED_FIELDS[f]];
+        }
+        kept.set(camName, { framesData: store.framesData, instancesData: store.instancesData, rowKeyed: rowKeyed });
     }
     return kept;
 }
@@ -966,6 +995,7 @@ function restoreEditedStoreColumns(loader, kept) {
         }
         store.framesData = cols.framesData;
         store.instancesData = cols.instancesData;
+        Object.assign(store, cols.rowKeyed);
     }
 }
 
@@ -976,7 +1006,7 @@ function restoreEditedStoreColumns(loader, kept) {
  * bytes, so this is cheap relative to the FIRST open — no Track All/
  * Triangulate All is redone, only the columnar store is reconstructed.
  */
-async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStore) {
+async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStore, cameraRenames) {
     var loader = new SioLazyLoader();
     if (wasSharedStore) {
         // Lazily-reopened single-file project: every camera's sourceFiles entry
@@ -984,8 +1014,9 @@ async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStor
         // interleaved store is read once and `_sharedStore`/`videoIdByCam` are
         // restored — per-camera open() would re-read the whole project N times
         // and pass 2 would then append the shared store once per camera
-        // (duplicating every frame/track).
+        // (duplicating every frame/track). The file has the cameras' first names.
         await loader.openProjectSlp(sourceFileEntries[0][1]);
+        (cameraRenames || []).forEach(function (r) { loader.renameCamera(r[0], r[1]); });
         session.lazyLoader = loader;
         return loader;
     }
@@ -1048,6 +1079,7 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
         return session.cameras.some(function (c) { return c.name === vf.assignedCamera; });
     });
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
+    var cameraRenames = session.lazyLoader.cameraRenames;
     var wasSharedStore = !!session.lazyLoader._sharedStore;
     var refGraph = await buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx, onProgress);
     // A store edited in memory is not what pass 2 will read back from the
@@ -1055,7 +1087,7 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     var editedColumns = keepEditedStoreColumns(session.lazyLoader);
     handle.pending.push({
         session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore,
-        editedColumns: editedColumns,
+        editedColumns: editedColumns, cameraRenames: cameraRenames,
     });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
@@ -1065,6 +1097,7 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     session.lazyLoader = null;
     session.frameGroups = new Map();
     session.instanceGroups = new Map();
+    session._releasedBySave = true;   // see buildSlpBytes
     console.log('[save-slp] pass 1/2: committed ref graph for session', session.name || '(unnamed)', '- evicted its lazy loader');
     // See `encourageGC` — dereferencing doesn't force reclamation; nudge the
     // engine toward a real (mark-compact) collection before the next
@@ -1103,7 +1136,7 @@ export async function finalizeMultiSessionSave(handle, opts) {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
             if (onProgress) await onProgress('frames', j, handle.pending.length, 'sessions');
-            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore);
+            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.cameraRenames);
             if (p.editedColumns) restoreEditedStoreColumns(p.session.lazyLoader, p.editedColumns);
             await streamSessionIntoWriter(writer, p.session, p.refGraph);
             p.session.lazyLoader.close();
@@ -1139,10 +1172,28 @@ export async function finalizeMultiSessionSave(handle, opts) {
  * whose compute alone approaches the ceiling.
  */
 export async function saveAllSessionsStreaming(sessions, opts) {
+    // Pass 1 releases each session's data and pass 2 reads it back from these files,
+    // so one that has gone away must stop the save before anything is released: then
+    // nothing is lost, and the save works once the file is back.
+    for (var si = 0; si < sessions.length; si++) {
+        if (!sessions[si].lazyLoader) continue;   // the commit below says what is wrong
+        for (var source of sessions[si].lazyLoader.sourceFiles.values()) await readBlobRange(source, 0, 1);
+    }
     var handle = beginMultiSessionSave();
     var onProgress = (opts && opts.onProgress) || undefined;
     for (var i = 0; i < sessions.length; i++) await commitSessionForMultiSessionSave(handle, sessions[i], onProgress);
     return await finalizeMultiSessionSave(handle, opts);
+}
+
+/**
+ * What a save leaves out of a project with images embedded in its `.slp`. A save
+ * writes the poses and each video's name, not the images, so the menus never make
+ * that `.slp` the save target (`ui/ui-wiring.js`), and the status says so here.
+ */
+function embeddedImagesSaveNote() {
+    return hasEmbeddedVideos(state)
+        ? '. Labels only: the images are still in the file you opened, not in this one'
+        : '';
 }
 
 export async function quickSave() {
@@ -1222,7 +1273,7 @@ export async function quickSave() {
         hideLoading();
         clearDirty();
         var sizeMB = (bytesWritten / 1024 / 1024).toFixed(1);
-        setStatus('Saved (' + sizeMB + ' MB)', 'success');
+        setStatus('Saved (' + sizeMB + ' MB)' + embeddedImagesSaveNote(), hasEmbeddedVideos(state) ? 'warning' : 'success');
     } catch (err) {
         state.isSaving = false;
         hideLoading();
@@ -1292,7 +1343,8 @@ export async function saveProjectSlp() {
         setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 
         setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)' +
-            (fsaHint ? ' — downloaded, not saved in place. ' + fsaHint : ''), 'success');
+            (fsaHint ? ' — downloaded, not saved in place. ' + fsaHint : '') + embeddedImagesSaveNote(),
+            hasEmbeddedVideos(state) ? 'warning' : 'success');
     } catch (err) {
         if (err && err.name === 'SaveCancelledError') {
             setStatus('Save cancelled', 'warning');
@@ -1540,9 +1592,13 @@ export async function handleLoadProject(prePickedFile) {
             // reconstruct duplicate and OOMs the tab on real multi-camera
             // prediction sessions (e.g. a 108k-frame × 3-cam cage5 project). The
             // lazy path keeps 2D on-demand and rebuilds grouping with lightweight
-            // members; videos are attached afterward via File → Load Videos.
+            // members; videos are attached afterward via File → Load Videos. A
+            // plain SLEAP file with no session goes the same way, a camera per
+            // video; what the lazy store cannot hold comes back to the eager path.
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
-            if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
+            // Not for a file with embedded images: those are what makes it large,
+            // and only the eager path shows them.
+            if (ext === 'slp' && file.size > LARGE_SLP_BYTES && !(await slpHasEmbeddedImages(file))) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
                 var _sl = await import('../loading/session-loader.js');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
@@ -1912,7 +1968,10 @@ export async function handleLoadProject(prePickedFile) {
         }
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
-        if (timeline) timeline.setData(state.session);
+        if (timeline) {
+            timeline.setData(state.session);
+            fitTimelineToData();
+        }
 
         hideLoading();
 

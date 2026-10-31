@@ -9,6 +9,8 @@
  *                                capped at 30% of window.innerHeight.
  *   - syncTimelineToggleButton() — keep the toolbar button's `.active` class
  *                                in sync with the container's collapsed state.
+ *   - get/setTimelineDisplayMode() — the Tracks / IDs / Both toggle: its
+ *                                buttons and the Timeline's rows together.
  *   - installTimelineShortcuts() — register the Ctrl/Cmd+J (toggle) and
  *                                Ctrl/Cmd+Shift+J (legacy "Change Frame
  *                                Number") keyboard shortcuts. Idempotent.
@@ -19,13 +21,13 @@
  *                   via the test accessors `getCachedTimelineHeight()` /
  *                   `setCachedTimelineHeight(px)`.
  *
- * The module reads the Timeline instance via `state.timeline` from
- * `ui/app-state.js`. That module is intentionally lightweight — it does not
- * transitively import `app.js` — so this module can be safely bridged into
- * the test runner.
+ * The module reads the Timeline instance through the live `timeline` export
+ * of `ui/app-state.js` (set by `setTimeline()`; there is no `state.timeline`).
+ * That module is intentionally lightweight — it does not transitively import
+ * `app.js` — so this module can be safely bridged into the test runner.
  */
 
-import { state } from './app-state.js';
+import { timeline } from './app-state.js';
 
 // ----------------------------------------------------------------------------
 // Module-level state
@@ -39,10 +41,11 @@ var _installed = false;
 // ----------------------------------------------------------------------------
 
 function _getTimeline() {
-    // `state.timeline` is the canonical reference — `setTimeline()` from
-    // `app-state.js` writes to it. We read it lazily on every call so the
-    // controller works regardless of module-load order.
-    return state && state.timeline ? state.timeline : null;
+    // The live `timeline` binding — `setTimeline()` from `app-state.js`
+    // writes it. Read on every call so the controller works regardless of
+    // module-load order. (Reading `state.timeline` here, which nothing
+    // sets, left `fitTimelineToData()` a silent no-op in the app.)
+    return timeline || null;
 }
 
 function _getContainer() {
@@ -65,7 +68,6 @@ export function toggleTimeline() {
     var container = _getContainer();
     if (!container) return;
 
-    var timeline = _getTimeline();
     var willCollapse = !container.classList.contains('collapsed');
 
     if (willCollapse) {
@@ -94,12 +96,8 @@ export function toggleTimeline() {
         } else {
             fitTimelineToData();
         }
-        if (timeline && typeof timeline.resize === 'function') {
-            setTimeout(function () {
-                var tl = _getTimeline();
-                if (tl && typeof tl.resize === 'function') tl.resize();
-            }, 16);
-        }
+        // No resize call here: the Timeline's own ResizeObserver resizes
+        // the canvas before the expanded timeline is first painted.
     }
 
     syncTimelineToggleButton();
@@ -119,6 +117,45 @@ export function collapseTimeline() {
     if (!container || container.classList.contains('collapsed')) return false;
     toggleTimeline();
     return true;
+}
+
+/**
+ * The timeline's display mode: what the Tracks / IDs / Both toggle
+ * (`#timelineModeToggle`) shows. Read from the Timeline instance, or from the
+ * highlighted button before one exists.
+ *
+ * @returns {'tracks'|'identities'|'both'}
+ */
+export function getTimelineDisplayMode() {
+    if (timeline && typeof timeline.getDisplayMode === 'function') return timeline.getDisplayMode();
+    var btn = (typeof document !== 'undefined' && document.querySelector)
+        ? document.querySelector('#timelineModeToggle .timeline-mode-btn.active')
+        : null;
+    return (btn && btn.getAttribute('data-mode')) || 'tracks';
+}
+
+/**
+ * Show the timeline's rows by track, identity or both. The one setter for that
+ * choice, used by the toggle's own buttons (`pose/initialization.js`) and by
+ * Track All (`pose/tracker.js`), so the highlighted button and the rows always
+ * agree. Not stored anywhere (a reload starts on Tracks), never in the `.slp`.
+ *
+ * @param {'tracks'|'identities'|'both'} mode
+ * @param {{refresh?: boolean}} [opts]  passed to `Timeline.setDisplayMode`
+ * @returns {boolean} whether the mode changed
+ */
+export function setTimelineDisplayMode(mode, opts) {
+    var changed = getTimelineDisplayMode() !== mode;
+    var toggle = (typeof document !== 'undefined' && document.getElementById)
+        ? document.getElementById('timelineModeToggle')
+        : null;
+    if (toggle) {
+        toggle.querySelectorAll('.timeline-mode-btn').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+        });
+    }
+    if (timeline && typeof timeline.setDisplayMode === 'function') timeline.setDisplayMode(mode, opts);
+    return changed;
 }
 
 /**

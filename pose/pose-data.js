@@ -970,6 +970,13 @@ export class Instance {
         this._ps = other ? other._ps : -1;
     }
 
+    /** Take over what the file said about this detection (import-export/detection-labels.js). */
+    adoptFileLabelsFrom(other) {
+        if (!other) return;
+        if (other.trackingScore) this.trackingScore = other.trackingScore;
+        if (other.fileLabels) this.fileLabels = other.fileLabels;
+    }
+
     /** Does this instance carry the model's per-node scores? @returns {boolean} */
     hasPointScores() { return this._ps >= 0; }
 
@@ -1073,6 +1080,11 @@ export class Instance {
         }
     }
 }
+
+// What the file said about a detection, carried through a save unread and unused
+// (import-export/detection-labels.js). Defaults here, so one with none costs nothing.
+Instance.prototype.trackingScore = 0;
+Instance.prototype.fileLabels = null;
 
 
 // --------------------------------------------------------------------------
@@ -1589,6 +1601,14 @@ export class InstanceGroup {
          * @type {'ba'|'dlt'|undefined}
          */
         this.triangulationMethod = undefined;
+        /**
+         * The solve settings `points3d` was produced under
+         * (`triangulationSettingsKey`, pose/triangulation.js): `adoptPrior3d` only
+         * reuses 3D solved under the settings in force now. In memory only, so 3D
+         * read from a file has none and is re-solved rather than trusted.
+         * @type {string|undefined}
+         */
+        this.solveSettings = undefined;
         /**
          * @type {Map<string, Instance>} camera name -> reprojected instance.
          * Starts as the shared read-only `NO_REPROJECTED_INSTANCES`; write
@@ -3423,6 +3443,11 @@ export class Session {
     renameCameraInAllData(oldName, newName) {
         if (oldName === newName) return;
 
+        if (this.fileVideos && this.fileVideos.has(oldName)) {
+            this.fileVideos.set(newName, this.fileVideos.get(oldName));
+            this.fileVideos.delete(oldName);
+        }
+
         // Rename in all FrameGroups
         for (const fg of this.frameGroups.values()) {
             // Rename in fg.instances (Map<string, Instance[]>)
@@ -3459,6 +3484,11 @@ export class Session {
                     group.instances.set(newName, inst);
                 }
             }
+        }
+
+        // A lazy project's other frames are under this name in its loader.
+        if (this.lazyLoader && typeof this.lazyLoader.renameCamera === 'function') {
+            this.lazyLoader.renameCamera(oldName, newName);
         }
     }
 

@@ -27,7 +27,7 @@ import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineT
 import { installInfoTips } from '../ui/info-tip.js';
 import { installNodeTooltip } from '../ui/node-tooltip.js';
 import { refreshReadoutTotals } from '../ui/frame-readout.js';
-import { installTimelineShortcuts } from '../ui/timeline-controller.js';
+import { installTimelineShortcuts, setTimelineDisplayMode } from '../ui/timeline-controller.js';
 import { setupPanelTabs, setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js';
 import { setupRecordingInfo } from '../ui/recording-info.js';
 import {
@@ -1110,14 +1110,12 @@ export function setupTimeline() {
         fitTimelineToData();
     }
 
-    // Timeline display mode toggles
+    // Timeline display mode toggles (Track All also switches it: pose/tracker.js)
     var modeToggle = document.getElementById('timelineModeToggle');
     if (modeToggle) {
         modeToggle.querySelectorAll('.timeline-mode-btn').forEach(function (btn) {
             btn.addEventListener('click', function () {
-                modeToggle.querySelectorAll('.timeline-mode-btn').forEach(function (b) { b.classList.remove('active'); });
-                btn.classList.add('active');
-                if (timeline) timeline.setDisplayMode(btn.getAttribute('data-mode'));
+                setTimelineDisplayMode(btn.getAttribute('data-mode'));
             });
         });
     }

@@ -13,9 +13,10 @@
  *  2. A GROUPED instance whose identity is removed labels itself in the muted
  *     palette too: the label takes its skeleton's color. Before, it fell back
  *     to drawInstanceLabels' Track-mode color.
- *  3. The timeline's track rows and the Visibility tab's track swatches are in
- *     the muted palette, switch to the vivid one on the Tracks button and back
- *     on the Identity button. Rows are recolored in place, not rebuilt.
+ *  3. The timeline's track rows (put back on Tracks: Track All moves it to IDs)
+ *     and the Visibility tab's track swatches are in the muted palette, switch
+ *     to the vivid one on the Tracks button and back on the Identity button.
+ *     Rows are recolored in place, not rebuilt.
  * Track mode's own canvas colors are covered by
  * tests/test-track-identity-palette.mjs §7 (predicted labels are drawn only in
  * Identity mode, so there is no Track-mode label to read here).
@@ -46,7 +47,7 @@ try {
     await answerTrackSetup(page, 2);   // Track All asks for the animal count
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js');
@@ -171,6 +172,10 @@ try {
     }
 
     // ---- 3. timeline rows and Visibility swatches follow the mode ----------------------
+    // Track All left the timeline closed and on IDs (track-all-switches-to-id.mjs);
+    // open it and show the track rows again with its own Tracks button.
+    await page.click('#timelineToggleBtn');
+    await page.click('#timelineModeToggle .timeline-mode-btn[data-mode="tracks"]');
     const panels = () => page.evaluate(async () => {
         const tl = window.__lucid.timeline;
         const rows = (tl && tl._trackSegments || []).filter(r => r._isTrack && r._trackColored);

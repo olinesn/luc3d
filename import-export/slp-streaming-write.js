@@ -57,6 +57,7 @@ import { _buildSioPoints } from './file-io.js';
 import { points3dNodeCount } from '../pose/pose-data.js';
 import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
+import { identityCatalogFinder, storeRowLabels, writeFileLabels } from './detection-labels.js';
 import { writePlaneMetadata } from './plane-metadata.js';
 import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js';
 import { writeBehaviorSlpMetadata } from './behavior-metadata.js';
@@ -156,6 +157,18 @@ function resolveVideoPath(cam, views, videoFiles, lazyVid) {
 }
 
 /**
+ * The names a store's tracks go in the file under. A rename or a new track in LUC3D changes
+ * only `session.tracks`, whose slots are the store's, so the store's own list would write
+ * the old names and leave the new ones out. A store with more tracks than the session
+ * does not line up with it, and keeps its own.
+ */
+function headerTrackNames(session, labels) {
+    var own = labels.tracks || [];
+    if (own.length > session.tracks.length) return own;
+    return session.tracks.map(function (name) { return { name: name }; });
+}
+
+/**
  * Create a fresh cross-session writer context. Shared by every
  * `buildSessionRefGraph`/`openProjectWriter` call in one save so every
  * session's frame refs stay file-global (see module docstring). Reused
@@ -215,6 +228,18 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     // exactly ONCE (not once per camera) or the re-save duplicates them.
     var _sharedStore = !!loader._sharedStore;
     var _sharedTrackBase = -1;
+    // The store goes into the file whole, under the header's videos, which are
+    // this session's cameras. Poses on any other camera would point at no video,
+    // or at another camera's; with none in the session, none would be written.
+    if (_sharedStore) {
+        var _noCamera = Array.from(loader.labelsByCam.keys()).filter(function (name) {
+            return !session.cameras.some(function (c) { return c.name === name; });
+        });
+        if (_noCamera.length > 0) {
+            throw new Error('poses on ' + _noCamera.join(', ') + ' belong to no camera of this session\'s calibration, ' +
+                'so they would be lost. Load a calibration that names those cameras.');
+        }
+    }
 
     // MEMORY (#134 follow-up): "Track All" materializes EVERY frame into
     // `frameGroups` (the cross-view tracker is sequential), so a
@@ -275,14 +300,26 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
 
     // ---- Identities (session-scoped in LUCID; concatenated into ctx like tracks) ----
     var lucidIdToSioId = new Map();
+    var sessionSioIdentities = [];
     if (session.identities && session.identities.length > 0) {
         for (var iid = 0; iid < session.identities.length; iid++) {
             var lucidId = session.identities[iid];
-            var sioId = new SIO.Identity({ name: lucidId.name, color: lucidId.color });
-            ctx.allIdentities.push(sioId);
+            var sioId = new SIO.Identity({ name: lucidId.name, color: lucidId.color, metadata: lucidId.metadata });
+            sessionSioIdentities.push(sioId);
             lucidIdToSioId.set(lucidId.id, sioId);
         }
     }
+    // A store's detections name identities in its own catalog: map them onto this
+    // session's, adding any it lacks, since the writer's catalog is fixed at open.
+    var findDetectionIdentity = identityCatalogFinder(SIO, sessionSioIdentities);
+    var storeIdentityMap = function (store) {
+        if (!store.identities || !store._instanceIdentityLinks || !store._instanceIdentityLinks.size) return null;
+        var byName = new Map();
+        for (var si = 0; si < store.identities.length; si++) {
+            byName.set(store.identities[si].name, findDetectionIdentity(store.identities[si]));
+        }
+        return byName;
+    };
 
     // ---- Per-camera stores, cameras, videos, and concatenated tracks ----
     // The header carries a Camera + Video for EVERY session camera (calibration
@@ -311,6 +348,14 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             if (views[vi].name === c.name) {
                 vw = views[vi].videoWidth || 0; vh = views[vi].videoHeight || 0;
                 fc = views[vi].frameCount || 0; break;
+            }
+        }
+        if (!fc && videoFiles) {
+            for (var vfi = 0; vfi < videoFiles.length; vfi++) {
+                if (videoFiles[vfi].name === c.name || videoFiles[vfi].assignedCamera === c.name) {
+                    fc = videoFiles[vfi].frameCount || 0;
+                    break;
+                }
             }
         }
         // No attached video (lazily reopened session before File → Load
@@ -353,12 +398,12 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         if (_sharedStore) {
             if (_sharedTrackBase < 0) {
                 _sharedTrackBase = ctx.allTracks.length;
-                var camTracksS = (labels.tracks || []);
+                var camTracksS = headerTrackNames(session, labels);
                 for (var tiS = 0; tiS < camTracksS.length; tiS++) ctx.allTracks.push(new SIO.Track(camTracksS[tiS].name));
             }
             trackBase = _sharedTrackBase;
         } else {
-            var camTracks = (labels.tracks || []);
+            var camTracks = headerTrackNames(session, labels);
             // Name-list signature ('|~|'-joined — a track/identity name
             // containing this exact 3-char sequence is not a realistic
             // concern): if this camera's track list is IDENTICAL (by name,
@@ -382,9 +427,10 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
 
         cam.push({
             name: c.name, sioCam: sioCam, videoIndex: videoIndex, framesData: framesData, instancesData: instancesData,
-            rowMap: rowMap, nFrames: nFrames, trackBase: trackBase,
+            rowMap: rowMap, nFrames: nFrames, trackBase: trackBase, identityByName: storeIdentityMap(store),
         });
     }
+    for (var sii = 0; sii < sessionSioIdentities.length; sii++) ctx.allIdentities.push(sessionSioIdentities[sii]);
 
     // ---- RecordingSession (ref-based grouping) ----
     var cameraGroup = new SIO.CameraGroup({ cameras: sioCameras });
@@ -466,10 +512,19 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             var combinedIdx = trackBase + inst.trackIdx;
             if (combinedIdx >= 0 && combinedIdx < ctx.allTracks.length) track = ctx.allTracks[combinedIdx];
         }
-        if (isPredicted) {
-            return new SIO.PredictedInstance({ points: pts, skeleton: skeleton, track: track, score: inst.score || 0 });
+        var built = isPredicted
+            ? new SIO.PredictedInstance({ points: pts, skeleton: skeleton, track: track, score: inst.score || 0 })
+            : new SIO.Instance({ points: pts, skeleton: skeleton, track: track });
+        // This replaces the instance's store row, and the row's labels with it.
+        var labels = loader.labelsByCam.get(camName);
+        var overlayStore = labels && labels._lazyDataStore;
+        var frameRow = loader.frameRowByCam.get(camName);
+        frameRow = frameRow ? frameRow.get(frameIdx) : undefined;
+        if (overlayStore && frameRow !== undefined && inst._rawInstIndex != null && inst._rawInstIndex >= 0) {
+            var storeRow = Number(overlayStore.framesData.instance_id_start[frameRow]) + inst._rawInstIndex;
+            writeFileLabels(built, storeRowLabels(overlayStore, storeRow), findDetectionIdentity);
         }
-        return new SIO.Instance({ points: pts, skeleton: skeleton, track: track });
+        return built;
     }
 
     for (var [fgIdx, fg] of session.frameGroups) {
@@ -774,6 +829,12 @@ function _remapSharedStoreVideos(store, headerByNative) {
         predPointsData: store.predPointsData,
         videos: [],
         negativeFrames: neg,
+        identities: store.identities,
+        categoryCatalog: store.categoryCatalog,
+        _instanceIdentityLinks: store._instanceIdentityLinks,
+        _instanceEmbeddings: store._instanceEmbeddings,
+        _instanceCategoryLinks: store._instanceCategoryLinks,
+        _instanceCategoryEmbeddings: store._instanceCategoryEmbeddings,
         _roiByFrame: remapAnnMap(store._roiByFrame),
         _maskByFrame: remapAnnMap(store._maskByFrame),
         _bboxByFrame: remapAnnMap(store._bboxByFrame),
@@ -836,7 +897,7 @@ export async function streamSessionIntoWriter(writer, session, refGraphResult, o
                         Array.from(headerByNative.entries()).map(function (e) { return e[0] + '->' + e[1]; }).join(', '));
                     appendTarget = _remapSharedStoreVideos(sStore, headerByNative);
                 }
-                appends.push([appendTarget, { videoIndexOffset: 0, trackOffset: anyCam.trackBase }]);
+                appends.push([appendTarget, { videoIndexOffset: 0, trackOffset: anyCam.trackBase, identityByName: anyCam.identityByName }]);
             }
         }
     } else {
@@ -845,7 +906,7 @@ export async function streamSessionIntoWriter(writer, session, refGraphResult, o
             var labels = loader.labelsByCam.get(camInfo.name);
             var store = labels && labels._lazyDataStore;
             if (!store) continue;
-            appends.push([store, { videoIndexOffset: camInfo.videoIndex, trackOffset: camInfo.trackBase }]);
+            appends.push([store, { videoIndexOffset: camInfo.videoIndex, trackOffset: camInfo.trackBase, identityByName: camInfo.identityByName }]);
         }
     }
     if (!onProgress || typeof writer.appendStoreAsync !== 'function') {
