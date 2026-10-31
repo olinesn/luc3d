@@ -81,7 +81,7 @@ def read(path):
         sio.load_slp(path)  # the default call opens the videos too
     except Exception as e:
         return {"error": type(e).__name__ + ": " + str(e)[:160]}
-    poses, detail = [], []
+    poses, detail, labeled = [], [], []
     row_of = {}
     for lf in labels.labeled_frames:
         for i in lf.instances:
@@ -89,6 +89,8 @@ def read(path):
     for lf in labels.labeled_frames:
         for i in lf.instances:
             poses.append(row_of[id(i)])
+            if i.identity is not None:
+                labeled.append("|".join([lf.video.filename, str(lf.frame_idx), i.track.name if i.track else "", i.identity.name]))
             if i.skeleton.name in KEPT:
                 source = i.from_predicted if isinstance(i, sio.Instance) and not isinstance(i, sio.PredictedInstance) else None
                 tracking = i.tracking_score if i.tracking_score is not None and i.tracking_score == i.tracking_score else 0.0
@@ -111,7 +113,7 @@ def read(path):
     return {
         "error": None, "videos": [v.filename for v in labels.videos], "tracks": sorted(t.name for t in labels.tracks),
         "skeletons": [[s.name or "skeleton", s.node_names] for s in labels.skeletons],
-        "sessions": sessions, "poses": sorted(poses), "detail": sorted(detail), "groups": sorted(groups),
+        "sessions": sessions, "poses": sorted(poses), "detail": sorted(detail), "labeled": sorted(labeled), "groups": sorted(groups),
         "repeatedFrames": len(keys) - len(set(keys)),
     }
 `;
@@ -186,6 +188,15 @@ user.from_predicted = predicted
 user.tracking_score = 0.25
 fb[1].instances.append(user)
 save("camB_kinds", fb, [b], [sk2], tracks=(TB,))
+
+# An identity on a detection, which only the typed reader has: on other nodes, and in
+# another order.
+beta = sio.Identity(name="beta")
+for name, skeleton, base in (("camB_other_labeled", sk2, 210), ("camB_reversed_labeled", sk_rev, 200)):
+    b = video("camB.mp4")
+    fb = frames(b, skeleton, base)
+    fb[1].instances[0].identity = beta
+    sio.Labels(labeled_frames=fb, videos=[b], skeletons=[skeleton], tracks=[T1, T2], identities=[beta]).save(os.path.join(out, name + ".slp"), embed=False)
 
 # Hand labels on the reversed skeleton, one node not visible, one missing.
 b = video("camB.mp4")
@@ -473,6 +484,7 @@ function compare(what, got, want) {
     check(eq(got.poses, want.poses), what + ': every pose on its own skeleton, nodes and video', diff(got.poses, want.poses));
     check(got.repeatedFrames === 0, what + ': one row per video and frame', got.repeatedFrames);
     if (want.detail) check(eq(got.detail, want.detail), what + ': what a kept pose also carries', diff(got.detail || [], want.detail));
+    if (want.labeled) check(eq(got.labeled, want.labeled), what + ': the identity on each detection', got.labeled);
     if (want.groups) check(eq(got.groups, want.groups), what + ': groups point at the right poses', diff(got.groups || [], want.groups));
     if (want.sessions) check(eq(got.sessions, want.sessions), what + ': cameras and their videos', got.sessions);
     if (want.videos) check(eq([...got.videos].sort(), [...want.videos].sort()), what + ': video list', got.videos);
@@ -511,7 +523,7 @@ async function saveEveryWay(page, what, want, reopenRoutes = ROUTES) {
 try {
     uv(PY_WRITE, [tmp]);
     const NAMES = ['camA_main', 'camB_main', 'camC_main', 'camD_main', 'camA_other', 'camB_other', 'camC_other', 'camD_other', 'camB_reversed', 'camC_reversed', 'camA_reversed',
-        'camC_main_abc', 'camD_main_abc', 'camC_main_rev', 'camD_main_rev', 'camB_edged', 'camB_twin', 'camB_kinds', 'camB_reversed_hand', 'camB_other_first', 'camB_main_first', 'camB_stale', 'camB_two_videos', 'camB_reversed_two_videos', 'camB_later_video', 'camB_empty'];
+        'camC_main_abc', 'camD_main_abc', 'camC_main_rev', 'camD_main_rev', 'camB_edged', 'camB_twin', 'camB_kinds', 'camB_other_labeled', 'camB_reversed_labeled', 'camB_reversed_hand', 'camB_other_first', 'camB_main_first', 'camB_stale', 'camB_two_videos', 'camB_reversed_two_videos', 'camB_later_video', 'camB_empty'];
     const sourcePaths = NAMES.map(n => path.join(tmp, n + '.slp'));
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
     const sources = {};
@@ -780,7 +792,73 @@ try {
         await page.close();
     }
 
+    check(eq(sources.camB_other_labeled.labeled, ['camB.mp4|1|mouse1|beta']) && eq(sources.camB_reversed_labeled.labeled, ['camB.mp4|1|mouse1|beta']), 'the labeled fixtures hold an identity on one detection', sources.camB_other_labeled.labeled);
+    for (const route of ROUTES) {
+        const what = `an identity on a detection, on other nodes, ${route}`;
+        const { page, status } = await openFolder({ camA: 'camA_main', camB: 'camB_other_labeled' }, { route });
+        check(/camB shows no poses/.test(status), what + ': the status names the camera', status);
+        savedForPython(await saveBytes(page), what, {
+            poses: [...sources.camA_main.poses, ...sources.camB_other_labeled.poses].sort(), labeled: sources.camB_other_labeled.labeled, skeletons: [MAIN, OTHER],
+        });
+        await page.close();
+    }
+    for (const route of ROUTES) {
+        const what = `an identity on a detection, in another node order, ${route}`;
+        const { page, status } = await openFolder({ camA: 'camA_main', camB: 'camB_reversed_labeled' }, { route });
+        check(!/not shown|shows no poses/.test(status), what + ': nothing hidden', status);
+        savedForPython(await saveBytes(page), what, {
+            poses: onMain([...sources.camA_main.poses, ...sources.camB_reversed_labeled.poses]), labeled: sources.camB_reversed_labeled.labeled, skeletons: [MAIN],
+        });
+        await page.close();
+    }
+
     console.log('\nF. Edits around a hidden camera');
+    for (const route of ROUTES) {
+        // A camera named unlike its video: a save with no video loaded has the file's record.
+        const what = `a hidden camera's video keeps its name, ${route}`;
+        const { page } = await openFolder({ camA: 'camA_main', camE: 'camB_other' }, { route });
+        savedForPython(await saveBytes(page), what, {
+            poses: [...sources.camA_main.poses, ...sources.camB_other.poses].sort(), detail: sources.camB_other.detail,
+            skeletons: [MAIN, OTHER], sessions: [{ camA: 'camA.mp4', camE: 'camB.mp4' }],
+        });
+        await page.close();
+    }
+    for (const route of ROUTES) {
+        // A calibration loaded later renames cameras: a hidden one stays hidden and saved,
+        // and a track only it has keeps its name.
+        const what = `a hidden camera renamed, ${route}`;
+        const { page } = await openFolder({ camA: 'camA_main', camB: 'camB_kinds' }, { route });
+        await page.evaluate(async () => {
+            const { state } = await import('/ui/app-state.js');
+            state.session.renameCameraInAllData('camB', 'renamedB');
+            state.session.cameras.find(c => c.name === 'camB').name = 'renamedB';
+        });
+        const shown = await shownInApp(page);
+        check(!shown[0].cams.renamedB && !shown[0].cams.camB && shown[0].cams.camA.length === 6, what + ': still not shown', shown[0].cams);
+        savedForPython(await saveBytes(page), what, {
+            poses: [...sources.camA_main.poses, ...sources.camB_kinds.poses].sort(), detail: sources.camB_kinds.detail,
+            skeletons: [MAIN, OTHER], sessions: [{ camA: 'camA.mp4', renamedB: 'camB.mp4' }],
+        });
+        await page.close();
+    }
+    {
+        // The multi-session save reads the files again: the rename must decide as it did.
+        const what = 'a hidden camera renamed, two lazy sessions';
+        const first = await openFolder({ camA: 'camA_main', camB: 'camB_kinds' }, { route: 'lazy', folder: 'sess1' });
+        await openFolder({ camC: 'camC_main', camD: 'camD_main' }, { route: 'lazy', folder: 'sess2', page: first.page });
+        const page = first.page;
+        await page.evaluate(async () => {
+            const { state } = await import('/ui/app-state.js');
+            state.sessions[0].renameCameraInAllData('camB', 'renamedB');
+            state.sessions[0].cameras.find(c => c.name === 'camB').name = 'renamedB';
+        });
+        savedForPython(await saveBytes(page), what, {
+            poses: [...sources.camA_main.poses, ...sources.camB_kinds.poses, ...sources.camC_main.poses, ...sources.camD_main.poses].sort(),
+            detail: sources.camB_kinds.detail, skeletons: [MAIN, OTHER],
+            sessions: [{ camA: 'camA.mp4', renamedB: 'camB.mp4' }, { camC: 'camC.mp4', camD: 'camD.mp4' }],
+        });
+        await page.close();
+    }
     for (const route of ROUTES) {
         // A pose drawn on the hidden camera's frame: one row, both kinds of pose in it.
         const what = `a pose drawn on its frame, ${route}`;
@@ -1009,7 +1087,8 @@ try {
         await page.close();
     }
     {
-        // Eager: it goes aside like any other camera, on its own nodes.
+        // Eager: it goes aside like any other camera, on its own nodes. The file's record
+        // of its video is its own name, for a shown camera too.
         const what = '.h5 on other nodes, eager';
         const { page, status } = await openFolder({ camA: 'h5_camA_main.h5', camB: 'h5_camB_other.h5' }, { route: 'eager' });
         check(/camB shows no poses/.test(status), what + ': the status names the camera', status);
@@ -1017,7 +1096,7 @@ try {
         check(!shown[0].cams.camB, what + ': not shown', shown[0].cams.camB);
         const bytes = await saveBytes(page);
         await page.close();
-        savedForPython(bytes, what, { poses: null, onVideo: 'camB.mp4', onVideoCount: 6, skeletons: [['skeleton', ['nose', 'tail']], ['skeleton', ['a', 'b', 'c']]] });
+        savedForPython(bytes, what, { poses: null, onVideo: 'camB', onVideoCount: 6, skeletons: [['skeleton', ['nose', 'tail']], ['skeleton', ['a', 'b', 'c']]] });
     }
     {
         // Lazy: the poses stay in a worker and a save has nothing to keep them in.

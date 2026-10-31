@@ -11,6 +11,7 @@ import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from 
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
 import { persistSectionState } from './section-state.js';
+import { refreshBehaviorPanel } from './behavior-panel.js';
 import { renderRecordingInfo } from './recording-info.js';
 import { buildLazySelect } from './lazy-select.js';
 import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
@@ -1226,6 +1227,8 @@ export function updateInfoPanel() {
     populateTimelineVisibility(state.session);
     // The ID Switches tab (and its timeline markers) for this session.
     refreshIdSwitchPanel(state.session);
+    // The Behavior tab (skips itself while hidden).
+    refreshBehaviorPanel();
 
     // Wire Session tab buttons
     document.getElementById('btnAutoAssign').onclick = function () {
