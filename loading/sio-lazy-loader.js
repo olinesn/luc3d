@@ -31,8 +31,8 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { unionTrackNames } from './track-union.js';
 import { rekeyStoreRows } from '../import-export/detection-labels.js';
+import { unionTrackNames } from './track-union.js';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
