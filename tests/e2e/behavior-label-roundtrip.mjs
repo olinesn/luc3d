@@ -135,10 +135,10 @@ try {
             const slpData = await fileio.parseSlpViaSleapIO(new File([bytes], filename), () => {});
             meta.resetBehaviorState();
             const out = [];
-            for (const sd of (slpData.sessions || [])) {
+            for (const [i, sd] of (slpData.sessions || []).entries()) {
                 const lucid = (sd.metadata && sd.metadata.lucid) || {};
                 const fresh = new Session([], skelOf(), [], 'reopened');
-                meta.readBehaviorMetadata(fresh, lucid, slpData.behaviorEvents, events.sessionVideoIdxs(sd));
+                meta.readBehaviorMetadata(fresh, lucid, slpData.behaviorEvents, events.sessionEventScope(slpData.sessions, slpData.videos.length, i));
                 out.push({
                     sessionName: lucid.sessionName,
                     hasEthogramKey: Object.prototype.hasOwnProperty.call(lucid, 'ethogram'),

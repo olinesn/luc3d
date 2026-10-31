@@ -14,7 +14,7 @@
 //                    type, start_frame, end_frame (both inclusive),
 //                    video     the session's FIRST camera. A bout belongs to the
 //                              whole session, so an event on ANY camera of a
-//                              session is read as the session's.
+//                              calibrated session is read as the session's.
 //                    subject   the animal: the identity of that name, else the
 //                              track of that name (matched by name on reading)
 //                    target    a social behavior's other animal
@@ -34,20 +34,32 @@
 //
 // An event the per-animal labels cannot hold (no subject, e.g. a stimulus epoch; a
 // social behavior with no target) is kept per session (`_keptRows`) and written back
-// unchanged, so reopening and saving a file never loses it. So is an event on another
-// video of a file with no recording session: its videos need not be cameras of one
-// recording (a sleap-app project of separate videos), though LUC3D opens them as if they
-// were, so only the first video's events are labels here and the others stay on their
-// own video. A label keeps only its note: other per-event metadata and names written by
-// other tools are not carried through a LUC3D save.
+// unchanged, so reopening and saving a file never loses it. So is an event on a video
+// that is not one of the session's cameras (`sessionEventScope`), and it stays on that
+// video:
+//   - a video in no recording session of the file. The file's first session keeps these,
+//     and a save writes the video back too, from what the file said about it (the
+//     writers themselves write one video per camera). LUC3D does not open the poses on
+//     such a video.
+//   - another session's video, when a loader opens only one session of the file.
+//   - another video of a file with no recording session, or of a session whose cameras are
+//     all placeholders. With no calibration to say so, its videos need not be cameras of
+//     one recording (a sleap-app project of separate videos), though LUC3D opens them as if
+//     they were, so only the first camera's events are labels here. The two must read
+//     alike: a save gives a file with no session exactly that session.
+// Each event goes to one session, an event with no video to the first. A label keeps
+// only its note: other per-event metadata and names written by other tools are not
+// carried through a LUC3D save.
 //
 // DOM-free: Node tests import it directly (they pass their own `SIO` classes).
 //
-// Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js, pose/behavior-predictions.js
+// Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js, pose/behavior-predictions.js,
+// pose/placeholder-cameras.js
 
 import { behaviors, behaviorById, normalizeBehaviorKey } from '../pose/behavior-ethogram.js';
 import { exportBoutRows } from '../pose/behavior-labels.js';
 import { exportPredictionEvents } from '../pose/behavior-predictions.js';
+import { hasRealCalibration } from '../pose/placeholder-cameras.js';
 
 /** Sources of a labelled bout, as saved. */
 var SOURCE_NAMES = { m: 'manual', a: 'accepted_prediction', i: 'imported' };
@@ -86,13 +98,15 @@ function notTypeName(b) {
  * or `openSlpWriter`. Writes nothing for a project with no ethogram and no bouts, so
  * its bytes do not move.
  *
- * @param {Object} SIO sleap-io classes: EventType, UserEvent, PredictedEvent, Identity
+ * @param {Object} SIO sleap-io classes: EventType, UserEvent, PredictedEvent, Identity, Video
  * @param {Array<{session: Session, video: ?Object, videos: ?Object[], identities: ?Object[], tracks: ?Object[]}>} items
  *   each session with its first camera's video, all its cameras' videos in order
- *   (where kept events of other videos can go back to; without it they are left out,
- *   as in a one-camera export), and the catalogs its animals are looked up in. An animal
- *   in neither (a deleted identity's bouts) becomes a new Identity, added to `identities`.
- * @returns {{eventTypes: Object[], events: Object[]}}
+ *   (without it, kept events of other videos are left out, as in a one-camera export),
+ *   and the catalogs its animals are looked up in. An animal in neither (a deleted
+ *   identity's bouts) becomes a new Identity, added to `identities`.
+ * @returns {{eventTypes: Object[], events: Object[]}} an event on a video that is not in
+ *   `videos` brings it along: `new SIO.Labels` and `openSlpWriter` add an event's video
+ *   to the file's list
  */
 export function buildBehaviorEvents(SIO, items) {
     var typeByName = new Map();
@@ -107,6 +121,21 @@ export function buildBehaviorEvents(SIO, items) {
     behaviors().forEach(function (b) {
         typeOf(b.name, b.description, behaviorTypeMetadata(b));
     });
+    var madeVideos = new Map();   // a file's video (its record) -> its one Video in this save
+    /** Where a kept event of another video goes back to; null in a one-camera export. */
+    function ownVideoOf(row, item) {
+        if (!item.videos) return null;
+        if (row.ownCamera !== undefined && item.videos[row.ownCamera]) return item.videos[row.ownCamera];
+        var made = madeVideos.get(row.ownVideo);
+        if (!made) {
+            made = new SIO.Video({
+                filename: row.ownVideo.filename, backendMetadata: Object.assign({}, row.ownVideo.backendMetadata),
+                sourceVideo: row.ownVideo.sourceVideo, openBackend: false,
+            });
+            madeVideos.set(row.ownVideo, made);
+        }
+        return made;
+    }
     var events = [];
     items.forEach(function (item) {
         var session = item.session;
@@ -149,10 +178,12 @@ export function buildBehaviorEvents(SIO, items) {
             }));
         });
         keptRowsOf(session).forEach(function (row) {
-            var ownVideo = row.ownVideo === undefined ? item.video : item.videos && item.videos[row.ownVideo];
-            if (row.ownVideo !== undefined && !ownVideo) return;
+            var video = row.ownVideo ? ownVideoOf(row, item) : item.video;
+            if (row.ownVideo && !video) return;
+            var entry = row.typeEntry || {};
             var options = {
-                type: typeOf(row.type), video: ownVideo || null, startFrame: row.start, endFrame: row.end,
+                type: typeOf(row.type, entry.description, entry.metadata), video: video || null,
+                startFrame: row.start, endFrame: row.end,
                 subject: animal(row.subject), target: animal(row.target),
                 name: row.name, source: row.source, metadata: Object.assign({}, row.metadata),
             };
@@ -167,17 +198,33 @@ export function buildBehaviorEvents(SIO, items) {
 }
 
 /**
+ * What a save needs to write one of a file's videos back: what the file said about it.
+ * A save writes no images, so an embedded video goes back as its source, with no
+ * `dataset` to point at images the new file does not hold.
+ */
+function fileVideoRecord(v) {
+    var embedded = !!v.hasEmbeddedImages, source = v.sourceVideo || null;
+    return {
+        filename: embedded && source ? source.filename : v.filename,
+        backendMetadata: embedded ? { shape: v.shape } : Object.assign({}, v.backendMetadata),
+        sourceVideo: embedded ? null : source,
+    };
+}
+
+/**
  * A file's events as plain data, or null when it has none: what the readers hand to
  * `readBehaviorMetadata`.
  * @param {Object} labels a sleap-io `Labels`
- * @returns {?{types: Array, rows: Array}}
+ * @returns {?{types: Array, rows: Array, videos: Array}} `rows[].video` indexes `videos`
  */
 export function fileEventsOf(labels) {
     var types = (labels && labels.eventTypes) || [], events = (labels && labels.events) || [];
     if (!types.length && !events.length) return null;
+    var videos = (labels && labels.videos) || [];
     var videoIdx = new Map();
-    ((labels && labels.videos) || []).forEach(function (v, i) { videoIdx.set(v, i); });
+    videos.forEach(function (v, i) { videoIdx.set(v, i); });
     return {
+        videos: videos.map(fileVideoRecord),
         types: types.map(function (t) {
             return { name: t.name, description: t.description || '', metadata: Object.assign({}, t.metadata) };
         }),
@@ -208,13 +255,74 @@ export function sessionVideoIdxs(rawSession) {
 }
 
 /**
- * For a file with no recording session and several videos: the video whose events are
- * the session's labels (the first), else null (see the header).
- * @param {{sessions: ?Array, videos: ?Array}} file `parseSlpViaSleapIO`'s result, or Labels
+ * Where the videos of a session with only placeholder cameras sit among those cameras, as
+ * the loaders read a `sessions_json` entry: its `calibration` in file order, a camera named
+ * in `camcorder_to_video_idx_map` by its name, calibration key or number.
+ *
+ * @returns {?Map<number, number>} video index -> camera's place; null for a session with a
+ *   real calibration or no camera
  */
-export function onlyVideoOf(file) {
-    var noSessions = !file.sessions || file.sessions.length === 0;
-    return noSessions && file.videos && file.videos.length > 1 ? 0 : null;
+function placeholderCameraPlaces(rawSession) {
+    var calib = rawSession.calibration || {};
+    var keys = Object.keys(calib).filter(function (k) {
+        return k !== 'metadata' && calib[k] && typeof calib[k] === 'object';
+    });
+    var cameras = keys.map(function (k) {
+        var cd = calib[k];
+        return { rvec: cd.rotation || cd.rvec || [0, 0, 0], tvec: cd.translation || cd.tvec || [0, 0, 0] };
+    });
+    if (!cameras.length || hasRealCalibration({ cameras: cameras })) return null;
+    var places = new Map();
+    var map = rawSession.camcorder_to_video_idx_map;
+    Object.keys(map).forEach(function (k) {
+        var place = keys.findIndex(function (key) { return calib[key].name === k || key === k; });
+        if (place < 0) place = parseInt(k.replace(/[^0-9]/g, ''), 10);
+        var v = Number(map[k]);
+        if (Number.isInteger(v) && place >= 0 && place < keys.length) places.set(v, place);
+    });
+    return places;
+}
+
+/**
+ * Which of a file's events one of its sessions reads, and which it only keeps on their
+ * own video (see the header). Goes by the videos the file's sessions name, so a session
+ * naming none reads what no other session names.
+ *
+ * @param {?Array} rawSessions the file's `sessions_json` entries (`slpData.sessions`,
+ *   `labels.rawSessionsJson`)
+ * @param {number} nVideos the file's videos
+ * @param {number} idx the session
+ * @param {boolean} [onlyThisSession] the loader opens this session and no other of the
+ *   file, so it also keeps the other sessions' events
+ * @returns {{videos: Set<number>, keep: Set<number>, cameras: ?Map<number, number>, noVideo: boolean}}
+ *   `videos` whose events are this session's, `keep` whose events it only keeps;
+ *   `cameras`: with no calibration, each of its cameras' videos -> that camera's place in the
+ *   session (never the file's video number, which a second session's cameras do not start at);
+ *   `noVideo`: it reads the events with no video
+ */
+export function sessionEventScope(rawSessions, nVideos, idx, onlyThisSession) {
+    var sessions = rawSessions || [];
+    var videos = new Set(), keep = new Set();
+    if (sessions.length === 0) {
+        var inFileOrder = new Map();
+        for (var k = 0; k < nVideos; k++) {
+            (k === 0 ? videos : keep).add(k);
+            inFileOrder.set(k, k);
+        }
+        return { videos: videos, keep: keep, cameras: inFileOrder, noVideo: true };
+    }
+    var own = sessionVideoIdxs(sessions[idx]);
+    var places = own ? placeholderCameraPlaces(sessions[idx]) : null;
+    var others = new Set();
+    sessions.forEach(function (s, i) {
+        var theirs = i === idx ? null : sessionVideoIdxs(s);
+        if (theirs) theirs.forEach(function (v) { others.add(v); });
+    });
+    for (var v = 0; v < nVideos; v++) {
+        if (own ? own.has(v) : idx === 0 && !others.has(v)) (!places || places.get(v) === 0 ? videos : keep).add(v);
+        else if (others.has(v) ? onlyThisSession : idx === 0) keep.add(v);
+    }
+    return { videos: videos, keep: keep, cameras: places, noVideo: idx === 0 };
 }
 
 /** A catalog entry as `ingestEthogram` reads it. */
@@ -241,14 +349,12 @@ function typeToBehavior(t, id, extra, hasTarget) {
  * ethogram, label rows, prediction runs and the rows LUC3D keeps aside. All ids in
  * the result are the FILE's, the ids in `ethogram.behaviors`.
  *
- * @param {?{types: Array, rows: Array}} fileEvents `fileEventsOf`'s result
+ * @param {?{types: Array, rows: Array, videos: Array}} fileEvents `fileEventsOf`'s result
  * @param {Object} lucid the session's `metadata.lucid` (`ethogram` extras, run headers)
- * @param {?Set<number>} videoIdxs this session's videos; null reads every row
- * @param {?number} [onlyVideo] a file with no recording session and several videos: the
- *   one video whose events are this session's labels; the others' are kept
+ * @param {?Object} [scope] `sessionEventScope`'s result; without it, every row is read
  * @returns {{ethogram: Object, labelRows: Array, runs: Array, kept: Array}}
  */
-export function eventsToBehaviorData(fileEvents, lucid, videoIdxs, onlyVideo) {
+export function eventsToBehaviorData(fileEvents, lucid, scope) {
     var types = (fileEvents && fileEvents.types) || [];
     var allRows = (fileEvents && fileEvents.rows) || [];
     var extras = lucid && lucid.ethogram && lucid.ethogram.v === 2 ? lucid.ethogram : null;
@@ -308,17 +414,25 @@ export function eventsToBehaviorData(fileEvents, lucid, videoIdxs, onlyVideo) {
         runs.push(run);
     });
 
+    function keepRow(r, onOwnVideo) {
+        var out = Object.assign({}, r, onOwnVideo);
+        // A "not" type is no behavior of the ethogram: only its rows keep it in the catalog.
+        if (negates.has(r.type)) out.typeEntry = types.find(function (t) { return t.name === r.type; });
+        kept.push(out);
+    }
+
     allRows.forEach(function (r) {
-        if (videoIdxs && r.video >= 0 && !videoIdxs.has(r.video)) return;
-        if (Number.isInteger(onlyVideo) && r.video >= 0 && r.video !== onlyVideo) {
-            kept.push(Object.assign({}, r, { ownVideo: r.video }));
+        if (scope && !(r.video < 0 ? scope.noVideo : scope.videos.has(r.video))) {
+            if (scope.keep.has(r.video)) {
+                keepRow(r, { ownVideo: fileEvents.videos[r.video], ownCamera: scope.cameras ? scope.cameras.get(r.video) : undefined });
+            }
             return;
         }
         var negated = negates.has(r.type);
         var behaviorName = negated ? negates.get(r.type) : r.type;
         var id = idOfName.get(behaviorName);
         var social = socialNames.has(behaviorName);
-        if (!id || !r.subject || (social && (!r.target || r.target === r.subject))) { kept.push(r); return; }
+        if (!id || !r.subject || (social && (!r.target || r.target === r.subject))) { keepRow(r); return; }
         if (!r.predicted) {
             labelRows.push([id, r.subject, r.target || '', r.start, r.end, negated ? 0 : 1,
                 SOURCE_CODES[r.source] || 'i', (r.metadata && r.metadata.note) || '']);

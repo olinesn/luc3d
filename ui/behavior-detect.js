@@ -22,6 +22,11 @@
 // animal makes: pose/behavior-tensor.js `brokenPoseFrames`) are skipped by
 // every feature, here and in the settings' histograms; a run says how many.
 //
+// Seconds, windows and speeds use `detectionFps` / `sessionFps`, never
+// `state.fps`: a `.slp` does not save the frame rate, so while nothing has said
+// what it is the rate the session's runs or labels recorded stands in. `state.fps`
+// is left alone: playback reads it.
+//
 // Predictions go stale when their poses change: every markDirty notes that
 // they may have, and a check (one pass over the poses) runs shortly after the
 // edits stop, never on a draw.
@@ -43,7 +48,7 @@ import { planDetectors, detectorBouts, orderedPairs, combineMutual } from '../po
 import { runBehaviorChunks, runJob } from '../pose/behavior-pool.js';
 import {
     setBehaviorRun, noteDetectionPass, runConfigPrint, predictionInputPrintAsync, notePossibleInputChange,
-    predictionCheckPending, checkPredictionInputAsync,
+    predictionCheckPending, checkPredictionInputAsync, recordedFps,
 } from '../pose/behavior-predictions.js';
 import {
     behaviorModelOf, modelHashOf, labelPrintOf, modelProblems, predictModels, predictModelsAtFrame, deriveBouts,
@@ -59,8 +64,29 @@ var INPUT_CHECK_DELAY_MS = 600;
 
 var SEP = '\u0001';
 
-/** The frame rate behaviors are measured at: the session's (30 when unknown). */
+/**
+ * Has nothing said what the active session's frame rate is? No video decoded,
+ * no campy manifest, nothing typed in the fps box for this session. A `.slp`
+ * does not save the rate, so `state.fps` then only holds a default.
+ */
+function frameRateUnknown() {
+    var session = state.session;
+    var rec = session && session.campyRecording;
+    if (rec && rec.frameRate) return false;
+    if (session && session.typedFps > 0 && session.typedFps === state.fps) return false;
+    return !(state.views || []).some(function (v) {
+        return v && v.decoder && v.decoder.samples && v.decoder.samples.length > 0;
+    });
+}
+
+/**
+ * The frame rate behaviors are measured at: the active session's, or while
+ * nothing has said what that is, the one its runs or labels recorded (30 when
+ * there is none).
+ */
 export function detectionFps() {
+    var recorded = frameRateUnknown() ? recordedFps(state.session) : 0;
+    if (recorded > 0) return recorded;
     return state.fps > 0 ? state.fps : 30;
 }
 
@@ -89,12 +115,12 @@ export function floorKey() {
 }
 
 /**
- * What predictions are checked against now: the frame rate and the floor;
- * for classifier runs, each behavior's training labels (a cached print) and
- * its current model.
+ * What predictions are checked against now: the frame rate (`fpsUnknown` when
+ * it is only a default) and the floor; for classifier runs, each behavior's
+ * training labels (a cached print) and its current model.
  */
 export function detectionEnv() {
-    return { fps: detectionFps(), floorKey: floorKey(), modelHashOf: modelHashOf,
+    return { fps: detectionFps(), fpsUnknown: frameRateUnknown(), floorKey: floorKey(), modelHashOf: modelHashOf,
              labelPrintOf: function (id) { return labelPrintOf(state.sessions || [], id); } };
 }
 
@@ -103,10 +129,36 @@ function numFramesOf(session) {
     return session && session.totalFrames > 0 ? session.totalFrames : 0;
 }
 
-/** A session's frame rate: the app's for the active one, the one it was left at otherwise. */
+/** Does this session have a video file (`videoFileIndices`, or File ▸ Load Videos' `sessionIdx` tag)? */
+function sessionHasVideo(session) {
+    var files = state.videoFiles || [];
+    if ((session.videoFileIndices || []).some(function (i) { return !!files[i]; })) return true;
+    var idx = (state.sessions || []).indexOf(session);
+    return idx >= 0 && files.some(function (vf) { return vf && vf.sessionIdx === idx; });
+}
+
+/**
+ * The rate something said for a session that is not active: what it was left at
+ * if typed or from its video, or its manifest's (0 when nothing did: what it
+ * was left at is then only a default).
+ */
+function saidFps(session) {
+    if (session.typedFps > 0 && session.typedFps === session.fps) return session.fps;
+    var rec = session.campyRecording;
+    if (rec && rec.frameRate) return rec.frameRate;
+    return session.fps > 0 && sessionHasVideo(session) ? session.fps : 0;
+}
+
+/** A session's frame rate: the app's for the active one; another's as said, else as it recorded, else the app's. */
 export function sessionFps(session) {
-    if (session === state.session || !(session && session.fps > 0)) return detectionFps();
-    return session.fps;
+    if (session === state.session || !session) return detectionFps();
+    return saidFps(session) || recordedFps(session) || detectionFps();
+}
+
+/** " · no video: at 60 fps, the rate on record" for a status line, when the fps box says otherwise ('' if not). */
+function recordedRateNote() {
+    var recorded = frameRateUnknown() ? recordedFps(state.session) : 0;
+    return recorded > 0 && recorded !== state.fps ? ' · no video: at ' + (+recorded.toFixed(3)) + ' fps, the rate on record' : '';
 }
 
 function n(x) {
@@ -444,7 +496,7 @@ export async function detectAllFrames(opts) {
         // That edit was this run's own: the poses it read are still current.
         if (_ctxCache && _ctxCache.ctx === ctx) _ctxCache.gen = _editGen;
         var broken = brokenNote(ctx);
-        setStatus('Detected ' + n(res.total) + ' bout' + (res.total === 1 ? '' : 's') + ': ' + res.counts.join(', ') + (broken ? ' · ' + broken : '') +
+        setStatus('Detected ' + n(res.total) + ' bout' + (res.total === 1 ? '' : 's') + ': ' + res.counts.join(', ') + (broken ? ' · ' + broken : '') + recordedRateNote() +
             (ctx.floorInfo.warning ? ' · ' + ctx.floorInfo.warning : '') + (res.notes.length ? ' · Skipped ' + res.notes.join(' · ') : ''),
             res.notes.length || ctx.floorInfo.warning ? 'warning' : 'success');
         return { bouts: res.total };
@@ -491,7 +543,7 @@ export async function detectAllSessions(opts) {
         }
         markDirty();
         if (_ctxCache && _ctxCache.session === state.session) _ctxCache.gen = _editGen;
-        setStatus('Detected ' + n(bouts) + ' bout' + (bouts === 1 ? '' : 's') + ' in ' + n(done) + ' session' + (done === 1 ? '' : 's') +
+        setStatus('Detected ' + n(bouts) + ' bout' + (bouts === 1 ? '' : 's') + ' in ' + n(done) + ' session' + (done === 1 ? '' : 's') + recordedRateNote() +
             (leftOut.length ? ' · Left out (poses not loaded: open each to include it): ' + leftOut.join(', ') : '') +
             (notes.length ? ' · ' + notes.join(' · ') : ''), leftOut.length || notes.length ? 'warning' : 'success');
         return { sessions: done, bouts: bouts, leftOut: leftOut };

@@ -21,7 +21,12 @@
  *
  *  C. A sleap-app project of two separate videos, labelled on both: LUC3D opens the videos
  *     as cameras, so only the first video's bouts are its labels, and a save there leaves
- *     each bout on its own video.
+ *     each bout on its own video. That save gives the file a session of placeholder cameras,
+ *     which changes nothing through sleap-app's save and LUC3D's next one.
+ *
+ *  D. A recording session plus a video in no session (written by Python sleap-io), with a
+ *     bout on that video: LUC3D keeps it there through a save, sleap-app reads it there,
+ *     and it is still there after sleap-app's save, LUC3D's next one, and in Python.
  *
  * Needs a checkout of sleap-app linked to a sleap-io.js with events: SLEAP_APP_DIR (default
  * ../sleap-app beside the main LUC3D checkout), and `uv` for Python. Skips without them.
@@ -73,6 +78,7 @@ def who(p):
 print(json.dumps({
     "types": [t.name for t in labels.event_types],
     "videos": len(labels.videos),
+    "onVideos": sorted([e.video.filename, e.start_frame] for e in labels.events),
     "events": sorted(([e.type.name, e.start_frame, e.end_frame, who(e.subject), who(e.target), e.is_predicted, e.source]
                       for e in labels.events), key=lambda r: (r[1], r[2], r[0], str(r[3]))),
 }))
@@ -119,6 +125,33 @@ for v in videos:
             sio.PredictedInstance.from_numpy(np.array([[40.0, 40.0], [50.0, 50.0]]), skeleton=skeleton, track=t2, score=0.9, point_scores=np.array([0.9, 0.9])),
         ]))
 sio.Labels(labeled_frames=frames, videos=videos, skeletons=[skeleton], tracks=[t1, t2]).save(sys.argv[1], embed=False)
+`;
+    const r = spawnSync('uv', ['run', '--quiet', '--with', PY_SPEC, 'python', '-I', '-c', script, file], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error('python failed: ' + r.stderr);
+}
+
+/** A session of two cameras plus a video in no session, with a bout on each kind. */
+function pythonSessionPlusVideo(file) {
+    const script = `
+import sys, numpy as np, sleap_io as sio
+skeleton = sio.Skeleton(nodes=["nose", "tail"], edges=[("nose", "tail")])
+videos = [sio.Video(filename=n, open_backend=False) for n in ("cam0.mp4", "cam1.mp4", "other.mp4")]
+for v in videos:
+    v.backend_metadata["shape"] = (50, 64, 64, 1)
+t1 = sio.Track(name="mouse1")
+frames = [sio.LabeledFrame(video=v, frame_idx=f, instances=[
+    sio.PredictedInstance.from_numpy(np.array([[10.0, 10.0], [20.0, 20.0]]), skeleton=skeleton, track=t1, score=0.9, point_scores=np.array([0.9, 0.9])),
+]) for v in videos[:2] for f in range(5)]
+cameras = [sio.Camera(name=n, rvec=np.array([0.0, 0.1 * i, 0.0]), tvec=np.array([10.0 * i, 0.0, 0.0]), matrix=np.array([[500.0, 0, 32], [0, 500.0, 32], [0, 0, 1]]), dist=np.zeros(5), size=(64, 64)) for i, n in enumerate(("camA", "camB"))]
+session = sio.RecordingSession(camera_group=sio.CameraGroup(cameras=cameras))
+for v, c in zip(videos, cameras):
+    session.add_video(v, c)
+rear = sio.EventType(name="rear")
+events = [
+    sio.UserEvent(type=rear, video=videos[0], start_frame=10, end_frame=19, subject=t1, source="manual"),
+    sio.UserEvent(type=rear, video=videos[2], start_frame=30, end_frame=39, subject=t1, source="manual"),
+]
+sio.Labels(labeled_frames=frames, videos=videos, skeletons=[skeleton], tracks=[t1], sessions=[session], event_types=[rear], events=events).save(sys.argv[1], embed=False)
 `;
     const r = spawnSync('uv', ['run', '--quiet', '--with', PY_SPEC, 'python', '-I', '-c', script, file], { encoding: 'utf8' });
     if (r.status !== 0) throw new Error('python failed: ' + r.stderr);
@@ -378,7 +411,11 @@ try {
         const vfs = CAMS.map(cn => ({ name: cn, assignedCamera: cn, videoPath: cn + '.mp4' }));
         AS.state.views = views; AS.state.videoFiles = vfs;
         window.__saved = await window.SleapIO.saveSlpToBytes(fileio.buildSlpLabelsAllViews(s, views, vfs));
+        // A view does not always carry its frame count; the video file does.
+        const bare = fileio.buildSlpLabelsAllViews(s, views.map(v => ({ ...v, frameCount: undefined })), vfs.map(v => ({ ...v, frameCount: 77 })));
+        window.__frameCountFromFile = bare.videos[0].shape[0];
     });
+    check(await luc3d.evaluate(() => window.__frameCountFromFile) === 77, 'the file records a video\'s frame count when only the video file knows it');
     const fileA1 = await getBytes(luc3d, '__saved');
     if (process.env.WRITE_FIXTURES) fs.writeFileSync(path.join(process.env.WRITE_FIXTURES, 'luc3d_behavior.slp'), fileA1);
     const before = await luc3dState(luc3d);
@@ -585,6 +622,52 @@ try {
         return labels.events.map(e => [labels.videos.indexOf(e.video), e.startFrame, e.endFrame, e.subject.name]).sort((a, b) => a[0] - b[0]);
     });
     check(eq(onVideos, [[0, 10, 19, 'mouse1'], [1, 10, 29, 'mouse2']]), 'each bout is still on its own video', onVideos);
+    const fileC3 = await appSave(app);
+    check(await luc3dLoad(luc3d, fileC3, 'two-videos-3.slp') === true, 'saved there and opened in LUC3D again');
+    l = await luc3dState(luc3d);
+    check(eq(l.bouts.map(r => r.slice(1, 5)), [['mouse1', '', 10, 19]]), 'its labels are still the first video\'s', l.bouts);
+    const fileC4 = await luc3dSave(luc3d);
+    check(await appLoad(app, fileC4, 'two-videos-4.slp') === true, 'saved there and back in sleap-app');
+    const onVideosC4 = await app.evaluate(() => {
+        const { labels } = window.sleap.store.getState();
+        return labels.events.map(e => [labels.videos.indexOf(e.video), e.startFrame, e.endFrame, e.subject.name]).sort((a, b) => a[0] - b[0]);
+    });
+    check(eq(onVideosC4, [[0, 10, 19, 'mouse1'], [1, 10, 29, 'mouse2']]), 'each bout is on its own video after all that', onVideosC4);
+    const pathC4 = path.join(tmp, 'two-videos-4.slp');
+    fs.writeFileSync(pathC4, fileC4);
+    py = pythonReads(pathC4);
+    const namesC4 = await app.evaluate(() => window.sleap.store.getState().labels.videos.map(v => String(v.filename)));
+    check(eq(py.onVideos, [[namesC4[0], 10], [namesC4[1], 10]]), 'and Python reads them there', py.onVideos);
+
+    // =================================================================
+    console.log('\n-- D. a session plus a video in no session, through both apps --');
+    const pathD0 = path.join(tmp, 'session-plus-video.slp');
+    pythonSessionPlusVideo(pathD0);
+    check(await luc3dLoad(luc3d, fs.readFileSync(pathD0), 'session-plus-video.slp') === true, 'LUC3D opens it');
+    l = await luc3dState(luc3d);
+    check(eq(l.bouts.map(r => r.slice(1, 5)), [['mouse1', '', 10, 19]]), 'its labels are the session\'s', l.bouts);
+    const fileD1 = await luc3dSave(luc3d);
+    check(await appLoad(app, fileD1, 'session-plus-video-2.slp') === true, 'sleap-app opens what LUC3D saved');
+    const onVideoNames = () => app.evaluate(() => {
+        const { labels } = window.sleap.store.getState();
+        return labels.events.map(e => [String(e.video.filename), e.startFrame]).sort((a, b) => a[1] - b[1]);
+    });
+    const appD1 = await onVideoNames();
+    check(eq(appD1, [['camA.mp4', 10], ['other.mp4', 30]]), 'the bout is on its video there', appD1);
+    const appSessions = await app.evaluate(() => {
+        const { labels } = window.sleap.store.getState();
+        return labels.sessions.map(s => s.videos.map(v => String(v.filename)));
+    });
+    check(eq(appSessions, [['camA.mp4', 'camB.mp4']]), 'which is still in no session', appSessions);
+    const fileD2 = await appSave(app);
+    check(await luc3dLoad(luc3d, fileD2, 'session-plus-video-3.slp') === true, 'saved there and opened in LUC3D');
+    l = await luc3dState(luc3d);
+    check(eq(l.bouts.map(r => r.slice(1, 5)), [['mouse1', '', 10, 19]]), 'it still shows only the session\'s', l.bouts);
+    const fileD3 = await luc3dSave(luc3d);
+    const pathD3 = path.join(tmp, 'session-plus-video-4.slp');
+    fs.writeFileSync(pathD3, fileD3);
+    py = pythonReads(pathD3);
+    check(eq(py.onVideos, [['camA.mp4', 10], ['other.mp4', 30]]), 'Python reads each bout on its video after all that', py.onVideos);
 
     console.log(fails === 0 ? '\nPASS' : `\nFAIL — ${fails} check(s)`);
     process.exitCode = fails === 0 ? 0 : 1;

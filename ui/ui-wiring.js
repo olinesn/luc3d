@@ -55,6 +55,7 @@ import { PLANE_VIS_IDS } from './plane-visibility.js';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
+import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
 import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
          loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js';
@@ -1358,6 +1359,7 @@ export function setupMenus() {
 
         // 1. Parse all env files, collecting instances per frame per camera
         var envSkeleton = null;
+        var envRefusal = null;
         var envFrames = new Map();
         var totalInstances = 0;
 
@@ -1384,8 +1386,16 @@ export function setupMenus() {
                     }
                 } catch (err) {
                     console.error('[set-env] Failed to parse', files[fi].name, err);
+                    if (isNewerSlpFormatError(err)) envRefusal = err;
                 }
             }
+        }
+
+        // Not triangulated from whichever cameras' files happened to be readable.
+        if (envRefusal) {
+            hideLoading();
+            setStatus(envRefusal.message, 'error');
+            return;
         }
 
         if (totalInstances === 0) {
@@ -1563,10 +1573,13 @@ export function setupMenus() {
                 });
                 if (handles.length === 0) { setStatus('No file selected', 'warning'); return; }
                 var file = await handles[0].getFile();
-                if (file.name.endsWith('.slp')) {
+                // Only once it has opened: Save writes to this handle, so a file that
+                // did not open (refused as too new, say) would be overwritten with
+                // whatever project is open.
+                var opened = await handleLoadProject(file);
+                if (opened !== false && file.name.endsWith('.slp')) {
                     state.slpFileHandle = handles[0];
                 }
-                handleLoadProject(file);
             } catch (e) {
                 if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
                 handleLoadProject();
@@ -1621,9 +1634,10 @@ export function setupMenus() {
                         }]
                     });
                     if (handles.length === 0) { setStatus('No file selected', 'warning'); return; }
-                    state.slpFileHandle = handles[0];
                     var file = await handles[0].getFile();
-                    handleLoadSlpFile(file);
+                    // Only once it has opened: see the same step in menuLoadProject.
+                    var opened = await handleLoadSlpFile(file);
+                    if (opened !== false) state.slpFileHandle = handles[0];
                 } catch (e) {
                     if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
                     // Fallback to input picker
@@ -3771,6 +3785,7 @@ export function seekToLabeledFrame(direction) {
             var num = parseFloat(raw);
             if (raw !== '' && !isNaN(num) && num > 0 && num <= 1000) {
                 state.fps = num;
+                if (state.session) state.session.typedFps = num;   // said, not a default (`detectionEnv`)
                 applyPlaybackRate();
                 if (videoController && state.isPlaying) {
                     videoController.stopPlayback();

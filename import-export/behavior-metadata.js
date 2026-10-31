@@ -130,18 +130,17 @@ export function writeBehaviorSlpMetadata(lucid, session) {
  * states back, from a file's events and from `lucid`. Tolerates absence and garbage.
  * @param {Session} session
  * @param {?Object} lucid the session's `metadata.lucid` (or a project JSON's dict)
- * @param {?{types: Array, rows: Array}} [fileEvents] the file's events (`fileEventsOf`)
- * @param {?Set<number>} [videoIdxs] the videos of this session; omit to read every row
- * @param {?number} [onlyVideo] `onlyVideoOf(file)`: a file of separate videos, whose other
- *   videos' events are kept aside (import-export/behavior-events.js)
+ * @param {?{types: Array, rows: Array, videos: Array}} [fileEvents] the file's events (`fileEventsOf`)
+ * @param {?Object} [scope] `sessionEventScope`: which of them this session reads and which
+ *   it keeps aside (import-export/behavior-events.js); omit to read every row
  * @returns {{kept:number, dropped:number}} bouts read and bouts skipped
  */
-export function readBehaviorMetadata(session, lucid, fileEvents, videoIdxs, onlyVideo) {
+export function readBehaviorMetadata(session, lucid, fileEvents, scope) {
     var hasLucid = lucid && typeof lucid === 'object';
     if (!session || (!hasLucid && !fileEvents)) return { kept: 0, dropped: 0 };
     var saved = hasLucid ? lucid : {};
     var fromEvents = fileEvents || (saved.ethogram && saved.ethogram.v === 2) || (saved.behaviorPredictions && saved.behaviorPredictions.v === 2)
-        ? eventsToBehaviorData(fileEvents, saved, videoIdxs, onlyVideo) : null;
+        ? eventsToBehaviorData(fileEvents, saved, scope) : null;
     // Each source's ids map through its own table, so the rows below hold project
     // ids and cannot collide (a file's b2 may be the project's b7).
     var savedIds = saved.ethogram && saved.ethogram.v === 1 ? ingestEthogram(saved.ethogram) : new Map();

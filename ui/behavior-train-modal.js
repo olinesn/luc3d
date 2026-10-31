@@ -24,7 +24,7 @@ import {
     classifierStatus, trainClassifiers, applyClassifierPost, exportClassifiers, showImportClassifiers, isTraining, fmt,
     lastTrainingReport, openSessionByName,
 } from './behavior-train.js';
-import { detectAllFrames } from './behavior-detect.js';
+import { detectAllFrames, detectionFps } from './behavior-detect.js';
 import { setInfoTip } from './info-tip.js';
 import { ICON_INFO } from './plane-definition.js';
 import { behaviorById, behaviorPost } from '../pose/behavior-ethogram.js';
@@ -51,8 +51,6 @@ var SCHEME_TEXT = {
 };
 
 var _dlg = null;
-
-function fpsNow() { return state.fps > 0 ? state.fps : 30; }
 
 function infoButton(key) {
     return '<button type="button" class="plane-section-info bd-info" data-info="' + key + '" aria-label="About this"></button>';
@@ -174,7 +172,7 @@ function updateLive(card) {
     var post = cardPost(card);
     var thrEl = card.querySelector('.bt-thr');
     if (thrEl) thrEl.textContent = post.threshold.toFixed(2);
-    var live = evaluateAt(model.cv, post, fpsNow(), b.kind === 'point');
+    var live = evaluateAt(model.cv, post, detectionFps(), b.kind === 'point');
     var host = card.querySelector('.bt-live');
     if (host && live) host.innerHTML = metricsHtml(live.frame, live.bout);
     drawCurve(card, live ? live.frame : null);
