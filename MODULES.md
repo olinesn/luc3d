@@ -12090,7 +12090,7 @@ numbered box on the animal the keys label.
 **Exports.** `isBehaviorModeActive`, `enterBehaviorMode`, `exitBehaviorMode`,
 `toggleBehaviorMode`.
 
-**Imports.** `./app-state.js`, `./behavior-coding.js`, `./keyboard-target.js`,
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js` (`detectionFps`), `./keyboard-target.js`,
 `./plane-definition.js` (circular, call-time only), `../pose/behavior-ethogram.js`,
 `../pose/behavior-labels.js`, `../import-export/save-load.js`. **Imported by**
 `ui/behavior-panel.js`, `ui/plane-definition.js`. **Tests.**
@@ -12175,7 +12175,7 @@ clears it; otherwise it reports the range as before.
 **Exports.** `ABSENT_COLOR`, `behaviorTimelineRows`, `onTimelineRangeSelect`.
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js`
-(`detectionEnv`), `./behavior-states.js` (`stateTimelineRows`), `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+(`detectionEnv`, `detectionFps`), `./behavior-states.js` (`stateTimelineRows`), `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
 `../pose/behavior-predictions.js`, `../import-export/save-load.js`. **Imported by** `pose/initialization.js`
 (`setupTimeline`), `ui/behavior-panel.js`. **Tests.**
 `tests/e2e/behavior-labelling.mjs` §1, §5, `tests/e2e/behavior-kpms-roundtrip.mjs` §2.
@@ -12227,7 +12227,7 @@ chooser), `importBehaviorFile(file)` (the dialog for a File),
 `behaviorSessionInfo(session, camera)` (the `info` the exports take: name,
 fps, frame count, animals, video path).
 
-**Imports.** `./app-state.js`, `./behavior-coding.js`,
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js` (`sessionFps`),
 `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
 `../import-export/behavior-io.js`, `../import-export/save-load.js`,
 `../loading/cold-read-guard.js`. **Imported by** `ui/behavior-panel.js`.
@@ -12239,7 +12239,7 @@ fps, frame count, animals, video path).
 The rate everything is measured at: `detectionFps()` (the active session) is `state.fps`, or
 while nothing has said the rate (no video decoded, no campy manifest, `session.typedFps` not
 what the fps box holds) what the session recorded (`recordedFps`; 30 when nothing), and Detect's
-status line says so; `state.fps` itself is left alone. `sessionFps(session)` is the same for another
+status line says so; `state.fps` itself is left alone. The behavior UI's seconds and its files read these too. `sessionFps(session)` is the same for another
 session: what was said for it (typed, its manifest, its video's rate it was left at), else what it recorded, else
 `detectionFps()`.
 `buildBehaviorContext(session)` (the active session, or another whose poses are
@@ -12297,7 +12297,7 @@ call-time), `../pose/behavior-ethogram.js`, `../pose/behavior-tensor.js`,
 `../pose/behavior-pool.js`, `../pose/behavior-predictions.js`, `../pose/behavior-classifier.js`,
 `../import-export/save-load.js` (`onMarkDirty`). No top-level side effects
 (registration happens in `setupBehaviorDetection`), so import cycles through
-save-load are safe. **Imported by** `ui/behavior-panel.js`, `ui/behavior-coding.js`,
+save-load are safe. **Imported by** `ui/behavior-panel.js`, `ui/behavior-coding.js`, `ui/behavior-mode.js`, `ui/behavior-io-modal.js`,
 `ui/behavior-timeline.js`, `ui/behavior-rules-modal.js`, `ui/run-buttons.js`,
 `ui/ui-wiring.js`, `ui/behavior-train.js`, `ui/behavior-train-modal.js`. **Tests.**
 `tests/e2e/behavior-rules.mjs`, `tests/e2e/behavior-classifier.mjs` §2; timing
@@ -12436,7 +12436,7 @@ section and its ⓘ, and makes every states change `markDirty()` and repaint
 `renderStatesSection`, `setupBehaviorStates`.
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-confirm.js`,
-`./behavior-detect.js` (`sessionFps`), `./behavior-kpms-modal.js`, `./info-tip.js`,
+`./behavior-detect.js` (`sessionFps`, `detectionFps`), `./behavior-kpms-modal.js`, `./info-tip.js`,
 `./plane-definition.js` (`ICON_INFO`), `../pose/behavior-states.js`,
 `../pose/behavior-predictions.js`, `../pose/behavior-ethogram.js`,
 `../pose/behavior-tensor.js`, `../import-export/save-load.js`. **Imported by**

@@ -32,7 +32,10 @@
  *     seconds uses the rate on record: Detect gives the saved bouts and the same
  *     per-frame scores, bit for bit, and This frame and the settings dialog the
  *     same numbers, with `state.fps` still 30. Other sessions go by what they
- *     recorded too; a label edit keeps the labels' rate.
+ *     recorded too; a label edit keeps the labels' rate. What the Behavior UI
+ *     shows in seconds follows (the tab, a bout's lead-in, the timeline's menu,
+ *     Label Behaviors mode, States), and so do real files: an export's seconds
+ *     and an import's frames.
  *
  * Run: node tests/e2e/behavior-rules.mjs   (spawns its own http.server; PORT= to move it)
  */
@@ -488,6 +491,50 @@ try {
     });
     const asMade = await measure(maker);
     await maker.close();
+    /** What the Behavior UI says in seconds, as the user sees it. Leaves a labelled rear on 200–259. */
+    const shows = (p) => p.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const C = await import('/ui/behavior-coding.js');
+        const M = await import('/ui/behavior-mode.js');
+        const St = await import('/pose/behavior-states.js');
+        const s = AS.state.session;
+        const painted = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const text = (sel) => (document.querySelector(sel) || {}).textContent || '';
+        const tab = document.querySelector('.panel-tab[data-tab="tabBehavior"]');
+        if (tab && !tab.classList.contains('active')) tab.click();
+        (await import('/ui/behavior-panel.js')).refreshBehaviorPanel();
+        await painted();
+        const out = { note: text('#behaviorSummaryBody .behavior-fps-note'), predicted: text('.behavior-pred[data-pkey^="b1|"] .behavior-bout-dur') };
+        let went = null;
+        C.setBehaviorNavigator(f => { went = f; });
+        document.querySelector('.behavior-pred[data-pkey^="b1|"] .behavior-bout-main').click();
+        out.leadIn = went;
+        (await import('/ui/behavior-timeline.js')).onTimelineRangeSelect(100, 159, { animal: 'id_0' });
+        out.range = text('.behavior-range-head');
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        M.toggleBehaviorMode();
+        AS.state.currentFrame = 200;
+        C.codeBehavior('b1', { animal: 'id_0' });
+        AS.state.currentFrame = 259;
+        C.requestBehaviorRepaint({ ui: true });
+        await painted();
+        out.mode = text('#behaviorModeHint');
+        M.toggleBehaviorMode();
+        St.setStateLayer(s, { name: 'kpms', source: 'keypoint-MoSeq', animals: { id_0: [[0, 59, 1], [60, 119, 2]], id_1: [[0, 119, 1]] } });
+        C.requestBehaviorRepaint({ states: true });
+        await painted();
+        out.states = text('#behaviorStatesBody .behavior-fps-note');
+        out.stateRun = text('#behaviorStatesBody .behavior-state-row[data-state="2"] .behavior-state-stats');
+        document.querySelector('#behaviorStatesBody .behavior-state-row[data-state="2"] button[data-act="next"]').click();
+        out.stateStatus = document.getElementById('statusText').textContent;
+        St.removeStateLayer(s, 'kpms');
+        C.setBehaviorNavigator((await import('/pose/initialization.js')).navigateToFrame);
+        return out;
+    });
+    const behaviorMenu = async (p, id) => {
+        await p.click('.menu-item[data-menu="behavior"]');
+        await p.click('#' + id);
+    };
     check(eq(made.bouts, [['id_0', 500, 620]]) && made.runFps === 60, 'detected at 60 fps: the planted rear');
     check(asMade.rate === 60 && asMade.readout[0][1] > 1.1 && asMade.readout[0][1] < 1.3, 'walking at ' + asMade.readout[0][1].toFixed(2) + ' body lengths a second, at 60 fps');
     check(!/rate on record/.test(asMade.status), 'the status has nothing to add at the rate the fps box holds');
@@ -524,6 +571,7 @@ try {
         const env = det.detectionEnv();
         const banner = document.querySelector('.behavior-stale');
         return { fps: AS.state.fps, rate: det.detectionFps(), shown: document.getElementById('fpsDisplay').textContent, views: AS.state.views.length, lazy: !!s.lazyLoader,
+                 note: (document.querySelector('#behaviorSummaryBody .behavior-fps-note') || {}).textContent, fileRate: (await import('/ui/behavior-io-modal.js')).behaviorSessionInfo(s).fps,
                  runFps: P.behaviorRunOf(s, 'b1').fps, bouts: P.predictedBouts(s).length, input: P.predictionStaleness(s, env).input,
                  settings: P.predictionStaleness(s, env).settings, stands: P.predictionsStand(s, env),
                  blue: document.getElementById('tbBehavior').classList.contains('active'), banner: banner ? banner.textContent : '' };
@@ -571,6 +619,41 @@ try {
         check(/^1 bout · 2\.0 s in all/.test(live[0]) && /^0 bouts/.test(live[1]) && /^0 bouts/.test(live[2]),
             route + ': the settings dialog counts at 60 fps: "' + live[0].slice(0, 22) + '", and 0 for the two the rate decides');
         await d.keyboard.press('Escape');
+        const seen = await shows(d);
+        check(/^Seconds at 60 fps/.test(seen.note) && seen.predicted === '2.0 s', route + ': the Behavior tab counts seconds at 60: the 121-frame bout is ' + seen.predicted + ', "' + seen.note + '"');
+        check(seen.leadIn === 440, route + ': opening that bout leads in by a second of video: frame ' + seen.leadIn + ' for a bout at 500');
+        check(/60 frames \(1\.0 s\)$/.test(seen.range), route + ': the timeline\'s menu: "' + seen.range + '"');
+        check(/● rear · id_0 1\.0 s/.test(seen.mode), route + ': Label Behaviors mode: "' + seen.mode.split('   ·   ').pop() + '"');
+        check(/4\.0 s with a syllable, at 60 fps$/.test(seen.states) && / · 1\.00 s$/.test(seen.stateRun) && /\(1\.00 s\)/.test(seen.stateStatus),
+            route + ': States: "' + seen.states.split(' · ').pop() + '", a 60-frame run is ' + seen.stateRun.split(' · ').pop());
+
+        // Files. The label on id_1 is frames 100–110, and the seconds are frames / 60.
+        await behaviorMenu(d, 'menuBehaviorExport');
+        await d.waitForSelector('.behavior-export-modal');
+        const exportSays = await d.textContent('.behavior-export-modal .behavior-ed-lead');
+        await d.check('input[name="bxTable"][value="bouts"]');
+        await d.selectOption('#bxSep', ',');
+        const download = d.waitForEvent('download');
+        await d.click('#bxGo');
+        const exported = fs.readFileSync(await (await download).path(), 'utf8').split('\r\n').find(l => /,id_1,/.test(l)) || '';
+        check(/^Seconds at 60 fps/.test(exportSays) && /,100,110,11,1\.667,1\.850,0\.183,.*,60$/.test(exported),
+            route + ': an export says 60 fps, and writes its seconds at that: ' + exported.split(',').slice(-9).join(','));
+        // A file in seconds, with no frame rate of its own: its frames depend on the rate.
+        const chooser = d.waitForEvent('filechooser');
+        await behaviorMenu(d, 'menuBehaviorImport');
+        await (await chooser).setFiles({ name: 'seconds.csv', mimeType: 'text/csv',
+            buffer: Buffer.from('Observation id,Subject,Behavior,Behavior type,Start (s),Stop (s)\r\nSixty,id_0,rear,STATE,1.000,2.000\r\n') });
+        await d.waitForSelector('.behavior-import-modal');
+        const importSays = await d.textContent('#biFps');
+        await d.click('#biGo');
+        const imported = await d.evaluate(async () => {
+            const L = await import('/pose/behavior-labels.js');
+            const s = (await import('/ui/app-state.js')).state.session;
+            return { rows: L.exportBoutRows(s).filter(r => r[6] === 'i').map(r => [r[1], r[3], r[4]]), labelsFps: L.behaviorFps(s) };
+        });
+        check(/^Seconds become frames at 60 fps/.test(importSays) && eq(imported.rows, [['id_0', 60, 119]]),
+            route + ': an import turns 1–2 s into frames ' + JSON.stringify(imported.rows) + ' at 60 fps: "' + importSays + '"');
+        check(imported.labelsFps === 60, route + ': and the labels record 60');
         const m = await measure(d);
         check(m.readout.length === 2 && eq(m.readout, asMade.readout), route + ': This frame reads what it read at 60 fps');
         check(eq(m.speed, asMade.speed), route + ': so do the settings\' feature columns');
@@ -609,6 +692,7 @@ try {
     await typeFps(box, 25);
     const typed = await look(box);
     check(typed.fps === 25 && isStale(typed), 'no video, 25 typed in the fps box: stale');
+    check(typed.note === 'Seconds at 25 fps.' && typed.fileRate === 25, 'and the Behavior tab and files go by the 25 typed, not the 60 on record');
     await typeFps(box, 60);
     const typed60 = await look(box);
     check(typed60.fps === 60 && isFresh(typed60), '60 typed: fresh');
@@ -632,6 +716,8 @@ try {
     const vid = await openApp();
     await reopen(vid, 'eager');
     await loadVideos(vid, VIDEO_10);
+    const lookAt10 = await look(vid);
+    check(lookAt10.note === 'Seconds at 10 fps.' && lookAt10.fileRate === 10, 'a 10 fps video: the Behavior tab and files go by it, not the 60 on record');
     const at10 = await measure(vid);
     check(at10.rate === 10 && at10.runFps.every(f => f === 10), 'a 10 fps video: Detect measures at 10, and each run records it');
     await vid.close();
@@ -661,6 +747,7 @@ try {
         out.video = det.sessionFps(other);
         AS.state.videoFiles = []; other.fps = 30;
         out.nothing = det.sessionFps(new pd.Session(s.cameras, s.skeleton, [], 'Empty'));
+        out.exportRate = (await import('/ui/behavior-io-modal.js')).behaviorSessionInfo(other).fps;
         await det.detectAllSessions();
         out.runs = [P.behaviorRunOf(s, 'b1').fps, P.behaviorRunOf(other, 'b1').fps];
         out.status = document.getElementById('statusText').textContent;
@@ -679,6 +766,7 @@ try {
     check(others.typed === 30, 'unless 30 was typed for it');
     check(others.manifest === 50 && others.video === 40, 'or its manifest (50) or its video (40) said otherwise');
     check(others.nothing === 60, 'a session with nothing on record takes the app\'s rate');
+    check(others.exportRate === 25, 'exporting all sessions writes that session\'s seconds at its own 25');
     check(eq(others.runs, [60, 25]) && /in 2 sessions · no video: at 60 fps, the rate on record/.test(others.status),
         'Detect on all sessions measures each at its own rate (' + others.runs.join(', ') + '), and says so');
     check(others.labels === 60 && others.fromLabels === 60, 'with no runs left, the labels\' 60 from the file is the rate on record');

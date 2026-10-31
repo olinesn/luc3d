@@ -22,7 +22,7 @@ import {
     sessionAnimals, focalAnimal, selectedBehaviorId, codeBehavior, armRange, clearBehaviorRange,
     registerBehaviorRepaint, animalColor,
 } from './behavior-coding.js';
-import { detectionEnv } from './behavior-detect.js';
+import { detectionEnv, detectionFps } from './behavior-detect.js';
 import { stateTimelineRows } from './behavior-states.js';
 import { behaviors, behaviorById } from '../pose/behavior-ethogram.js';
 import { listBouts, runningStates, hasBehaviorData, orphanedAnimals } from '../pose/behavior-labels.js';
@@ -163,9 +163,8 @@ function onOutside(e) {
 
 function frameRangeText(start, end) {
     var n = end - start + 1;
-    var fps = state.fps > 0 ? state.fps : 30;
     return 'Frames ' + (start + 1).toLocaleString('en-US') + '–' + (end + 1).toLocaleString('en-US') +
-        ' · ' + n.toLocaleString('en-US') + ' frame' + (n === 1 ? '' : 's') + ' (' + (n / fps).toFixed(1) + ' s)';
+        ' · ' + n.toLocaleString('en-US') + ' frame' + (n === 1 ? '' : 's') + ' (' + (n / detectionFps()).toFixed(1) + ' s)';
 }
 
 /**

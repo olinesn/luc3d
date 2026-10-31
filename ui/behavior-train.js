@@ -294,8 +294,7 @@ export function nextActiveItem(kind) {
 
 function showItem(it) {
     setReviewFocus(state.session, it, 'learning');
-    var fps = state.fps > 0 ? state.fps : 30;
-    goToBehaviorFrame(Math.max(0, it.start - Math.round(BOUT_LEAD_IN_SECONDS * fps)));
+    goToBehaviorFrame(Math.max(0, it.start - Math.round(BOUT_LEAD_IN_SECONDS * detectionFps())));
     requestBehaviorRepaint({ predictions: true });
 }
 

@@ -32,7 +32,8 @@
  *  8. No video: trained and predicted at 60 fps, saved, reopened with the app at
  *     the default 30: retraining measures at the 60 on record, so it gives the
  *     same forest and the predictions still stand; the threshold dialog's live
- *     numbers and an exported model file use that rate too.
+ *     numbers, an exported model file and active learning's lead-in use that
+ *     rate too.
  *
  * Run: node tests/e2e/behavior-classifier.mjs   (spawns its own http.server; PORT= to move it)
  */
@@ -438,6 +439,19 @@ try {
         page.evaluate(async () => (await import('/ui/behavior-train.js')).exportClassifiers()),
     ]);
     check(JSON.parse(readFileSync(await sixtyFile.path(), 'utf8')).fps === 60, 'and an exported model file records it');
+    await page.evaluate(async () => {
+        await (await import('/ui/behavior-detect.js')).detectAllFrames();
+        (await import('/ui/behavior-coding.js')).setBehaviorNavigator((f) => { window.__went = f; });
+    });
+    await openTab();
+    await page.selectOption('select[data-act="al-behavior"]', noVideo.id);
+    await page.click('[data-act="al-uncertain"]');
+    await page.waitForSelector('.behavior-al-item', { timeout: 10000 });
+    const leadIn = await page.evaluate(async () => {
+        const it = (await import('/ui/behavior-train.js')).activeLearning().current;
+        return { start: it.start, went: window.__went };
+    });
+    check(leadIn.went === Math.max(0, leadIn.start - 60), 'and Next uncertain ▸ leads in by a second of video: frame ' + leadIn.went + ' for a stretch at ' + leadIn.start);
 
     console.log('\n-- page errors --');
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
