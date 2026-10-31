@@ -18,7 +18,7 @@ import {
 } from '../pose/pose-data.js';
 import {
     makePlaceholderCamera, isPlaceholderCamera, hasRealCalibration,
-    cameraNamesInUse, ensurePlaceholderCameras, PLACEHOLDER_DEFAULT_SIZE,
+    cameraNamesInUse, ensurePlaceholderCameras, cameraNamesFromVideos, PLACEHOLDER_DEFAULT_SIZE,
 } from '../pose/placeholder-cameras.js';
 
 let passed = 0, failed = 0;
@@ -126,6 +126,34 @@ console.log('\n§6 nothing to do');
     eq(ensurePlaceholderCameras(null, [], []), [], 'no session → []');
     const s = new Session([], skel(), ['t'], 'empty');
     eq(ensurePlaceholderCameras(s), [], 'no views, videos or poses → no cameras');
+}
+
+console.log('\n§ cameraNamesFromVideos: a file with no recording session');
+{
+    eq(cameraNamesFromVideos([{ filename: '/data/rec/left.mp4' }, { filename: 'C:\\data\\right.avi' }]),
+        ['left', 'right'], 'the file stem, whichever slash the path uses');
+    eq(cameraNamesFromVideos([{ filename: 'a.mp4', sourceFilename: '/x/orig.mp4' }]), ['orig'],
+        "a record's source video goes first");
+    eq(cameraNamesFromVideos([{ filename: 'a.mp4', sourceVideo: { filename: '/x/orig.mp4' } }]), ['orig'],
+        "the reader's source video too");
+    eq(cameraNamesFromVideos([{ filename: 'a.mp4', backendMetadata: { source_filename: '/x/orig.mp4' } }]), ['orig'],
+        'and the source name in the backend metadata');
+    eq(cameraNamesFromVideos([{ filename: ['/seq/frame_001.png', '/seq/frame_002.png'] }]), ['frame_001'],
+        'an image sequence: its first image');
+    eq(cameraNamesFromVideos([{ filename: '.' }, null, { filename: '' }, {}]), ['cam_0', 'cam_1', 'cam_2', 'cam_3'],
+        'no usable name: cam_<i>');
+    eq(cameraNamesFromVideos([{ filename: '.mp4' }]), ['cam_0'], 'nothing before the extension is no name either');
+    eq(cameraNamesFromVideos([]), [], 'no videos, no names');
+
+    eq(cameraNamesFromVideos([{ filename: 'rec/Camera0_topB/0.mp4' }, { filename: 'rec/Camera1_topC/0.mp4' }, { filename: 'rec/other.mp4' }]),
+        ['Camera0_topB', 'Camera1_topC', 'other'], 'one stem on two videos: their parent folders (campy)');
+    eq(cameraNamesFromVideos([{ filename: 'a/0.mp4' }, { filename: 'a/0.avi' }, { filename: 'b/0.mov' }]),
+        ['0', '0_2', '0_3'], 'folders that do not tell them apart: numbered');
+    eq(cameraNamesFromVideos([{ filename: '0.mp4' }, { filename: '0.mp4' }]), ['0', '0_2'], 'no folder at all: numbered');
+    eq(cameraNamesFromVideos([{ filename: 'x/0.mp4' }, { filename: 'y/0.mp4' }, { filename: 'z/x.mp4' }]),
+        ['x', 'y', 'x_2'], 'a folder name meeting another video\'s stem still comes out unique');
+    const many = Array.from({ length: 40 }, (_, i) => ({ filename: 'same.mp4', i }));
+    check(new Set(cameraNamesFromVideos(many)).size === 40, 'always one name per video, all different');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

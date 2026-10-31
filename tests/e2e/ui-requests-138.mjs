@@ -9,7 +9,7 @@
  *  2. The Speed popover offers 0.25x and 0.5x presets, they apply, and the
  *     (now wider) popover stays inside the window.
  *  3. The Triangulate / Triangulate All buttons say which method a plain click
- *     runs (in its tooltip; the label stays "Triangulate"), and follow Settings ▸ Default Triangulation
+ *     runs (in its tooltip; the label stays "Triangulate"), and follow Settings ▸ Triangulation Wizard
  *     when it is changed through the real Settings dialog — immediately, and
  *     after a reload (the setting persists in localStorage).
  *
@@ -54,7 +54,7 @@ try {
     const bar = await page.evaluate(() => [...document.querySelectorAll('.menu-bar > .menu-item')]
         .map(el => ({ text: el.firstChild.textContent.trim(), id: el.id, left: el.getBoundingClientRect().left })));
     const names = bar.map(b => b.text);
-    check(JSON.stringify(names) === JSON.stringify(['File', 'Edit', 'Calibrate', 'Tracks', 'View', 'Hot Keys', 'Help', 'Docs', 'Settings']),
+    check(JSON.stringify(names) === JSON.stringify(['File', 'Edit', 'Calibrate', 'Tracks', 'Behavior', 'View', 'Hot Keys', 'Help', 'Docs', 'Settings']),
         'menu bar reads ' + names.join(' | '));
     const help = bar.find(b => b.text === 'Help'), hot = bar.find(b => b.text === 'Hot Keys');
     const docs = bar.find(b => b.text === 'Docs');

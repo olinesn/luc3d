@@ -98,6 +98,17 @@ const ACTION_CATALOG = [
     { id: 'toggleErrors', label: 'Toggle Errors', category: 'View', binding: 'e', editable: true, dispatched: true },
     { id: 'definePlanes', label: 'Toggle Defining Plane Mode', category: 'View', binding: 'Mod+Shift+P', editable: true, dispatched: true },
 
+    // --- Behavior (ui/behavior-mode.js) ---
+    // The mode toggle is dispatched. The keys below it work only while the
+    // mode is on and are handled by the mode itself (reference entries); each
+    // behavior's own letter is set in the ethogram and listed in Hot Keys help.
+    { id: 'behaviorMode', label: 'Toggle Label Behaviors mode', category: 'Behavior', binding: 'Mod+Shift+L', editable: true, dispatched: true },
+    { id: 'behaviorFocal', label: 'Pick the animal to label (in the mode)', category: 'Behavior', binding: '1 – 9', editable: false, dispatched: false },
+    { id: 'behaviorRange', label: 'Range start / end at the playhead (in the mode)', category: 'Behavior', binding: '[ / ]', editable: false, dispatched: false },
+    { id: 'behaviorNot', label: 'Label the range "not" a behavior (in the mode)', category: 'Behavior', binding: 'Shift+behavior key', editable: false, dispatched: false },
+    { id: 'behaviorBoutNav', label: 'Previous / next bout (in the mode)', category: 'Behavior', binding: ', / .', editable: false, dispatched: false },
+    { id: 'behaviorUndo', label: 'Undo / redo a behavior edit (in the mode)', category: 'Behavior', binding: 'Mod+Z / Mod+Shift+Z', editable: false, dispatched: false },
+
     // --- Help ---
     { id: 'showHotkeys', label: 'Show keyboard shortcuts help', category: 'Help', binding: '?', editable: true, dispatched: true },
 ];
@@ -424,7 +435,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
         min: 0, max: 640, step: 1,
-        desc: 'Robust triangulation: after the 3D solve, if a node\'s reprojection error in any view (the distance on that view\'s 2D image between the prediction and the reprojection) is over this many pixels, the view that misses by most is dropped for that node and the node is re-triangulated from the rest; this repeats while more than 2 views are left. A node whose last 2 views still miss by more gets no 3D point. 100 to 15 px is the recommended range: lower can drop good views too. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless. Settings ▸ Default Triangulation draws it.',
+        desc: 'Robust triangulation: after the 3D solve, if a node\'s reprojection error in any view (the distance on that view\'s 2D image between the prediction and the reprojection) is over this many pixels, the view that misses by most is dropped for that node and the node is re-triangulated from the rest; this repeats while more than 2 views are left. A node whose last 2 views still miss by more gets no 3D point. 100 to 15 px is the recommended range: lower can drop good views too. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless. Settings ▸ Triangulation Wizard draws it.',
     },
 ];
 

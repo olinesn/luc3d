@@ -136,12 +136,35 @@ try {
     // ---- 3. KEYBOARD focus is left alone ------------------------------------
     // Tab to the checkbox rather than calling .focus(): only a real keyboard
     // focus sets :focus-visible, which is what the blur rule keys on.
+    //
+    // The walk crosses the toolbar's hover menus: focus on a menu's button opens
+    // it (`.tri-dropdown:focus-within`, styles.css), so Tab stops on its items
+    // too. That is only right while every stop can be seen, so each is checked.
+    // The toolbar itself says how many presses may be needed: the fixed 6 this
+    // used to allow ran out on the Triangulate button when #399 moved Track.
     await reset();
-    await page.evaluate(() => { document.getElementById('tbTrackAll').focus(); });
-    for (let i = 0; i < 6; i++) {
+    await page.evaluate(() => { document.getElementById('tbSessions').focus(); });
+    const maxPresses = await page.evaluate(() =>
+        document.querySelectorAll('#toolbar button, #toolbar input').length);
+    const stops = [];
+    const unseenStops = [];
+    for (let i = 0; i < maxPresses; i++) {
         await page.keyboard.press('Tab');
-        const id = await page.evaluate(() => document.activeElement.id);
-        if (id === 'visUser') break;
+        const stop = await page.evaluate(() => {
+            const a = document.activeElement;
+            const menu = a.closest('.tri-dropdown-menu');
+            // Jump past the menu's fade-in: what counts is where it ends up.
+            if (menu) menu.getAnimations().forEach(fade => fade.finish());
+            const r = a.getBoundingClientRect();
+            const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            return {
+                id: a.id || a.name || a.textContent.trim(),
+                seen: a.contains(top) && (!menu || getComputedStyle(menu).opacity === '1'),
+            };
+        });
+        stops.push(stop.id);
+        if (!stop.seen) unseenStops.push(stop.id);
+        if (stop.id === 'visUser') break;
     }
     const kb = await page.evaluate(() => ({
         id: document.activeElement.id,
@@ -149,26 +172,34 @@ try {
     }));
     check(kb.id === 'visUser' && kb.focusVisible === true,
         `Tab reaches #visUser with keyboard focus (id=${kb.id}, :focus-visible=${kb.focusVisible})`);
+    check(['tbTrackFrame', 'tbTriangulate', 'tbSmoothFrame'].every(id => stops.includes(id)),
+        `the walk goes into the hover menus' items (stops: ${stops.join(', ')})`);
+    check(unseenStops.length === 0,
+        `every Tab stop on the way can be seen (hidden: ${JSON.stringify(unseenStops)})`);
 
-    const before = await snap();
-    await page.keyboard.press('Space');
-    s = await snap();
-    check(s.user !== before.user,
-        `Space on a TAB-focused checkbox still toggles it (${before.user} -> ${s.user})`);
-    check(s.playing === false,
-        `and does not also play the video (isPlaying=${s.playing})`);
-    check(s.activeId === 'visUser',
-        `keyboard focus is kept, not stolen (activeElement=${s.activeId})`);
+    // Only on the checkbox: Space on any other stop would activate it, and on
+    // Triangulate that opens a dialog which blocks the rest of this test.
+    if (kb.id === 'visUser') {
+        const before = await snap();
+        await page.keyboard.press('Space');
+        s = await snap();
+        check(s.user !== before.user,
+            `Space on a TAB-focused checkbox still toggles it (${before.user} -> ${s.user})`);
+        check(s.playing === false,
+            `and does not also play the video (isPlaying=${s.playing})`);
+        check(s.activeId === 'visUser',
+            `keyboard focus is kept, not stolen (activeElement=${s.activeId})`);
 
-    // The half of the fix that keyboard users get: a checkbox owns Space and
-    // nothing else, so every other shortcut still works while it has focus.
-    const beforeArrow = await snap();
-    await page.keyboard.press('ArrowRight');
-    s = await snap();
-    check(s.frame === beforeArrow.frame + 1,
-        `arrow keys step frames while the checkbox holds focus (${beforeArrow.frame} -> ${s.frame})`);
-    check(s.user === beforeArrow.user,
-        `and the arrow does not disturb the checkbox (checked=${s.user})`);
+        // The half of the fix that keyboard users get: a checkbox owns Space and
+        // nothing else, so every other shortcut still works while it has focus.
+        const beforeArrow = await snap();
+        await page.keyboard.press('ArrowRight');
+        s = await snap();
+        check(s.frame === beforeArrow.frame + 1,
+            `arrow keys step frames while the checkbox holds focus (${beforeArrow.frame} -> ${s.frame})`);
+        check(s.user === beforeArrow.user,
+            `and the arrow does not disturb the checkbox (checked=${s.user})`);
+    }
 
     // ---- 4. A real text field still swallows everything ---------------------
     // The per-camera rotation row lives in the Visibility tab, which has to be
