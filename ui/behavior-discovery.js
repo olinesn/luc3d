@@ -19,7 +19,7 @@
 
 import { state } from './app-state.js';
 import { showLoading, showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
-import { buildBehaviorContext, cachedBehaviorContext } from './behavior-detect.js';
+import { buildBehaviorContext, cachedBehaviorContext, sessionFps } from './behavior-detect.js';
 import { requestBehaviorRepaint, setReviewFocus, goToBehaviorFrame, openBehaviorTab, behaviorUi } from './behavior-coding.js';
 import { discoverBehaviors, storeDiscovery } from '../pose/behavior-discovery.js';
 import { stateColor, stateLabel, statesToBouts, OTHER_STATE_COLOR } from '../pose/behavior-states.js';
@@ -41,7 +41,6 @@ var STAGE_ORDER = Object.keys(STAGES);
 
 function n(x) { return Number(x || 0).toLocaleString('en-US'); }
 function plural(k, one, many) { return n(k) + ' ' + (k === 1 ? one : (many || one + 's')); }
-function fps() { return state.fps > 0 ? state.fps : 30; }
 
 function sessionName(s, i) {
     return (s && s.name) || 'session ' + (i + 1);
@@ -155,7 +154,7 @@ export function nextStateExample(session, layer, k, word) {
     var it = e.list[e.at];
     showStateMoment(session, layer, k, word, it.animal, it.start, it.end);
     setStatus(word + ' ' + stateLabel(layer, k) + ': ' + it.animal + ', frames ' + n(it.start + 1) + '–' + n(it.end + 1) + ' (' +
-        ((it.end - it.start + 1) / fps()).toFixed(2) + ' s) · example ' + n(e.at + 1) + ' of ' + n(e.list.length) + ', longest first');
+        ((it.end - it.start + 1) / sessionFps(session)).toFixed(2) + ' s) · example ' + n(e.at + 1) + ' of ' + n(e.list.length) + ', longest first');
     return it;
 }
 
@@ -268,7 +267,7 @@ export function discoveryBinAt(canvas, result, cssX, cssY) {
 /** Go to a bin of the map: its moment, boxed on the video. */
 export function showDiscoveryBin(session, layer, bin, word) {
     if (!bin || !session) return;
-    var half = Math.max(1, Math.round(0.05 * fps()));
+    var half = Math.max(1, Math.round(0.05 * sessionFps(session)));
     showStateMoment(session, layer, bin.state, word, bin.animal, Math.max(0, bin.frame - half), bin.frame + half);
     setStatus(word + ' ' + (bin.state >= 0 ? stateLabel(layer, bin.state) : 'none') + ': ' + bin.animal + ', frame ' + n(bin.frame + 1));
 }

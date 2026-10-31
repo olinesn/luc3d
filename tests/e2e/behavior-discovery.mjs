@@ -22,7 +22,8 @@
  *     steps through its examples, longest first, boxed on the video; a press on the
  *     map goes to that bin's moment, and a repaint of the tab does not redraw it.
  *  5. Name a cluster and promote it to a new behavior: an ethogram entry of that name,
- *     and its runs as predictions (source states:Discovery) to Accept or Reject.
+ *     and its runs as predictions (source states:Discovery) to Accept or Reject. With
+ *     no video, an example's seconds and a map press's box use the rate on record.
  *  6. Split a behavior: the dialog offers behaviors with present labels; the layer
  *     has states only on those frames. All sessions: one layer each, one numbering.
  *  7. Save (File ▸ Save As's path) -> reopen (the importer's reader): the layers,
@@ -398,6 +399,24 @@ try {
         return { labelled: L.listBouts(s, { behaviorId: b.id, present: true }).length };
     });
     check(reviewed.labelled === 1, 'accepting one labels it');
+    // No video, and now a rate on record (30): state.fps only holds a default, so it must not count.
+    const atRecordedRate = await page.evaluate(async () => {
+        const B = await import('/ui/behavior-discovery.js');
+        const S = await import('/pose/behavior-states.js');
+        const C = await import('/ui/behavior-coding.js');
+        const AS = await import('/ui/app-state.js');
+        const s = AS.state.session, L = S.stateLayer(s, 'Discovery'), before = AS.state.fps;
+        AS.state.fps = 120;
+        B.clearStateExample();
+        const it = B.nextStateExample(s, L, 0, 'Cluster');
+        const status = document.getElementById('statusText').textContent;
+        B.showDiscoveryBin(s, L, { state: 0, animal: it.animal, frame: 1000 }, 'Cluster');
+        const r = C.behaviorUi().review;
+        AS.state.fps = before;
+        return { status, frames: it.end - it.start + 1, box: r && r.end - r.start };
+    });
+    check(atRecordedRate.status.includes(`(${(atRecordedRate.frames / 30).toFixed(2)} s)`), `no video: an example's seconds use the rate on record, not state.fps ("${atRecordedRate.status.slice(0, 70)}")`, atRecordedRate);
+    check(atRecordedRate.box === 4, 'and so does a map press\'s 100 ms box (2 frames each side at 30 fps)', atRecordedRate);
 
     console.log('\n-- 6. Split a behavior --');
     await page.evaluate(() => document.getElementById('menuBehaviorDiscover').click());
