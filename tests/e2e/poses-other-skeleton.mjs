@@ -18,7 +18,8 @@
  *  D. Edits around a kept pose: node removed / added, track deleted, camera renamed, a
  *     corrected pose beside it, every shown pose on its frame deleted.
  *  E. File ▸ Add SLP.
- *  F. A per-camera folder through the raw worker's columnar route.
+ *  F. A per-camera folder: the raw worker's columnar route, and the typed reader's for a
+ *     file whose detections carry labels.
  *  G. A group linking a pose on another skeleton: the load refuses, nothing changes.
  *  H. A LUC3D project whose sessions are on different skeletons: each shows its own.
  *  I. A project mixing lazy and eager sessions.
@@ -280,6 +281,14 @@ a, y = video("camA.mp4"), video("camA_second.mp4")
 fa = frames_on(a, 100)
 fa[0].instances.append(on_sk2(600, 0))
 sio.Labels(labeled_frames=fa + frames_on_sk2(y, 500), videos=[a, y], skeletons=[sk, sk2], tracks=[T1, T2]).save(os.path.join(out, "camA_two_skeletons.slp"), embed=False)
+# The same with an identity on a detection: only the typed reader has those.
+a, y = video("camA.mp4"), video("camA_second.mp4")
+beta = sio.Identity(name="beta")
+fa = frames_on(a, 100)
+labeled = on_sk2(600, 0)
+labeled.identity = beta
+fa[0].instances.append(labeled)
+sio.Labels(labeled_frames=fa + frames_on_sk2(y, 500), videos=[a, y], skeletons=[sk, sk2], tracks=[T1, T2], identities=[beta]).save(os.path.join(out, "camA_labeled.slp"), embed=False)
 b = video("camB.mp4")
 sio.Labels(labeled_frames=frames_on(b, 200), videos=[b], skeletons=[sk], tracks=[T1, T2]).save(os.path.join(out, "camB_alone.slp"), embed=False)
 `;
@@ -307,7 +316,7 @@ const browser = await chromium.launch();
 // `page.evaluate` has no timeout, so a step waiting on a click nobody makes would sit
 // silent for good. Closing the browser fails that step.
 const stallGuard = setTimeout(() => {
-    console.log('\nStuck: no check for 5 minutes');
+    console.log('\nStuck: no step finished for 5 minutes');
     browser.close();
 }, 5 * 60 * 1000);
 stallGuard.unref();
@@ -373,6 +382,7 @@ async function open(loader, bytes, page) {
     await putBytes(page, '__file', bytes);
     await LOADERS[loader](page, bytes);
     await settle(page, loader + ' load');
+    stallGuard.refresh();
     return page;
 }
 
@@ -391,6 +401,7 @@ async function save(page) {
         return btoa(s);
     });
     await page.close();
+    stallGuard.refresh();
     return Buffer.from(b64, 'base64');
 }
 
@@ -452,7 +463,7 @@ const FIXTURES = {
 
 try {
     uv(PY_WRITE, [tmp]);
-    const NAMES = [...Object.keys(FIXTURES), 'skeleton_mixed', 'skeleton_twin', 'skeleton_stale', 'skeleton_two_sessions', 'one_skeleton', 'skeleton_group', 'camA_two_skeletons', 'camB_alone'];
+    const NAMES = [...Object.keys(FIXTURES), 'skeleton_mixed', 'skeleton_twin', 'skeleton_stale', 'skeleton_two_sessions', 'one_skeleton', 'skeleton_group', 'camA_two_skeletons', 'camA_labeled', 'camB_alone'];
     const sourcePaths = NAMES.map(n => path.join(tmp, n + '.slp'));
     const sources = {};
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
@@ -470,6 +481,8 @@ try {
         for (const loader of ['eager', 'folder', 'raw']) {
             // A file with no session has no calibration for the folder route to read.
             if (name === 'skeleton_no_session' && loader === 'folder') continue;
+            // The raw worker does not stand in for a file with labels on its detections: below.
+            if (name === 'skeleton_kinds' && loader === 'raw') continue;
             let bytes = readFile(name);
             for (let gen = 1; gen <= 2; gen++) {
                 const page = await open(loader, bytes);
@@ -483,16 +496,21 @@ try {
                 }
                 bytes = await save(page);
                 const source = sources[name];
-                // The raw worker reads no identities at all, a file's or a pose's.
-                const raw = loader === 'raw';
                 savedForPython(bytes, what, {
-                    poses: source.poses, videos: FIXTURES[name].videos,
-                    detail: raw ? source.detail.map(r => r.replace(/identity=.*$/, 'identity=')) : source.detail,
+                    poses: source.poses, detail: source.detail, videos: FIXTURES[name].videos,
                     sessions: name === 'skeleton_no_session' ? undefined : source.sessions,
-                    tracks: source.tracks, skeletons: source.skeletons, identities: raw ? [] : source.identities,
+                    tracks: source.tracks, skeletons: source.skeletons, identities: source.identities,
                 });
             }
         }
+    }
+    {
+        // It would lose them, so it does not open the file: nothing changes.
+        const page = await open('raw', readFile('skeleton_kinds'));
+        const status = await statusOf(page);
+        check(/forced to the raw worker/.test(status), 'skeleton_kinds, raw: not opened, as the raw worker would lose its labels', status);
+        check(await page.evaluate(() => window.__lucid.state.sessions.length) === 0, 'skeleton_kinds, raw: nothing opened');
+        await page.close();
     }
     for (const loader of ['eager', 'folder', 'raw']) {
         // The control: nothing to say and nothing to keep.
@@ -671,7 +689,8 @@ try {
         savedForPython(bytes, 'a deleted track', { poses, detail: sources.skeleton_camera.detail, tracks: ['mouse1', 'mouse2'] });
     }
     {
-        // Rename a camera: its kept poses go with it, onto the video it now writes.
+        // Rename a camera: its kept poses stay with it, on the one video it writes, under
+        // the file's own name for it. Left behind, they would list that video a second time.
         const page = await open('eager', readFile('skeleton_camera'));
         await page.evaluate(async () => {
             const { state } = await import('/ui/app-state.js');
@@ -679,8 +698,7 @@ try {
             state.session.renameCameraInAllData('camB', 'camZ');
         });
         const bytes = await save(page);
-        const poses = sources.skeleton_camera.poses.map(r => r.replace(/^camB\.mp4\|/, 'camZ.mp4|')).sort();
-        savedForPython(bytes, 'a renamed camera', { poses, videos: ['camA.mp4', 'camZ.mp4'], sessions: [{ camA: 'camA.mp4', camZ: 'camZ.mp4' }] });
+        savedForPython(bytes, 'a renamed camera', { poses: sources.skeleton_camera.poses, videos: ['camA.mp4', 'camB.mp4'], sessions: [{ camA: 'camA.mp4', camZ: 'camB.mp4' }] });
     }
     {
         // Lose a camera: its kept poses stay on the file's own record of that video.
@@ -753,9 +771,9 @@ try {
     }
 
     console.log('\nF. A per-camera folder, through the raw worker');
-    const openFolder = async (route) => {
+    const openFolder = async (route, camA = 'camA_two_skeletons') => {
         const page = await newAppPage();
-        await putBytes(page, '__camA', readFile('camA_two_skeletons'));
+        await putBytes(page, '__camA', readFile(camA));
         await putBytes(page, '__camB', readFile('camB_alone'));
         // The folder goes lazy on a file's size alone, and HDF5 ignores trailing bytes.
         const loading = page.evaluate(async (route) => {
@@ -787,6 +805,16 @@ try {
         savedForPython(saved, 'per-camera, eager', { poses, detail: sources.camA_two_skeletons.detail, sessions: [{ camA: 'camA.mp4', camB: 'camB.mp4' }], skeletons: sources.camA_two_skeletons.skeletons });
         const again = await save(await open('eager', saved));
         savedForPython(again, 'per-camera, eager, saved again as a project', { poses, detail: sources.camA_two_skeletons.detail, sessions: [{ camA: 'camA.mp4', camB: 'camB.mp4' }], skeletons: sources.camA_two_skeletons.skeletons });
+    }
+    {
+        // A file with labels on its detections takes the typed reader: the same rule, and the label stays.
+        const poses = [...sources.camA_labeled.poses, ...sources.camB_alone.poses].sort();
+        const { page, status } = await openFolder('eager', 'camA_labeled');
+        check(/1 pose on a camera's video is on another skeleton \("other"\)/.test(status), 'typed route: the status says what is on another skeleton', status);
+        const shown = await shownInApp(page);
+        check(shown[0].cams.camA.every(r => r[1] === 2 && r[2] < 200), 'typed route: a camera shows only the session\'s poses', shown[0].cams.camA);
+        check(sources.camA_labeled.detail.some(r => r.includes('identity=beta')), 'the source holds an identity on a kept pose', sources.camA_labeled.detail);
+        savedForPython(await save(page), 'per-camera, typed route', { poses, detail: sources.camA_labeled.detail, sessions: [{ camA: 'camA.mp4', camB: 'camB.mp4' }], skeletons: sources.camA_labeled.skeletons });
     }
     {
         // The lazy route's save, for the same poses.
@@ -877,10 +905,10 @@ try {
         const status = await statusOf(page);
         check(/Not opened: 6 groups/.test(status), 'raw worker, groups beside another skeleton\'s poses: refuses', status);
         await page.close();
-        // Nothing to check on a file of its kind today: it keeps no groups for this reader.
+        // Groups in `/session_data` are out of its reach, so it does not stand in at all.
         const raw = await open('raw', readFile('skeleton_mixed'));
-        check(/6 poses on a camera's video are on another skeleton/.test(await statusOf(raw)), 'raw worker, a file holding its groups in /session_data: opens');
-        savedForPython(await save(raw), 'raw worker, groups in /session_data', { poses: sources.skeleton_mixed.poses, skeletons: sources.skeleton_mixed.skeletons });
+        check(/forced to the raw worker/.test(await statusOf(raw)), 'raw worker, a file holding its groups in /session_data: not opened', await statusOf(raw));
+        await raw.close();
     }
     {
         // The lazy route keeps such a file's groups in its store: nothing refused, nothing lost.

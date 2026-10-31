@@ -84,7 +84,8 @@ export function preferNonCalibrationVideos(files, groupKeyFn) {
 /**
  * The camera a video belongs to, by the three signals every load path shares:
  * the parent directory name, the camera name appearing anywhere in the filename
- * stem, and the video filename the project file references for that camera.
+ * stem (the whole stem first, so a `clip10.mp4` goes to camera `clip10`, not
+ * `clip1`), and the video filename the project file references for that camera.
  * All comparisons are case-insensitive. Returns null when nothing matches.
  *
  * @param {File} file
@@ -102,6 +103,9 @@ export function matchVideoToCamera(file, cameraNames, refBaseByCam) {
     var ci;
     for (ci = 0; ci < cameraNames.length; ci++) {
         if (parentDir && parentDir === cameraNames[ci].toLowerCase()) return cameraNames[ci];
+    }
+    for (ci = 0; ci < cameraNames.length; ci++) {
+        if (stem === cameraNames[ci].toLowerCase()) return cameraNames[ci];
     }
     for (ci = 0; ci < cameraNames.length; ci++) {
         if (stem.indexOf(cameraNames[ci].toLowerCase()) >= 0) return cameraNames[ci];
