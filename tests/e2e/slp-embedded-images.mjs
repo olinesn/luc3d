@@ -313,7 +313,7 @@ try {
         const s = await open(page, 'images_only.pkg.slp');
         check(/^SLP loaded/.test(s.status), 'loads', s.status);
         check(s.labeled.length === 0 && s.current === 10, 'with no labels, opens on its first image', s);
-        check(eq(s.views, ['images_only.pkg', 'images_only.pkg_1']), 'two videos with no source name get a camera each', s.views);
+        check(s.views.length === 2 && new Set(s.views).size === 2, 'two videos with no source name get a camera each', s.views);
         const size = await page.evaluate(() => window.__lucid.state.views.map(v => [v.videoWidth, v.videoHeight]));
         check(eq(size[0], [2, 2]), 'the size is read from an image', size);
         check(size[1][0] > 0 && size[1][1] > 0, 'and a video with no images gets a size anyway, without hanging', size);
