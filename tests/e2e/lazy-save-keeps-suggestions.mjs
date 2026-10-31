@@ -192,9 +192,9 @@ save("two_sessions", frames_on(x, 500) + fa + fb + fc, [x, a, b, c, d], [s1, s2]
 a, b, x = video("camA.mp4"), video("camB.mp4"), video("outside.mp4")
 save("all_outside", frames_on(x, 500), [a, b, x], [session([("camA", a, []), ("camB", b, [])])], sug(a, 15) + sug(x, 44))
 
-# A session that maps no video.
-a, b, x = video("camA.mp4"), video("camB.mp4"), video("third.mp4")
-save("no_map", frames_on(a, 100) + frames_on(b, 200) + frames_on(x, 500), [a, b, x], [session([("camA", None, []), ("camB", None, [])])], sug(a, 16) + sug(x, 45))
+# No session at all: each video is a camera, the one with no poses too.
+a, b, y = video("camA.mp4"), video("camB.mp4"), video("no_poses.mp4")
+save("plain_file", frames_on(a, 100) + frames_on(b, 200), [a, b, y], [], sug(b, 26) + sug(y, 53) + sug(a, 16))
 
 # The same file name in three folders, as campy names every video.
 a, b, x = video("rec/cam0/0.mp4"), video("rec/cam1/0.mp4"), video("rec/other/0.mp4")
@@ -311,14 +311,19 @@ async function settle(page, what) {
     if (done !== true) throw new Error(what + ': did not finish: ' + done);
 }
 
-/** The lazy route: `handleLoadProjectSlpLazy`, as File ▸ Open takes any `.slp` over 200 MB. */
-async function openLazy(bytes) {
+/**
+ * The lazy route: `handleLoadProjectSlpLazy`, as File ▸ Open takes any `.slp` over 200 MB.
+ * It can hand a file on to the eager path (`openProjectSlp`'s `eagerReason`, as for a
+ * session that maps no video), and then this test would say nothing about a lazy save.
+ */
+async function openLazy(bytes, what) {
     const page = await newAppPage();
     await putBytes(page, '__file', bytes);
     await page.evaluate(() => { window.__done = false; (async () => {
         await (await import('/loading/session-loader.js')).handleLoadProjectSlpLazy(new File([window.__file], 'project.slp'));
     })().then(() => { window.__done = true; }, e => { window.__done = 'ERR ' + (e && e.stack || e); }); });
     await settle(page, 'lazy load');
+    check(await page.evaluate(() => !!window.__lucid.state.session.lazyLoader), what + ': opened lazily');
     return page;
 }
 
@@ -399,7 +404,7 @@ const FILES = {
     only_suggested: { videos: ['camA.mp4', 'camB.mp4', 'outside.mp4', 'no_poses_y.mp4', 'no_poses_z.mp4'] },
     two_sessions: { videos: ['camA.mp4', 'camB.mp4', 'outside.mp4', 'camC.mp4', 'camD.mp4'], firstSessionOnly: true },
     all_outside: { videos: ['camA.mp4', 'camB.mp4', 'outside.mp4'] },
-    no_map: { poseOnly: true },
+    plain_file: { videos: ['camA.mp4', 'camB.mp4', 'no_poses.mp4'], noSession: true },
     same_name: { videos: ['rec/cam0/0.mp4', 'rec/cam1/0.mp4', 'rec/other/0.mp4'] },
 };
 
@@ -419,20 +424,19 @@ try {
     console.log('\nA. Every layout, the lazy route, two saves in a sitting, then reopened and saved');
     for (const [name, layout] of Object.entries(FILES)) {
         const source = sources[name];
-        const want = { suggestions: source.suggestions, poses: source.poses };
-        if (!layout.poseOnly) {
-            want.videos = layout.videos;
+        const want = { suggestions: source.suggestions, poses: source.poses, videos: layout.videos };
+        if (!layout.noSession) {
             want.openSessionOnly = !!layout.firstSessionOnly;
             want.sessions = layout.firstSessionOnly ? source.sessions.slice(0, 1) : source.sessions;
             want.groups = layout.firstSessionOnly ? source.groups.filter(g => g.startsWith('s0|')) : source.groups;
             want.onCamera = onCameras(source);
         }
-        const page = await openLazy(readFile(name));
+        const page = await openLazy(readFile(name), name);
         const first = await save(page);
         expectSave(first, `${name}, save 1`, want);
         expectSave(await save(page), `${name}, save 2 in the same sitting`, want);
         await page.close();
-        const again = await openLazy(first);
+        const again = await openLazy(first, name + ', reopened');
         expectSave(await save(again), `${name}, reopened and saved`, want);
         await again.close();
     }
@@ -446,11 +450,11 @@ try {
             ],
             rawGroups: [3, 'night', 0, 0, 0, 1, 1],
         };
-        const page = await openLazy(readFile('groups'));
+        const page = await openLazy(readFile('groups'), 'groups');
         const first = await save(page);
         expectSave(first, 'groups, save 1', want);
         await page.close();
-        const again = await openLazy(first);
+        const again = await openLazy(first, 'groups, reopened');
         expectSave(await save(again), 'groups, reopened and saved', want);
         await again.close();
     }
@@ -488,7 +492,7 @@ try {
         expectSave(first, 'per-camera, save 1', want);
         expectSave(await save(page), 'per-camera, save 2 in the same sitting', want);
         await page.close();
-        const again = await openLazy(first);
+        const again = await openLazy(first, 'per-camera, reopened');
         expectSave(await save(again), 'per-camera, saved again as a project', want);
         await again.close();
     }
@@ -499,7 +503,7 @@ try {
         ['two_sessions', 'project', 'a two-session file + a project file'],
         ['only_suggested', 'cameras', 'a project file + per-camera files'],
     ]) {
-        const page = await openLazy(readFile(firstFile));
+        const page = await openLazy(readFile(firstFile), what);
         await putBytes(page, '__second', readFile('second_project'));
         await putBytes(page, '__camC', readFile('camC_file'));
         await putBytes(page, '__camD', readFile('camD_file'));
@@ -564,14 +568,14 @@ try {
             onCamera: [...onCameras(sources[firstFile]), ...secondSource.suggestions.map(r => secondCams[r.split('|')[0]] || '')],
         });
         // Its next life: the first session opens, the rest of the file comes along.
-        const again = await openLazy(bytes);
+        const again = await openLazy(bytes, what + ', reopened');
         expectSave(await save(again), what + ', reopened and saved', want);
         await again.close();
     }
 
     console.log('\nE. Edits: a correction, and a video attached under another name');
     {
-        const page = await openLazy(readFile('first'));
+        const page = await openLazy(readFile('first'), 'a corrected frame');
         await page.evaluate(async () => {
             const tri = await import('/pose/triangulation.js');
             const { state } = await import('/ui/app-state.js');
@@ -589,7 +593,7 @@ try {
     }
     {
         // By the video's id, not its name: the header calls camera A's video something else.
-        const page = await openLazy(readFile('first'));
+        const page = await openLazy(readFile('first'), 'a renamed video');
         await page.evaluate(async () => {
             const { state } = await import('/ui/app-state.js');
             state.videoFiles = [{ name: 'camA', assignedCamera: 'camA', videoPath: '/moved/here/camA_new.mp4' }];
@@ -605,7 +609,7 @@ try {
 
     console.log('\nF. No suggestions: none, and no extra video');
     for (const [name, videos] of [['none', ['camA.mp4', 'camB.mp4', 'outside.mp4']], ['none_plain', ['camA.mp4', 'camB.mp4']]]) {
-        const page = await openLazy(readFile(name));
+        const page = await openLazy(readFile(name), name);
         const bytes = await save(page);
         await page.close();
         expectSave(bytes, name, { suggestions: [], videos, poses: sources[name].poses, groups: sources[name].groups, sessions: sources[name].sessions });
