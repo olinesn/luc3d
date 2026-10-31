@@ -7,9 +7,13 @@
 // Per session (a WeakMap, like the labels), one RUN per behavior — the last
 // time that behavior was detected:
 //
-//   { behaviorId, source: 'rule',
-//     cfg,               // a print of what produced it: the detector, the body
-//                        // and floor settings, the frame rate, 2D or 3D
+//   { behaviorId, source: 'rule' | 'model:<hash>',
+//     cfg,               // a print of what produced it: the detector (a model
+//                        // run: its post-processing and exclusive group), the
+//                        // body and floor settings, the frame rate, 2D or 3D
+//     labels,            // a model run: the print of the labels its model
+//                        // learned from (pose/behavior-classifier.js
+//                        // `trainingLabelPrint`), or null (an imported model)
 //     fps, mode, camera,
 //     bouts: [{animal, target, start, end (inclusive), score}],   sorted
 //     scores: Map<'animal\u0001target', Float32Array> | null }    per frame, in memory only
@@ -30,11 +34,18 @@
 //     run, its camera's 2D) no longer has the print taken when it ran
 //     (`predictionInputPrint`: an order-free hash of every value, its frame and
 //     its identity, so any edit, re-solve, smoothing or identity fix shows).
-// Label edits do not make a rule run stale (rules do not read labels; a
-// classifier run will). Stale predictions stay visible, marked, until run
-// again. Checking the input costs one pass over the poses, so it is done only
-// when something may have changed (`notePossibleInputChange`, from markDirty)
-// and is cached in between.
+//   * labels (a classifier run only) — the labels its model learned from
+//     changed (`env.labelPrintOf(behaviorId)` differs from the run's `labels`),
+//     so a retrain would change it: Accept and Reject feed the next training;
+//   * model (a classifier run only) — a newer model replaced the one that
+//     made it (`env.modelHashOf(behaviorId)` differs from the run's hash; a
+//     project reopened has no model until it is retrained, and retraining on
+//     the same labels gives the same hash).
+// Label edits do not make a rule run stale (rules do not read labels).
+// Stale predictions stay visible, marked, until run again. Checking the input
+// costs one pass over the poses, so it is done only when something may have
+// changed (`notePossibleInputChange`, from markDirty) and is cached in
+// between.
 //
 // ## Review
 //
@@ -48,13 +59,29 @@
 // Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js, pose/behavior-tensor.js,
 //             pose/pose-data.js
 
-import { behaviorById, featureSettings } from './behavior-ethogram.js';
+import { behaviorById, featureSettings, behaviorPost, exclusivePeers } from './behavior-ethogram.js';
 import { boutIntervals, labelBouts } from './behavior-labels.js';
 import { resolveBody, POSE_CHECK_VERSION } from './behavior-tensor.js';
+import { FEATURE_SPEC_VERSION } from './behavior-features.js';
 import { POINT3D_STRIDE, points3dNodeCount } from './pose-data.js';
 
 var SEP = '\u0001';
-var SOURCES = ['rule'];
+
+/** Is `s` a run source: 'rule', or 'model:' and a forest's 16-hex-digit hash? */
+export function isRunSource(s) {
+    return s === 'rule' || (typeof s === 'string' && /^model:[0-9a-f]{16}$/.test(s));
+}
+
+/** A model run's forest hash ('' for a rule run). */
+export function runModelHash(run) {
+    return run && typeof run.source === 'string' && run.source.indexOf('model:') === 0 ? run.source.slice(6) : '';
+}
+
+/** The threshold a run's scores are decided at: its behavior's for a classifier run, 0.5 for a rule. */
+export function runThreshold(run) {
+    if (!runModelHash(run)) return 0.5;
+    return behaviorPost(behaviorById(run.behaviorId)).threshold;
+}
 
 var _stores = new WeakMap();
 var _listeners = [];
@@ -114,17 +141,25 @@ function bodyPrint(session) {
  * What a run of `behavior` depends on besides the poses: its detector, the
  * resolved body, the floor in effect, the frame rate, 2D vs 3D, and which
  * frames count as broken tracking (`POSE_CHECK_VERSION`, so runs from before
- * a change to that check go stale).
+ * a change to that check go stale). A classifier run (`env.source`
+ * 'model:…') depends on its post-processing and its exclusive group (the
+ * peers and theirs) instead of a detector, and on the feature definitions
+ * (`FEATURE_SPEC_VERSION`); its model is checked by hash, apart.
  * @param {Object} behavior
  * @param {Session} session
- * @param {{fps:number, mode?:string, camera?:string, floorKey?:string}} env
+ * @param {{fps:number, mode?:string, camera?:string, floorKey?:string, source?:string}} env
  */
 export function runConfigPrint(behavior, session, env) {
     env = env || {};
     // The floor in effect (the caller's key); without one, the floor setting.
     var fs = featureSettings();
     var floor = env.mode === '2d' ? '' : env.floorKey != null ? env.floorKey : (fs && fs.floor ? JSON.stringify(fs.floor) : 'auto');
-    return fnv(JSON.stringify([behavior && behavior.detector || null, bodyPrint(session), floor,
+    var model = typeof env.source === 'string' && env.source.indexOf('model:') === 0;
+    var what = model
+        ? ['model', behaviorPost(behavior), behavior && behavior.group || '',
+           exclusivePeers(behavior).map(function (p) { return [p.id, behaviorPost(p)]; }).sort(), FEATURE_SPEC_VERSION]
+        : behavior && behavior.detector || null;
+    return fnv(JSON.stringify([what, bodyPrint(session), floor,
         Math.round((env.fps || 0) * 1000) / 1000, env.mode || '', env.camera || '',
         behavior ? [behavior.kind, !!behavior.social, !!behavior.mutual] : null, POSE_CHECK_VERSION]));
 }
@@ -257,7 +292,7 @@ export async function predictionInputPrintAsync(session, mode, camera, opts) {
 /**
  * Store a behavior's run, replacing the last one.
  * @param {Session} session
- * @param {{behaviorId, source?, cfg, fps, mode, camera, bouts: Array<{animal,target,start,end,score}>,
+ * @param {{behaviorId, source?, cfg, labels?, fps, mode, camera, bouts: Array<{animal,target,start,end,score}>,
  *          scores?: Map<string, Float32Array>}} run
  */
 export function setBehaviorRun(session, run) {
@@ -272,11 +307,27 @@ function normalizeRun(run) {
         return { animal: p[0], target: p[1], start: b.start, end: b.end, score: Number.isFinite(b.score) ? b.score : NaN };
     }).filter(function (b) { return b.animal && b.end >= b.start && b.start >= 0; });
     bouts.sort(function (a, b) { return a.start - b.start || a.end - b.end || (a.animal < b.animal ? -1 : a.animal > b.animal ? 1 : 0); });
+    var source = isRunSource(run.source) ? run.source : 'rule';
     return {
-        behaviorId: run.behaviorId, source: SOURCES.indexOf(run.source) >= 0 ? run.source : 'rule', cfg: run.cfg || '',
+        behaviorId: run.behaviorId, source: source, cfg: run.cfg || '',
+        labels: source !== 'rule' && typeof run.labels === 'string' && run.labels ? run.labels : null,
         fps: run.fps > 0 ? run.fps : 0, mode: run.mode === '2d' ? '2d' : '3d', camera: run.camera || null,
         bouts: bouts, scores: run.scores || null,
     };
+}
+
+/**
+ * Replace a run's bouts (and keep its scores): a classifier's post-processing
+ * changed and its bouts were re-derived from the scores in memory, so it is
+ * as fresh as before under the new settings (`cfg`).
+ */
+export function replaceRunBouts(session, behaviorId, bouts, cfg) {
+    var st = session && _stores.get(session);
+    var run = st && st.runs.get(behaviorId);
+    if (!run) return false;
+    st.runs.set(behaviorId, normalizeRun(Object.assign({}, run, { bouts: bouts, cfg: cfg != null ? cfg : run.cfg })));
+    emit(session, { rederived: behaviorId });
+    return true;
 }
 
 /**
@@ -426,26 +477,35 @@ export async function checkPredictionInputAsync(session, pause) {
 
 /**
  * Why a session's predictions are stale.
- * @param {{fps:number, floorKey?:string}} env the frame rate and floor now
- * @returns {{input: boolean, settings: string[]}} settings: behavior ids whose
- *   detector or settings changed since their run (or that no longer exist)
+ * @param {{fps:number, floorKey?:string, labelPrintOf?: function(string): string,
+ *          modelHashOf?: function(string): ?string}} env the frame rate and floor now, and for
+ *   classifier runs the print of each behavior's training labels now and its current model's hash
+ * @returns {{input: boolean, settings: string[], labels: string[], model: string[]}} behavior ids
+ *   whose detector or settings changed since their run (or that no longer exist); whose training
+ *   labels changed (classifier runs); whose model was replaced (classifier runs)
  */
 export function predictionStaleness(session, env) {
     var st = session && _stores.get(session);
-    if (!st || !st.runs.size) return { input: false, settings: [] };
-    var settings = [];
+    if (!st || !st.runs.size) return { input: false, settings: [], labels: [], model: [] };
+    var settings = [], labels = [], model = [];
     st.runs.forEach(function (run, id) {
         var b = behaviorById(id);
-        var now = b && runConfigPrint(b, session, { fps: env && env.fps, mode: run.mode, camera: run.camera, floorKey: env && env.floorKey });
+        var now = b && runConfigPrint(b, session, { fps: env && env.fps, mode: run.mode, camera: run.camera, floorKey: env && env.floorKey,
+                                                   source: run.source });
         if (!b || now !== run.cfg) settings.push(id);
+        var hash = runModelHash(run);
+        if (!hash || !b) return;
+        if (run.labels && env && env.labelPrintOf && env.labelPrintOf(id) !== run.labels) labels.push(id);
+        var current = env && env.modelHashOf ? env.modelHashOf(id) : null;
+        if (current && current !== hash) model.push(id);
     });
-    return { input: !!st.inputStale, settings: settings };
+    return { input: !!st.inputStale, settings: settings, labels: labels, model: model };
 }
 
-/** Is this behavior's run stale (input or settings)? */
+/** Is this behavior's run stale (input, settings, labels or model)? */
 export function isRunStale(session, behaviorId, env) {
     var s = predictionStaleness(session, env);
-    return s.input || s.settings.indexOf(behaviorId) >= 0;
+    return s.input || s.settings.indexOf(behaviorId) >= 0 || s.labels.indexOf(behaviorId) >= 0 || s.model.indexOf(behaviorId) >= 0;
 }
 
 /**
@@ -458,7 +518,9 @@ export function predictionsStand(session, env) {
     if (!hasPredictions(session)) return false;
     var s = predictionStaleness(session, env);
     if (s.input) return false;
-    return behaviorRuns(session).some(function (r) { return r.bouts.length && s.settings.indexOf(r.behaviorId) < 0; });
+    return behaviorRuns(session).some(function (r) {
+        return r.bouts.length && s.settings.indexOf(r.behaviorId) < 0 && s.labels.indexOf(r.behaviorId) < 0 && s.model.indexOf(r.behaviorId) < 0;
+    });
 }
 
 // ----------------------------------------------------------------------------
@@ -527,14 +589,19 @@ export var REVIEW_ORDERS = ['uncertainty', 'disagreement', 'time'];
 /**
  * Predicted bouts in review order, each with its review status.
  * @param {{order?:'uncertainty'|'disagreement'|'time', behaviorId?, animal?, unreviewedOnly?: boolean}} [opts]
- *   uncertainty: scores nearest the 0.5 decision first; disagreement: most
- *   frames labelled "not" first, then uncertainty; time: by start
+ *   uncertainty: scores nearest the decision first (0.5 for a rule, the
+ *   behavior's threshold for a classifier); disagreement: most frames
+ *   labelled "not" first, then uncertainty; time: by start
  */
 export function reviewQueue(session, opts) {
     opts = opts || {};
+    var thr = new Map();
+    behaviorRuns(session).forEach(function (r) { thr.set(r.behaviorId, runThreshold(r)); });
     var list = predictedBouts(session, { behaviorId: opts.behaviorId || undefined, animal: opts.animal || undefined }).map(function (b) {
         var r = reviewStatus(session, b);
-        return Object.assign(b, { status: r.status, disagreement: r.disagreement, uncertainty: Number.isFinite(b.score) ? Math.abs(b.score - 0.5) : 1 });
+        var t = thr.has(b.behaviorId) ? thr.get(b.behaviorId) : 0.5;
+        return Object.assign(b, { status: r.status, disagreement: r.disagreement, threshold: t,
+                                  uncertainty: Number.isFinite(b.score) ? Math.abs(b.score - t) : 1 });
     });
     if (opts.unreviewedOnly) list = list.filter(function (b) { return b.status !== 'accepted' && b.status !== 'rejected'; });
     var order = REVIEW_ORDERS.indexOf(opts.order) >= 0 ? opts.order : 'uncertainty';
@@ -576,6 +643,7 @@ export function exportPredictionRuns(session) {
     st.runs.forEach(function (run) {
         if (!run.bouts.length || !behaviorById(run.behaviorId)) return;
         var o = { behavior: run.behaviorId, source: run.source, cfg: run.cfg, mode: run.mode };
+        if (run.labels) o.labels = run.labels;
         if (run.camera) o.camera = run.camera;
         if (run.fps > 0) o.fps = run.fps;
         o.bouts = run.bouts.map(function (b) {
@@ -613,7 +681,7 @@ export function importPredictionRuns(session, payload, idMap) {
         });
         kept += bouts.length;
         st.runs.set(id, normalizeRun({ behaviorId: id, source: r.source, cfg: typeof r.cfg === 'string' ? r.cfg : '',
-            fps: r.fps > 0 ? r.fps : 0, mode: r.mode, camera: r.camera, bouts: bouts }));
+            labels: r.labels, fps: r.fps > 0 ? r.fps : 0, mode: r.mode, camera: r.camera, bouts: bouts }));
     });
     return { kept: kept, dropped: dropped };
 }

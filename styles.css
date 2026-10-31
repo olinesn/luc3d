@@ -8380,6 +8380,100 @@ div.track-summary-steps { padding-left: 0; }
   color: var(--text-primary);
 }
 
+/* Behavior ▸ Train Classifiers… (ui/behavior-train-modal.js; the rules dialog's look, one scroller) */
+.bt-table {
+  width: 100%;
+  font-size: 12px;
+}
+.bt-table td:first-child {
+  width: 22px;
+}
+.bt-table tr.is-short td {
+  color: var(--text-secondary);
+}
+.bt-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: flex-start;
+}
+.bt-left {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+.bt-right {
+  flex: 0 0 auto;
+}
+.bt-curve {
+  display: block;
+  width: 220px;
+  height: 150px;
+}
+.bt-metrics {
+  font-size: 12px;
+  margin: 6px 0;
+}
+.bt-metrics td,
+.bt-metrics th {
+  padding: 2px 8px;
+}
+.bt-post {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  font-size: 12px;
+}
+.bt-post input[type="number"] {
+  width: 56px;
+}
+.bt-post input[type="range"] {
+  width: 120px;
+  vertical-align: middle;
+}
+.bt-thr {
+  display: inline-block;
+  min-width: 30px;
+  font-variant-numeric: tabular-nums;
+}
+.bt-top {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.bt-top ol {
+  margin: 2px 0 0;
+  padding-left: 22px;
+  columns: 2;
+  column-gap: 18px;
+}
+.bt-imp {
+  color: var(--text-secondary);
+}
+
+/* Behavior tab ▸ Classifiers */
+.behavior-classifiers {
+  width: 100%;
+  margin: 4px 0;
+  font-size: 12px;
+}
+.behavior-short {
+  color: var(--text-secondary);
+}
+.behavior-al {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.behavior-al-item {
+  margin: 4px 0 6px;
+  padding: 4px 6px;
+  border-left: 3px solid var(--accent);
+  font-size: 12px;
+}
+
 /* Behavior tab ▸ Predictions */
 .behavior-stale {
   margin: 6px 0;

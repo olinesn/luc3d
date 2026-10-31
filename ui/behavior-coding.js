@@ -10,7 +10,8 @@
 //             the whole range instead of starting / stopping at the playhead
 //   pending   a social behavior waiting for its target (a digit or a click on
 //             the animal picks it; Esc cancels)
-//   review    the predicted bout selected in the Predictions list
+//   review    the predicted bout selected in the Predictions list, or the
+//             stretch the active-learning queue shows
 //             (ui/behavior-panel.js), boxed on the video while the playhead is
 //             in it, so the animal it names is plain to see
 //
@@ -118,16 +119,19 @@ export function setBehaviorBoxesVisible(on) {
 
 /**
  * The predicted bout being reviewed (the Predictions list's selection), or
- * null: `{behaviorId, animal, target, start, end, score}`. The viewer boxes
- * its animals, dashed and marked "?", while the playhead is in it.
+ * the stretch the active-learning queue shows (ui/behavior-train.js), or
+ * null: `{behaviorId, animal, target, start, end, score, from}`. The viewer
+ * boxes its animals, dashed and marked "?", while the playhead is in it.
+ * @param {string} [from] who set it: 'predictions' (default) or 'learning' —
+ *   each clears only its own
  */
-export function setReviewFocus(session, bout) {
+export function setReviewFocus(session, bout, from) {
     var next = session && bout ? { session: session, behaviorId: bout.behaviorId, animal: bout.animal, target: bout.target || '',
-                                   start: bout.start, end: bout.end, score: bout.score } : null;
+                                   start: bout.start, end: bout.end, score: bout.score, from: from || 'predictions' } : null;
     var cur = ui.review;
     if (!next && !cur) return;
     if (next && cur && cur.session === next.session && cur.behaviorId === next.behaviorId && cur.animal === next.animal &&
-        cur.target === next.target && cur.start === next.start && cur.end === next.end) return;
+        cur.target === next.target && cur.start === next.start && cur.end === next.end && cur.from === next.from) return;
     ui.review = next;
     requestBehaviorRepaint({ ui: true });
 }

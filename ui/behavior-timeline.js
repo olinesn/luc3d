@@ -77,7 +77,8 @@ export function behaviorTimelineRows(session) {
         predicted.forEach(function (p) {
             if (!laneOf.has(p.behaviorId)) return;
             var b = behaviorById(p.behaviorId);
-            var alpha = predictionAlpha(p.score, stale.input || stale.settings.indexOf(p.behaviorId) >= 0);
+            var alpha = predictionAlpha(p.score, stale.input || stale.settings.indexOf(p.behaviorId) >= 0 ||
+                stale.labels.indexOf(p.behaviorId) >= 0 || stale.model.indexOf(p.behaviorId) >= 0);
             rowsOf(b, p.animal, p.target).forEach(function (a) {
                 if (!byAnimal.has(a)) return;
                 predLanes.add(a + '\u0001' + laneOf.get(p.behaviorId));

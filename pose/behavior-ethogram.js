@@ -28,6 +28,10 @@
 //     Esc and the arrows keep their mode meanings, so keys are letters only.
 //   * `detector` (optional): the rule that detects it automatically
 //     (pose/behavior-rules.js), `{conditions, minDuration, maxGap}`.
+//   * `post` (optional): how a CLASSIFIER's per-frame scores become bouts
+//     (pose/behavior-classifier.js), `{threshold, minBout, maxGap}` — the
+//     threshold on the score, the shortest bout and the longest gap joined,
+//     in seconds. Kept only where it differs from `DEFAULT_POST` (0.5, 0, 0).
 //
 // The ethogram also carries the project's behavior FEATURE settings
 // (`featureSettings`): the node roles, the excluded nodes and the floor the
@@ -42,6 +46,10 @@ import { normalizeDetector } from './behavior-rules.js';
 
 /** The behavior kinds. */
 export var BEHAVIOR_KINDS = ['state', 'point'];
+
+/** A classifier's post-processing when none is set: score ≥ 0.5, any length, no gap joined. */
+export var DEFAULT_POST = { threshold: 0.5, minBout: 0, maxGap: 0 };
+var POST_MAX_S = 600;
 
 /**
  * Default colors, handed out in order to new behaviors: vivid, light enough
@@ -123,6 +131,46 @@ export function setBehaviorDetector(id, detector) {
     var d = normalizeDetector(detector);
     if (!d) return { error: 'A detector needs at least one condition' };
     b.detector = d;
+    return { behavior: b };
+}
+
+/**
+ * A clean `post`: only the fields that differ from DEFAULT_POST, or null.
+ * Threshold in [0, 1]; durations in seconds, 0–600.
+ */
+function cleanPost(p) {
+    if (!p || typeof p !== 'object') return null;
+    var out = {};
+    var thr = Number(p.threshold);
+    if (Number.isFinite(thr) && thr >= 0 && thr <= 1 && thr !== DEFAULT_POST.threshold) out.threshold = Math.round(thr * 1000) / 1000;
+    ['minBout', 'maxGap'].forEach(function (k) {
+        var v = Number(p[k]);
+        if (Number.isFinite(v) && v > 0) out[k] = Math.min(POST_MAX_S, Math.round(v * 1000) / 1000);
+    });
+    if (out.threshold === DEFAULT_POST.threshold) delete out.threshold;
+    return Object.keys(out).length ? out : null;
+}
+
+/** A behavior's post-processing with the defaults filled in: `{threshold, minBout, maxGap}`. */
+export function behaviorPost(b) {
+    var p = b && b.post;
+    return {
+        threshold: p && p.threshold != null ? p.threshold : DEFAULT_POST.threshold,
+        minBout: p && p.minBout != null ? p.minBout : DEFAULT_POST.minBout,
+        maxGap: p && p.maxGap != null ? p.maxGap : DEFAULT_POST.maxGap,
+    };
+}
+
+/**
+ * Set (or with null, clear) how a behavior's classifier scores become bouts.
+ * Only what differs from DEFAULT_POST is kept.
+ * @returns {{behavior?: Object, error?: string}}
+ */
+export function setBehaviorPost(id, post) {
+    var b = behaviorById(id);
+    if (!b) return { error: 'No such behavior' };
+    var p = cleanPost(post);
+    if (p) b.post = p; else delete b.post;
     return { behavior: b };
 }
 
@@ -286,6 +334,7 @@ export function serializeEthogram() {
             if (b.group) o.group = b.group;
             if (b.description) o.description = b.description;
             if (b.detector) o.detector = JSON.parse(JSON.stringify(b.detector));
+            if (b.post) o.post = Object.assign({}, b.post);
             return o;
         }),
     };
@@ -324,6 +373,8 @@ export function ingestEthogram(payload) {
             // A detector comes in with an imported ethogram for a behavior that has none.
             var kd = !known.detector && normalizeDetector(e.detector);
             if (kd) known.detector = kd;
+            var kp = !known.post && cleanPost(e.post);
+            if (kp) known.post = kp;
             return;
         }
         var fields = {
@@ -340,6 +391,8 @@ export function ingestEthogram(payload) {
         if (sameId) _model.nextId = Math.max(_model.nextId, idNumber(e.id) + 1);
         var det = normalizeDetector(e.detector);
         if (det) b.detector = det;
+        var post = cleanPost(e.post);
+        if (post) b.post = post;
         _model.behaviors.push(b);
         idMap.set(e.id, b.id);
     });

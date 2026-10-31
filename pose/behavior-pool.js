@@ -1,7 +1,7 @@
 /**
- * behavior-pool.js — compute behavior features and score rule detectors over
- * a whole session, chunk by chunk, on a pool of Web Workers
- * (`pose/behavior-worker.js`).
+ * behavior-pool.js — compute behavior features, score rule detectors and
+ * classifiers, extract training rows and train forest trees, chunk by chunk
+ * (or batch by batch), on a pool of Web Workers (`pose/behavior-worker.js`).
  *
  * WHY: features are independent from one chunk of frames to the next once
  * each chunk is padded by the longest window (pose/behavior-features.js
@@ -20,6 +20,16 @@
  * made only when a worker is free for it (`makeJob`), so at most ~2 chunks per
  * worker are in memory.
  *
+ * Job kinds: 'scores' (rule detectors), 'features' (feature columns), 'rows'
+ * (classifier training rows, as codes), 'forest' (classifier scores) and
+ * 'trees' (grow some trees of a forest; no poses). What every job of a run
+ * shares — the forests to score with, the binned training matrix — goes to
+ * each worker ONCE per run (`opts.shared = {key, value}`; a worker keeps the
+ * last one it was sent, and gets it again only when the key changes), not
+ * with every job: there is no SharedArrayBuffer without cross-origin
+ * isolation, so each worker holds its own copy. `opts.releaseShared` drops
+ * the copies when the run ends (a training matrix is tens of MB).
+ *
  * Runs INLINE (same calls, one chunk at a time, `opts.pause()` awaited between
  * them so the page can paint) when workers are unavailable, the run is small
  * (`opts.workload` below `MIN_WORKLOAD`, where worker start-up would
@@ -33,6 +43,7 @@
  */
 import { computeFeatureChunk } from './behavior-features.js';
 import { scoreDetectorsChunk } from './behavior-rules.js';
+import { extractTrainingRows, scoreForestsChunk, trainTrees } from './behavior-forest.js';
 
 /** Below this many animal-frames a run stays inline. */
 export const MIN_WORKLOAD = 40000;
@@ -82,12 +93,19 @@ function terminatePool() {
     pool = null;
 }
 
-/** What one job computes, on whichever thread runs it. */
-export function runJob(job) {
+/**
+ * What one job computes, on whichever thread runs it (the worker runs the
+ * same switch).
+ * @param {Object} job
+ * @param {*} [shared] the run's shared value (`opts.shared.value`)
+ */
+export function runJob(job, shared) {
+    if (job.kind === 'trees') return trainTrees(shared, job.trees);
     const chunk = { start: job.chunk.start, end: job.chunk.end, padStart: job.chunk.padStart, padEnd: job.chunk.padEnd, data: job.data };
-    return job.kind === 'scores'
-        ? scoreDetectorsChunk(job.spec, chunk, job.plan, job.extra)
-        : computeFeatureChunk(job.spec, chunk, job.request);
+    if (job.kind === 'scores') return scoreDetectorsChunk(job.spec, chunk, job.plan, job.extra);
+    if (job.kind === 'rows') return extractTrainingRows(job.spec, chunk, job.request);
+    if (job.kind === 'forest') return scoreForestsChunk(job.spec, chunk, job.plan, shared);
+    return computeFeatureChunk(job.spec, chunk, job.request);
 }
 
 /**
@@ -96,7 +114,10 @@ export function runJob(job) {
  * @param {function(number): Object} makeJob job i: {kind, spec, chunk, data, plan?, extra?, request?}
  * @param {function(number, Object)} onDone
  * @param {{workload?: number, onProgress?: function(number, number), isCancelled?: function(): boolean,
- *          pause?: function(): Promise}} [opts]
+ *          pause?: function(): Promise, shared?: {key: string, value: *}, releaseShared?: boolean,
+ *          maxWorkers?: number}} [opts]
+ *   shared: sent to each worker once (see the header); maxWorkers: use at most
+ *   this many (each holds a copy of `shared`)
  * @returns {Promise<{parallel: boolean, workers: number, cancelled: boolean}>}
  */
 export async function runBehaviorChunks(count, makeJob, onDone, opts) {
@@ -106,15 +127,18 @@ export async function runBehaviorChunks(count, makeJob, onDone, opts) {
     const forced = forcedSize();
     const big = (forced != null && forced > 0) || opts.workload == null || opts.workload >= MIN_WORKLOAD;
     const P = (big && count > 1 && !poolBusy) ? getPool() : null;
+    const shared = opts.shared || null;
+    const sharedValue = shared ? shared.value : undefined;
     if (!P) {
         for (let i = 0; i < count; i++) {
             if (cancelled()) return { parallel: false, workers: 0, cancelled: true };
-            onDone(i, runJob(makeJob(i)));
+            onDone(i, runJob(makeJob(i), sharedValue));
             progress(i + 1, count);
             if (opts.pause && i + 1 < count) await opts.pause();
         }
         return { parallel: false, workers: 0, cancelled: false };
     }
+    const slots = opts.maxWorkers > 0 ? P.workers.slice(0, Math.max(1, opts.maxWorkers | 0)) : P.workers;
     poolBusy = true;
     let next = 0, done = 0, failure = null, stop = false;
     const jobs = new Map();
@@ -129,8 +153,14 @@ export async function runBehaviorChunks(count, makeJob, onDone, opts) {
                 const job = makeJob(i);
                 slot.busy = true;
                 jobs.set(i, { job, slot });
+                if (shared && slot.sharedKey !== shared.key) {
+                    slot.w.postMessage({ type: 'shared', key: shared.key, value: shared.value });
+                    slot.sharedKey = shared.key;
+                }
                 const { data, ...rest } = job;
-                slot.w.postMessage(Object.assign({ type: 'job', id: i }, rest, { data }), data.map((a) => a.buffer));
+                const list = data || [];
+                slot.w.postMessage(Object.assign({ type: 'job', id: i, sharedKey: shared ? shared.key : null }, rest, { data: list }),
+                    list.map((a) => a.buffer));
             };
             const settle = (slot, i, result) => {
                 jobs.delete(i);
@@ -141,7 +171,7 @@ export async function runBehaviorChunks(count, makeJob, onDone, opts) {
                 if (done >= count) { resolve(); return; }
                 dispatch(slot);
             };
-            for (const slot of P.workers) {
+            for (const slot of slots) {
                 slot.w.onmessage = (e) => {
                     const m = e.data;
                     const entry = jobs.get(m.id);
@@ -150,7 +180,7 @@ export async function runBehaviorChunks(count, makeJob, onDone, opts) {
                     console.warn('[behavior-pool] a worker failed a chunk; computing it inline:', m.message);
                     // The job's data went to the worker; rebuild it.
                     let r = null;
-                    try { r = runJob(makeJob(m.id)); } catch (err) { failure = failure || err; }
+                    try { r = runJob(makeJob(m.id), sharedValue); } catch (err) { failure = failure || err; }
                     settle(slot, m.id, r);
                 };
                 slot.w.onerror = (ev) => {
@@ -159,17 +189,17 @@ export async function runBehaviorChunks(count, makeJob, onDone, opts) {
                     for (const [i, entry] of jobs) {
                         if (entry.slot !== slot) continue;
                         let r = null;
-                        try { r = runJob(makeJob(i)); } catch (err) { failure = failure || err; }
+                        try { r = runJob(makeJob(i), sharedValue); } catch (err) { failure = failure || err; }
                         jobs.delete(i);
                         try { onDone(i, r); } catch (e) { failure = failure || e; }
                         done++;
                         progress(done, count);
                     }
                     slot.dead = true;
-                    if (P.workers.every((s) => s.dead)) {
+                    if (slots.every((s) => s.dead)) {
                         while (next < count && !failure) {
                             const i = next++;
-                            try { onDone(i, runJob(makeJob(i))); } catch (e) { failure = failure || e; }
+                            try { onDone(i, runJob(makeJob(i), sharedValue)); } catch (e) { failure = failure || e; }
                             done++;
                             progress(done, count);
                         }
@@ -177,15 +207,21 @@ export async function runBehaviorChunks(count, makeJob, onDone, opts) {
                     finishIfDone();
                 };
             }
-            for (const slot of P.workers) dispatch(slot);
+            for (const slot of slots) dispatch(slot);
             finishIfDone();
         });
     } finally {
-        for (const slot of P.workers) { slot.w.onmessage = null; slot.w.onerror = null; slot.busy = false; }
+        for (const slot of slots) {
+            slot.w.onmessage = null; slot.w.onerror = null; slot.busy = false;
+            if (opts.releaseShared && slot.sharedKey != null && !slot.dead) {
+                slot.w.postMessage({ type: 'shared', key: null, value: null });
+                slot.sharedKey = null;
+            }
+        }
         if (P.workers.some((s) => s.dead)) terminatePool();
         else if (pool === P) { clearTimeout(P.idleTimer); P.idleTimer = setTimeout(terminatePool, IDLE_TERMINATE_MS); }
         poolBusy = false;
     }
     if (failure) throw failure;
-    return { parallel: true, workers: P.workers.length, cancelled: stop };
+    return { parallel: true, workers: slots.length, cancelled: stop };
 }

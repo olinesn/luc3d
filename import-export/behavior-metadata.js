@@ -19,12 +19,15 @@
 //                   bouts and their scores (per-frame scores stay in memory),
 //                   with a print of the detector and settings that made it, so
 //                   a reopened project can tell they no longer match
-//                   (pose/behavior-predictions.js).
-//     { v: 1, runs: [{ behavior, source: 'rule', cfg, mode, camera?, fps?,
+//                   (pose/behavior-predictions.js). A classifier's run names
+//                   its forest by hash and keeps the print of the labels it
+//                   learned from (`labels`); the forest itself is not saved.
+//     { v: 1, runs: [{ behavior, source: 'rule'|'model:<hash>', cfg, labels?, mode, camera?, fps?,
 //                      bouts: [[animal, target, start, end, score], …] }] }
 //
-// The ethogram carries the detectors (`behaviors[].detector`) and the feature
-// settings (`features`), each only once set (pose/behavior-ethogram.js).
+// The ethogram carries the detectors (`behaviors[].detector`), each
+// classifier's post-processing (`behaviors[].post`) and the feature settings
+// (`features`), each only once set (pose/behavior-ethogram.js).
 // A project nobody labelled behaviors in writes none of these keys, so its bytes are
 // unchanged (tests/e2e/save-golden-digest.mjs). A running state (Label
 // Behaviors mode) is saved as ending at the playhead without being stopped.
@@ -41,6 +44,7 @@
 import { serializeEthogram, ingestEthogram, resetEthogram } from '../pose/behavior-ethogram.js';
 import { exportBoutRows, importBoutRows, behaviorFps, noteBehaviorFps } from '../pose/behavior-labels.js';
 import { exportPredictionRuns, importPredictionRuns } from '../pose/behavior-predictions.js';
+import { resetBehaviorModels, noteLabelsChanged } from '../pose/behavior-classifier.js';
 
 /** Every `metadata.lucid` key this module may write. */
 export var BEHAVIOR_METADATA_KEYS = ['ethogram', 'behaviorLabels', 'behaviorPredictions'];
@@ -81,6 +85,7 @@ export function readBehaviorMetadata(session, lucid) {
             ' in session "' + (session.name || '') + '" named no known behavior or were malformed, and were skipped');
     }
     var bl = lucid.behaviorLabels;
+    noteLabelsChanged();
     if (!bl || typeof bl !== 'object' || bl.v !== 1 || !Array.isArray(bl.bouts)) return { kept: 0, dropped: 0 };
     var res = importBoutRows(session, bl.bouts, idMap);
     if (typeof bl.fps === 'number' && bl.fps > 0) noteBehaviorFps(session, bl.fps);
@@ -92,11 +97,14 @@ export function readBehaviorMetadata(session, lucid) {
 }
 
 /**
- * Forget the project's ethogram. The ethogram is project-scoped and lives on a
- * module singleton, so it survives `state.sessions = []`: call this before
- * every load and on New Project, or the next project opens with this one's
- * behaviors. (Bouts live on their Session and go with it.)
+ * Forget the project's ethogram and its trained classifiers. Both are
+ * project-scoped and live on module singletons, so they survive
+ * `state.sessions = []`: call this before every load and on New Project, or
+ * the next project opens with this one's behaviors and models. (Bouts live on
+ * their Session and go with it; classifiers are never saved — the labels are,
+ * and retraining is seeded.)
  */
 export function resetBehaviorState() {
     resetEthogram();
+    resetBehaviorModels();
 }
