@@ -8474,6 +8474,117 @@ div.track-summary-steps { padding-left: 0; }
   font-size: 12px;
 }
 
+/* Behavior tab ▸ States (ui/behavior-states.js) */
+.behavior-states-head,
+.behavior-states-promote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.behavior-states-head .panel-btn,
+.behavior-states-promote .panel-btn {
+  flex: 0 0 auto;
+}
+.behavior-states-labels {
+  display: block;
+  margin: 6px 0 4px;
+  font-size: 12px;
+}
+.behavior-states-legend {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.behavior-states-list {
+  margin: 2px 0 4px;
+  font-size: 12px;
+}
+.behavior-state-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  padding: 3px 2px;
+  border-bottom: 1px solid var(--border-light);
+}
+.behavior-state-row .behavior-state-stats {
+  margin-left: auto;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.behavior-state-row .behavior-state-labels {
+  flex: 1 0 100%;
+  padding-left: 22px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.behavior-state-go {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.behavior-state-go:hover {
+  color: var(--accent);
+}
+.behavior-state-name {
+  flex: 1 1 60px;
+  min-width: 50px;
+  max-width: 160px;
+  font-size: 12px;
+}
+.behavior-states-rare {
+  margin: 2px 0 4px;
+  font-size: 11px;
+}
+
+/* Behavior ▸ Export for keypoint-MoSeq… / Import keypoint-MoSeq Results… (ui/behavior-kpms-modal.js) */
+.kpms-frames {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.kpms-frames input[type="number"] {
+  width: 90px;
+}
+.kpms-recordings {
+  width: 100%;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.kpms-recordings td:first-child {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kpms-recordings select {
+  width: 100%;
+}
+.kpms-recordings input[type="number"] {
+  width: 80px;
+}
+.kpms-recordings tr.kpms-unmatched td {
+  color: var(--warning-color);
+}
+.kpms-layer {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.kpms-layer input {
+  margin-left: 4px;
+  width: 200px;
+}
+
 /* Behavior tab ▸ Predictions */
 .behavior-stale {
   margin: 6px 0;

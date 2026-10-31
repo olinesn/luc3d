@@ -3096,9 +3096,10 @@ export class Timeline {
     // -----------------------------------------------------------------------
 
     /**
-     * Supply the behavior rows (ui/behavior-timeline.js). They are a synthetic
-     * "Behavior" group after the track / identity rows, one row per animal,
-     * hidden with their identity, drawn with each segment's own color.
+     * Supply the behavior rows (ui/behavior-timeline.js). They are synthetic
+     * groups after the track / identity rows — "Behavior", or the row's own
+     * `group` ("States": ui/behavior-states.js) — one row per animal, hidden
+     * with their identity, drawn with each segment's own color.
      * @param {function(Session): Array|null} fn
      */
     setBehaviorRowsProvider(fn) {
@@ -3112,7 +3113,7 @@ export class Timeline {
         for (var i = 0; i < rows.length; i++) {
             this._trackSegments.push({
                 trackIdx: -1,
-                cameraName: BEHAVIOR_GROUP_NAME,
+                cameraName: rows[i].group || BEHAVIOR_GROUP_NAME,
                 color: rows[i].color || null,
                 segments: rows[i].segments || [],
                 lanes: rows[i].lanes || 1,
@@ -3137,7 +3138,9 @@ export class Timeline {
         var hIds = session._hiddenIdentities;
         var visible = rows.filter(function (r) { return !(hIds && hIds.has(r.animal)); });
         var current = this._trackSegments.filter(function (r) { return r._isBehavior; });
-        var same = current.length === visible.length && current.every(function (r, i) { return r.trackName === visible[i].animal; });
+        var same = current.length === visible.length && current.every(function (r, i) {
+            return r.trackName === visible[i].animal && r.cameraName === (visible[i].group || BEHAVIOR_GROUP_NAME);
+        });
         if (!same) {
             this.refreshTracks(session);
             return;

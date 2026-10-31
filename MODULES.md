@@ -2823,10 +2823,10 @@ Pure (the worker loads it).
 ### pose/behavior-predictions.js
 
 **Purpose.** Predicted behavior bouts per session (a `WeakMap`), shared by
-every source (rules, classifiers; keypoint-MoSeq and discovery later):
-one RUN per behavior `{behaviorId, source: 'rule'|'model:<16-hex hash>', cfg,
+every source (rules, classifiers, promoted states; discovery later):
+one RUN per behavior `{behaviorId, source: 'rule'|'model:<16-hex hash>'|'states:<layer>', cfg,
 labels (a classifier run: the print of the labels its model learned from, null
-for an imported model), fps, mode, camera,
+for an imported model), states (a states run: the promoted states, sorted), fps, mode, camera,
 bouts: [{animal, target, start, end, score}], scores: Map<'animal\u0001target',
 Float32Array> (in memory only)}`, a mutual pair in name order. STALE when the
 settings changed — `runConfigPrint(behavior, session, {fps, mode, camera,
@@ -2838,7 +2838,9 @@ session's skeleton) + the floor in effect + fps + 2D/3D + `POSE_CHECK_VERSION`
 classifier run also when its training labels changed (`env.labelPrintOf(id)`
 ≠ its `labels`) or a newer model replaced its own (`env.modelHashOf(id)` set
 and ≠ its hash; a reopened project has no model until retrained, and retraining
-the same labels gives the same hash) — or the poses changed: `predictionInputPrint` is an order-free
+the same labels gives the same hash); a states run's `cfg` is instead its layer's `layerPrint` and
+its states, so re-importing or removing the layer makes it stale, naming a
+state or renaming an animal does not — or the poses changed: `predictionInputPrint` is an order-free
 sum/xor hash of every coordinate (to 1e-3) with its frame, identity and node
 (3D from groups; 2D from resident frames plus a lazy project's store rows, so
 residency changes nothing). Edits only `notePossibleInputChange` (cheap); the
@@ -2862,21 +2864,63 @@ DOM-free.
 `predictionStaleness(session, env)`, `isRunStale`, `predictionsStand`,
 `renamePredictedAnimal`, `reviewStatus`, `REVIEW_ORDERS`, `reviewQueue`,
 `acceptPredictions`, `rejectPredictions`, `exportPredictionRuns`,
-`importPredictionRuns`, `resetBehaviorPredictions`, `isRunSource`, `runModelHash`,
+`importPredictionRuns`, `resetBehaviorPredictions`, `isRunSource`, `runModelHash`, `runStateLayer`,
 `runThreshold`, `replaceRunBouts(session, id, bouts, cfg)` (a classifier's
 post-processing changed: bouts re-derived from the scores in memory).
 `predictionStaleness` returns `{input, settings, labels, model}`.
 
 **Imports.** `./behavior-ethogram.js`, `./behavior-labels.js`,
 `./behavior-tensor.js` (`resolveBody`, `POSE_CHECK_VERSION`), `./behavior-features.js`
-(`FEATURE_SPEC_VERSION`), `./pose-data.js`. **Imported by** `pose/behavior-classifier.js`,
+(`FEATURE_SPEC_VERSION`), `./behavior-states.js` (`stateLayer`, `layerPrint`, `cleanLayerName`),
+`./pose-data.js`. **Imported by** `pose/behavior-classifier.js`, `ui/behavior-states.js`,
 `ui/behavior-train.js`,
 `import-export/behavior-metadata.js`, `pose/run-state.js`, `ui/behavior-detect.js`,
 `ui/behavior-panel.js`, `ui/behavior-timeline.js`, `ui/ui-wiring.js` (Rename
 Identity). **Tests.** `tests/test-behavior-rules.mjs` §6–7,
 `tests/test-behavior-metadata.mjs` §5, `tests/test-behavior-classifier.mjs` §9,
 `tests/e2e/behavior-rules.mjs`, `tests/e2e/behavior-label-roundtrip.mjs`,
-`tests/e2e/behavior-classifier.mjs`.
+`tests/e2e/behavior-classifier.mjs`, `tests/test-kpms-io.mjs` §11 (states runs).
+
+### pose/behavior-states.js
+
+**Purpose.** Behavioral STATES per session (a `WeakMap`; never on
+FrameGroups): one categorical label per animal and frame from an
+unsupervised model — keypoint-MoSeq's syllables (Phase 4), the in-browser
+discovery's clusters later — as named LAYERS `{name, source:
+'keypoint-MoSeq'|'discovery', stateNames: Map<state, name>, animals:
+Map<animal NAME, Int32Array [start, end, state, …]>, version}`. Runs are the
+only form (sorted, non-overlapping, touching runs of a state joined; 3 ints
+each), never a per-frame array; a layer's runs are never edited in place.
+Animals are identity names: `renameStateAnimal` (Rename Identity) and
+`swapStateAnimalsInRange` (registered on `onIdentitySwap`: ID-switch Fix /
+Undo, reassignment) carry them, a swap splitting runs at its edges.
+`stateSummary` (frames, runs, median run per state), `stateEnrichment`
+(per state × behavior: frames labelled present, and "not" minus present — a
+frame once per animal and behavior, whatever the target, a mutual pair for
+both animals; unlabelled frames count for neither) and `statesToBouts`
+(maximal stretches in a set of states, each with its main state) read runs
+and label intervals only. `layerPrint` (runs only, a sum over animals: names
+are not in it) is what promoted-state predictions check. Saved as
+`metadata.lucid.behaviorStates` only when a layer has a run;
+`resetBehaviorStates` forgets every session's (from `resetBehaviorState`).
+State colors `STATE_COLORS` (24, by state number) then `OTHER_STATE_COLOR`.
+DOM-free.
+
+**Exports.** `STATE_SOURCES`, `STATE_COLORS`, `OTHER_STATE_COLOR`, `stateColor`,
+`cleanLayerName`, `onStatesChange`, `runsFromSequence(seq, {offset, maxFrame})`,
+`setStateLayer(session, layer, {silent})` → `{layer, runs, dropped}`, `removeStateLayer`,
+`stateLayers`, `stateLayer`, `hasStates`, `setStateName`, `stateName`, `stateLabel`,
+`layerAnimals`, `stateAt(layer, animal, frame)` (binary search; -1 = none), `layerPrint`,
+`stateSummary(layers)`, `stateEnrichment(items, behaviorIds)`, `statesToBouts(layer, states)`,
+`renameStateAnimal`, `swapStateAnimalsInRange`, `exportStateLayers`, `importStateLayers`,
+`resetBehaviorStates`.
+
+**Imports.** `./behavior-labels.js` (`listBouts`), `./pose-data.js` (`onIdentitySwap`).
+**Imported by** `pose/behavior-predictions.js`, `import-export/behavior-metadata.js`,
+`ui/behavior-states.js`, `ui/behavior-kpms-modal.js`, `ui/behavior-confirm.js` (re-track warning),
+`ui/ui-wiring.js` (Rename Identity).
+**Tests.** `tests/test-kpms-io.mjs` §8–12, `tests/test-track-identity-palette.mjs` §11,
+`tests/e2e/behavior-kpms-roundtrip.mjs`, `tests/e2e/behavior-label-roundtrip.mjs`.
 
 ### pose/behavior-pool.js
 
@@ -10069,7 +10113,7 @@ the no-data placeholder.
 
 ---
 
-**Behavior labels.** A synthetic "Behavior" row group (`BEHAVIOR_GROUP_NAME`) after the mode's rows, from the `behaviorRows` constructor option / `setBehaviorRowsProvider(fn)` (ui/behavior-timeline.js): rows tagged `_isBehavior`, hidden with their identity, drawn per segment color and lane (`_drawBehaviorSegments`; a segment's optional `band: [from, to]` draws it over that fraction of its lane's height — predicted bouts sit in a band under the labels), outside the per-camera row cap. `refreshBehaviorRows()` swaps their segments without walking frames (full `refreshTracks` only when which rows show changes). `onRangeSelect(start, end, {animal})` now also names the behavior row a Shift+drag began on (`_rowAtY`).
+**Behavior labels.** A synthetic "Behavior" row group (`BEHAVIOR_GROUP_NAME`) after the mode's rows — or the group a row names (`group`: "States", keypoint-MoSeq's syllables) — from the `behaviorRows` constructor option / `setBehaviorRowsProvider(fn)` (ui/behavior-timeline.js): rows tagged `_isBehavior`, hidden with their identity, drawn per segment color and lane (`_drawBehaviorSegments`; a segment's optional `band: [from, to]` draws it over that fraction of its lane's height — predicted bouts sit in a band under the labels), outside the per-camera row cap. `refreshBehaviorRows()` swaps their segments without walking frames (full `refreshTracks` only when which rows show changes — by animal and group). `onRangeSelect(start, end, {animal})` now also names the behavior row a Shift+drag began on (`_rowAtY`).
 
 ### ui/timeline-controller.js
 
@@ -11284,7 +11328,7 @@ so a hidden entity stays hidden under its new name.
 
 ---
 
-**Behavior labels.** Behavior labels: `setupMenus` calls `setupBehaviorUi({closeMenus, navigate, switchSession})` (ui/behavior-panel.js; `switchSession` lets the Train Classifiers dialog open a session left out of training); `updateSeekbarVisual` calls `updateBehaviorFrame`; the toolbar's Behavior menu is a `wireActionMenu` (`behaviorDropdown`: the button / All frames → `detectAllFrames` (each behavior with its classifier when it has one, else its detector), This frame → `detectThisFrame`, Settings… → `showBehaviorRulesModal`); Rename Identity calls `renameAnimal` and `renamePredictedAnimal` next to `renameHiddenIdentity`; Propagate Tracks → IDs asks first on a labelled session (`confirmRetrackWithBehaviorLabels`); Hot Keys help appends this project's ethogram keys.
+**Behavior labels.** Behavior labels: `setupMenus` calls `setupBehaviorUi({closeMenus, navigate, switchSession})` (ui/behavior-panel.js; `switchSession` lets the Train Classifiers dialog open a session left out of training); `updateSeekbarVisual` calls `updateBehaviorFrame`; the toolbar's Behavior menu is a `wireActionMenu` (`behaviorDropdown`: the button / All frames → `detectAllFrames` (each behavior with its classifier when it has one, else its detector), This frame → `detectThisFrame`, Settings… → `showBehaviorRulesModal`); Rename Identity calls `renameAnimal`, `renamePredictedAnimal` and `renameStateAnimal` next to `renameHiddenIdentity`; Propagate Tracks → IDs asks first on a labelled session (`confirmRetrackWithBehaviorLabels`); Hot Keys help appends this project's ethogram keys.
 
 ### ui/viewport3d.js
 
@@ -12062,15 +12106,18 @@ the gate, its classifier — trained, imported, or its detector — and the
 cross-validated F1 on frames · bouts; Train… (`ui/behavior-train-modal.js`),
 Predict all frames, This frame, All sessions, Export…, Import…; the active-learning queue:
 Teach <behavior>, Next uncertain ▸, Next disagreement ▸, and the stretch shown
-with Accept / Reject / Skip ▸ — `ui/behavior-train.js`) and Summary (time
+with Accept / Reject / Skip ▸ — `ui/behavior-train.js`), States
+(`ui/behavior-states.js` `renderStatesSection`: keypoint-MoSeq's syllables) and Summary (time
 budget, orphaned labels of a deleted identity to reassign or delete). The stale
 banner also names classifier runs whose training labels changed ("train again")
 or whose model was replaced. Skips rendering while hidden.
 `setupBehaviorUi` (from `setupMenus`) binds the menu (including Import Labels… /
 Export Labels…, `ui/behavior-io-modal.js`, Detect Behaviors, Detect in All
 Sessions, Detection Settings…, Train Classifiers…, Export / Import
-Classifiers…), the toolbar menu's Label Behaviors mode item, tab buttons and
-catalog handler, wires detection (`setupBehaviorDetection`), and makes every label edit `markDirty()` and repaint
+Classifiers…, Export for keypoint-MoSeq… / Import keypoint-MoSeq Results…,
+`ui/behavior-kpms-modal.js`), the toolbar menu's Label Behaviors mode item, tab buttons and
+catalog handler, wires detection (`setupBehaviorDetection`) and states
+(`setupBehaviorStates`; a `{states}` repaint refreshes the tab), and makes every label edit `markDirty()` and repaint
 (predictions changes and the This frame readout repaint too, without marking dirty). The
 Summary's mean bout is `boutFrames / bouts`.
 `updateBehaviorFrame` (every frame, from `updateSeekbarVisual`) keeps the save
@@ -12084,11 +12131,12 @@ states of a session just left (so `switchSession` needs no hook).
 `./behavior-detect.js`, `./behavior-rules-modal.js`, `./behavior-confirm.js`,
 `./info-tip.js`, `./plane-definition.js` (`ICON_INFO`),
 `./panel-visibility.js`, `./section-state.js`, `./settings.js`,
-`./rendering.js`, `./behavior-train.js`, `./behavior-train-modal.js`, `../pose/behavior-ethogram.js`,
+`./rendering.js`, `./behavior-train.js`, `./behavior-train-modal.js`, `./behavior-states.js`,
+`./behavior-kpms-modal.js`, `../pose/behavior-ethogram.js`,
 `../pose/behavior-labels.js`, `../pose/behavior-predictions.js`, `../pose/behavior-classifier.js`,
 `../import-export/save-load.js`. **Imported by** `ui/ui-wiring.js`,
 `ui/info-panel.js`. **Tests.** `tests/e2e/behavior-labelling.mjs` §4, `tests/e2e/behavior-rules.mjs` §2–4,
-`tests/e2e/behavior-classifier.mjs`.
+`tests/e2e/behavior-classifier.mjs`, `tests/e2e/behavior-kpms-roundtrip.mjs` §3.
 
 ### ui/behavior-timeline.js
 
@@ -12102,7 +12150,9 @@ playhead; PREDICTED bouts (pose/behavior-predictions.js) in a band under the
 lane's labels (`PREDICTION_BAND`; the labels then take `LABEL_BAND`), alpha
 following the bout's score in steps of 0.05, fainter while stale (for a
 classifier's run also when its training labels changed or its model was
-replaced); null (no group at all) without an ethogram or bouts.
+replaced); then the "States" group (`ui/behavior-states.js` `stateTimelineRows`,
+rows tagged `group: 'States'`); null (no group at all) without an ethogram,
+bouts or states.
 `onTimelineRangeSelect` is the timeline's `onRangeSelect`: with an ethogram
 and animals, a menu above the selection labels the range for the animal whose
 row the drag began on (Shift-click = "not"), arms it as the `[` `]` range, or
@@ -12111,10 +12161,10 @@ clears it; otherwise it reports the range as before.
 **Exports.** `ABSENT_COLOR`, `behaviorTimelineRows`, `onTimelineRangeSelect`.
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js`
-(`detectionEnv`), `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+(`detectionEnv`), `./behavior-states.js` (`stateTimelineRows`), `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
 `../pose/behavior-predictions.js`, `../import-export/save-load.js`. **Imported by** `pose/initialization.js`
 (`setupTimeline`), `ui/behavior-panel.js`. **Tests.**
-`tests/e2e/behavior-labelling.mjs` §1, §5.
+`tests/e2e/behavior-labelling.mjs` §1, §5, `tests/e2e/behavior-kpms-roundtrip.mjs` §2.
 
 ### ui/behavior-ethogram-modal.js
 
@@ -12326,17 +12376,89 @@ scroller (the dialog).
 
 **Purpose.** The confirmations behavior labels need, in the skeleton-edit
 dialog's shape (title, one sentence, counts; Esc cancels): before a pass that
-hands identity names out afresh on a labelled session (Track All, Track
-Frame Range — `runTrackingPass` — and Propagate Tracks → IDs; labels follow
-names), before removing a behavior that has bouts, and before making a
-behavior mutual when that merges bouts labelled both ways round.
+hands identity names out afresh on a session with labels or behavioral states
+(Track All, Track Frame Range — `runTrackingPass` — and Propagate Tracks →
+IDs; labels and keypoint-MoSeq states follow names), before removing a
+behavior that has bouts, and before making a behavior mutual when that merges
+bouts labelled both ways round.
 
 **Exports.** `behaviorConfirm`, `confirmRetrackWithBehaviorLabels`,
 `confirmRemoveBehavior`, `confirmMakeMutual`.
 
-**Imports.** `./app-state.js`, `../pose/behavior-labels.js`. **Imported by**
-`pose/tracker.js`, `ui/ui-wiring.js`, `ui/behavior-ethogram-modal.js`.
+**Imports.** `./app-state.js`, `../pose/behavior-labels.js`, `../pose/behavior-states.js`. **Imported by**
+`pose/tracker.js`, `ui/ui-wiring.js`, `ui/behavior-ethogram-modal.js`, `ui/behavior-states.js`.
 **Tests.** `tests/e2e/behavior-labelling.mjs` §6.
+
+### ui/behavior-states.js
+
+**Purpose.** Behavioral states in the app. The Behavior tab's States section
+(`renderStatesSection`, called by `refreshBehaviorPanel`): Export for
+keypoint-MoSeq… / Import results… buttons; the shown layer (chosen, else the
+newest; Remove… with a confirm, this session or every session with it),
+counted in this session or every session with a layer of that name; one
+two-line row per syllable — checkbox, its color and number (a click: its next
+run after the playhead, any animal), its name (typed names go into every
+session's layer of that name; focus survives the repaint), its share of the
+frames · median run, and the labels in it: P(behavior | syllable) with the
+frames behind it, for a chosen behavior or the best match (smoothed by the
+frames) — unlabelled frames count for neither; syllables under 0.5% folded.
+Promote turns the checked syllables into one lasting, non-social behavior's
+predictions (`statesToBouts`, source `states:<layer>`, each bout scored by its
+main syllable's labelled share, NaN without labels; a run from another source
+is replaced after a confirm). `stateTimelineRows` is the timeline's "States"
+group: a row per animal of the shown layer, runs in `stateColor`, segments
+cached per layer version (no frame walk). `setupBehaviorStates` wires the
+section and its ⓘ, and makes every states change `markDirty()` and repaint
+(`{states: true}`), showing a layer just imported.
+
+**Exports.** `STATES_GROUP_NAME`, `shownLayer`, `stateTimelineRows`,
+`renderStatesSection`, `setupBehaviorStates`.
+
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-confirm.js`,
+`./behavior-detect.js` (`sessionFps`), `./behavior-kpms-modal.js`, `./info-tip.js`,
+`./plane-definition.js` (`ICON_INFO`), `../pose/behavior-states.js`,
+`../pose/behavior-predictions.js`, `../pose/behavior-ethogram.js`,
+`../pose/behavior-tensor.js`, `../import-export/save-load.js`. **Imported by**
+`ui/behavior-panel.js`, `ui/behavior-timeline.js`. **Tests.**
+`tests/e2e/behavior-kpms-roundtrip.mjs` §2–3, §5.
+
+### ui/behavior-kpms-modal.js
+
+**Purpose.** Behavior ▸ Export for keypoint-MoSeq… and Behavior ▸ Import
+keypoint-MoSeq Results… (keypoint-MoSeq runs in the user's Python;
+`import-export/kpms-io.js` has the formats). Export: this session or every
+session whose poses are loaded (others named as left out; 2D and 3D never
+mixed), all frames or a stretch (the armed `[ ]` range by default); the
+poses are the behavior features' (`buildBehaviorContext`: 3D in the floor
+frame, used nodes, head → tail base, broken tracking scored 0; 2D from one
+camera), written chunk by chunk into a folder picked inside the click
+(`showDirectoryPicker`), else as downloads, plus `luc3d-kpms.yml`; a
+progress card counts rows. `runKpmsExport(choice, dirPick, {write})` takes a
+`write(name, parts)` instead (tests, the real-data harness). Import: Choose
+folder… (`showDirectoryPicker`, else a folder input; a few levels down:
+`luc3d-kpms.yml`, every `results.h5`, the CSVs of folders named `results`,
+`syll_info.csv` beside them — never `checkpoint.h5` or the pose tables) or
+Choose files… (any `.h5`, CSVs, the yml); several results → the newest
+first, chosen in a select; results.h5 read through `readBlobArrayBuffer` into
+h5wasm's MEMFS (`readResultsH5`), CSVs one by one with a progress card. A
+table maps each recording to a session · animal (`matchRecordings`: the
+manifest, the name, its parts; else Skip, to choose) and its first frame; the
+summary warns of clipping, length mismatches and two recordings on one
+animal. `applyKpmsImport` stores one layer per session (`setStateLayer`,
+replacing a layer of that name there; names from `syll_info.csv`). Esc
+closes both.
+
+**Exports.** `showKpmsExportModal`, `runKpmsExport`, `showKpmsImportModal`,
+`applyKpmsImport`.
+
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js`,
+`./behavior-io-modal.js` (`behaviorSessionInfo`), `./loading-overlay.js`,
+`../pose/behavior-states.js`, `../pose/behavior-tensor.js`, `../pose/behavior-ethogram.js`,
+`../import-export/kpms-io.js`, `../import-export/save-load.js`,
+`../loading/cold-read-guard.js`; the h5wasm IIFE global. **Imported by**
+`ui/behavior-panel.js`, `ui/behavior-states.js`. **Tests.**
+`tests/e2e/behavior-kpms-roundtrip.mjs` §1–2; real data
+`tests/e2e/_real-kpms-roundtrip.mjs`.
 
 ## loading/
 
@@ -14084,9 +14206,11 @@ first one ingested — later sessions map onto it by name; carries each
 behavior's `detector`, its classifier's `post` and the project's feature
 settings `features`, each only once set), `behaviorLabels`
 (`{v:1, fps?, bouts:[[behaviorId, animal, target, start, end, present, source, note]]}`)
-and `behaviorPredictions` (`{v:1, runs:[{behavior, source: 'rule'|'model:<hash>',
-cfg, labels?, mode, camera?, fps?, bouts:[[animal, target, start, end, score]]}]}`,
-only runs with bouts; pose/behavior-predictions.js). Trained classifiers are
+and `behaviorPredictions` (`{v:1, runs:[{behavior, source: 'rule'|'model:<hash>'|'states:<layer>',
+cfg, labels?, states?, mode, camera?, fps?, bouts:[[animal, target, start, end, score]]}]}`,
+only runs with bouts; pose/behavior-predictions.js) and `behaviorStates`
+(`{v:1, layers:[{name, source, stateNames:{state: name}, animals:{name: [[start, end, state]]}}]}`,
+only when a layer has a run; pose/behavior-states.js). Trained classifiers are
 never saved (retraining the same labels gives the same forest).
 Reading REPLACES the session's bouts and predictions; a session file added to an open project
 merges its ethogram by name and remaps its bouts' and predictions' ids. The fourth
@@ -14095,11 +14219,11 @@ merges its ethogram by name and remaps its bouts' and predictions' ids. The four
 **Exports.** `BEHAVIOR_METADATA_KEYS`, `writeBehaviorMetadata(lucid, session)`,
 `readBehaviorMetadata(session, lucid)` → `{kept, dropped}` (also
 `noteLabelsChanged`, so the cached label prints are redone),
-`resetBehaviorState()` (forget the ethogram and the trained classifiers with
-their row cache; before every load and on New Project).
+`resetBehaviorState()` (forget the ethogram, the trained classifiers with
+their row cache, and every session's states; before every load and on New Project).
 
 **Imports.** `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
-`../pose/behavior-predictions.js`, `../pose/behavior-classifier.js`.
+`../pose/behavior-predictions.js`, `../pose/behavior-classifier.js`, `../pose/behavior-states.js`.
 **Imported by** the writers `import-export/file-io.js`
 (`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
 (`buildSessionRefGraph`), `import-export/save-load.js` (project JSON v2/v3
@@ -14107,8 +14231,9 @@ and `_restoreProjectV2`), and the readers `import-export/slp-import.js`
 (`handleLoadSlpFile`), `loading/session-loader.js`
 (`handleLoadSessionFolderSingleSlp`, `handleLoadProjectSlpLazy`), plus
 `pose/initialization.js` (sample session reset). **Tests.**
-`tests/test-behavior-metadata.mjs`, `tests/e2e/behavior-label-roundtrip.mjs`
-(both writers, predictions included), `tests/e2e/behavior-rules.mjs` §6.
+`tests/test-behavior-metadata.mjs`, `tests/test-kpms-io.mjs` §12, `tests/e2e/behavior-label-roundtrip.mjs`
+(both writers, predictions and states included), `tests/e2e/behavior-rules.mjs` §6,
+`tests/e2e/behavior-kpms-roundtrip.mjs` §4.
 
 ### import-export/behavior-model-io.js
 
@@ -14178,6 +14303,46 @@ groups in use). RFC 4180 cells (`delimitedCell`, `toDelimited`,
 **Imports.** `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`.
 **Imported by** `ui/behavior-io-modal.js`, `ui/behavior-ethogram-modal.js`.
 **Tests.** `tests/test-behavior-io.mjs`, `tests/e2e/behavior-import-export.mjs`.
+
+### import-export/kpms-io.js
+
+**Purpose.** keypoint-MoSeq's file formats both ways (followed as
+keypoint-MoSeq 0.8.4 reads and writes them; none of its code — academic-only
+licence). Out: a pose table per session × animal named
+`<session>__<animal>.csv` (`recordingName`; parts are letters, digits, `.`,
+`-` and single `_`, so `__` only joins them; `recordingNames` makes clashes
+`-2`…): 3D in anipose's layout (`{bp}_x, _y, _z, _score` per node, then
+`fnum`; keypoint-MoSeq finds bodyparts with `(\w+)_x,\1_y,\1_z`, so
+`kpmsBodypartNames` writes `\w+` names), 2D in DeepLabCut's single-animal
+layout (scorer / bodyparts / coords header rows, frame as index); score 1,
+0 where the node is missing (empty coordinates) or the frame is broken
+tracking (coordinates kept); coordinates in the floor frame when given (z up:
+keypoint-MoSeq aligns headings about z), at `coordinateDecimals` (~1/10,000
+of a body length); `poseCsvChunks` yields text in row blocks.
+`kpmsManifest` writes `luc3d-kpms.yml`: keypoint-MoSeq's settings as
+top-level keys (bodyparts, use_bodyparts, anterior/posterior_bodyparts,
+skeleton, fps; plus format, dims, units, coordinates, node_names), the
+`recordings` block (session, animal, first_frame, frames) and `calls` (a
+literal block: the keypoint-MoSeq run, matplotlib on Agg so a script never
+waits on a plot window); every value a JSON-style flow value, so PyYAML reads
+it and `parseKpmsManifest` reads it back without a YAML library. In:
+`readResultsH5(h5, path)` (each recording group's `syllable`, int64 →
+Int32Array; older `syllables_reindexed` / `syllables`; nested names),
+`parseResultsCsv` (the `syllable` column), `parseSyllableNames`
+(`syll_info.csv` labels), and `matchRecordings` (manifest record, then the
+export's name — also at the end of a `path_in_name` name —, then its parts
+either side of `__`, ignoring case; else unmatched). DOM-free.
+
+**Exports.** `KPMS_MANIFEST`, `RECORDING_SEP`, `KPMS_SCORER`, `kpmsBodypartNames`,
+`recordingPart`, `recordingName`, `recordingNames`, `coordinateDecimals`,
+`poseCsvChunks`, `poseCsv`, `kpmsCalls`, `kpmsManifest`, `parseKpmsManifest`,
+`syllableArray`, `readResultsH5`, `parseResultsCsv`, `recordingOfCsv`,
+`parseSyllableNames`, `matchRecordings`.
+
+**Imports.** `./behavior-io.js` (`parseDelimited`). **Imported by**
+`ui/behavior-kpms-modal.js`. **Tests.** `tests/test-kpms-io.mjs` §1–7 (§6 reads
+`tests/fixtures/kpms/`, what a real keypoint-MoSeq 0.8.4 fit wrote —
+`make_fixture.sh` remakes it), `tests/e2e/behavior-kpms-roundtrip.mjs`.
 
 ### import-export/plane-metadata.js
 

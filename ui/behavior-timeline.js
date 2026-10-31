@@ -1,6 +1,8 @@
 // ui/behavior-timeline.js — behavior labels on the timeline: the "Behavior"
-// row group (one row per animal, see `Timeline.setBehaviorRowsProvider`) and
-// the menu a Shift+drag range opens to label that range.
+// row group (one row per animal, see `Timeline.setBehaviorRowsProvider`), the
+// "States" group after it (keypoint-MoSeq's syllables: ui/behavior-states.js
+// `stateTimelineRows`) and the menu a Shift+drag range opens to label that
+// range.
 //
 // A row shows the behavior selected in the Behavior tab, or — with none
 // selected — every behavior that has bouts or predictions, as thin stacked
@@ -13,7 +15,7 @@
 //
 // Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-detect.js,
 //             pose/behavior-ethogram.js, pose/behavior-labels.js,
-//             pose/behavior-predictions.js, import-export/save-load.js
+//             ui/behavior-states.js, pose/behavior-predictions.js, import-export/save-load.js
 
 import { state, timeline } from './app-state.js';
 import {
@@ -21,6 +23,7 @@ import {
     registerBehaviorRepaint, animalColor,
 } from './behavior-coding.js';
 import { detectionEnv } from './behavior-detect.js';
+import { stateTimelineRows } from './behavior-states.js';
 import { behaviors, behaviorById } from '../pose/behavior-ethogram.js';
 import { listBouts, runningStates, hasBehaviorData, orphanedAnimals } from '../pose/behavior-labels.js';
 import { predictedBouts, predictionStaleness } from '../pose/behavior-predictions.js';
@@ -41,11 +44,19 @@ function predictionAlpha(score, stale) {
 }
 
 /**
- * The behavior rows for `session`, or null when it has nothing to show.
- * @returns {Array<{animal:string, color:string, lanes:number, segments:Array}>|null}
+ * The rows for `session`: the "Behavior" group's, then the "States" group's
+ * (`group: 'States'`); null when there is nothing to show.
+ * @returns {Array<{animal:string, color:string, lanes:number, segments:Array, group?:string}>|null}
  */
 export function behaviorTimelineRows(session) {
     if (!session) return null;
+    var labels = labelTimelineRows(session) || [];
+    var states = stateTimelineRows(session);
+    return labels.length || states.length ? labels.concat(states) : null;
+}
+
+/** The "Behavior" group's rows, or null when there is no ethogram and no bout. */
+function labelTimelineRows(session) {
     if (!behaviors().length && !hasBehaviorData(session)) return null;
     var animals = sessionAnimals(session);
     var names = animals.concat(orphanedAnimals(session, animals));
@@ -120,7 +131,7 @@ export function behaviorTimelineRows(session) {
 // a state runs (its bar grows with the playhead).
 registerBehaviorRepaint(function (info) {
     if (!timeline) return;
-    if (info.frame && !info.labels && !info.ui && !info.ethogram && !info.predictions && !runningStates(state.session).length) return;
+    if (info.frame && !info.labels && !info.ui && !info.ethogram && !info.predictions && !info.states && !runningStates(state.session).length) return;
     timeline.refreshBehaviorRows();
 });
 

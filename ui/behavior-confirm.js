@@ -2,18 +2,20 @@
 // pass that hands identity names out afresh (Track All, Track Frame Range,
 // Propagate), and before removing a behavior that has bouts.
 //
-// Behavior labels are keyed by identity NAME (pose/behavior-labels.js). An
-// ID-switch fix or a rename carries them, but a re-track or a propagate can
-// give a labelled animal a different name, and its labels then sit on whoever
-// now has the old one. Nothing on screen would show it, so it is asked first.
+// Behavior labels are keyed by identity NAME (pose/behavior-labels.js), and
+// so are behavioral states (pose/behavior-states.js). An ID-switch fix or a
+// rename carries them, but a re-track or a propagate can give a labelled
+// animal a different name, and its labels then sit on whoever now has the old
+// one. Nothing on screen would show it, so it is asked first.
 //
 // Same dialog shape as the skeleton-edit warning (title, one sentence, the
 // counts, Cancel / go); Esc cancels.
 //
-// Depends on: ui/app-state.js, pose/behavior-labels.js
+// Depends on: ui/app-state.js, pose/behavior-labels.js, pose/behavior-states.js
 
 import { state } from './app-state.js';
 import { hasBehaviorData, listBouts } from '../pose/behavior-labels.js';
+import { hasStates, stateLayers } from '../pose/behavior-states.js';
 
 function n(x) { return Number(x || 0).toLocaleString('en-US'); }
 
@@ -83,21 +85,33 @@ export function behaviorConfirm(o) {
 
 /**
  * Before a pass that reassigns identity names on `session`. Resolves true at
- * once when the session has no behavior labels.
+ * once when the session has no behavior labels and no behavioral states
+ * (keypoint-MoSeq syllables, which follow names too).
  * @param {Session} session
  * @param {string} action the pass, as the user knows it ("Track All")
  * @returns {Promise<boolean>}
  */
 export function confirmRetrackWithBehaviorLabels(session, action) {
-    if (!session || !hasBehaviorData(session)) return Promise.resolve(true);
-    var bouts = listBouts(session);
-    var animals = new Set(bouts.map(function (b) { return b.animal; }));
+    var labelled = !!session && hasBehaviorData(session), stated = !!session && hasStates(session);
+    if (!labelled && !stated) return Promise.resolve(true);
+    var rows = [];
+    if (labelled) {
+        var bouts = listBouts(session);
+        var animals = new Set(bouts.map(function (b) { return b.animal; }));
+        rows.push(['Behavior bouts in this session', n(bouts.length)], ['Animals with bouts', n(animals.size)]);
+    }
+    if (stated) {
+        var withStates = new Set();
+        stateLayers(session).forEach(function (l) { l.animals.forEach(function (_, a) { withStates.add(a); }); });
+        rows.push(['Animals with keypoint-MoSeq states', n(withStates.size)]);
+    }
     return behaviorConfirm({
         id: 'behaviorRetrackConfirm',
-        title: action + ' with behavior labels',
-        message: 'Behavior labels follow identity names, and ' + action + ' may give a labelled animal a ' +
-            'different name — its labels would then belong to whichever animal gets the old one.',
-        rows: [['Behavior bouts in this session', n(bouts.length)], ['Animals with bouts', n(animals.size)]],
+        title: action + (labelled ? ' with behavior labels' : ' with behavioral states'),
+        message: (labelled && stated ? 'Behavior labels and states follow' : labelled ? 'Behavior labels follow' : 'Behavioral states follow') +
+            ' identity names, and ' + action + ' may give an animal a different name — its ' + (labelled ? 'labels' : 'states') +
+            ' would then belong to whichever animal gets the old one.',
+        rows: rows,
         confirmLabel: action + ' anyway',
     });
 }

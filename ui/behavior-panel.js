@@ -25,6 +25,9 @@
 //             scoring near the threshold) and Next disagreement ▸ (labels the
 //             predicted bouts contradict), each shown with Accept / Reject /
 //             Skip ▸ (ui/behavior-train.js)
+//   States    keypoint-MoSeq's syllables, imported from its results: usage,
+//             median length, how the labels fall in each, names, Next ▸, and
+//             Promote to predictions (ui/behavior-states.js)
 //   Summary   per animal × behavior: bouts, seconds, share of the labelled
 //             frames; labels of a deleted identity, to reassign or delete
 //
@@ -34,6 +37,7 @@
 // Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-mode.js,
 //             ui/behavior-ethogram-modal.js, ui/behavior-io-modal.js, ui/behavior-timeline.js,
 //             ui/behavior-detect.js, ui/behavior-rules-modal.js, ui/behavior-confirm.js,
+//             ui/behavior-states.js, ui/behavior-kpms-modal.js,
 //             ui/info-tip.js, ui/plane-definition.js (the ⓘ icon),
 //             ui/panel-visibility.js, ui/section-state.js, ui/settings.js,
 //             ui/rendering.js, pose/behavior-ethogram.js, pose/behavior-labels.js,
@@ -61,6 +65,8 @@ import { showBehaviorTrainModal } from './behavior-train-modal.js';
 import { onModelsChange, behaviorModels } from '../pose/behavior-classifier.js';
 import { showBehaviorRulesModal } from './behavior-rules-modal.js';
 import { behaviorConfirm } from './behavior-confirm.js';
+import { renderStatesSection, setupBehaviorStates } from './behavior-states.js';
+import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.js';
 import { setInfoTip } from './info-tip.js';
 import { ICON_INFO } from './plane-definition.js';
 import { isInfoPanelVisible } from './panel-visibility.js';
@@ -75,7 +81,7 @@ import {
 } from '../pose/behavior-labels.js';
 import {
     reviewQueue, acceptPredictions, rejectPredictions, predictionStaleness, hasPredictions, clearBehaviorRuns,
-    onPredictionsChange, behaviorRuns,
+    onPredictionsChange, behaviorRuns, behaviorRunOf, runStateLayer,
 } from '../pose/behavior-predictions.js';
 import { markDirty, setStatus } from '../import-export/save-load.js';
 
@@ -141,6 +147,7 @@ export function refreshBehaviorPanel() {
     renderBouts(session);
     renderPredictions(session);
     renderClassifiers(session);
+    renderStatesSection(session);
     renderSummary(session);
 }
 
@@ -312,12 +319,17 @@ function staleHtml(session) {
     if (!st.input && !st.settings.length && !st.labels.length && !st.model.length) return '';
     var why = [];
     var names = function (ids) { return ids.map(function (id) { var b = behaviorById(id); return b ? b.name : 'a removed behavior'; }).join(', '); };
+    // Promoted states go stale when their layer changes; detecting again does not redo them.
+    var fromStates = st.settings.filter(function (id) { var r = behaviorRunOf(session, id); return !!(r && runStateLayer(r)); });
+    var settings = st.settings.filter(function (id) { return fromStates.indexOf(id) < 0; });
     if (st.input) why.push('the poses changed since they were detected');
-    if (st.settings.length) why.push('the settings of ' + names(st.settings) + ' changed');
+    if (settings.length) why.push('the settings of ' + names(settings) + ' changed');
+    if (fromStates.length) why.push('the states ' + names(fromStates) + ' came from changed (promote them again under States)');
     if (st.labels.length) why.push('the labels ' + names(st.labels) + ' learned from changed (train again)');
     if (st.model.length) why.push(names(st.model) + ' has a newer classifier');
+    var detect = st.input || settings.length || st.labels.length || st.model.length;
     return '<div class="behavior-stale" role="status">Out of date: ' + esc(why.join('; ')) + '. ' +
-        '<button class="panel-btn" data-act="detect-all">Detect again</button></div>';
+        (detect ? '<button class="panel-btn" data-act="detect-all">Detect again</button>' : '') + '</div>';
 }
 
 function readoutHtml() {
@@ -833,13 +845,15 @@ export function setupBehaviorUi(deps) {
     on('menuBehaviorTrain', showBehaviorTrainModal);
     on('menuBehaviorExportModels', function () { exportClassifiers(); });
     on('menuBehaviorImportModels', showImportClassifiers);
+    on('menuBehaviorKpmsExport', showKpmsExportModal);
+    on('menuBehaviorKpmsImport', showKpmsImportModal);
     on('tbBehaviorMode', toggleBehaviorMode);
     on('behaviorModeBtn', toggleBehaviorMode);
     on('behaviorModeExit', exitBehaviorMode);
     on('behaviorEthogramBtn', showEthogramModal);
     setHandler('behaviorMode', toggleBehaviorMode);
     persistSectionStates(['behaviorCodingSection', 'behaviorBoutsSection', 'behaviorPredictionsSection', 'behaviorClassifiersSection',
-        'behaviorSummarySection'], SECTIONS_KEY);
+        'behaviorStatesSection', 'behaviorSummarySection'], SECTIONS_KEY);
     var coding = document.getElementById('behaviorCodingBody');
     var bouts = document.getElementById('behaviorBoutsBody');
     var preds = document.getElementById('behaviorPredictionsBody');
@@ -855,6 +869,7 @@ export function setupBehaviorUi(deps) {
     var cinfo = document.getElementById('behaviorClassifiersInfo');
     if (cinfo) { cinfo.innerHTML = ICON_INFO; setInfoTip(cinfo, CLASSIFIERS_INFO); }
     setupBehaviorDetection({ openSettings: showBehaviorRulesModal });
+    setupBehaviorStates();
     var tabBtn = document.querySelector('.panel-tab[data-tab="tabBehavior"]');
     if (tabBtn) tabBtn.addEventListener('click', function () { setTimeout(refreshBehaviorPanel, 0); });
 
@@ -873,7 +888,7 @@ export function setupBehaviorUi(deps) {
         requestBehaviorRepaint({ predictions: true });
     });
     registerBehaviorRepaint(function (info) {
-        if (info.labels || info.ui || info.ethogram || info.predictions) refreshBehaviorPanel();
+        if (info.labels || info.ui || info.ethogram || info.predictions || info.states) refreshBehaviorPanel();
         // The video boxes follow the labels and the target question (`ui`);
         // the toolbar's blue Behavior button follows the predictions.
         if ((info.labels || info.ethogram || info.ui || info.predictions) && state.session) drawAllOverlays(state.currentFrame);

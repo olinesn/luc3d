@@ -37,7 +37,7 @@ console.log('\n1. Nothing to say, nothing written');
     const lucid = {};
     writeBehaviorMetadata(lucid, { name: 's' });
     check(Object.keys(lucid).length === 0, 'no ethogram, no bouts: no keys');
-    check(BEHAVIOR_METADATA_KEYS.join() === 'ethogram,behaviorLabels,behaviorPredictions', 'the keys this module owns');
+    check(BEHAVIOR_METADATA_KEYS.join() === 'ethogram,behaviorLabels,behaviorPredictions,behaviorStates', 'the keys this module owns');
 }
 
 console.log('\n2. Write and read back');
