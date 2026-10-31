@@ -54,7 +54,7 @@ import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-me
 import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { buildSaveProvenance } from './slp-provenance.js';
-import { withUnopenedSessions } from './unopened-sessions.js';
+import { instancePlacesForSave, withUnopenedSessions } from './unopened-sessions.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 
 /**
@@ -801,7 +801,8 @@ async function buildSlpBytes(opts) {
             return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
         });
 
-        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
+        var sessPlaces = instancePlacesForSave(sess.unopenedSessions);
+        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessPlaces);
         // Poses on a video no session names go back on their own video.
         var sessOutside = outsideFramesForSave(sess, sessLabels.skeletons[0]);
 
@@ -829,7 +830,7 @@ async function buildSlpBytes(opts) {
         allSessions = allSessions.concat(sessLabels.sessions || []);
         // The sessions of this session's file that nobody opened go right after it.
         if (sess.unopenedSessions) {
-            allSessions = allSessions.concat(unopenedSessionsForEagerSave(SIO, sess, sessLabels, sessOutside, sessOutsideBase, allVideos, allIdentities));
+            allSessions = allSessions.concat(unopenedSessionsForEagerSave(SIO, sess, sessLabels, sessOutside, sessOutsideBase, allVideos, allIdentities, sessPlaces));
         }
     }
 

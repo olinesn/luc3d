@@ -2165,7 +2165,7 @@ export function makePooledSioInstances(SIO, skeleton, numNodes) {
  * @param {Array} videoFiles - Array of videoFile objects
  * @returns {Object} sleap-io.js Labels instance
  */
-export function buildSlpLabelsAllViews(session, views, videoFiles) {
+export function buildSlpLabelsAllViews(session, views, videoFiles, placeOf) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -2326,6 +2326,11 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
             return sioInst;
         }
 
+        function _addToFrame(frameInstances, inst) {
+            if (placeOf && placeOf.has(inst)) placeOf.set(inst, [labeledFrames.length, frameInstances.length]);
+            frameInstances.push(_getOrCreateSioInst(inst));
+        }
+
         // Create per-camera LabeledFrames from grouped + ungrouped instances
         var lfByCamera = new Map();
         for (var [camName3, camInstances] of fg.instances) {
@@ -2336,13 +2341,13 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
 
             var frameInstances = [];
             for (var ii = 0; ii < camInstances.length; ii++) {
-                frameInstances.push(_getOrCreateSioInst(camInstances[ii]));
+                _addToFrame(frameInstances, camInstances[ii]);
             }
 
             // Also add ungrouped instances for this camera
             var ulList = fg.getUnlinkedInstances(camName3);
             for (var ui = 0; ui < ulList.length; ui++) {
-                frameInstances.push(_getOrCreateSioInst(ulList[ui].instance));
+                _addToFrame(frameInstances, ulList[ui].instance);
             }
 
             if (frameInstances.length > 0) {
@@ -2360,7 +2365,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
             if (!ulVideo || !ulSioCam) continue;
             var ulFrameInsts = [];
             for (var ui2 = 0; ui2 < ulInstList.length; ui2++) {
-                ulFrameInsts.push(_getOrCreateSioInst(ulInstList[ui2].instance));
+                _addToFrame(ulFrameInsts, ulInstList[ui2].instance);
             }
             if (ulFrameInsts.length > 0) {
                 var ulLf = new SIO.LabeledFrame({ video: ulVideo, frameIdx: frameIdx, instances: ulFrameInsts });
@@ -2898,7 +2903,8 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         for (var ii = 0; ii < lfInsts.length; ii++) {
             instances.push(_typedInstanceToSlpData(lfInsts[ii], typedTracks, numNodes, PredictedInstance));
         }
-        frames.push({ frameIdx: lf.frameIdx, videoIdx: videoIdx, instances: instances });
+        // `fileRow`: what a session's group members name this frame by.
+        frames.push({ frameIdx: lf.frameIdx, videoIdx: videoIdx, fileRow: li, instances: instances });
     }
 
     // --- videos[] ---

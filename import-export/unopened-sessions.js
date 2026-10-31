@@ -1,14 +1,15 @@
 /**
- * unopened-sessions.js — the recording sessions of a file that a lazy open leaves closed.
+ * unopened-sessions.js — the recording sessions of a file that a loader leaves closed.
  *
- * A `.slp` can hold several recording sessions, and a lazy open
- * (`handleLoadProjectSlpLazy`, so any `.slp` over 200 MB from File ▸ Open) shows the
- * first. The others are still the user's data, so a save writes them back with their
- * cameras, groups, 3D, calibration, identities and every key LUC3D does not read. They
- * cannot be edited, and nothing the open session does changes them.
+ * A `.slp` can hold several recording sessions. Two loaders show only the first: a lazy
+ * open (`handleLoadProjectSlpLazy`, so any `.slp` over 200 MB from File ▸ Open) and the
+ * single-`.slp` folder loader (`handleLoadSessionFolderSingleSlp`, eager). The others are
+ * still the user's data, so a save writes them back with their cameras, groups, 3D,
+ * calibration, identities and every key LUC3D does not read. They cannot be edited.
  *
- * Their poses are not here: those are rows of the one columnar store, and a save keeps
- * them on their own videos (`outside-frames.js`).
+ * Their poses are not here. After a lazy open they are rows of the one columnar store;
+ * after an eager read they are `session.outsideFrames`. Either way a save keeps them on
+ * their own videos (`outside-frames.js`).
  *
  * ## In memory
  *
@@ -29,6 +30,16 @@
  * A member's place within its frame only moves on a video the open session shares with
  * a closed one: `renumberUnopenedMembers` follows a delete there. Nothing else edits a
  * store row a closed session names, because those rows are in no camera's row map.
+ *
+ * ## After an eager read (`kept.eager`)
+ *
+ * `keepUnopenedSessionsOfRead` takes `parseSlpViaSleapIO`'s result. Three things differ.
+ * The file rows are `outsideFrames`' (`rowAt`, `outsideFramesForSave`). A member on a
+ * video the open session has too holds the pose itself (`seatMembersOnOpenVideos`),
+ * because the eager writer lists a frame's instances in its own order: it follows that
+ * pose through edits to wherever the writer puts it (`instancePlacesForSave`), and goes
+ * if the pose is deleted. And a skeleton node edit reaches these sessions, because it
+ * re-shapes their poses (`kept.eager.addNode`, `kept.eager.removeNode`).
  *
  * DOM-free (tests: `tests/test-unopened-sessions.mjs`, e2e
  * `tests/e2e/lazy-keeps-other-sessions.mjs`). A file with one session never gets here,
@@ -130,6 +141,11 @@ function inlineRecordsByFrame(dict) {
     return byFrame;
 }
 
+function lucidSkeletonOf(dict) {
+    var lucid = dict && dict.metadata && dict.metadata.lucid;
+    return (lucid && lucid.skeleton) || null;
+}
+
 function projectPlaneKeysOf(dict) {
     var lucid = dict && dict.metadata && dict.metadata.lucid;
     if (!lucid) return '{}';
@@ -203,6 +219,8 @@ async function keepOneSession(typed, dict, file, firstPlaneKeys) {
         fileDict: null,
         // Its copy of the project's planes was the first session's when read.
         planesFollowFirst: false,
+        // Its copy of the skeleton was too, and its poses follow a node edit (eager only).
+        skeletonFollowsFirst: false,
     };
 
     for (var videoEntry of typed.videoByCamera) {
@@ -275,15 +293,15 @@ async function keepOneSession(typed, dict, file, firstPlaneKeys) {
         delete kept.fg_end;
         delete kept.camcorder_to_video_idx_map;
         record.fileDict = encoder.encode(JSON.stringify(kept));
-        record.planesFollowFirst = projectPlaneKeysOf(dict) !== '{}' && projectPlaneKeysOf(dict) === firstPlaneKeys;
+        record.planesFollowFirst = !file.keepOwnPlanes && projectPlaneKeysOf(dict) !== '{}' && projectPlaneKeysOf(dict) === firstPlaneKeys;
+        record.skeletonFollowsFirst = !!file.firstSkeleton && JSON.stringify(lucidSkeletonOf(dict)) === file.firstSkeleton;
     }
 
-    var openVideos = record.videos.filter(function (v) { return file.openVideoIds.has(v.id); });
-    if (openVideos.length > 0) {
-        var openHere = new Set(openVideos.map(function (v) { return v.id; }));
+    // A member's video is its row's, whatever its camera's says.
+    if (file.openVideoIds.size > 0) {
         var onOpen = [];
         for (var mi = 0; mi < m; mi++) {
-            if (openHere.has(file.rowVideoId(record.memberRow[mi]))) onOpen.push(mi);
+            if (file.openVideoIds.has(file.rowVideoId(record.memberRow[mi]))) onOpen.push(mi);
         }
         record.membersOnOpenVideos = Uint32Array.from(onOpen);
     }
@@ -297,6 +315,12 @@ async function keepOneSession(typed, dict, file, firstPlaneKeys) {
  * @param {Object} labels - the reader's lazy `Labels` (read with `rawSessions: true`)
  * @param {Object} opts
  * @param {Set<number>} opts.openVideoIds - store video ids of the open session's cameras
+ * @param {(row: number) => number} [opts.rowVideoId] - a file row's video id, for a read
+ *   with no store
+ * @param {boolean} [opts.keepOwnPlanes] - a closed session's planes never follow the open
+ *   session's (they are not the same project's)
+ * @param {boolean} [opts.skeletonFollowsFirst] - a closed session's copy of the skeleton
+ *   follows the open session's
  * @returns {Promise<{sessions: Array, identities: Array}|null>} null when the file has
  *   no other session. `identities` is the file's catalog: what `identity` columns index.
  */
@@ -326,7 +350,9 @@ export async function keepUnopenedSessions(labels, opts) {
             var position = videos.indexOf(video);
             return idOfPosition.has(position) ? idOfPosition.get(position) : position;
         },
-        rowVideoId: function (row) { return Number(videoCol[row]); },
+        rowVideoId: (opts && opts.rowVideoId) || function (row) { return Number(videoCol[row]); },
+        keepOwnPlanes: !!(opts && opts.keepOwnPlanes),
+        firstSkeleton: opts && opts.skeletonFollowsFirst && lucidSkeletonOf(rawDicts[0]) ? JSON.stringify(lucidSkeletonOf(rawDicts[0])) : null,
         index: 0,
     };
     var firstPlaneKeys = projectPlaneKeysOf(rawDicts[0]);
@@ -337,6 +363,218 @@ export async function keepUnopenedSessions(labels, opts) {
     }
     typed.length = 1;
     return { sessions: kept, identities: labels.identities || [] };
+}
+
+/**
+ * Can an eager read keep its later sessions whole? Only the typed reader gives them: the
+ * raw worker (`parseSlpH5`) has no `_typedSession`.
+ * @param {Object} slpData - `parseSlpViaSleapIO` / `parseSlpH5` result
+ * @returns {boolean}
+ */
+export function readKeepsUnopenedSessions(slpData) {
+    var dicts = (slpData && slpData.sessions) || [];
+    return dicts.length > 1 && dicts.every(function (d) { return !!d._typedSession; });
+}
+
+/**
+ * `keepUnopenedSessions` for an eager read, once `readKeepsUnopenedSessions` said yes.
+ *
+ * @param {Object} slpData - `parseSlpViaSleapIO` result. Its later sessions are drained.
+ * @param {Object} opts
+ * @param {Map<string, number>} opts.videoIdByCam - camera name -> video index, the open
+ *   session's
+ * @param {boolean} [opts.keepOwnPlanes] - see `keepUnopenedSessions`
+ * @returns {Promise<Object>} what `keepUnopenedSessions` gives, with `eager` set
+ */
+export async function keepUnopenedSessionsOfRead(slpData, opts) {
+    var dicts = slpData.sessions;
+    var frames = slpData.frames || [];
+    // `frames` is in file order and leaves out rows with no instance, which no member names.
+    var videoOfRow = new Int32Array(frames.length ? frames[frames.length - 1].fileRow + 1 : 0).fill(-1);
+    for (var f = 0; f < frames.length; f++) videoOfRow[frames[f].fileRow] = frames[f].videoIdx;
+    var kept = await keepUnopenedSessions({
+        sessions: dicts.map(function (d) { return d._typedSession; }),
+        rawSessionsJson: dicts.map(function (d) {
+            var raw = Object.assign({}, d);
+            delete raw._typedSession;
+            delete raw._typedIdentities;
+            return raw;
+        }),
+        videos: (slpData.videos || []).map(function (v) { return v._typedVideo; }),
+        identities: dicts[0]._typedIdentities,
+        provenance: slpData.provenance,
+    }, {
+        openVideoIds: new Set(opts.videoIdByCam.values()),
+        rowVideoId: function (row) { return videoOfRow[row]; },
+        keepOwnPlanes: opts.keepOwnPlanes,
+        skeletonFollowsFirst: true,
+    });
+    kept.eager = {
+        videoIdByCam: opts.videoIdByCam,
+        // File row -> the open session's pose at each place in that row, for rows a
+        // closed session's member names on a video the open session has too.
+        posesOfRows: new Map(),
+        // For `Session.propagateNodeAdded`/`propagateNodeRemoved` (`pose-data.js` imports nothing).
+        addNode: function () { addNodeToUnopenedSessions(kept); },
+        removeNode: function (nodeIdx) { removeNodeFromUnopenedSessions(kept, nodeIdx); },
+    };
+    return kept;
+}
+
+/**
+ * How far `pose` is from a file's `points`, or Infinity when they are not one pose. Nodes
+ * only one side has count against it, because the reader drops a pose matching a grouped
+ * one on the nodes both have (`restoreGroupingAndUnlink`), and then that one stands for it.
+ */
+function poseGap(pose, points) {
+    if (pose.numNodes !== points.length) return Infinity;
+    var gap = 0, shared = 0, onlyOneSide = 0;
+    for (var n = 0; n < points.length; n++) {
+        var p = points[n], has = pose.hasPoint(n);
+        if (!p || !has) { if (p || has) onlyOneSide++; continue; }
+        var d = Math.max(Math.abs(pose.getX(n) - p[0]), Math.abs(pose.getY(n) - p[1]));
+        if (d > 0.5) return Infinity;
+        gap += d;
+        shared++;
+    }
+    if (shared === 0 && onlyOneSide > 0) return Infinity;
+    return gap + onlyOneSide;
+}
+
+/**
+ * After an eager read: tie each member on a video the open session has too to the open
+ * session's pose, once its instances are final. A group's poses are rebuilt from the file
+ * and ungrouped ones keep their own objects, so the file's coordinates say which is which.
+ *
+ * @param {Object} kept - `keepUnopenedSessionsOfRead`
+ * @param {Array} frames - `slpData.frames`
+ * @param {(frame: Object) => Array} posesOfFrame - the open session's `Instance`s on that
+ *   file frame's camera and frame number
+ */
+export function seatMembersOnOpenVideos(kept, frames, posesOfFrame) {
+    if (!hasMembersOnOpenVideos(kept)) return;
+    var frameOfRow = new Map(frames.map(function (f) { return [f.fileRow, f]; }));
+    var seated = kept.eager.posesOfRows;
+    kept.sessions.forEach(function (record) {
+        record.membersOnOpenVideos.forEach(function (m) {
+            var row = record.memberRow[m], k = record.memberInst[m];
+            var frame = frameOfRow.get(row);
+            var filePose = frame && frame.instances[k];
+            if (!filePose || (seated.has(row) && seated.get(row)[k])) return;
+            var best = null, bestGap = Infinity;
+            posesOfFrame(frame).forEach(function (pose) {
+                var gap = poseGap(pose, filePose.points);
+                if (gap < bestGap) { best = pose; bestGap = gap; }
+            });
+            if (!best) return;
+            if (!seated.has(row)) seated.set(row, []);
+            seated.get(row)[k] = best;
+        });
+    });
+}
+
+/**
+ * The open session's poses a save must find: for `buildSlpLabelsAllViews`, which sets
+ * `[labeled frame, place in it]` on each one it writes.
+ * @param {Object|null} kept - `session.unopenedSessions`
+ * @returns {Map<Object, (number[]|null)>|null} null when no member needs one
+ */
+export function instancePlacesForSave(kept) {
+    if (!kept || !kept.eager || kept.eager.posesOfRows.size === 0) return null;
+    var places = new Map();
+    kept.eager.posesOfRows.forEach(function (poses) {
+        poses.forEach(function (pose) { places.set(pose, null); });
+    });
+    return places;
+}
+
+/**
+ * Copy one group's 3D rows into new columns: `rowsOf(n)` says which of its `n` rows go,
+ * in order, with -1 for a new row, NaN.
+ */
+function reshapePoints(record, rowsOf) {
+    var nGroups = record.pointEnd.length;
+    var newEnd = new Uint32Array(nGroups);
+    var total = 0, start = 0, g;
+    for (g = 0; g < nGroups; g++) {
+        var n = record.pointEnd[g] - start;
+        total += n > 0 ? rowsOf(n).length : 0;
+        newEnd[g] = total;
+        start = record.pointEnd[g];
+    }
+    var points3d = new Float64Array(total * 3);
+    var pointScores = record.pointScores ? new Float64Array(total) : null;
+    var unsmoothed = record.unsmoothed ? new Float64Array(total * 3) : null;
+    var at = 0;
+    start = 0;
+    for (g = 0; g < nGroups; g++) {
+        var count = record.pointEnd[g] - start;
+        var rows = count > 0 ? rowsOf(count) : [];
+        for (var r = 0; r < rows.length; r++, at++) {
+            var from = start + rows[r];
+            for (var c = 0; c < 3; c++) {
+                points3d[at * 3 + c] = rows[r] < 0 ? NaN : record.points3d[from * 3 + c];
+                if (unsmoothed) unsmoothed[at * 3 + c] = rows[r] < 0 ? NaN : record.unsmoothed[from * 3 + c];
+            }
+            if (pointScores) pointScores[at] = rows[r] < 0 ? NaN : record.pointScores[from];
+        }
+        start = record.pointEnd[g];
+    }
+    record.pointEnd = newEnd;
+    record.points3d = points3d;
+    record.pointScores = pointScores;
+    record.unsmoothed = unsmoothed;
+}
+
+/**
+ * A skeleton node was added, after an eager read: the closed sessions' poses got an empty
+ * slot (`Session.propagateNodeAdded`), so each group's 3D gets one row, NaN. Every other
+ * row keeps its value and its index.
+ * @param {Object} kept - `session.unopenedSessions`, with `eager` set
+ */
+function addNodeToUnopenedSessions(kept) {
+    kept.sessions.forEach(function (record) {
+        reshapePoints(record, function (n) {
+            var rows = [];
+            for (var r = 0; r < n; r++) rows.push(r);
+            rows.push(-1);
+            return rows;
+        });
+    });
+}
+
+/**
+ * A skeleton node was removed, after an eager read: 3D rows and hidden-node lists are
+ * indexed by node, like the poses `Session.propagateNodeRemoved` re-shaped.
+ * @param {Object} kept - `session.unopenedSessions`, with `eager` set
+ * @param {number} nodeIdx
+ */
+function removeNodeFromUnopenedSessions(kept, nodeIdx) {
+    kept.sessions.forEach(function (record) {
+        reshapePoints(record, function (n) {
+            var rows = [];
+            for (var r = 0; r < n; r++) if (r !== nodeIdx) rows.push(r);
+            return rows;
+        });
+        if (record.groupMeta) record.groupMeta = groupMetaWithoutNode(record, nodeIdx);
+    });
+}
+
+function groupMetaWithoutNode(record, nodeIdx) {
+    var nGroups = record.memberEnd.length;
+    var out = newMetaColumn(nGroups);
+    for (var g = 0; g < nGroups; g++) {
+        var meta = metaAt(record.groupMeta, g);
+        var perCamera = meta.lucid && meta.lucid.instanceMeta;
+        for (var cam in perCamera || {}) {
+            var hidden = perCamera[cam].nulledNodes;
+            if (!Array.isArray(hidden)) continue;
+            perCamera[cam].nulledNodes = hidden.filter(function (k) { return k !== nodeIdx; })
+                .map(function (k) { return k > nodeIdx ? k - 1 : k; });
+        }
+        metaPut(out, g, meta);
+    }
+    return metaDone(out);
 }
 
 function* frameGroupsOf(SIO, record, lf, inst, identityOf) {
@@ -485,17 +723,22 @@ export function unopenedSessionsForSave(kept, opts) {
  * This save's text of the session's own dict. Its copy of the project's planes follows
  * the open session's, because every session of a LUC3D project holds the same and an
  * eager open reads the first it finds: a plane deleted in the open session must not
- * come back from a closed one's copy.
+ * come back from a closed one's copy. Its copy of the skeleton follows after an eager
+ * read, because an eager open builds that session from it and a node edit re-shaped its
+ * poses.
  */
 function fileDictForSave(record, firstLucid) {
     var text = decoder.decode(record.fileDict);
-    if (!record.planesFollowFirst || !firstLucid) return text;
+    if ((!record.planesFollowFirst && !record.skeletonFollowsFirst) || !firstLucid) return text;
     var dict = JSON.parse(text);
     var lucid = dict.metadata.lucid;
-    PROJECT_PLANE_KEYS.forEach(function (key) {
-        if (firstLucid[key] !== undefined) lucid[key] = firstLucid[key];
-        else delete lucid[key];
-    });
+    if (record.planesFollowFirst) {
+        PROJECT_PLANE_KEYS.forEach(function (key) {
+            if (firstLucid[key] !== undefined) lucid[key] = firstLucid[key];
+            else delete lucid[key];
+        });
+    }
+    if (record.skeletonFollowsFirst) lucid.skeleton = firstLucid.skeleton;
     return JSON.stringify(dict);
 }
 
@@ -522,7 +765,7 @@ export function renumberUnopenedMembers(kept, framesData, kill, survBefore) {
 }
 
 /**
- * The sentence a lazy open's final status adds for a file with more sessions.
+ * The sentence a load's final status adds for a file with more sessions.
  * @param {number} fileSessions - sessions in the file
  * @returns {string}
  */

@@ -69,7 +69,7 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from './plane-metadata.js';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -1025,6 +1025,7 @@ export async function handleLoadSlpFile(slpFile) {
         var lastSessionHas3d = false;
         // Video indices some session reads; frames on any other are kept aside below.
         var claimedVideos = new Set();
+        var planeConflictSessions = [];   // sessions whose planes are not the project's
         for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
         showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
         await new Promise(function (r) { setTimeout(r, 0); });
@@ -1160,8 +1161,17 @@ export async function handleLoadSlpFile(slpFile) {
         // Temporal Smoothing's last run (the groups' sources come with the 3D).
         readSmoothingMetadata(session, earlyVisibility);
         // Define Planes state — pool/planes/origin from the first session that
-        // carries them, this session's per-view 2D onto this session.
-        readPlaneMetadata(session, earlyVisibility);
+        // carries them, this session's per-view 2D onto this session. A session
+        // with other planes (one a save kept whole from a file added to this
+        // project) names other nodes by the same ids: its 2D would land on them.
+        var sessPlaneConflict = planeMetadataConflict(earlyVisibility);
+        if (sessPlaneConflict) {
+            console.warn('[load-slp] not reading the plane state of session "' + sessName + '" — ' + sessPlaneConflict);
+            session.planePlacements = new Map();
+            planeConflictSessions.push(sessName);
+        } else {
+            readPlaneMetadata(session, earlyVisibility);
+        }
 
         // Populate FrameGroups from worker's frames array (yield every 20K for UI)
         var BATCH = 20000;
@@ -1719,6 +1729,9 @@ export async function handleLoadSlpFile(slpFile) {
         });
         var outsideNote = outsideFramesNote(keptOutsideCounts(state.sessions[0]));
         if (outsideNote) campyWarn.push(outsideNote);
+        if (planeConflictSessions.length) {
+            campyWarn.push('the planes of ' + planeConflictSessions.join(', ') + ' are not this project\'s, so they are not open and a save replaces them');
+        }
         setStatus('SLP loaded (' + statusParts.join(', ') + ')'
             + (campyWarn.length ? ' — ' + campyWarn.join('; ') : ''), campyWarn.length ? 'warning' : 'success');
 

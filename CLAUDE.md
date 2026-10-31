@@ -99,7 +99,7 @@ Rules:
 - **Never write defaults.** `tests/e2e/save-golden-digest.mjs` must not move.
 - **Never touch other `metadata.lucid` keys** (keeps files SLEAP-readable).
 - **Address plane points and membership by node ID, never by pool index**, and keep the file's IDs (`adoptNode`/`adoptPlane`).
-- **Call `resetPlaneState()` before every load** (`readPlaneMetadata` only fills an empty model). Exception: the single-SLP folder loader with a project open adds a session without resetting, and reads plane 2D only if `planeMetadataConflict` finds every node and plane matching by id and name (node IDs restart at 1 in every project).
+- **Call `resetPlaneState()` before every load** (`readPlaneMetadata` only fills an empty model). Exception: the single-SLP folder loader with a project open adds a session without resetting, and reads plane 2D only if `planeMetadataConflict` finds every node and plane matching by id and name (node IDs restart at 1 in every project). `handleLoadSlpFile` runs the same check on each session, because a save can keep a closed session whose planes are another project's (`keepOwnPlanes`).
 - **Call `markDirty()` on every plane or node mutation** (not the browser-local size sliders).
 - Global appearance prefs stay in `localStorage.visibilitySettings`, never the `.slp`.
 
@@ -146,13 +146,13 @@ A `.slp` can hold frames on a video no session's camera map lists, and a loader 
 - **Eager:** `session.outsideFrames` (`keepOutsideFrames`: ordinary `Instance`s, the file's track names), written by `buildSlpBytes` (`outsideFramesForSave`). Skeleton node edits re-shape them and `countSkeletonEditImpact` counts them; track edits do not touch them. A loader that skips frames must keep them: `videosClaimedBy` says which videos it read. Never wrap a video index round the cameras.
 - **A camera is one video:** the first its file lists with frames (`SioLazyLoader.open`, `ownVideoOfColumnar`); that file's other videos are outside.
 - The vendored writers file a frame whose video is not in the header under video 0 (`Math.max(0, indexOf)`), so its video must be in the header. `appendStore` writes each row's skeleton id too, so `buildSessionRefGraph` also lists every skeleton the rows use (`skeletonPairsFor`).
-- A file with none saves byte-identically (`save-golden-digest.mjs` must not move). The load's final status says what is not shown (`outsideFramesNote`) and, for the single-`.slp` folder loader, that a save keeps the other sessions' poses but not their cameras or 3D.
+- A file with none saves byte-identically (`save-golden-digest.mjs` must not move). The load's final status says what is not shown (`outsideFramesNote`) and, for the single-`.slp` folder loader on the raw worker's read (no typed sessions), that a save keeps the other sessions' poses but not their cameras or 3D.
 
 Test: `tests/e2e/poses-outside-session.mjs`.
 
-### The sessions a lazy open leaves closed
+### The sessions a loader leaves closed
 
-`handleLoadProjectSlpLazy` opens a file's first session. The others stay whole: a save writes back their cameras, groups, 3D, calibration, identities and every key LUC3D does not read (`import-export/unopened-sessions.js`). Their poses are outside frames, above.
+`handleLoadProjectSlpLazy` and `handleLoadSessionFolderSingleSlp` open a file's first session. The others stay whole: a save writes back their cameras, groups, 3D, calibration, identities and every key LUC3D does not read (`import-export/unopened-sessions.js`). Their poses are outside frames, above.
 - **In memory, columns:** `keepUnopenedSessions` runs right after the read and turns each closed session into typed columns on `session.unopenedSessions`, then empties `labels.sessions` down to the first. Never keep the reader's graph for them: one Map per group and one ArrayBuffer per 3D instance for as long as the project is open is what the Memory rule forbids. Sending these files to the eager path instead costs twice the heap (5.47 GB against 2.75 GB peak on a 545 MB two-session file) and eager crashes on large real ones.
 - **Refs are file-wide:** a member names a frame by its position in the file, and a save renumbers frames. `unopenedSessionsForSave` sends each member through the same `sharedOut` the open session's refs use, on every save, from columns that stay in the file's numbering. Anything that writes a store row must keep `sharedOut` right, or every later member lands on another pose with no error (Python skips the frame group if it runs off the end).
 - **Their own dict is written back:** `session.lucidFileDictJson` (`writeSessions`, the `(unopened sessions)` patch), because the writer's fixed keys would drop a camera's extra keys and a session's top-level keys, which Python keeps as metadata.
@@ -160,7 +160,14 @@ Test: `tests/e2e/poses-outside-session.mjs`.
 - **A video two sessions name:** the only way an edit reaches a closed session's rows. A correction moves its member into the overlay (`byRaw`), a delete renumbers it (`onInstanceRowsDeleted`).
 - **Multi-session project:** the writer's list is each session then the ones it carries (`refGraph.unopened`, `withUnopenedSessions` for provenance). A lazy session on the eager writer's path goes through `unopenedSessionsForEagerSave`, which refuses a shared video or a closed loader rather than write them badly.
 
-Tests: `tests/test-unopened-sessions.mjs`, `tests/e2e/lazy-keeps-other-sessions.mjs`.
+After the folder loader's eager read (`kept.eager`). Only a read with typed sessions can keep them (`readKeepsUnopenedSessions`): the raw worker's keeps only their poses, and its status says so.
+- **File rows:** `parseSlpViaSleapIO` skips frames with no instance, so each `slpData.frames[i]` has its `fileRow`. `keepOutsideFrames(..., { ownFile: true })` keeps it, and `outsideFramesForSave` gives `rowAt` and `videoOfId` from those frames only: File ▸ Add SLP's rows and video ids are another file's.
+- **A video two sessions name:** the eager writer lists a frame's instances in its own order, grouped first, so a member cannot keep its place in the frame. `seatMembersOnOpenVideos` ties it to the open session's `Instance`, `buildSlpLabelsAllViews` says where it wrote that object (`placeOf`, `instancePlacesForSave`), and a deleted pose takes the member with it. It holds because edits change an `Instance` in place, and regrouping and Track All move the same object. An edit that replaces the object loses the link.
+- **A node edit reaches them,** because it re-shapes their poses (`Session.propagateNodeAdded`/`propagateNodeRemoved` → `kept.eager`): 3D rows, hidden-node lists, and at save the session's `metadata.lucid.skeleton` copy (`skeletonFollowsFirst`), which an eager open builds that session from. `countSkeletonEditImpact` counts their groups and 3D. A lazy open does none of this: its poses stay in the store's layout.
+- **A first session with no camera opens with none,** and every pose is kept aside. A file with no other session gives every video a view; here those videos are the other sessions'.
+- **Adding to an open project:** when `planeMetadataConflict` finds the file's planes are another project's, the closed sessions keep theirs (`keepOwnPlanes`), so their 2D stays with their own node ids.
+
+Tests: `tests/test-unopened-sessions.mjs`, `tests/e2e/lazy-keeps-other-sessions.mjs` (`ROUTE=folder` runs only this loader's sections).
 
 ## Triangulation must not depend on where the origin is
 
@@ -228,7 +235,7 @@ Tests: `test-mesh-object-3d`, `test-mesh-object-geometry`, `test-mesh-export`, `
 ## Skeleton edits re-shape every annotation
 
 One skeleton object is shared by all sessions, and `Instance` stores 2D by node INDEX, so a node edit re-shapes the whole project. All five edits (add/remove/rename node, add/remove edge) go through `confirmSkeletonEdit` (`ui/skeleton-edit-warning.js`), counted by `pose/skeleton-edit-impact.js`.
-- Count the WHOLE project: lazy → `lazyLoader.forEachInstanceRow`; eager → frame-group instances + `unlinkedInstances`. Never `frameGroups` alone.
+- Count the WHOLE project: lazy → `lazyLoader.forEachInstanceRow`; eager → frame-group instances + `unlinkedInstances` + `outsideFrames`, and the groups and 3D of the file's closed sessions. Never `frameGroups` alone.
 - Settle the sessions BEFORE mutating (handed to `onConfirm`) and apply only to them (`adoptEditedSkeleton`, `ui/info-panel.js`), never `setProjectSkeleton`; sessions on a different-shaped skeleton are named, not counted or edited.
 - Node edits clear `state.triangulationResults` and each session's copy (stale snapshots duplicate info-panel tables).
 - 2D, `nulledNodes` and `InstanceGroup.points3d` move together (removal splices the 3D); drop cached reprojections; keep 3D pooled (`pooledPoints3d`, `NO_REPROJECTED_INSTANCES`). A new node on a USER instance is placed and nulled (so it stays clickable); predicted instances get an empty slot.
