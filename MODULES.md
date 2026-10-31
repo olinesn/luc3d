@@ -14308,9 +14308,10 @@ session's resident/total) rather than truncate silently. Covered by
   `parseSlpViaSleapIO`, and `parseSlpH5` only if that throws on a file the raw
   worker can read in full. Never for a file too new to read
   (`loading/slp-format-check.js`), after a failed read (`err.failedRead`), or
-  on a file with `/session_data`, which the raw worker can't read: it would open the
-  project with every group and all the 3D gone, and the next save would write that
-  (private `rawWorkerCanStandIn`, which answers no when it can't tell). Used by
+  on a file with `/session_data`, `/identity`, `/categories` or `/embeddings`, which
+  the raw worker can't read: it would open the project with every group and all the
+  3D gone, or the labels on detections, and the next save would write that (private
+  `rawWorkerCanStandIn`, which answers no when it can't tell). Used by
   `parseSlpForImport` and `handleLoadSessionFolderSingleSlp`. Tests:
   `tests/e2e/slp-failed-read.mjs` §3, §4.
 - SLP parse (raw worker): `parseSlpH5(file, onProgress, opts)` — spawns

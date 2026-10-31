@@ -593,6 +593,11 @@ for (var i = 0; i < early.length; i++) self.onmessage(early[i]);`
     f4 = await viaFallback(files.project, { typedThrows: true });
     check(f4.threw === 'this layout is not readable' && f4.rawWorkers === 0,
         'the typed reader can\'t read a file with /session_data: no fallback, its error stands (the raw worker would drop every group and all the 3D)', f4);
+    for (const name of ['identity', 'category', 'multiview']) {
+        f4 = await viaFallback(files[name], { typedThrows: true });
+        check(f4.threw === 'this layout is not readable' && f4.rawWorkers === 0,
+            `same for ${name}: its labels on detections or its groups are out of the raw worker's reach`, f4);
+    }
     f4 = await viaFallback(files.compound, { typedThrows: true });
     check(f4.opened && f4.opened.frames === 60 && f4.rawWorkers === 1, 'the typed reader can\'t read a plain file: the raw worker reads it', f4);
     f4 = await viaFallback(files.compound, { typedThrows: true, noOpen: true });

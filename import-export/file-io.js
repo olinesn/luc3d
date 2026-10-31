@@ -2999,9 +2999,9 @@ export async function parseSlpViaSleapIO(file, onProgress) {
 }
 
 /**
- * Whether the raw worker can stand in for the typed reader on `file`: not when its
- * grouping and 3D are in `/session_data`, which only the typed reader can read, and
- * not when that can't be told.
+ * Whether the raw worker can stand in for the typed reader on `file`: not when it holds
+ * what only the typed reader can read (grouping and 3D in `/session_data`, an identity
+ * catalog or labels on detections), and not when that can't be told.
  */
 async function rawWorkerCanStandIn(file) {
     var h5;
@@ -3014,15 +3014,16 @@ async function rawWorkerCanStandIn(file) {
     }
     var keys = h5.keys();
     h5.close().catch(function () { /* the answer is already in */ });
-    return keys.indexOf('session_data') < 0;
+    return !['session_data', 'identity', 'categories', 'embeddings'].some(function (k) { return keys.indexOf(k) >= 0; });
 }
 
 /**
  * Read a `.slp` for a load: `parseSlpViaSleapIO`, and the raw worker (`parseSlpH5`)
  * only if that throws on a file the raw worker can read in full, e.g. a non-standard
  * split-field export. Standing in for the typed reader on a saved project, the raw
- * worker opens the 2D with every group and all the 3D gone, with nothing said, and the
- * next save writes that over the project. And when the file could not be read
+ * worker opens the 2D with every group and all the 3D gone (and the labels on
+ * detections, on a file that has them), with nothing said, and the next save writes
+ * that over the project. And when the file could not be read
  * (`err.failedRead`, LUCID local patch (failed read)), the error is the answer: nothing
  * is opened, and opening the file again reads it from the start.
  *
