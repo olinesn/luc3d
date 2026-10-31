@@ -1042,7 +1042,7 @@ export function showOverlayExportModal() {
      *
      * ZOOM FIDELITY — magnification and pan centre match the main window; the
      * visible CROP cannot. The main window's crop is produced by `.video-cell`'s
-     * `overflow:hidden` at the cell's aspect; an export tile has its own aspect, so a
+     * `overflow:clip` at the cell's aspect; an export tile has its own aspect, so a
      * wider tile simply shows more video. At high zoom near a frame edge that means
      * black past the edge, exactly as the main window would show if its cell were
      * that shape. This is inherent to honouring zoom in a differently-shaped box.

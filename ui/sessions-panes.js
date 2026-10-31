@@ -64,6 +64,7 @@ import { setSoloView } from './ui-wiring.js';
 import { clearReadout, refreshReadoutTotals } from './frame-readout.js';
 import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
 import { refreshIdSwitchPanel } from './id-switch-modal.js';
+import { wireMenuReturn } from './toolbar-menu-keys.js';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
 import { setup3DViewport } from '../pose/initialization.js';
@@ -101,6 +102,9 @@ class VideoPaneRenderer {
         // reads the zoom as a % of 1:1 (`applyZoom` writes the label) and a
         // click fits the view; hovering opens a menu of presets — the
         // Triangulate split-button pattern, the same pure-CSS `.tri-dropdown`.
+        // Its items are <button>s too, so Tab reaches them and Enter and Space
+        // pick them without also reaching the shortcuts (ui/keyboard-target.js),
+        // and Esc closes it like the toolbar's menus (ui/toolbar-menu-keys.js).
         var findView = function () {
             return state.views.find(function (v) { return v.name === self.viewName; });
         };
@@ -139,7 +143,7 @@ class VideoPaneRenderer {
             });
         };
         ZOOM_PRESET_PERCENTS.concat([null]).forEach(function (pct) {
-            var item = document.createElement('div');
+            var item = document.createElement('button');
             item.className = 'tri-dropdown-item';
             item.setAttribute('role', pct ? 'menuitemradio' : 'menuitem');
             if (pct) item.setAttribute('data-zoom-pct', String(pct));
@@ -158,6 +162,8 @@ class VideoPaneRenderer {
             if (pct) presetItems.push({ pct: pct, el: item });
         });
         badge.addEventListener('mouseenter', refreshPresetChecks);
+        badge.addEventListener('focusin', refreshPresetChecks);
+        wireMenuReturn(badge);
         badge.appendChild(unzoomBtn);
         badge.appendChild(menu);
         this.element.appendChild(badge);

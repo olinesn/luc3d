@@ -6648,9 +6648,9 @@ and `tests/test-visibility-metadata.js`.
 
 ### ui/toolbar-menu-keys.js
 
-**Purpose.** The keyboard's side of the toolbar's hover menus (`.tri-dropdown`,
-pure CSS in `styles.css`): which of two open menus paints on top, Esc, and where a
-dialog opened from a menu gives focus back to.
+**Purpose.** The keyboard's side of the hover menus (`.tri-dropdown`, pure CSS in
+`styles.css`), the toolbar's and each pane's zoom badge: which of two open menus
+paints on top, Esc, and where a dialog opened from a menu gives focus back to.
 
 **Which menu paints on top.** Focus and hover can each hold a menu open, so two
 can overlap. Tab sets `.keyboard-nav` on the toolbar and the pointer moving over
@@ -6675,8 +6675,9 @@ It closes the innermost thing first. The listener is on `window` in the capture
 phase, ahead of everything on `document`, and stops the event: the first Esc closes
 the menu, the next cancels Edit Group or leaves Label Behaviors mode (whose Esc also
 ends running behaviors). Dialogs keep their Esc: several take no focus from the
-toolbar (Settings…, Calibration Required), so `underDialog` hit-tests the focused
-control, because the dialogs share no class but every one covers the window.
+menu (Settings…, Calibration Required), so `underDialog` hit-tests the menu's button,
+because the dialogs share no class but every one covers the window. The button, not
+the focused item: a pane can clip the items of its zoom badge.
 
 **A dialog that takes focus** notes where it was (`keyboardFocus`) and gives it back
 as it closes, or the next Tab starts over at the top of the page. Cancel gives back
@@ -6690,6 +6691,9 @@ with the pointer elsewhere.
 
 **Key exports.**
 - `wireToolbarMenuKeys()` — called once from `setupUI` (`ui/ui-wiring.js`).
+- `wireMenuReturn(dropdown)` — clear `.menu-dismissed` when the user comes back to
+  that menu. For the toolbar's menus (above) and each zoom badge
+  (`ui/sessions-panes.js`).
 - `keyboardFocus()` — the element keyboard focus is on, or null. A dialog calls it
   before taking focus.
 - `returnFocusTo(el)` — give focus back as a dialog closes with nothing started. Call
@@ -6707,11 +6711,11 @@ Used by Frame range… (`ui/track-range-modal.js`), the first-use Track dialog
 
 **Imports from project modules.** `./keyboard-target.js` (`isTextEntryTarget`).
 
-**Imported by.** `ui/ui-wiring.js`, `ui/track-range-modal.js`,
+**Imported by.** `ui/ui-wiring.js`, `ui/sessions-panes.js`, `ui/track-range-modal.js`,
 `ui/track-setup-modal.js`.
 
-Tests: `tests/e2e/toolbar-menu-keyboard.mjs`, `tests/e2e/track-dialogs-keyboard.mjs`
-(`BROWSER=firefox|webkit` to switch).
+Tests: `tests/e2e/toolbar-menu-keyboard.mjs`, `tests/e2e/track-dialogs-keyboard.mjs`,
+`tests/e2e/zoom-badge-keyboard.mjs` (`BROWSER=firefox|webkit` to switch).
 
 ### ui/plane-toolbar-lock.js
 
@@ -8418,7 +8422,12 @@ multi-video docking layout.
   `ZOOM_PRESET_PERCENTS` and Fit for THAT pane's view (`setZoomPercent` /
   `resetZoom`; items carry `data-zoom-pct` / `data-zoom-fit`). 100% is ticked
   only when the view is AT 1:1 (`zoom.native`). The badge stops `mousedown` so a
-  click on it never starts the cell's pan / box zoom.
+  click on it never starts the cell's pan / box zoom. The items are `<button>`s, so
+  Tab reaches them (at 5 more stops per zoomed pane) and Enter and Space pick them, and
+  Esc closes the menu (`ui/toolbar-menu-keys.js`, `wireMenuReturn`). A short pane clips
+  the menu, so `.video-cell.zoomed` is `overflow: clip`: with `hidden`, Tab onto a
+  clipped item scrolled the pane and it stayed shifted. Covered by
+  `tests/e2e/zoom-badge-keyboard.mjs`.
 - `multiSelectViews`, `clearMultiSelect`.
 - `refreshPaneInteractions()` — after any pane rebuild: re-attach the
   interaction manager, give a view a zoom state the FIRST time it is docked
@@ -8502,6 +8511,7 @@ multi-video docking layout.
 - `./info-panel.js` — `updateInfoPanel`, `populateTimelineVisibility`.
 - `./loading-progress-modal.js` — `getLoadingProgressModal` (`switchSession`'s
   "Loading videos" progress).
+- `./toolbar-menu-keys.js` — `wireMenuReturn`, for each pane's zoom badge.
 - `./frame-readout.js` — `clearReadout` (session removed),
   `refreshReadoutTotals` (`switchSession` restoring a cached frame count / fps).
 - `../pose/initialization.js` — `setup3DViewport`.
