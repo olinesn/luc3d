@@ -1316,6 +1316,26 @@ body {
   transition-delay: 0s;
 }
 
+/* Hover and focus can hold two menus open at once, and they overlap. The one on
+   top is the one in use, not the later one in the page: the keyboard's while it
+   is what moves (.keyboard-nav, ui/toolbar-menu-keys.js), otherwise the pointer's. */
+.tri-dropdown:hover .tri-dropdown-menu {
+  z-index: 201;
+}
+
+.toolbar.keyboard-nav .tri-dropdown:focus-within .tri-dropdown-menu {
+  z-index: 202;
+}
+
+/* Esc closed this menu (ui/toolbar-menu-keys.js): at once, without the hover grace
+   period, so the next Tab skips its items, and even with the pointer resting on it. */
+.tri-dropdown.menu-dismissed .tri-dropdown-menu {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition-delay: 0s;
+}
+
 /* The toolbar's Trails menu (ui/ui-wiring.js): narrower, with a checkmark
    column like Tracks ▸ Node Trails. Hung from the button's RIGHT edge: Trails
    is the last control before the panel toggles, and a menu opening rightwards
@@ -1392,6 +1412,14 @@ button.tri-dropdown-item:disabled {
   opacity: 0.4;
   cursor: default;
   background: transparent;
+}
+
+/* A click on a menu button's label, caret or hint must land on the <button> itself:
+   that is what installFocusRelease (ui/keyboard-target.js) gives focus back from.
+   Otherwise the button keeps focus, and focus holds its menu open. */
+button.tri-dropdown-item > *,
+.tri-dropdown > .toolbar-btn > * {
+  pointer-events: none;
 }
 
 /* An item that is ON: a pressed Group item, or Temporal Smoothing's scope

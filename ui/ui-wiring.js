@@ -61,6 +61,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 // The toolbar's Animals field, beside Track Frame / Track All.
 import { wireAnimalCountField } from './animal-count-field.js';
 import { wireReprojThresholdField } from './reproj-threshold-field.js';
+import { wireToolbarMenuKeys, returnFocusTo } from './toolbar-menu-keys.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -1098,11 +1099,15 @@ export function setupMenus() {
         menu.appendChild(group);
         return group;
     }
-    function addTrailItems(menu, className, idPrefix, onPick) {
+    // `itemTag`: the toolbar's items are <button>s like the rest of its menus, so
+    // Tab reaches them and Enter and Space pick them without also reaching the
+    // shortcuts (ui/keyboard-target.js). The menu bar's stay <div>s, like every
+    // other item there: nothing opens those menus by keyboard.
+    function addTrailItems(menu, itemTag, className, idPrefix, onPick) {
         if (!menu) return;
         var lengths = addTrailGroup(menu, 'Length', 'Trail length');
         TRAIL_PRESETS.concat([null]).forEach(function (p) {
-            var item = document.createElement('div');
+            var item = document.createElement(itemTag);
             item.className = className;
             if (idPrefix) item.id = idPrefix + (p ? p.key : 'Custom');
             item.setAttribute('role', 'menuitemradio');
@@ -1127,7 +1132,7 @@ export function setupMenus() {
         var sample = TRACK_COLORS[0];
         var shades = addTrailGroup(menu, 'Shade', 'Trail shade');
         TRAIL_SHADES.forEach(function (shade) {
-            var item = document.createElement('div');
+            var item = document.createElement(itemTag);
             item.className = className;
             if (idPrefix) item.id = idPrefix + 'Shade' + shade.key.charAt(0).toUpperCase() + shade.key.slice(1);
             item.setAttribute('role', 'menuitemradio');
@@ -1146,8 +1151,8 @@ export function setupMenus() {
             shadeItems.push({ shade: shade, el: item });
         });
     }
-    addTrailItems(trailsMenu, 'tri-dropdown-item', '', function () {});
-    addTrailItems(trailsSubmenu, 'menu-dropdown-item', 'menuTrails', closeMenus);
+    addTrailItems(trailsMenu, 'button', 'tri-dropdown-item', '', function () {});
+    addTrailItems(trailsSubmenu, 'div', 'menu-dropdown-item', 'menuTrails', closeMenus);
     // Opening either menu (or hovering the button, whose tooltip names the
     // frame count) re-reads state.fps.
     [trailsDropdown, trailsParent].forEach(function (el) {
@@ -1165,6 +1170,10 @@ export function setupMenus() {
     // the frames typed). Enter applies, Esc cancels.
     function showCustomTrailModal() {
         if (document.getElementById('trailCustomModal')) return;
+        // Keyboard focus comes back to the item that opened the dialog, or the
+        // next Tab would start over at the top of the page. A pointer's was released.
+        var opener = document.activeElement;
+        var returnFocus = opener && opener.matches(':focus-visible') ? opener : null;
         var rate = trailRate(state.fps);
         var overlay = document.createElement('div');
         overlay.className = 'multi-frame-modal-overlay';
@@ -1227,6 +1236,7 @@ export function setupMenus() {
         function close() {
             document.removeEventListener('keydown', onKey, true);
             overlay.remove();
+            if (returnFocus) returnFocusTo(returnFocus);
         }
         function apply() {
             if (seconds == null) return;
@@ -3169,6 +3179,7 @@ export function setupUI() {
 
     wireAnimalCountField();
     wireReprojThresholdField();
+    wireToolbarMenuKeys();
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
