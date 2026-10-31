@@ -770,7 +770,7 @@ try {
         let bytes = readFile(name);
         for (let gen = 1; gen <= 2; gen++) {
             const saved = await saveAndRead(await open('lazy', bytes));
-            // The app's reader reads every pose on the first skeleton, so only Python can tell.
+            // The app's reader lists only the first skeleton's poses in `frames`, so only Python can tell.
             savedForPython(saved.bytes, `${name}, save ${gen}, Python`, { poses: sources[name].poses, skeleton: ['nose', 'tail'] });
             bytes = saved.bytes;
         }

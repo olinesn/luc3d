@@ -801,8 +801,8 @@ async function buildSlpBytes(opts) {
         });
 
         var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
-        // Poses on a video no session names go back on their own video.
-        var sessOutside = outsideFramesForSave(sess, sessLabels.skeletons[0]);
+        // Poses LUC3D does not show go back on their own video and skeleton.
+        var sessOutside = outsideFramesForSave(sess, sessLabels);
 
         // Merge into combined Labels
         allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFrames : []);
@@ -822,7 +822,7 @@ async function buildSlpBytes(opts) {
                 seenTrackNames.add(trk.name);
             }
         }
-        allIdentities = allIdentities.concat(sessLabels.identities || []);
+        allIdentities = allIdentities.concat(sessLabels.identities || [], sessOutside ? sessOutside.identities : []);
         allSessions = allSessions.concat(sessLabels.sessions || []);
     }
 

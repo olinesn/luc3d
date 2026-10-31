@@ -44,7 +44,8 @@ import {
 
 import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
 import {
-    keepOutsideFrames, keepOutsideColumnarFrames, keptOutsideCounts, outsideFramesNote, ownVideoOfColumnar,
+    groupsAcrossSkeletonsRefusal, keepOtherSkeletonFrames, keepOutsideFrames, keepOutsideColumnarFrames,
+    keptOutsideCounts, noteVideoReaders, outsideFramesNote, ownVideoOfColumnar, sessionSkeletonEntry,
 } from '../import-export/outside-frames.js';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
@@ -2187,6 +2188,13 @@ export async function handleLoadSessionFolderSingleSlp() {
                 return;
             }
         }
+        // This loader opens only the file's first session.
+        var acrossSkeletons = groupsAcrossSkeletonsRefusal(slpData, 1);
+        if (acrossSkeletons) {
+            hideLoading();
+            setStatus(acrossSkeletons, 'error');
+            return;
+        }
 
         // Load calibration
         var cameras = [];
@@ -2237,9 +2245,9 @@ export async function handleLoadSessionFolderSingleSlp() {
             }
         }
 
-        // Build session from SLP data
-        var skelData = slpData.skeleton || { name: 'skeleton', nodes: [], edges: [] };
-        var skeleton = new Skeleton(skelData.name, skelData.nodes, skelData.edges);
+        // Build session from SLP data: the poses on its own skeleton.
+        var singleEntry = sessionSkeletonEntry(slpData, 0);
+        var skeleton = new Skeleton(singleEntry.name, singleEntry.nodes, singleEntry.edges);
 
         // Override skeleton if skeleton.json is present (same folder as
         // calibration.toml). One skeleton per project — register it so it
@@ -2336,8 +2344,8 @@ export async function handleLoadSessionFolderSingleSlp() {
 
         // Populate frames
         showLoading('Building session...');
-        for (var fri = 0; fri < slpData.frames.length; fri++) {
-            var fd = slpData.frames[fri];
+        for (var fri = 0; fri < singleEntry.frames.length; fri++) {
+            var fd = singleEntry.frames[fri];
             // A video no camera has (kept aside below) would sit under a camera
             // key the session does not have, and the writer drops those.
             if (cameras.length > 0 && !videoIdxToCameraName[fd.videoIdx]) continue;
@@ -2360,11 +2368,14 @@ export async function handleLoadSessionFolderSingleSlp() {
             }
         }
         // Poses on a video no camera has (a video in no session, or a later
-        // session of the file, which this loader does not open): not shown, kept
-        // for the save.
+        // session of the file, which this loader does not open), or on another
+        // skeleton: not shown, kept for the save.
         if (cameras.length > 0) {
-            keepOutsideFrames(session, slpData, new Set(Object.keys(videoIdxToCameraName).map(Number)));
+            keepOutsideFrames(session, Object.assign({}, slpData, { frames: singleEntry.frames }), new Set(Object.keys(videoIdxToCameraName).map(Number)));
         }
+        var singleReaders = new Map();
+        noteVideoReaders(singleReaders, session, singleEntry, new Set(Object.keys(videoIdxToCameraName).map(Number)), videoIdxToCameraName, cameras);
+        keepOtherSkeletonFrames(slpData, singleReaders, session, singleEntry);
 
         // Restore the project's saved state from the SLP's sessions_json —
         // InstanceGroup grouping, per-instance nulledNodes/occlusion,
@@ -3665,9 +3676,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             var trackRemap = trackUnion.remapByCam.get(camName) || new Int32Array(0);
 
             if (slpData.columnar) {
-                var ownVideo = ownVideoOfColumnar(slpData.columnar);
+                var ownVideo = ownVideoOfColumnar(slpData.columnar, slpData);
                 addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap, ownVideo);
-                keepOutsideColumnarFrames(state.session, slpData, ownVideo);
+                keepOutsideColumnarFrames(state.session, slpData, ownVideo, camName);
             } else if (slpData.frames) {
                 for (var fri = 0; fri < slpData.frames.length; fri++) {
                     var frameData = slpData.frames[fri];

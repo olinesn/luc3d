@@ -43,7 +43,10 @@ import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js';
 import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
 import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
-import { keepOutsideFrames, keptOutsideCounts, outsideFramesNote } from './outside-frames.js';
+import {
+    fileSkeletons, groupsAcrossSkeletonsRefusal, keepOtherSkeletonFrames, keepOutsideFrames, keptOutsideCounts,
+    noteVideoReaders, outsideFramesNote, sessionSkeletonEntry,
+} from './outside-frames.js';
 import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js';
 import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js';
 import {
@@ -888,8 +891,9 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
  *
  * @param {File} slpFile
  * @returns {Promise<false|undefined>} `false` when the file did not open and the
- *   project is as it was (cancelled, refused as too new, unreadable), so a caller
- *   holding a save handle for this file knows not to keep it.
+ *   project is as it was (cancelled, refused as too new or for a group across
+ *   skeletons, unreadable), so a caller holding a save handle for this file knows
+ *   not to keep it.
  */
 export async function handleLoadSlpFile(slpFile) {
     try {
@@ -919,7 +923,13 @@ export async function handleLoadSlpFile(slpFile) {
             return false;
         }
 
-        var totalFrames = slpData.frames.length;
+        var acrossSkeletons = groupsAcrossSkeletonsRefusal(slpData, (slpData.sessions || []).length);
+        if (acrossSkeletons) {
+            hideLoading();
+            setStatus(acrossSkeletons, 'error');
+            return false;
+        }
+
         // Count instance types from parsed SLP data
         var slpUserCount = 0, slpPredCount = 0;
         for (var _ti = 0; _ti < slpData.frames.length; _ti++) {
@@ -931,7 +941,7 @@ export async function handleLoadSlpFile(slpFile) {
         console.log('[load-slp] Parsed OK:', {
             skeleton: slpData.skeleton ? slpData.skeleton.nodes.length + ' nodes' : 'none',
             tracks: slpData.tracks.length,
-            frames: totalFrames,
+            frames: slpData.frames.length,
             videos: slpData.videos.length,
             userInstances: slpUserCount,
             predictedInstances: slpPredCount,
@@ -1025,6 +1035,8 @@ export async function handleLoadSlpFile(slpFile) {
         var lastSessionHas3d = false;
         // Video indices some session reads; frames on any other are kept aside below.
         var claimedVideos = new Set();
+        // Who reads each of them, for the poses on another skeleton (kept aside too).
+        var videoReaders = new Map();
         for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
         showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
         await new Promise(function (r) { setTimeout(r, 0); });
@@ -1095,7 +1107,12 @@ export async function handleLoadSlpFile(slpFile) {
         // own its array. Without the copy, every session in a non-lucid SLP
         // shares `slpData.tracks` (and the maxTrack padding below mutates it),
         // so deleting a track in one session would hit all of them.
-        var sessSkeleton = skeleton;
+        // The poses this session shows: those on its own skeleton.
+        var sessEntry = sessionSkeletonEntry(slpData, slpSessIdx);
+        var sessFrames = sessEntry.frames;
+        var totalFrames = sessFrames.length;
+        var sessSkeleton = sessEntry === fileSkeletons(slpData)[0]
+            ? skeleton : new Skeleton(sessEntry.name, sessEntry.nodes, sessEntry.edges);
         var sessTracks = slpData.tracks.length > 0 ? slpData.tracks.slice() : ['track_0'];
         var sessName = 'Session ' + (slpSessIdx + 1);
         // True when this session carries its OWN per-session track list (a lucid
@@ -1131,7 +1148,8 @@ export async function handleLoadSlpFile(slpFile) {
         for (var svk in videoIdxToCameraName) {
             sessVideoIndices.add(parseInt(svk));
         }
-        videosClaimedBy(videoIdxToCameraName, cameras.length).forEach(function (v) { claimedVideos.add(v); });
+        var sessClaimed = videosClaimedBy(videoIdxToCameraName, cameras.length);
+        sessClaimed.forEach(function (v) { claimedVideos.add(v); });
 
         // Ensure enough track slots for instances in this session. Only for
         // non-lucid SLPs, where the per-instance trackIdx is used as-is against
@@ -1142,7 +1160,7 @@ export async function handleLoadSlpFile(slpFile) {
         if (!hasPerSessionTracks) {
             var maxTrack = 0;
             for (var fri = 0; fri < totalFrames; fri++) {
-                var fd = slpData.frames[fri];
+                var fd = sessFrames[fri];
                 if (sessVideoIndices.size > 0 && !sessVideoIndices.has(fd.videoIdx)) continue;
                 for (var ii = 0; ii < fd.instances.length; ii++) {
                     if (fd.instances[ii].trackIdx > maxTrack) maxTrack = fd.instances[ii].trackIdx;
@@ -1153,6 +1171,7 @@ export async function handleLoadSlpFile(slpFile) {
 
         var session = new Session(cameras, sessSkeleton, sessTracks);
         session.name = sessName;
+        noteVideoReaders(videoReaders, session, sessEntry, sessClaimed, videoIdxToCameraName, cameras);
         // The file's provenance (e.g. campy-live-export's records), written back on save.
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), slpSessIdx);
@@ -1166,7 +1185,7 @@ export async function handleLoadSlpFile(slpFile) {
         // Populate FrameGroups from worker's frames array (yield every 20K for UI)
         var BATCH = 20000;
         for (var fi = 0; fi < totalFrames; fi++) {
-            var fd2 = slpData.frames[fi];
+            var fd2 = sessFrames[fi];
 
             // Skip frames that don't belong to this session's cameras
             if (sessVideoIndices.size > 0 && !sessVideoIndices.has(fd2.videoIdx)) continue;
@@ -1609,8 +1628,11 @@ export async function handleLoadSlpFile(slpFile) {
         if (state.sessions.length > 0) {
             state.activeSessionIdx = 0;
             state.session = state.sessions[0];
-            // Poses on a video no session names: not shown, kept for the save.
-            keepOutsideFrames(state.sessions[0], slpData, claimedVideos);
+            // Poses on a video no session names, or on a skeleton their session
+            // does not show: not shown, kept for the save.
+            var firstEntry = sessionSkeletonEntry(slpData, 0);
+            keepOutsideFrames(state.sessions[0], Object.assign({}, slpData, { frames: firstEntry.frames }), claimedVideos);
+            keepOtherSkeletonFrames(slpData, videoReaders, state.sessions[0], firstEntry);
         }
 
         // Create views for the active session only
@@ -1648,7 +1670,7 @@ export async function handleLoadSlpFile(slpFile) {
         if (state.session && hasRealCalibration(state.session)) {
             if (viewport3d) {
                 viewport3d.cameras = state.session.cameras;
-                viewport3d.skeleton = skeleton;
+                viewport3d.skeleton = state.session.skeleton;
                 viewport3d.addCameraPyramids();
                 viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
                 viewport3d.fitToScene();
@@ -1707,7 +1729,7 @@ export async function handleLoadSlpFile(slpFile) {
 
         clearDirty();
         hideLoading();
-        var statusParts = [state.sessions.length + ' session(s)', skeleton.nodes.length + ' nodes'];
+        var statusParts = [state.sessions.length + ' session(s)', (state.session ? state.session.skeleton : skeleton).nodes.length + ' nodes'];
         if (state.session) statusParts.push(state.session.numFrames.toLocaleString('en-US') + ' labeled frames');
         if (state.views.length > 0) statusParts.push(state.views.length + ' views');
         // A campy recording's warnings (status, cameras), per session.
@@ -1717,7 +1739,7 @@ export async function handleLoadSlpFile(slpFile) {
                 campyWarn.push(state.sessions.length > 1 ? cs.name + ': ' + w : w);
             });
         });
-        var outsideNote = outsideFramesNote(keptOutsideCounts(state.sessions[0]));
+        var outsideNote = outsideFramesNote(keptOutsideCounts(state.sessions));
         if (outsideNote) campyWarn.push(outsideNote);
         setStatus('SLP loaded (' + statusParts.join(', ') + ')'
             + (campyWarn.length ? ' — ' + campyWarn.join('; ') : ''), campyWarn.length ? 'warning' : 'success');
@@ -1902,10 +1924,16 @@ export async function handleAddSlp() {
 
         // Merge frames (with node reorder map if needed)
         var affectedFrames = mergeSlpFramesIntoSession(state.session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap);
-        // Its poses on a video no camera has: not shown, kept for the save. The
-        // lazy writer never writes these, so a lazy session cannot hold them.
+        // Its poses on a video no camera has, or on another skeleton: not shown,
+        // kept for the save. The lazy writer never writes these, so a lazy session
+        // cannot hold them.
         if (!state.session.lazyLoader) {
-            keepOutsideFrames(state.session, slpData, videosClaimedBy(videoIdxToCameraName, cameras.length), nodeReorderMap);
+            var addClaimed = videosClaimedBy(videoIdxToCameraName, cameras.length);
+            keepOutsideFrames(state.session, slpData, addClaimed, nodeReorderMap);
+            var addEntry = fileSkeletons(slpData)[0];
+            var addReaders = new Map();
+            noteVideoReaders(addReaders, state.session, addEntry, addClaimed, videoIdxToCameraName, cameras);
+            keepOtherSkeletonFrames(slpData, addReaders, state.session, addEntry);
         }
 
         // Rebuild instance groups for affected frames
