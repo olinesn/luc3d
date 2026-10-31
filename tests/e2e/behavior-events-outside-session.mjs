@@ -18,6 +18,13 @@
  *     only its own, nothing is doubled. A loader that opens only the first session keeps
  *     the second session's events too, on their videos.
  *  D. A video in no session with no event on it: not written back, as before.
+ *  E. Separate videos and no session. A save writes a session of placeholder cameras
+ *     naming them all, and that changes nothing: every event stays on its own video through
+ *     every later save, and one animal's adjacent bouts on two videos stay two bouts.
+ *  F. An uncalibrated session whose cameras are not in the file's order, and a video in no
+ *     session: only the first camera's events are labels, each other stays where it is.
+ *  G. Two uncalibrated sessions: each event stays on its own session's camera.
+ *  H. An uncalibrated session written by Python, through LUC3D, Python and LUC3D again.
  *
  * Kinds of event on the other video: a bout, a "not" label (its type must keep saying
  * what it negates), a prediction with framewise scores, an event with no animal.
@@ -61,23 +68,27 @@ async function buildFile(spec) {
         return v;
     });
     const frames = [];
+    const addFrames = (video) => {
+        for (let f = 0; f < 2; f++) {
+            const pt = (x, y) => ({ xy: [x, y], visible: true, complete: true, score: 0.9 });
+            frames.push(new SIO.LabeledFrame({ video, frameIdx: f, instances: [
+                new SIO.PredictedInstance({ points: [pt(10 + f, 10), pt(20, 20)], skeleton, track, score: 0.9 }),
+            ] }));
+        }
+    };
     const sessions = spec.sessions.map((names, si) => {
         const cameras = names.map((n, ci) => new SIO.Camera({
-            name: 's' + si + '_cam' + ci, rvec: [0, 0.1 * ci, 0], tvec: [10 * ci, 0, 0],
+            name: 's' + si + '_cam' + ci, rvec: spec.uncalibrated ? [0, 0, 0] : [0, 0.1 * ci, 0], tvec: spec.uncalibrated ? [0, 0, 0] : [10 * ci, 0, 0],
             matrix: [[500, 0, 32], [0, 500, 32], [0, 0, 1]], distortions: [0, 0, 0, 0, 0], size: [64, 64],
         }));
         const session = new SIO.RecordingSession({ cameraGroup: new SIO.CameraGroup({ cameras }) });
         names.forEach((n, ci) => {
             session.addVideo(videoOf[n], cameras[ci]);
-            for (let f = 0; f < 2; f++) {
-                const pt = (x, y) => ({ xy: [x, y], visible: true, complete: true, score: 0.9 });
-                frames.push(new SIO.LabeledFrame({ video: videoOf[n], frameIdx: f, instances: [
-                    new SIO.PredictedInstance({ points: [pt(10 + f, 10), pt(20, 20)], skeleton, track, score: 0.9 }),
-                ] }));
-            }
+            addFrames(videoOf[n]);
         });
         return session;
     });
+    if (spec.sessions.length === 0) videos.forEach(addFrames);
     const types = {
         attack: new SIO.EventType({ name: 'attack', metadata: { directed: 'true' } }),
         rear: new SIO.EventType({ name: 'rear' }),
@@ -105,12 +116,10 @@ async function readFile() {
     const slp = await fileio.parseSlpViaSleapIO(new File([window.__saved], 'saved.slp'), () => {});
     const videos = slp.videos.map(v => v.filename);
     const sessions = (slp.sessions || []).map(s => Object.values(s.camcorder_to_video_idx_map || {}).map(Number));
-    const firstCams = sessions.map(s => s[0]);
     const inSession = new Set(sessions.flat());
-    const place = (vi) => {
-        const si = firstCams.indexOf(vi);
-        return si >= 0 ? 'session ' + si + ' first camera' : videos[vi];
-    };
+    const where = new Map();
+    sessions.forEach((s, si) => s.forEach((vi, ci) => where.set(vi, 'session ' + si + (ci === 0 ? ' first camera' : ' camera ' + ci))));
+    const place = (vi) => where.get(vi) || videos[vi];
     const round = (a) => (a ? Array.from(a).map(x => Math.round(x * 1000) / 1000) : null);
     const events = (slp.behaviorEvents ? slp.behaviorEvents.rows : []).map(r => [
         place(r.video), r.type, r.start, r.end, r.subject, r.target, r.predicted, r.source,
@@ -120,6 +129,7 @@ async function readFile() {
         videos, sessions, outside: videos.filter((n, i) => !inSession.has(i)), events,
         types: slp.behaviorEvents ? slp.behaviorEvents.types.map(t => ({ name: t.name, negates: t.metadata.negates || null })) : [],
         framesOffSession: slp.frames.filter(f => !inSession.has(f.videoIdx)).length,
+        framesOn: videos.map((n, i) => slp.frames.filter(f => f.videoIdx === i).length),
     };
 }
 
@@ -314,6 +324,139 @@ async function noEventThere(loader) {
     check(one.read.videos.length === 2 && one.read.outside.length === 0, 'the save writes the session\'s cameras only, as before', one.read.videos);
 }
 
+const rearOn = (where, start, end, who = 'animal_A') => [where, 'rear', start, end, who, '', false, 'manual', null, null, {}, ''];
+
+/** E: separate videos, no session. The first save writes a session of placeholder cameras. */
+async function separateVideos(firstLoader, thenLoader) {
+    console.log(`\n-- E. separate videos with no session, ${firstLoader} then ${thenLoader} --`);
+    const page = await newAppPage();
+    await page.evaluate(buildFile, {
+        videos: ['one.mp4', 'two.mp4', 'three.mp4'], sessions: [],
+        events: [
+            { type: 'rear', video: 'one.mp4', start: 10, end: 19, subject: 'a', source: 'manual' },
+            { type: 'rear', video: 'two.mp4', start: 20, end: 29, subject: 'a', source: 'manual' },   // the same animal, right after
+        ].concat(OTHER.map(e => Object.assign({}, e, { video: 'three.mp4' }))),
+    });
+    const source = await getBytes(page, '__built');
+    await page.close();
+
+    const shows = [{ bouts: [['rear', 10, 19, 1]], predicted: 0 }];
+    const expected = [rearOn('session 0 first camera', 10, 19), rearOn('session 0 camera 1', 20, 29)].concat(OTHER_READ('session 0 camera 2'));
+    const one = await openAndSave(firstLoader, source);
+    check(eq(one.shown, shows), 'it shows the first video\'s bouts', one.shown);
+    check(eq(one.read.events, expected), 'saved: every event on its own video', one.read.events);
+    check(one.read.videos.length === 3 && one.read.sessions.length === 1 && one.read.outside.length === 0, 'a session of the three videos, and no copy of one', one.read);
+    check(eq(one.read.framesOn, [2, 2, 2]), 'each video keeps its poses', one.read.framesOn);
+
+    let last = one;
+    for (const step of ['opened again', 'and again']) {
+        const next = await openAndSave(thenLoader, last.saved);
+        check(eq(next.shown, shows), `${step}: it shows the same`, next.shown);
+        check(eq(next.read.events, expected), `saved: nothing moved, nothing merged`, next.read.events);
+        check(eq(next.read.videos, one.read.videos) && eq(next.read.sessions, one.read.sessions), 'the same videos, in the same session', next.read);
+        check(eq(next.read.framesOn, [2, 2, 2]), 'and each its poses', next.read.framesOn);
+        check(negatesOf(next.read, 'not rear') === 'rear', 'a "not" still a "not"', next.read.types);
+        last = next;
+    }
+    return { saved: last.saved, videos: one.read.videos };
+}
+
+/** F: an uncalibrated session, its first camera not the file's first video, and a video in no session. */
+async function uncalibratedShuffled(loader) {
+    console.log(`\n-- F. an uncalibrated session in another order, ${loader} --`);
+    const page = await newAppPage();
+    await page.evaluate(buildFile, {
+        videos: ['other.mp4', 'b.mp4', 'a.mp4'], sessions: [['a.mp4', 'b.mp4']], uncalibrated: true,
+        events: [
+            { type: 'rear', video: 'a.mp4', start: 10, end: 19, subject: 'a', source: 'manual' },
+            { type: 'rear', video: 'b.mp4', start: 20, end: 29, subject: 'a', source: 'manual' },
+        ].concat(OTHER),
+    });
+    const source = await getBytes(page, '__built');
+    await page.close();
+
+    const shows = [{ bouts: [['rear', 10, 19, 1]], predicted: 0 }];
+    const expected = [rearOn('session 0 first camera', 10, 19), rearOn('session 0 camera 1', 20, 29)].concat(OTHER_READ('other.mp4'));
+    const one = await openAndSave(loader, source);
+    check(eq(one.shown, shows), 'it shows the first camera\'s bouts', one.shown);
+    check(eq(one.read.events, expected), 'saved: the camera\'s on that camera, the other video\'s on that video', one.read.events);
+    check(one.read.videos.length === 3 && eq(one.read.outside, ['other.mp4']), 'no copy of a camera\'s video', one.read);
+    const two = await openAndSave(loader, one.saved);
+    check(eq(two.shown, shows) && eq(two.read.events, expected), 'reopened and saved again: the same', two.read.events);
+    check(eq(two.read.videos, one.read.videos), 'on the same videos', two.read.videos);
+}
+
+/** G: two uncalibrated sessions: a camera's place is in its session, not in the file. */
+async function uncalibratedTwoSessions(loader, opensAll) {
+    console.log(`\n-- G. two uncalibrated sessions, ${loader} --`);
+    const page = await newAppPage();
+    await page.evaluate(buildFile, {
+        videos: ['a0.mp4', 'a1.mp4', 'b0.mp4', 'b1.mp4'], sessions: [['a0.mp4', 'a1.mp4'], ['b0.mp4', 'b1.mp4']], uncalibrated: true,
+        events: OWN.concat([
+            { type: 'rear', video: 'b0.mp4', start: 110, end: 119, subject: 'b', source: 'manual' },
+            { type: 'rear', video: 'b1.mp4', start: 130, end: 139, subject: 'b', source: 'manual' },
+        ]),
+    });
+    const source = await getBytes(page, '__built');
+    await page.close();
+
+    const one = await openAndSave(loader, source);
+    const aRead = [rearOn('session 0 first camera', 10, 19), rearOn('session 0 camera 1', 30, 39)];
+    const shows = opensAll
+        ? [{ bouts: [['rear', 10, 19, 1]], predicted: 0 }, { bouts: [['rear', 110, 119, 1]], predicted: 0 }]
+        : [{ bouts: [['rear', 10, 19, 1]], predicted: 0 }];
+    const expected = opensAll
+        ? aRead.concat([rearOn('session 1 first camera', 110, 119, 'animal_B'), rearOn('session 1 camera 1', 130, 139, 'animal_B')])
+        : aRead.concat([rearOn('b0.mp4', 110, 119, 'animal_B'), rearOn('b1.mp4', 130, 139, 'animal_B')]);
+    check(eq(one.shown, shows), 'each session shows its first camera\'s bouts', one.shown);
+    check(eq(one.read.events, expected), 'saved: each on its own session\'s camera', one.read.events);
+    // The single-.slp folder loader makes the other session's frames cameras of its own
+    // (`cam_2`, `cam_3`), so there those videos are listed twice: poses, then events.
+    if (loader !== 'single .slp folder') check(one.read.videos.length === 4, 'no copy of a video', one.read.videos);
+    const two = await openAndSave(loader, one.saved);
+    check(eq(two.shown, shows) && eq(two.read.events, expected) && eq(two.read.videos, one.read.videos), 'reopened and saved again: the same', two.read);
+}
+
+/** H: a session Python wrote with no calibration: its cameras keep their default rotation and translation. */
+function pythonUncalibrated(file) {
+    const script = `
+import sys, numpy as np, sleap_io as sio
+skeleton = sio.Skeleton(nodes=["nose", "tail"], edges=[("nose", "tail")])
+videos = [sio.Video(filename=n, open_backend=False) for n in ("one.mp4", "two.mp4")]
+for v in videos:
+    v.backend_metadata["shape"] = (50, 64, 64, 1)
+t1 = sio.Track(name="mouse1")
+frames = [sio.LabeledFrame(video=v, frame_idx=f, instances=[
+    sio.PredictedInstance.from_numpy(np.array([[10.0, 10.0], [20.0, 20.0]]), skeleton=skeleton, track=t1, score=0.9, point_scores=np.array([0.9, 0.9])),
+]) for v in videos for f in range(2)]
+cameras = [sio.Camera(name=n) for n in ("camA", "camB")]
+session = sio.RecordingSession(camera_group=sio.CameraGroup(cameras=cameras))
+for v, c in zip(videos, cameras):
+    session.add_video(v, c)
+rear = sio.EventType(name="rear")
+events = [
+    sio.UserEvent(type=rear, video=videos[0], start_frame=10, end_frame=19, subject=t1, source="manual"),
+    sio.UserEvent(type=rear, video=videos[1], start_frame=20, end_frame=29, subject=t1, source="manual"),
+]
+sio.Labels(labeled_frames=frames, videos=videos, skeletons=[skeleton], tracks=[t1], sessions=[session], event_types=[rear], events=events).save(sys.argv[1], embed=False)
+`;
+    const r = spawnSync('uv', ['run', '--no-project', '--quiet', '--with', PY_SPEC, 'python', '-I', '-c', script, file], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error('python failed: ' + r.stderr);
+}
+
+/** Load a file in Python and save it again, as a Python script would. */
+function pythonResaves(from, to) {
+    const script = `
+import sys, sleap_io as sio
+sio.load_slp(sys.argv[1], open_videos=False).save(sys.argv[2], embed=False)
+`;
+    const r = spawnSync('uv', ['run', '--no-project', '--quiet', '--with', PY_SPEC, 'python', '-I', '-c', script, from, to], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error('python failed: ' + r.stderr);
+}
+
+/** Each event as [video, start], in frame order. */
+const placed = (py) => py.events.map(e => [e[0], e[2]]).sort((a, b) => a[1] - b[1]);
+
 function pythonReads(file) {
     const script = `
 import json, sys, sleap_io as sio
@@ -346,11 +489,47 @@ try {
     await twoSessions('single .slp folder', false);
     await noEventThere('File ▸ Open');
     await noEventThere('large project (lazy)');
+    const separate = {};
+    separate['File ▸ Open'] = await separateVideos('File ▸ Open', 'File ▸ Open');
+    separate['large project (lazy)'] = await separateVideos('File ▸ Open', 'large project (lazy)');
+    separate['single .slp folder'] = await separateVideos('single .slp folder', 'single .slp folder');
+    for (const loader of Object.keys(LOADERS)) await uncalibratedShuffled(loader);
+    await uncalibratedTwoSessions('File ▸ Open', true);
+    await uncalibratedTwoSessions('large project (lazy)', false);
+    await uncalibratedTwoSessions('single .slp folder', false);
 
     console.log('\n-- real Python reads the saves --');
     if (spawnSync('uv', ['--version'], { encoding: 'utf8' }).status !== 0) {
         console.log('  - skipped: no uv');
     } else {
+        for (const [loader, { saved, videos }] of Object.entries(separate)) {
+            const file = path.join(tmp, 'separate-for-python.slp');
+            fs.writeFileSync(file, saved);
+            const py = pythonReads(file);
+            check(eq(placed(py), [[videos[0], 10], [videos[1], 20], [videos[2], 300], [videos[2], 310], [videos[2], 320], [videos[2], 330]]),
+                `separate videos, ${loader}: every event on its video`, py.events);
+        }
+
+        console.log('\n-- H. an uncalibrated session from Python, through LUC3D, Python and LUC3D --');
+        for (const loader of Object.keys(LOADERS)) {
+            const file = path.join(tmp, 'python-uncalibrated.slp');
+            pythonUncalibrated(file);
+            const shows = [{ bouts: [['rear', 10, 19, 1]], predicted: 0 }];
+            const one = await openAndSave(loader, fs.readFileSync(file));
+            check(eq(one.shown, shows), `${loader}: it shows the first camera's bout`, one.shown);
+            const saved1 = path.join(tmp, 'python-uncalibrated-1.slp'), saved2 = path.join(tmp, 'python-uncalibrated-2.slp'), saved3 = path.join(tmp, 'python-uncalibrated-3.slp');
+            fs.writeFileSync(saved1, one.saved);
+            const py1 = pythonReads(saved1);
+            const [first, second] = one.read.sessions[0].map(vi => one.read.videos[vi]);
+            check(eq(placed(py1), [[first, 10], [second, 20]]), 'Python reads each bout on its camera\'s video', py1.events);
+            pythonResaves(saved1, saved2);
+            const two = await openAndSave(loader, fs.readFileSync(saved2));
+            check(eq(two.shown, shows), 'after Python\'s save, the same', two.shown);
+            fs.writeFileSync(saved3, two.saved);
+            check(eq(placed(pythonReads(saved3)), [[first, 10], [second, 20]]), 'and after LUC3D\'s next one, each bout is still on its video', pythonReads(saved3).events);
+        }
+
+        console.log('\n-- real Python reads the other saves --');
         for (const [loader, bytes] of Object.entries(finalSaves)) {
             const file = path.join(tmp, 'for-python.slp');
             fs.writeFileSync(file, bytes);

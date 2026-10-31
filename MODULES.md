@@ -1013,7 +1013,8 @@ loaders; `handleLoadProjectSlpLazy`'s 3D gate), `import-export/save-load.js`
 (`buildSlpBytes`, for every session before writing), `import-export/slp-import.js`
 (`handleLoadSlpFile`'s 3D gate), `pose/calibration-compare.js` (placeholder-only
 sessions are not compared), `pose/tracker.js` and `ui/track-range-modal.js`
-(tracking needs a real calibration).
+(tracking needs a real calibration), `import-export/behavior-events.js` (a placeholder-only
+session's videos need not be cameras of one recording, so each keeps its own events).
 
 **Tests.** `tests/test-placeholder-cameras.mjs`;
 `tests/e2e/nocalib-folder-save-reopen.mjs` (per-camera folder with no `.toml`:
@@ -14262,13 +14263,16 @@ description; metadata `color`, `key`, `group`, `kind`, `directed`, `mutual`,
 `lucid_id`), `/events` each labelled and predicted bout (span inclusive, the
 session's FIRST camera as `video`, the animal as `subject` by identity else track,
 `source`, `score`, metadata `note`). A "not" label is its own type (`not <name>`,
-metadata `negates`). Reading is by name; an event on any camera of a session is
-that session's. An event the labels cannot hold (no subject; social with no target)
+metadata `negates`). Reading is by name; an event on any camera of a calibrated session
+is that session's. An event the labels cannot hold (no subject; social with no target)
 is kept per session (`setKeptEventRows`) and written back unchanged. So is an event on
 a video that is not one of the session's cameras, and it stays on that video: a video
 in no recording session (the file's first session keeps it, and a save writes the video
 back from what the file said about it), another session's video when a loader opens
-only one session, another video of a file with no recording session. DOM-free.
+only one session, another video of a file with no recording session or of a session
+with only placeholder cameras. Those two read alike, since no calibration says the videos
+are cameras of one recording and a save gives a file with no session that session: only
+the first camera's events are labels, and each other stays on its camera. DOM-free.
 
 **Exports.** `buildBehaviorEvents(SIO, items)` → `{eventTypes, events}` (an event on a
 video outside `items[].videos` brings it along: `new SIO.Labels` and `openSlpWriter`
@@ -14276,17 +14280,20 @@ add it to the file's list),
 `fileEventsOf(labels)` → plain `{types, rows, videos}` or null,
 `sessionVideoIdxs(rawSession)` → `Set<number>` or null,
 `sessionEventScope(rawSessions, nVideos, idx, onlyThisSession?)` → `{videos, keep, cameras, noVideo}`
-(what one session reads and what it only keeps; each event goes to one session),
+(what one session reads and what it only keeps; each event goes to one session; `cameras`
+is a `Map` from a video to its camera's place in the session when no calibration names them,
+else null: a place, never the file's video number, so a save finds that camera's video),
 `eventsToBehaviorData(fileEvents, lucid, scope?)` → `{ethogram, labelRows, runs, kept}`
 (ids are the file's), `setKeptEventRows(session, rows)`.
 
 **Imports.** `pose/behavior-ethogram.js`, `pose/behavior-labels.js`,
-`pose/behavior-predictions.js`. **Imported by** `import-export/behavior-metadata.js`,
+`pose/behavior-predictions.js`, `pose/placeholder-cameras.js` (`hasRealCalibration`, on a
+file's raw cameras). **Imported by** `import-export/behavior-metadata.js`,
 `import-export/file-io.js`, `import-export/slp-import.js`, `import-export/slp-streaming-write.js`,
 `loading/session-loader.js`. **Tests.** `tests/test-behavior-events.mjs`, e2e
 `behavior-label-roundtrip` (with files sleap-app and Python wrote,
 `tests/fixtures/behavior-events/`), `behavior-events-outside-session` (the three loaders and
-both writers, on files with a video outside their sessions), `behavior-cross-app` (the two real apps, both ways,
+both writers, on files with a video outside their sessions or with no calibration), `behavior-cross-app` (the two real apps, both ways,
 with Python reading the result; needs a sleap-app checkout, skips without one).
 
 ### import-export/behavior-metadata.js

@@ -14,7 +14,7 @@
 //                    type, start_frame, end_frame (both inclusive),
 //                    video     the session's FIRST camera. A bout belongs to the
 //                              whole session, so an event on ANY camera of a
-//                              session is read as the session's.
+//                              calibrated session is read as the session's.
 //                    subject   the animal: the identity of that name, else the
 //                              track of that name (matched by name on reading)
 //                    target    a social behavior's other animal
@@ -42,20 +42,24 @@
 //     writers themselves write one video per camera). LUC3D does not open the poses on
 //     such a video.
 //   - another session's video, when a loader opens only one session of the file.
-//   - another video of a file with no recording session: its videos need not be cameras
-//     of one recording (a sleap-app project of separate videos), though LUC3D opens them
-//     as if they were, so only the first video's events are labels here.
+//   - another video of a file with no recording session, or of a session whose cameras are
+//     all placeholders. With no calibration to say so, its videos need not be cameras of
+//     one recording (a sleap-app project of separate videos), though LUC3D opens them as if
+//     they were, so only the first camera's events are labels here. The two must read
+//     alike: a save gives a file with no session exactly that session.
 // Each event goes to one session, an event with no video to the first. A label keeps
 // only its note: other per-event metadata and names written by other tools are not
 // carried through a LUC3D save.
 //
 // DOM-free: Node tests import it directly (they pass their own `SIO` classes).
 //
-// Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js, pose/behavior-predictions.js
+// Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js, pose/behavior-predictions.js,
+// pose/placeholder-cameras.js
 
 import { behaviors, behaviorById, normalizeBehaviorKey } from '../pose/behavior-ethogram.js';
 import { exportBoutRows } from '../pose/behavior-labels.js';
 import { exportPredictionEvents } from '../pose/behavior-predictions.js';
+import { hasRealCalibration } from '../pose/placeholder-cameras.js';
 
 /** Sources of a labelled bout, as saved. */
 var SOURCE_NAMES = { m: 'manual', a: 'accepted_prediction', i: 'imported' };
@@ -251,6 +255,35 @@ export function sessionVideoIdxs(rawSession) {
 }
 
 /**
+ * Where the videos of a session with only placeholder cameras sit among those cameras, as
+ * the loaders read a `sessions_json` entry: its `calibration` in file order, a camera named
+ * in `camcorder_to_video_idx_map` by its name, calibration key or number.
+ *
+ * @returns {?Map<number, number>} video index -> camera's place; null for a session with a
+ *   real calibration or no camera
+ */
+function placeholderCameraPlaces(rawSession) {
+    var calib = rawSession.calibration || {};
+    var keys = Object.keys(calib).filter(function (k) {
+        return k !== 'metadata' && calib[k] && typeof calib[k] === 'object';
+    });
+    var cameras = keys.map(function (k) {
+        var cd = calib[k];
+        return { rvec: cd.rotation || cd.rvec || [0, 0, 0], tvec: cd.translation || cd.tvec || [0, 0, 0] };
+    });
+    if (!cameras.length || hasRealCalibration({ cameras: cameras })) return null;
+    var places = new Map();
+    var map = rawSession.camcorder_to_video_idx_map;
+    Object.keys(map).forEach(function (k) {
+        var place = keys.findIndex(function (key) { return calib[key].name === k || key === k; });
+        if (place < 0) place = parseInt(k.replace(/[^0-9]/g, ''), 10);
+        var v = Number(map[k]);
+        if (Number.isInteger(v) && place >= 0 && place < keys.length) places.set(v, place);
+    });
+    return places;
+}
+
+/**
  * Which of a file's events one of its sessions reads, and which it only keeps on their
  * own video (see the header). Goes by the videos the file's sessions name, so a session
  * naming none reads what no other session names.
@@ -261,29 +294,35 @@ export function sessionVideoIdxs(rawSession) {
  * @param {number} idx the session
  * @param {boolean} [onlyThisSession] the loader opens this session and no other of the
  *   file, so it also keeps the other sessions' events
- * @returns {{videos: Set<number>, keep: Set<number>, cameras: boolean, noVideo: boolean}}
+ * @returns {{videos: Set<number>, keep: Set<number>, cameras: ?Map<number, number>, noVideo: boolean}}
  *   `videos` whose events are this session's, `keep` whose events it only keeps;
- *   `cameras`: `keep`'s videos are also its cameras, in file order (no recording session);
+ *   `cameras`: with no calibration, each of its cameras' videos -> that camera's place in the
+ *   session (never the file's video number, which a second session's cameras do not start at);
  *   `noVideo`: it reads the events with no video
  */
 export function sessionEventScope(rawSessions, nVideos, idx, onlyThisSession) {
     var sessions = rawSessions || [];
     var videos = new Set(), keep = new Set();
     if (sessions.length === 0) {
-        for (var k = 0; k < nVideos; k++) (k === 0 ? videos : keep).add(k);
-        return { videos: videos, keep: keep, cameras: true, noVideo: true };
+        var inFileOrder = new Map();
+        for (var k = 0; k < nVideos; k++) {
+            (k === 0 ? videos : keep).add(k);
+            inFileOrder.set(k, k);
+        }
+        return { videos: videos, keep: keep, cameras: inFileOrder, noVideo: true };
     }
     var own = sessionVideoIdxs(sessions[idx]);
+    var places = own ? placeholderCameraPlaces(sessions[idx]) : null;
     var others = new Set();
     sessions.forEach(function (s, i) {
         var theirs = i === idx ? null : sessionVideoIdxs(s);
         if (theirs) theirs.forEach(function (v) { others.add(v); });
     });
     for (var v = 0; v < nVideos; v++) {
-        if (own ? own.has(v) : idx === 0 && !others.has(v)) videos.add(v);
+        if (own ? own.has(v) : idx === 0 && !others.has(v)) (!places || places.get(v) === 0 ? videos : keep).add(v);
         else if (others.has(v) ? onlyThisSession : idx === 0) keep.add(v);
     }
-    return { videos: videos, keep: keep, cameras: false, noVideo: idx === 0 };
+    return { videos: videos, keep: keep, cameras: places, noVideo: idx === 0 };
 }
 
 /** A catalog entry as `ingestEthogram` reads it. */
@@ -385,7 +424,7 @@ export function eventsToBehaviorData(fileEvents, lucid, scope) {
     allRows.forEach(function (r) {
         if (scope && !(r.video < 0 ? scope.noVideo : scope.videos.has(r.video))) {
             if (scope.keep.has(r.video)) {
-                keepRow(r, { ownVideo: fileEvents.videos[r.video], ownCamera: scope.cameras ? r.video : undefined });
+                keepRow(r, { ownVideo: fileEvents.videos[r.video], ownCamera: scope.cameras ? scope.cameras.get(r.video) : undefined });
             }
             return;
         }

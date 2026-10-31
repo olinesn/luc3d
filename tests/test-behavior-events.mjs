@@ -16,6 +16,7 @@
  *   - a file of separate videos keeps each video's events on that video;
  *   - a video in no recording session keeps its events, on that video, through saves;
  *   - with several sessions each event goes to one of them;
+ *   - a session with only placeholder cameras reads like a file with no session;
  *   - renamed elsewhere, a behavior keeps its detector.
  */
 
@@ -347,6 +348,97 @@ console.log('\n6d. Several sessions: each event goes to one of them');
     const onName = (name) => outOnly.events.filter(e => e.video && e.video.filename === name).map(e => e.startFrame);
     check(outOnly.events.length === 6 && eq(onName('b0.mp4'), [110]) && eq(onName('b1.mp4'), [120]) && eq(onName('outside.mp4'), [300]),
         'saved, the other session\'s bouts stay on their videos');
+}
+
+console.log('\n6e. A session with only placeholder cameras counts as no session');
+{
+    const placeholder = (name) => ({ name, rotation: [0, 0, 0], translation: [0, 0, 0], matrix: [[600, 0, 32], [0, 600, 32], [0, 0, 1]], distortions: [0, 0, 0, 0, 0], size: [64, 64] });
+    const real = (name, i) => Object.assign(placeholder(name), { rotation: [0, 0.1 * i, 0], translation: [10 * i, 0, 0] });
+    const uncalibrated = (map, n = Object.keys(map).length) => {
+        const calibration = { metadata: {} };
+        for (let i = 0; i < n; i++) calibration['cam_' + i] = placeholder('c' + i);
+        return { calibration, camcorder_to_video_idx_map: map };
+    };
+    const rear = new EventType({ name: 'rear' });
+    const a = new Identity({ name: 'a' });
+    const bout = (video, start, end = start + 1) => new UserEvent({ type: rear, video, startFrame: start, endFrame: end, subject: a, source: 'manual' });
+    const videoNamed = n => new Video({ filename: n + '.mp4' });
+
+    // What a LUC3D save writes for a file of separate videos: the same result as the file before it.
+    const v = ['one', 'two', 'three'].map(videoNamed);
+    const events = [bout(v[0], 1), bout(v[1], 10), bout(v[2], 20)];
+    const scope = sessionEventScope([uncalibrated({ 0: 0, 1: 1, 2: 2 })], 3, 0);
+    check(eq([...scope.videos], [0]) && eq([...scope.keep], [1, 2]), 'only the first camera\'s events are labels');
+    resetBehaviorState();
+    const s = { name: 's' };
+    readBehaviorMetadata(s, null, asFile([rear], events, v), scope);
+    check(eq(exportBoutRows(s).map(r => r[3]), [1]), 'it shows those');
+    const out = buildBehaviorEvents(SIO, [{ session: s, video: v[0], videos: v, identities: [a] }]);
+    check(eq(out.events.map(e => [e.video.filename, e.startFrame]), [['one.mp4', 1], ['two.mp4', 10], ['three.mp4', 20]]), 'saved, each stays on its camera');
+    check(out.events.every(e => v.includes(e.video)), 'those cameras\' own videos, not copies');
+
+    // One animal's adjacent bouts on different videos stay two bouts.
+    resetBehaviorState();
+    const apart = { name: 'apart' };
+    const adjacent = [bout(v[0], 10, 19), bout(v[1], 20, 29)];
+    readBehaviorMetadata(apart, null, asFile([rear], adjacent, v), scope);
+    const apartOut = buildBehaviorEvents(SIO, [{ session: apart, video: v[0], videos: v, identities: [a] }]);
+    check(eq(apartOut.events.map(e => [e.video.filename, e.startFrame, e.endFrame]), [['one.mp4', 10, 19], ['two.mp4', 20, 29]]), 'one animal\'s adjacent bouts on two videos do not merge');
+
+    // The first camera is the one the session says, wherever its video is in the file.
+    const shuffled = ['outside', 'b', 'a'].map(videoNamed);
+    const sc = sessionEventScope([uncalibrated({ 0: 2, 1: 1 })], 3, 0);
+    check(eq([...sc.videos], [2]) && eq([...sc.keep], [0, 1]), 'the first camera may be any of the file\'s videos');
+    check(sc.cameras && sc.cameras.get(1) === 1 && sc.cameras.get(2) === 0 && !sc.cameras.has(0), 'each camera by its place in the session, a video in no session by none');
+    resetBehaviorState();
+    const sh = { name: 'sh' };
+    readBehaviorMetadata(sh, null, asFile([rear], [bout(shuffled[2], 1), bout(shuffled[1], 10), bout(shuffled[0], 20)], shuffled), sc);
+    check(eq(exportBoutRows(sh).map(r => r[3]), [1]), 'its bouts are the labels');
+    const cams = ['camA', 'camB'].map(videoNamed);
+    const shOut = buildBehaviorEvents(SIO, [{ session: sh, video: cams[0], videos: cams, identities: [a] }]);
+    const placed = shOut.events.map(e => [e.video.filename, e.startFrame]).sort((p, q) => p[1] - q[1]);
+    check(eq(placed, [['camA.mp4', 1], ['camB.mp4', 10], ['outside.mp4', 20]]), 'saved: the camera\'s bout on that camera, the other video\'s on that video');
+
+    // Keys may be camera names or calibration keys, as the loaders allow.
+    const named = uncalibrated({}, 2);
+    named.camcorder_to_video_idx_map = { c1: 0, cam_0: 1 };
+    check(eq([...sessionEventScope([named], 2, 0).videos], [1]), 'a camera may be named by its name or its calibration key');
+
+    // Two uncalibrated sessions: a position is in the session, never in the file.
+    const w = ['a0', 'a1', 'b0', 'b1'].map(videoNamed);
+    const two = [uncalibrated({ 0: 0, 1: 1 }), uncalibrated({ 0: 2, 1: 3 })];
+    const file = asFile([rear], [bout(w[0], 1), bout(w[1], 10), bout(w[2], 100), bout(w[3], 110)], w);
+    resetBehaviorState();
+    const s0 = { name: 's0' }, s1 = { name: 's1' };
+    readBehaviorMetadata(s0, {}, file, sessionEventScope(two, 4, 0));
+    readBehaviorMetadata(s1, {}, file, sessionEventScope(two, 4, 1));
+    check(eq(exportBoutRows(s0).map(r => r[3]), [1]) && eq(exportBoutRows(s1).map(r => r[3]), [100]), 'each session shows its first camera\'s');
+    const c0 = ['a0', 'a1'].map(videoNamed), c1 = ['b0', 'b1'].map(videoNamed);
+    const twoOut = buildBehaviorEvents(SIO, [
+        { session: s0, video: c0[0], videos: c0, identities: [a] },
+        { session: s1, video: c1[0], videos: c1, identities: [a] },
+    ]);
+    const onCams = c0.concat(c1);
+    check(twoOut.events.length === 4 && twoOut.events.every(e => onCams.includes(e.video)), 'saved, each on a camera of its own session, with no copy of a video');
+    check(twoOut.events.find(e => e.startFrame === 110).video === c1[1], 'the second session\'s second camera, though its number in the file is 3');
+
+    // A loader that opens one session keeps the other's on their videos, as any other session's.
+    const scopeOne = sessionEventScope(two, 4, 0, true);
+    check(eq([...scopeOne.videos], [0]) && eq([...scopeOne.keep], [1, 2, 3]) && !scopeOne.cameras.has(2), 'a loader of one session keeps the other session\'s videos as they are');
+
+    // Beside a calibrated session, each goes by its own cameras.
+    const mixed = [{ calibration: { cam_0: real('r0', 0), cam_1: real('r1', 1) }, camcorder_to_video_idx_map: { 0: 0, 1: 1 } }, uncalibrated({ 0: 2, 1: 3 })];
+    check(eq([...sessionEventScope(mixed, 4, 0).videos], [0, 1]), 'a calibrated session reads all its cameras');
+    check(eq([...sessionEventScope(mixed, 4, 1).videos], [2]), 'an uncalibrated one beside it, its first');
+
+    // What is a calibration.
+    const scopeOf = (calibration) => sessionEventScope([{ calibration, camcorder_to_video_idx_map: { 0: 0, 1: 1 } }], 2, 0);
+    check(scopeOf({ cam_0: placeholder('a'), cam_1: real('b', 1) }).videos.size === 2, 'one real camera is enough, as for `hasRealCalibration`');
+    check(scopeOf({ cam_0: Object.assign(placeholder('a'), { rotation: [[1, 0, 0], [0, 1, 0], [0, 0, 1]] }), cam_1: placeholder('b') }).videos.size === 2, 'a rotation matrix is a calibration');
+    check(scopeOf({ cam_0: { name: 'a' }, cam_1: { name: 'b' } }).videos.size === 1, 'cameras with no rotation or translation are placeholders, as the loaders read them');
+    check(sessionEventScope([{ camcorder_to_video_idx_map: { 0: 0, 1: 1 } }], 2, 0).videos.size === 2, 'a session with no calibration entry at all still says which videos go together');
+    check(sessionEventScope([{ calibration: { metadata: {} }, camcorder_to_video_idx_map: { 0: 0, 1: 1 } }], 2, 0).videos.size === 2, 'nor do its metadata make it a camera');
+    check(eq([...sessionEventScope([uncalibrated({}, 2)], 2, 0).videos], [0, 1]), 'cameras naming no video: it reads what no other session names, as before');
 }
 
 console.log('\n7. Renamed elsewhere');

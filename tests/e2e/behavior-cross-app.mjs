@@ -21,7 +21,8 @@
  *
  *  C. A sleap-app project of two separate videos, labelled on both: LUC3D opens the videos
  *     as cameras, so only the first video's bouts are its labels, and a save there leaves
- *     each bout on its own video.
+ *     each bout on its own video. That save gives the file a session of placeholder cameras,
+ *     which changes nothing through sleap-app's save and LUC3D's next one.
  *
  *  D. A recording session plus a video in no session (written by Python sleap-io), with a
  *     bout on that video: LUC3D keeps it there through a save, sleap-app reads it there,
@@ -621,6 +622,22 @@ try {
         return labels.events.map(e => [labels.videos.indexOf(e.video), e.startFrame, e.endFrame, e.subject.name]).sort((a, b) => a[0] - b[0]);
     });
     check(eq(onVideos, [[0, 10, 19, 'mouse1'], [1, 10, 29, 'mouse2']]), 'each bout is still on its own video', onVideos);
+    const fileC3 = await appSave(app);
+    check(await luc3dLoad(luc3d, fileC3, 'two-videos-3.slp') === true, 'saved there and opened in LUC3D again');
+    l = await luc3dState(luc3d);
+    check(eq(l.bouts.map(r => r.slice(1, 5)), [['mouse1', '', 10, 19]]), 'its labels are still the first video\'s', l.bouts);
+    const fileC4 = await luc3dSave(luc3d);
+    check(await appLoad(app, fileC4, 'two-videos-4.slp') === true, 'saved there and back in sleap-app');
+    const onVideosC4 = await app.evaluate(() => {
+        const { labels } = window.sleap.store.getState();
+        return labels.events.map(e => [labels.videos.indexOf(e.video), e.startFrame, e.endFrame, e.subject.name]).sort((a, b) => a[0] - b[0]);
+    });
+    check(eq(onVideosC4, [[0, 10, 19, 'mouse1'], [1, 10, 29, 'mouse2']]), 'each bout is on its own video after all that', onVideosC4);
+    const pathC4 = path.join(tmp, 'two-videos-4.slp');
+    fs.writeFileSync(pathC4, fileC4);
+    py = pythonReads(pathC4);
+    const namesC4 = await app.evaluate(() => window.sleap.store.getState().labels.videos.map(v => String(v.filename)));
+    check(eq(py.onVideos, [[namesC4[0], 10], [namesC4[1], 10]]), 'and Python reads them there', py.onVideos);
 
     // =================================================================
     console.log('\n-- D. a session plus a video in no session, through both apps --');
