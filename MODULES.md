@@ -2931,15 +2931,17 @@ kd-tree (points copied in tree order), core distances (k-th nearest other point,
 `minSamples`), the minimum spanning tree of mutual reachability by Borůvka with
 pruning (subtrees all one component, or too far), single linkage, the condensed tree
 (`minClusterSize`; a distance of 0 counts as the smallest above 0, so identical points
-do not mean infinite stability), Excess of Mass or leaf selection, labels (−1 noise).
-The hierarchy does not depend on the cluster size, so `clusterAtSize` re-runs only the
-last steps. Deterministic; pure and import-free; no JS object per point.
+do not mean infinite stability), Excess of Mass selection, labels (−1 noise). The
+hierarchy does not depend on the cluster size, so `clusterAtSize` re-runs only the last
+steps. `bestTreeOverlaps` asks whether a condensed tree holds a group of points at any
+level, the root aside. Deterministic; pure and import-free; no JS object per point.
 
 **Exports.** `buildKdTree(X, n, d, leafSize)`, `coreDistances2(tree, k)`,
 `mutualReachabilityMst(tree, core2)` → `{a, b, w}`, `singleLinkage(mst, n)`,
-`condenseTree(L, minClusterSize)`, `selectClusters(cond, leaf)` → `{labels, count, noise,
-stability}`, `clusterAtSize(linkage, minClusterSize, leaf)`, `hdbscanLinkage(X, n, d,
-{minSamples})`, `hdbscan(X, n, d, {minClusterSize, minSamples})`, `mstWeight(mst)`.
+`condenseTree(L, minClusterSize)`, `selectClusters(cond)` → `{labels, count, noise,
+stability}`, `bestTreeOverlaps(labels, count, cond)`, `clusterAtSize(linkage, minClusterSize)`,
+`hdbscanLinkage(X, n, d, {minSamples})`, `hdbscan(X, n, d, {minClusterSize, minSamples})`,
+`mstWeight(mst)`.
 
 **Imports.** Nothing. **Imported by** `pose/behavior-embedding.js`. **Tests.**
 `tests/test-behavior-discovery.mjs` §1 (brute-force Prim; labels equal the Python package's
@@ -2972,15 +2974,19 @@ value is the mean; a row missing over `MAX_MISSING_SHARE` of its features sits o
 constant or mostly missing feature is left out), then PCA to `VARIANCE_KEPT` (70%) with
 `symmetricEigen` up to `PCA_EXACT_MAX` features, `fitPCA`'s top `PCA_TOP` past that, no
 whitening. `clusterLayouts`: HDBSCAN on two layouts at each size of `clusterSizes`
-(0.5–1% of the bins, from a floor); a cluster counts only where the other layout has one
-sharing `MIN_REPEAT` of their bins (`bestOverlaps`, Jaccard), and the size kept has the most
-clusters that repeat among those covering nearly the most bins. UMAP + HDBSCAN finds
-clusters even in Gaussian noise (3 to 91, measured), which is why. Numbered by size.
+(0.5–1% of the bins, from a floor); a cluster counts only where the second layout's tree
+holds a group sharing `MIN_REPEAT` of their bins (`bestTreeOverlaps`, Jaccard) and it has
+bins from `MIN_EPISODES` separate stretches of time (`clusterEpisodes`), or `BIG_CLUSTER_SHARE`
+of all the bins, and the size kept has
+the most such clusters among those covering nearly the most bins. UMAP + HDBSCAN finds
+clusters even in Gaussian noise (3 to 91, measured) and in one long rest, which is why.
+Numbered by size.
 
 **Exports.** `VARIANCE_KEPT`, `Z_LIMIT`, `MAX_MISSING_SHARE`, `PCA_EXACT_MAX`, `PCA_TOP`,
-`SPEED_LOG_OFFSET`, `MIN_REPEAT`, `standardizeAndReduce(rows, M, F, {variance, zLimit,
-maxMissing, logFeatures})`, `clusterSizes(n, share, floor)`, `bestOverlaps(a, b, countA,
-countB)`, `clusterLayouts(E, E2, n, d, {share, floor, minSamples, minRepeat})`.
+`SPEED_LOG_OFFSET`, `MIN_REPEAT`, `MIN_EPISODES`, `EPISODE_GAP_SECONDS`, `BIG_CLUSTER_SHARE`,
+`standardizeAndReduce(rows, M, F, {variance, zLimit, maxMissing, logFeatures})`,
+`clusterSizes(n, share, floor)`, `clusterEpisodes(labels, count, series, times, order, gap)`,
+`clusterLayouts(E, E2, n, d, {share, floor, minSamples, minRepeat, minEpisodes, series, times})`.
 
 **Imports.** `./id-switch-check.js` (`symmetricEigen`, `fitPCA`), `./hdbscan.js`. **Imported
 by** `pose/behavior-discovery-worker.js`, `pose/behavior-discovery.js` (dynamically, inline).
@@ -2996,13 +3002,14 @@ best wins, −1 where the bin has a pose on under half its frames — B-SOiD's f
 `knnRows`: exact neighbours, the row itself first, the same however rows are split into
 jobs. `trainClusterTrees`: a cluster's trees against everything else (`trainTree`,
 seeded from (seed, cluster, tree)). `heldOutAgreement`: the share of held-out rows whose
-best forest is their own cluster's. Pure, and imports only the features and forests, so the
-behavior worker runs exactly this.
+best forest is their own cluster's. `randomView`: rows on two random orthonormal directions,
+the second layout's start. Pure, and imports only the features and forests, so the behavior
+worker runs exactly this.
 
 **Exports.** `BIN_SECONDS`, `binFrames`, `binCenters(T, w)`, `discoveryFeatureNames(catalog)`,
 `speedFeatures(catalog, names)`, `binRowsChunk(spec, chunk, {names, w, rows})`,
 `clusterLabelsChunk(spec, chunk, {names, w}, forests)`, `knnRows({Y, n, d}, range, k)`,
-`trainClusterTrees(shared, job)`, `heldOutAgreement(forestsTrees, data, rows)`.
+`trainClusterTrees(shared, job)`, `heldOutAgreement(forestsTrees, data, rows)`, `randomView(Y, n, d, seed)`.
 
 **Imports.** `./behavior-features.js`, `./behavior-forest.js`. **Imported by**
 `pose/behavior-pool.js`, `pose/behavior-worker.js`, `pose/behavior-discovery.js`. **Tests.**
@@ -3025,8 +3032,8 @@ not in the startup graph.
 features. `discoverBehaviors`: per session one context at a time, the usable bins, the
 ≤ `MAX_BINS` with the smallest seeded hash; rows on the pool in a fixed chunk layout;
 standardize + PCA; exact neighbours on the pool; two UMAP layouts (n_neighbors 60, min_dist 0;
-one from the principal components, one from random positions) side by side; HDBSCAN keeping
-the clusters that repeat, never smaller than `clusterFloor` (UMAP's clumps); a forest per
+one from the principal components, one from a random view) side by side; HDBSCAN keeping
+the clusters that come back and recur, never smaller than `clusterFloor` (UMAP's clumps); a forest per
 cluster plus one for the bins in no cluster, with whole 10 s stretches held out; every
 frame's bin labelled, frames that look like the bins in no cluster left without a state.
 Split a behavior (`opts.split`): the same on that behavior's present frames, states only
@@ -12542,8 +12549,10 @@ cached per layer version (no frame walk). `setupBehaviorStates` wires the
 section and its ⓘ, and makes every states change `markDirty()` and repaint
 (`{states: true}`), showing a layer just imported. A discovery layer says "cluster", its
 number steps through examples (longest first, boxed on the video), its row says how well it
-repeats and what stands out, and from a run in this page it has its map (a click goes to
-that moment). Promote can also make a new ethogram entry named after the checked states.
+repeats, from how many separate stretches of time, and what stands out, and from a run in
+this page it has its map (a press goes to that moment; the canvas stays across repaints and
+is drawn only when the run, the selected state or its size changed). Promote can also make a
+new ethogram entry named after the checked states.
 
 **Exports.** `STATES_GROUP_NAME`, `shownLayer`, `stateTimelineRows`,
 `renderStatesSection`, `setupBehaviorStates`.

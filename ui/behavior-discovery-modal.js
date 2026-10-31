@@ -25,10 +25,11 @@ import { stateLayer, cleanLayerName } from '../pose/behavior-states.js';
 import { setStatus } from '../import-export/save-load.js';
 
 var INFO = 'Groups each animal\'s poses into clusters with no labels, as B-SOiD does: features in 100 ms bins, PCA, UMAP, ' +
-    'HDBSCAN, then a forest per cluster labels every frame. The clusters are states to look at, name and promote: ' +
-    'nothing says they are behaviors until you have watched them.';
+    'HDBSCAN, then a forest per cluster labels every frame. A cluster counts only if a second layout finds it again and it happens ' +
+    'at several separate times. They are states to look at, name and promote: nothing says they are behaviors until you have watched them.';
 
 var PREFS_KEY = 'lucid.behaviorDiscovery';
+var SECTIONS_KEY = 'lucid.behaviorDiscoverySections';
 
 function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -107,8 +108,7 @@ export function showBehaviorDiscoveryModal(opts) {
     var info = modal.querySelector('#bdiInfo');
     info.innerHTML = ICON_INFO;
     setInfoTip(info, INFO);
-    var section = modal.querySelector('#bdiSettingsSection');
-    if (section) persistSectionState(section);
+    persistSectionState('bdiSettingsSection', SECTIONS_KEY);
 
     var whatEl = modal.querySelector('#bdiWhat'), nameEl = modal.querySelector('#bdiName'), scopeEl = modal.querySelector('#bdiScope');
     var nameTouched = false;

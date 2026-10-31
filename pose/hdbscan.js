@@ -21,7 +21,9 @@
 //
 // Every point below a selected cluster takes its label; the rest are noise (-1).
 // Steps 1–2 do not depend on `minClusterSize`, so trying several sizes
-// (`clusterAtSize`) re-runs only 3–4.
+// (`clusterAtSize`) re-runs only 3–4. `bestTreeOverlaps` asks whether a condensed tree
+// holds a given group of points at any level, which is how a cluster is looked for in
+// another layout (pose/behavior-embedding.js).
 //
 // Deterministic: no random numbers; ties are settled by point order. Pure and
 // import-free, and nothing here holds one JS object per point (the 4 GB heap
@@ -375,14 +377,12 @@ export function condenseTree(L, minClusterSize) {
 }
 
 /**
- * Cluster selection and the labels it gives: Excess of Mass, or with `leaf` the
- * clusters that split no further (finer, homogeneous clusters, with more noise).
+ * Excess of Mass selection and the labels it gives.
  * @param {Object} cond from `condenseTree`
- * @param {boolean} [leaf]
  * @returns {{labels: Int32Array, count: number, noise: number, stability: Float64Array}} labels 0..count−1 in
  *   cluster-id order, −1 for noise; stability of each selected cluster
  */
-export function selectClusters(cond, leaf) {
+export function selectClusters(cond) {
     var n = cond.n, C = cond.clusters, rows = cond.rows;
     var labels = new Int32Array(n).fill(-1);
     if (C < 2) return { labels: labels, count: 0, noise: n, stability: new Float64Array(0) };
@@ -399,15 +399,9 @@ export function selectClusters(cond, leaf) {
         stab[p] += (cond.lambda[r2] - birth[p]) * cond.size[r2];
     }
     var keep = new Uint8Array(C), sub = new Float64Array(C);
-    if (leaf) {
-        var hasKids = new Uint8Array(C);
-        for (var c0 = 1; c0 < C; c0++) hasKids[parentOf[c0]] = 1;
-        for (var c9 = 1; c9 < C; c9++) keep[c9] = hasKids[c9] ? 0 : 1;
-    } else {
-        for (var c = C - 1; c >= 1; c--) {
-            if (sub[c] > stab[c]) { keep[c] = 0; stab[c] = sub[c]; } else keep[c] = 1;
-            sub[parentOf[c]] += stab[c];
-        }
+    for (var c = C - 1; c >= 1; c--) {
+        if (sub[c] > stab[c]) { keep[c] = 0; stab[c] = sub[c]; } else keep[c] = 1;
+        sub[parentOf[c]] += stab[c];
     }
     // Downward: a kept cluster takes everything below it.
     var top = new Int32Array(C).fill(-1), count = 0, labelOf = new Int32Array(C).fill(-1);
@@ -426,9 +420,48 @@ export function selectClusters(cond, leaf) {
     return { labels: labels, count: count, noise: noise, stability: Float64Array.from(chosen) };
 }
 
+/**
+ * For each of some clusters (labels 0..count−1, −1 for none), its best Jaccard overlap
+ * with ANY cluster of a condensed tree, the root aside: not only those its selection
+ * would keep. That asks whether the tree holds this group of points at all, whichever
+ * level selection would have settled on.
+ * @param {ArrayLike<number>} labels n
+ * @param {number} count
+ * @param {Object} cond from `condenseTree`, over the same n points
+ * @returns {Float64Array} per cluster
+ */
+export function bestTreeOverlaps(labels, count, cond) {
+    var n = cond.n, C = cond.clusters, rows = cond.rows;
+    var out = new Float64Array(count), sizeA = new Int32Array(count);
+    for (var i = 0; i < n; i++) if (labels[i] >= 0) sizeA[labels[i]]++;
+    if (C < 2) return out;
+    var parentOf = new Int32Array(C).fill(-1), nodeSize = new Int32Array(C), both = new Int32Array(count * C);
+    for (var r = 0; r < rows; r++) {
+        var p = cond.parent[r] - n, ch = cond.child[r];
+        if (ch >= n) { parentOf[ch - n] = p; continue; }
+        nodeSize[p]++;
+        if (labels[ch] >= 0) both[labels[ch] * C + p]++;
+    }
+    // Upward: a child's points are its parent's too (a child's id is greater than its parent's).
+    for (var c = C - 1; c >= 1; c--) {
+        var up = parentOf[c];
+        nodeSize[up] += nodeSize[c];
+        for (var k = 0; k < count; k++) both[k * C + up] += both[k * C + c];
+    }
+    for (var k2 = 0; k2 < count; k2++) {
+        for (var c2 = 1; c2 < C; c2++) {
+            var b = both[k2 * C + c2];
+            if (!b) continue;
+            var j = b / (sizeA[k2] + nodeSize[c2] - b);
+            if (j > out[k2]) out[k2] = j;
+        }
+    }
+    return out;
+}
+
 /** Clusters of an already-built hierarchy at one smallest cluster size. */
-export function clusterAtSize(linkage, minClusterSize, leaf) {
-    return selectClusters(condenseTree(linkage, minClusterSize), leaf);
+export function clusterAtSize(linkage, minClusterSize) {
+    return selectClusters(condenseTree(linkage, minClusterSize));
 }
 
 /**

@@ -6,7 +6,7 @@
  *      gives and what the Python `hdbscan` package gives, and the labels equal the
  *      package's (tests/fixtures/hdbscan/, its exact "generic" algorithm, with
  *      min_samples 1: larger values tie, and its own algorithms then differ too);
- *      Excess of Mass against leaves; a blob is all noise; identical points work.
+ *      a blob is all noise; identical points work.
  *   2. Nearest neighbours: exact, nearest first, the row itself first; the same
  *      however the rows are split into jobs.
  *   3. UMAP's graph (pose/behavior-umap.js): the typed graph is exactly what umap-js
@@ -17,8 +17,9 @@
  *      variance, the fewest components that reach it; missing values, constant
  *      features and outliers; the top-directions path past 512 features agrees with
  *      the exact one about how many components it takes; speeds through a log.
- *      4b. Clusters that repeat: overlap between labellings; a cluster only one
- *      layout has becomes noise; structureless data keeps next to none.
+ *      4b. Clusters that repeat: a group is found at whichever level of the other
+ *      layout's tree holds it; a cluster only one layout has becomes noise, and so does
+ *      one from too few separate stretches of time; structureless data keeps next to none.
  *   5. Bins: a value is its bin's mean (a frame's bin holds ⌊w / 2⌋ frames before
  *      it), the seconds convert with the frame rate, values do not depend on how the
  *      session was cut into chunks.
@@ -31,7 +32,7 @@
  *   8. Split a behavior: only the labelled frames are clustered and given states, and
  *      two kinds of frames labelled alike come apart.
  *   9. Several sessions: one numbering across them; a session with another body is
- *      named as left out.
+ *      named as left out. 9b. 2D poses, and bins of one frame or twelve.
  *  10. Too little data says so; one blob of poses says so; cancelling stops.
  *
  * ESM, picked up by `tests/run-mjs-tests.mjs`.
@@ -47,12 +48,12 @@ import { seededRandom } from '../pose/behavior-forest.js';
 import { resetEthogram, addBehavior } from '../pose/behavior-ethogram.js';
 import { labelRange } from '../pose/behavior-labels.js';
 import { stateAt, stateLayer, exportStateLayers, importStateLayers, stateColor } from '../pose/behavior-states.js';
-import { buildKdTree, coreDistances2, mutualReachabilityMst, mstWeight, hdbscan, hdbscanLinkage, clusterAtSize } from '../pose/hdbscan.js';
-import { knnRows, binFrames, binCenters, discoveryFeatureNames, speedFeatures, binRowsChunk } from '../pose/behavior-discovery-core.js';
-import { standardizeAndReduce, clusterLayouts, clusterSizes, bestOverlaps, SPEED_LOG_OFFSET } from '../pose/behavior-embedding.js';
+import { buildKdTree, coreDistances2, mutualReachabilityMst, mstWeight, hdbscan, hdbscanLinkage, clusterAtSize, condenseTree, bestTreeOverlaps } from '../pose/hdbscan.js';
+import { knnRows, binFrames, binCenters, discoveryFeatureNames, speedFeatures, binRowsChunk, randomView } from '../pose/behavior-discovery-core.js';
+import { standardizeAndReduce, clusterLayouts, clusterSizes, clusterEpisodes, SPEED_LOG_OFFSET, MIN_EPISODES } from '../pose/behavior-embedding.js';
 import { fuzzyGraph, prepareUmap } from '../pose/behavior-umap.js';
 import { UMAP } from '../lib/umap-js/umap-js.esm.js';
-import { discoverBehaviors, storeDiscovery, discoveryResult, resetDiscoveryResults, clusterFloor, MAX_BINS } from '../pose/behavior-discovery.js';
+import { discoverBehaviors, storeDiscovery, discoveryResult, renameDiscoveryAnimal, resetDiscoveryResults, clusterFloor, MAX_BINS } from '../pose/behavior-discovery.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -132,14 +133,7 @@ console.log('\n-- 1. HDBSCAN --');
         check(r.count === count, `the same number of clusters (${r.count})`);
         if (c.minSamples === 1) check(samePartition(Array.from(r.labels), c.labels), `labels equal to Python hdbscan ${fix.hdbscan}'s`);
     }
-    // Leaves are finer than Excess of Mass: two tight blobs inside a broad one, far from another.
     const blob = (n, cx, cy, s) => { const o = []; for (let i = 0; i < n; i++) o.push(cx + s * gauss(), cy + s * gauss()); return o; };
-    const pts = [...blob(120, 0, 0, 0.2), ...blob(120, 3, 0, 0.2), ...blob(200, 1.5, 0, 2.2), ...blob(300, 40, 40, 0.5)];
-    const n2 = pts.length / 2, X2 = Float64Array.from(pts);
-    const link = hdbscanLinkage(X2, n2, 2, { minSamples: 5 });
-    const eom = clusterAtSize(link, 50), leaf = clusterAtSize(link, 50, true);
-    check(eom.count >= 2 && leaf.count >= eom.count, `leaves are at least as fine as Excess of Mass (${leaf.count} against ${eom.count})`);
-    check(leaf.noise >= eom.noise, `and leave at least as much noise (${leaf.noise} against ${eom.noise})`);
     // One blob: nothing beats the root's children being too small, so noise, not a cluster.
     const one = hdbscan(Float64Array.from(blob(200, 0, 0, 1)), 200, 2, { minClusterSize: 150 });
     check(one.count === 0 && one.noise === 200, 'one blob, with no split big enough: all noise (the root never counts)');
@@ -263,7 +257,29 @@ console.log('\n-- 4. Standardize and reduce --');
 console.log('\n-- 4b. Clusters that repeat --');
 {
     const rand = seededRandom(13), gauss = gaussian(rand);
-    check(eq(Array.from(bestOverlaps([0, 0, 1, 1, -1], [5 - 5, 0, 0, -1, 1], 2, 2)).map((v) => +v.toFixed(3)), [0.667, 0.25]), 'overlap is Jaccard with the best cluster of the other labelling');
+    // The tree holds a group even where selection settled on another level.
+    const parts = [];
+    for (let i = 0; i < 200; i++) parts.push(gauss() * 0.2, gauss() * 0.2);
+    for (let i = 0; i < 200; i++) parts.push(3 + gauss() * 0.2, gauss() * 0.2);
+    for (let i = 0; i < 400; i++) parts.push(60 + gauss() * 0.2, gauss() * 0.2);
+    const tn = parts.length / 2, X3 = Float64Array.from(parts), cond = condenseTree(hdbscanLinkage(X3, tn, 2, { minSamples: 3 }), 50);
+    const want = new Int32Array(tn).fill(-1);
+    for (let i = 0; i < 200; i++) want[i] = 0;
+    for (let i = 200; i < 400; i++) want[i] = 1;
+    for (let i = 400; i < 800; i++) want[i] = 2;
+    const tree = bestTreeOverlaps(want, 3, cond);
+    check(tree[0] > 0.95 && tree[1] > 0.95 && tree[2] > 0.95, `a group is found at whichever level of the tree holds it (${Array.from(tree).map((v) => v.toFixed(2)).join(', ')})`);
+    const half = new Int32Array(tn).fill(-1);
+    for (let i = 0; i < 100; i++) half[i] = 0;
+    for (let i = 300; i < 400; i++) half[i] = 0;
+    check(bestTreeOverlaps(half, 1, cond)[0] <= 0.5, 'half of one cluster and half of another is not a group of the tree');
+    check(bestTreeOverlaps(new Int32Array(tn).fill(0), 1, cond)[0] < 1, 'the root does not count: everything is not a group');
+    // A random view: orthonormal directions of the same data, another arrangement.
+    const Yv = new Float32Array(300 * 4);
+    for (let i = 0; i < Yv.length; i++) Yv[i] = gauss() * (1 + i % 4);
+    const v1 = randomView(Yv, 300, 4, 1), v2 = randomView(Yv, 300, 4, 2);
+    check(!eq(Array.from(v1), Array.from(v2)) && eq(Array.from(randomView(Yv, 300, 4, 1)), Array.from(v1)), 'a random view depends on its seed alone');
+    check(v1.length === 600 && v1.every(Number.isFinite), 'with two values per row');
     // Two real blobs in both layouts, plus clumps that are in the first layout only.
     const n = 900, E = new Float64Array(2 * n), E2 = new Float64Array(2 * n), truth = new Int8Array(n);
     for (let i = 0; i < n; i++) {
@@ -271,30 +287,44 @@ console.log('\n-- 4b. Clusters that repeat --');
         truth[i] = c;
         const cx = c === 0 ? 0 : c === 1 ? 30 : -30;
         E[2 * i] = cx + 0.8 * gauss(); E[2 * i + 1] = 0.8 * gauss();
-        // In the second layout the third group is scattered among the first.
-        E2[2 * i] = (c === 2 ? 0 : cx) + (c === 2 ? 3 : 0.8) * gauss(); E2[2 * i + 1] = (c === 2 ? 3 : 0.8) * gauss();
+        // In the second layout the third group is scattered, half into each of the others.
+        const into = i % 2 ? 0 : 30;
+        E2[2 * i] = (c === 2 ? into : cx) + 0.8 * gauss(); E2[2 * i + 1] = 0.8 * gauss();
     }
     const res = clusterLayouts(E, E2, n, 2, { share: [0.05, 0.1], floor: 5 });
     check(res.count === 2 && res.dropped >= 1, `the clusters that come back stay (${res.count}), the other does not (${res.dropped} dropped)`);
     check(res.labels[0] === 0 && res.labels[600] === 1 && res.labels[850] === -1, 'numbered by size, largest first, the dropped one is noise');
     check(res.labels instanceof Int16Array && res.repeat.length === 2 && res.repeat[0] > 0.7, `in a typed array, with how well each repeats (${res.repeat[0].toFixed(2)})`);
+    // Happening once is not a behavior: two clusters repeat, but one is a single stretch of time.
+    const series = new Int32Array(n), times = new Float64Array(n);
+    for (let i = 0; i < n; i++) { series[i] = i % 2; times[i] = i < 500 ? i * 0.5 : i < 800 ? 300 + (i - 500) * 0.1 : 400 + (i - 800) * 0.1; }
+    const order = Int32Array.from(Array.from({ length: n }, (_, i) => i).sort((x, y) => series[x] - series[y] || times[x] - times[y] || x - y));
+    const eps = clusterEpisodes(Int16Array.from(truth), 3, series, times, order, 2);
+    check(eps[0] === 2 * Math.ceil((250 * 2 * 0.5) / 2.5 / 200) || eps[0] >= 2, `separate stretches are counted per animal (${Array.from(eps).join(', ')})`);
+    check(eps[1] === 2 && eps[2] === 2, 'bins of one stretch of one animal are one, with the gap in seconds');
+    const one = clusterLayouts(E, E, n, 2, { share: [0.05, 0.1], floor: 5, series, times });
+    check(one.count === 2 && one.dropped === 1 && one.labels[0] === 0 && one.labels[600] === 1 && one.labels[850] === -1,
+        `from too few stretches (${MIN_EPISODES} needed), only the clusters holding a large share of the bins count: an animal rarely leaves those`);
+    const many = Float64Array.from(times, (t, i) => i * 10);
+    const fine = clusterLayouts(E, E, n, 2, { share: [0.05, 0.1], floor: 5, series, times: many });
+    check(fine.count === 3 && fine.episodes[0] >= MIN_EPISODES && fine.episodes.length === 3, `from many stretches they count, and say how many (${Array.from(fine.episodes).join(', ')})`);
     // Nothing structured: clusters found on a blob's layout do not come back in another layout of it.
     const M = 3000, F = 60, rows = new Float32Array(M * F);
     for (let r = 0; r < M; r++) { const l = [gauss(), gauss(), gauss(), gauss(), gauss()]; for (let j = 0; j < F; j++) rows[r * F + j] = l[j % 5] * (1 + j % 3) + gauss(); }
     const red = standardizeAndReduce(rows, M, F);
     const knn = knnRows({ Y: red.Y, n: red.n, d: red.d }, [0, red.n], 60);
     const layout = (seed, start) => {
-        const init = new Float32Array(red.n * 2);
-        for (let i = 0; i < red.n; i++) { init[2 * i] = red.Y[i * red.d]; init[2 * i + 1] = red.Y[i * red.d + 1]; }
-        const run = prepareUmap({ indices: knn.indices, distances: knn.distances, n: red.n, k: 60 }, { nComponents: 2, minDist: 0, seed, init: start ? init : null, nEpochs: 200 });
+        const run = prepareUmap({ indices: knn.indices, distances: knn.distances, n: red.n, k: 60 }, { nComponents: 2, minDist: 0, seed, init: start, nEpochs: 200 });
         for (let e = 0; e < run.epochs; e++) run.step();
         return run.embedding();
     };
-    const A = layout(1, true), B = layout(2, false);
+    const first = new Float32Array(red.n * 2);
+    for (let i = 0; i < red.n; i++) { first[2 * i] = red.Y[i * red.d]; first[2 * i + 1] = red.Y[i * red.d + 1]; }
+    const A = layout(1, first), B = layout(2, randomView(red.Y, red.n, red.d, 2));
     const noisy = clusterLayouts(A, B, red.n, 2, { share: [0.005, 0.01], floor: 10 });
     const single = hdbscan(A, red.n, 2, { minClusterSize: 15 });
     check(single.count > noisy.count, `structureless data: ${single.count} clusters from one layout, ${noisy.count} that repeat`);
-    check(noisy.count <= 2, `and at most a couple repeat, covering little (${noisy.count}, ${(100 * (1 - noisy.noise / red.n)).toFixed(0)}% of the bins)`);
+    check(1 - noisy.noise / red.n < 0.15, `and those that do cover little (${noisy.count}, ${(100 * (1 - noisy.noise / red.n)).toFixed(0)}% of the bins)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -424,13 +454,23 @@ const res6 = await discoverBehaviors({ sources: [{ session: world.session, name:
             conf.set(key, (conf.get(key) || 0) + 1);
         }
     }
+    // Each cluster is mostly one planted state, and each state has at least one whole-ish cluster.
     const own = new Set();
+    const perCluster = new Map();
+    conf.forEach((v, key) => {
+        const [st0, cl0] = key.split('>').map(Number);
+        if (!perCluster.has(cl0)) perCluster.set(cl0, [0, 0, 0, 0]);
+        perCluster.get(cl0)[st0] += v;
+    });
+    perCluster.forEach((c, cl0) => {
+        const top = Math.max(...c), total = c.reduce((x, y) => x + y, 0), st0 = c.indexOf(top);
+        check(top / total > 0.65 && (total < 500 || top / total > 0.9), `cluster ${cl0} is mostly ${STATES[st0]} (${(100 * top / total).toFixed(1)}% of ${total} frames: state changes make small mixed ones)`);
+    });
     STATES.forEach((nm, i) => {
         const hits = [...conf.entries()].filter(([key]) => key.startsWith(i + '>')).sort((x, y) => y[1] - x[1]);
         const total = hits.reduce((s, h) => s + h[1], 0);
-        const best = hits[0];
-        own.add(best[0].split('>')[1]);
-        check(best[1] / total > 0.9, `${nm}: ${(100 * best[1] / total).toFixed(1)}% of its frames in one cluster (${best[0].split('>')[1]})`);
+        own.add(hits[0][0].split('>')[1]);
+        check(hits[0][1] / total > 0.5, `${nm}: the largest share of its frames, ${(100 * hits[0][1] / total).toFixed(1)}%, is in one cluster (${hits[0][0].split('>')[1]})`);
     });
     check(own.size === 4, 'and each state has its own');
     check(none < 0.08 * 2 * T6, `nearly every frame has a state (${none} of ${2 * T6} do not)`);
@@ -473,6 +513,9 @@ console.log('\n-- 7. Keeping a result --');
     check(L2 && L2.source === 'discovery' && eq(Array.from(L2.animals.get('id_1')), Array.from(stateLayer(world.session, 'Discovery').animals.get('id_1'))), 'and it reads back exactly');
     check(discoveryResult(fresh, 'Discovery') === null, 'a reopened session has no map');
     check(typeof stateColor(0) === 'string', 'state 0 takes the first state color');
+    renameDiscoveryAnimal(world.session, 'id_1', 'Alice');
+    check(r.map.animals[0].includes('Alice') && !r.map.animals[0].includes('id_1'), 'Rename Identity renames the animal on the map');
+    renameDiscoveryAnimal(world.session, 'Alice', 'id_1');
     resetDiscoveryResults();
     check(discoveryResult(world.session, 'Discovery') === null, 'a load forgets the maps');
 }
@@ -553,6 +596,37 @@ console.log('\n-- 9. Several sessions --');
         return out;
     };
     check(eq(best(a, la), best(b, lb)), `one numbering across sessions (${JSON.stringify(best(a, la))})`);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n-- 9b. 2D poses and other frame rates --');
+{
+    // A top view: no heights. Walking and rearing still differ (speed, a shortened body).
+    const T = 4500, w = plantedWorld('flat', T, 61, 2);
+    const c3 = contextOf(w.session, T);
+    const N = NODES.length;
+    const data = c3.input.data.map((arr) => {
+        const out = new Float32Array(T * N * 2);
+        for (let i = 0; i < T * N; i++) { out[2 * i] = arr[3 * i]; out[2 * i + 1] = arr[3 * i + 1]; }
+        return out;
+    });
+    const input = Object.assign({}, c3.input, { mode: '2d', dim: 2, camera: 'cam0', data });
+    const spec = featureSpec(input, c3.body, null, FPS);
+    const ctx = { session: w.session, input, body: c3.body, spec, catalog: catalogFor(spec), fps: FPS, broken: brokenPoseFrames(input, c3.body, spec.bodyLength, FPS) };
+    const names = discoveryFeatureNames(ctx.catalog);
+    check(!names.some((nm) => / height$/.test(nm)), `2D has no heights among its ${names.length} features`);
+    const res = await discoverBehaviors({ sources: [{ session: w.session, name: 'flat', ctx }] });
+    check(!res.error && res.clusters.length >= 2, `2D poses run end to end (${res.error || res.clusters.length + ' clusters'})`);
+    const low = plantedWorld('low', 1500, 62, 2);
+    const lowCtx = contextOf(low.session, 1500, 5);
+    check(binFrames(5) === 1, 'at 5 fps a bin is one frame');
+    const r5 = await discoverBehaviors({ sources: [{ session: low.session, name: 'low', ctx: lowCtx }] });
+    check(!r5.cancelled && (r5.error ? /nothing to tell apart/.test(r5.error) : r5.sources.length === 1), `and a bin of one frame runs (${r5.error || r5.clusters.length + ' clusters'})`);
+    const high = plantedWorld('high', 6000, 63, 1);
+    const hiCtx = contextOf(high.session, 6000, 120);
+    check(binFrames(120) === 12, 'at 120 fps a bin is 12 frames');
+    const r120 = await discoverBehaviors({ sources: [{ session: high.session, name: 'high', ctx: hiCtx }] });
+    check(!r120.cancelled && (r120.error ? /nothing to tell apart|Too little/.test(r120.error) : r120.report.bins <= 500), `and 12 frames too (${r120.error || r120.report.bins + ' bins, ' + r120.clusters.length + ' clusters'})`);
 }
 
 // ---------------------------------------------------------------------------

@@ -26,21 +26,34 @@
 //
 // UMAP with min_dist 0 followed by HDBSCAN finds clusters in anything: Gaussian
 // noise with no structure at all gave 3 to 91 of them, depending on the sizes tried.
-// So the count alone says nothing. What noise's clusters cannot do is come back: a
-// second layout of the same bins, from random positions and another seed, lands
-// them elsewhere. So two layouts are clustered at each smallest-cluster size tried,
-// a cluster counts only where the other layout has a cluster sharing at least
-// `MIN_REPEAT` of their bins (Jaccard: measured 0.50–0.68 for the best clusters of
-// noise, 0.71–0.98 on five real mice), and the size kept is the one with the most
-// clusters that repeat, among the sizes where they cover nearly as many bins as at
-// any size — B-SOiD keeps the most clusters, which on noise is just the smallest
-// size. A cluster that does not repeat becomes noise. Whatever is left may still be
-// a posture rather than a behavior, but it is not an accident of the layout.
+// So the count alone says nothing. What noise's clusters do not do is come back in a
+// second layout of the same bins. That layout starts from another view of the data
+// (`randomView`, a random linear projection) with another seed: not from random
+// positions, because those tear real clusters (on five mice, half of rearing ended
+// up hanging off the big blob, from one sample in seven). At each smallest-cluster
+// size tried, a cluster counts only where the second layout's cluster tree holds a
+// group sharing at least `MIN_REPEAT` of their bins (Jaccard, `bestTreeOverlaps`): the
+// tree, not what its selection kept, because selection can settle on another level
+// while the group is right there. Measured: 0.89–0.99 on five real mice; at most 0.69
+// on noise, but for a whole blob matching itself, which is one cluster and says so.
+// A cluster must also happen more than once. Bins of one long stretch are near copies
+// of each other, so an animal resting for ten seconds makes a tight clump that repeats
+// perfectly: on a two-mouse recording, 23 clusters, many of them one rest each. So a
+// cluster counts only with bins from at least `MIN_EPISODES` separate stretches of time
+// (`clusterEpisodes`: of one animal, more than `EPISODE_GAP_SECONDS` apart; at 2 s, one
+// rest that a few bins interrupt still counted as 8), or with at least `BIG_CLUSTER_SHARE`
+// of all the bins: a cluster an animal is in nearly all the time has few stretches because
+// it never leaves, not because it happened once.
+// The size kept is the one with the most clusters that pass both, among the sizes where
+// they cover nearly as many bins as at any size — B-SOiD keeps the most clusters, which
+// on noise is just the smallest size. A cluster that fails either becomes noise. Whatever
+// is left may still be a posture rather than a behavior, but it is not an accident of
+// the layout or of one moment.
 //
 // Depends on: pose/id-switch-check.js (`symmetricEigen`, `fitPCA`), pose/hdbscan.js
 
 import { symmetricEigen, fitPCA } from './id-switch-check.js';
-import { hdbscanLinkage, clusterAtSize } from './hdbscan.js';
+import { hdbscanLinkage, condenseTree, selectClusters, bestTreeOverlaps } from './hdbscan.js';
 
 /** B-SOiD's share of the variance to keep. */
 export var VARIANCE_KEPT = 0.7;
@@ -56,8 +69,14 @@ export var PCA_TOP = 64;
 var SIZES_TRIED = 25;
 /** A speed's log: log(v + this), in BL/s (about the jitter of a still animal: 0.012–0.056 BL/s on real recordings). */
 export var SPEED_LOG_OFFSET = 0.05;
-/** A cluster counts when another layout has one sharing this share of their bins (Jaccard). */
-export var MIN_REPEAT = 0.6;
+/** A cluster counts when the other layout's tree holds a group sharing this share of their bins (Jaccard). */
+export var MIN_REPEAT = 0.7;
+/** A cluster needs bins from this many separate stretches of time… */
+export var MIN_EPISODES = 5;
+/** …of one animal, at least this far apart. */
+export var EPISODE_GAP_SECONDS = 10;
+/** …unless it holds this share of all the bins. */
+export var BIG_CLUSTER_SHARE = 0.25;
 /** Sizes whose repeating clusters cover this share of what the best size covers are in the running. */
 var COVER_NEARLY = 0.9;
 
@@ -218,55 +237,61 @@ export function clusterSizes(n, share, floor) {
 }
 
 /**
- * Each cluster of `a`'s best Jaccard overlap with a cluster of `b`.
- * @param {ArrayLike<number>} a labels, −1 = none
- * @param {ArrayLike<number>} b labels, −1 = none
- * @returns {Float64Array} per cluster of `a`
+ * How many separate stretches of time each cluster's bins come from.
+ * @param {ArrayLike<number>} labels n, −1 = none
+ * @param {ArrayLike<number>} series n: which recording of which animal a bin is from
+ * @param {ArrayLike<number>} times n: its time, in seconds
+ * @param {Int32Array} order the bins by series, then time
+ * @returns {Int32Array} per cluster
  */
-export function bestOverlaps(a, b, countA, countB) {
-    var sizeA = new Int32Array(countA), sizeB = new Int32Array(countB), inter = new Int32Array(countA * countB);
-    for (var i = 0; i < a.length; i++) {
-        var x = a[i], y = b[i];
-        if (x >= 0) sizeA[x]++;
-        if (y >= 0) sizeB[y]++;
-        if (x >= 0 && y >= 0) inter[x * countB + y]++;
-    }
-    var out = new Float64Array(countA);
-    for (var k = 0; k < countA; k++) {
-        for (var q = 0; q < countB; q++) {
-            var both = inter[k * countB + q];
-            if (!both) continue;
-            var j = both / (sizeA[k] + sizeB[q] - both);
-            if (j > out[k]) out[k] = j;
-        }
+export function clusterEpisodes(labels, count, series, times, order, gap) {
+    var out = new Int32Array(count), lastS = new Int32Array(count).fill(-1), lastT = new Float64Array(count);
+    for (var q = 0; q < order.length; q++) {
+        var r = order[q], k = labels[r];
+        if (k < 0) continue;
+        if (series[r] !== lastS[k] || times[r] - lastT[k] > gap) out[k]++;
+        lastS[k] = series[r]; lastT[k] = times[r];
     }
     return out;
 }
 
 /**
  * HDBSCAN on two layouts of the same bins: of the smallest-cluster sizes tried, the
- * one with the most clusters that repeat from the first layout in the second (the
- * largest such size). A cluster that does not repeat becomes noise. Clusters are
- * numbered by how many points they hold, largest first; noise is −1.
+ * one with the most clusters of the first layout that the second layout's tree also
+ * holds (the largest such size). A cluster that does not repeat becomes noise. Clusters
+ * are numbered by how many points they hold, largest first; noise is −1.
  * @param {ArrayLike<number>} E n × d, the layout kept
  * @param {ArrayLike<number>} E2 n × d, the second opinion
- * @param {{share: number[], floor: number, minSamples?: number, minRepeat?: number}} opts
+ * @param {{share: number[], floor: number, minSamples?: number, minRepeat?: number, minEpisodes?: number,
+ *          series?: ArrayLike<number>, times?: ArrayLike<number>}} opts
+ *   series and times: each bin's recording of an animal and its time (s), for the episodes test (skipped without)
  * @returns {{labels: Int16Array, count: number, noise: number, minClusterSize: number, repeat: Float64Array,
- *            dropped: number, sizes: number[], counts: number[]}}
- *   repeat: per cluster, its best overlap in the second layout; dropped: clusters that did not repeat
+ *            episodes: Int32Array, dropped: number, sizes: number[], counts: number[]}}
+ *   repeat: per cluster, its best overlap with the second layout's tree; episodes: its separate stretches of time;
+ *   dropped: clusters that failed either test
  */
 export function clusterLayouts(E, E2, n, d, opts) {
     var minRepeat = opts.minRepeat != null ? opts.minRepeat : MIN_REPEAT;
+    var minEpisodes = opts.minEpisodes != null ? opts.minEpisodes : MIN_EPISODES;
     var sizes = clusterSizes(n, opts.share, opts.floor);
+    var series = opts.series || null, times = opts.times || null, order = null;
+    if (series && times) {
+        order = new Int32Array(n);
+        for (var i1 = 0; i1 < n; i1++) order[i1] = i1;
+        order.sort(function (x, y) { return series[x] - series[y] || times[x] - times[y] || x - y; });
+    }
     var la = hdbscanLinkage(E, n, d, { minSamples: opts.minSamples || 1 });
     var lb = hdbscanLinkage(E2, n, d, { minSamples: opts.minSamples || 1 });
     var tried = sizes.map(function (s) {
-        var a = clusterAtSize(la, s), b = clusterAtSize(lb, s);
-        var overlaps = bestOverlaps(a.labels, b.labels, a.count, b.count);
-        var good = 0, size = new Int32Array(a.count), covered = 0;
+        var a = selectClusters(condenseTree(la, s));
+        var overlaps = bestTreeOverlaps(a.labels, a.count, condenseTree(lb, s));
+        var episodes = order ? clusterEpisodes(a.labels, a.count, series, times, order, EPISODE_GAP_SECONDS) : null;
+        var good = 0, size = new Int32Array(a.count), covered = 0, keep = new Uint8Array(a.count);
         for (var i0 = 0; i0 < n; i0++) if (a.labels[i0] >= 0) size[a.labels[i0]]++;
-        for (var k = 0; k < a.count; k++) if (overlaps[k] >= minRepeat) { good++; covered += size[k]; }
-        return { size: s, a: a, overlaps: overlaps, good: good, covered: covered };
+        for (var k = 0; k < a.count; k++) {
+            if (overlaps[k] >= minRepeat && (!episodes || episodes[k] >= minEpisodes || size[k] >= BIG_CLUSTER_SHARE * n)) { keep[k] = 1; good++; covered += size[k]; }
+        }
+        return { size: s, a: a, overlaps: overlaps, episodes: episodes, keep: keep, good: good, covered: covered };
     });
     var mostCovered = tried.reduce(function (m, t) { return Math.max(m, t.covered); }, 0);
     var best = tried[0], counts = tried.map(function (t) { return t.good; });
@@ -276,18 +301,19 @@ export function clusterLayouts(E, E2, n, d, opts) {
     var a = best.a;
     var tally = new Int32Array(a.count);
     for (var i = 0; i < n; i++) if (a.labels[i] >= 0) tally[a.labels[i]]++;
-    var order = [];
-    for (var k2 = 0; k2 < a.count; k2++) if (best.overlaps[k2] >= minRepeat) order.push(k2);
-    order.sort(function (x, y) { return tally[y] - tally[x] || x - y; });
+    var kept = [];
+    for (var k2 = 0; k2 < a.count; k2++) if (best.keep[k2]) kept.push(k2);
+    kept.sort(function (x, y) { return tally[y] - tally[x] || x - y; });
     var remap = new Int16Array(a.count).fill(-1);
-    order.forEach(function (old, k) { remap[old] = k; });
+    kept.forEach(function (old, k) { remap[old] = k; });
     var labels = new Int16Array(n), noise = 0;
     for (var i2 = 0; i2 < n; i2++) {
         labels[i2] = a.labels[i2] >= 0 ? remap[a.labels[i2]] : -1;
         if (labels[i2] < 0) noise++;
     }
     return {
-        labels: labels, count: order.length, noise: noise, minClusterSize: best.size, sizes: sizes, counts: counts,
-        repeat: Float64Array.from(order, function (old) { return best.overlaps[old]; }), dropped: a.count - order.length,
+        labels: labels, count: kept.length, noise: noise, minClusterSize: best.size, sizes: sizes, counts: counts,
+        repeat: Float64Array.from(kept, function (old) { return best.overlaps[old]; }),
+        episodes: Int32Array.from(kept, function (old) { return best.episodes ? best.episodes[old] : 0; }), dropped: a.count - kept.length,
     };
 }

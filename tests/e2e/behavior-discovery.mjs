@@ -7,22 +7,22 @@
  * between four kinematically different states every 1–5 s, so what should be found
  * is known.
  *
- *  1. The menu opens the dialog; Esc closes it. Esc during a run cancels it and
- *     leaves nothing behind.
+ *  1. The menu opens the dialog; Esc closes it. Esc during a run cancels it, in the
+ *     layouts too, and leaves nothing behind.
  *  2. A run: the progress card has its steps; the behavior pool and two discovery
  *     workers do the work, and the discovery workers are gone at the end. The states
- *     layer has a cluster for each planted state, on nearly every frame, at full
- *     frame rate; the timeline grows a "States" group.
+ *     layer's clusters are each mostly one planted state, every state has one, nearly
+ *     every frame has a cluster, at full frame rate; the timeline grows a "States" group.
  *  3. The run on one thread gives exactly the same layout, clusters and runs
  *     (`window.LUCID_BEHAVIOR_WORKER = 0`).
  *  4. The States section: a row per cluster, what stands out in it, how well it
  *     repeats; the map is drawn in the state colors; a click on a cluster's number
- *     steps through its examples, longest first, boxed on the video; a click on the
- *     map goes to that bin's moment.
+ *     steps through its examples, longest first, boxed on the video; a press on the
+ *     map goes to that bin's moment, and a repaint of the tab does not redraw it.
  *  5. Name a cluster and promote it to a new behavior: an ethogram entry of that name,
  *     and its runs as predictions (source states:Discovery) to Accept or Reject.
  *  6. Split a behavior: the dialog offers behaviors with present labels; the layer
- *     has states only on those frames.
+ *     has states only on those frames. All sessions: one layer each, one numbering.
  *  7. Save (File ▸ Save As's path) -> reopen (the importer's reader): the layers,
  *     their names and the promoted predictions come back; there is no map until
  *     discovery runs again, and the section says nothing about one.
@@ -152,6 +152,20 @@ try {
         return { layers: S.stateLayers(window.__lucid.state.session).length, hidden: document.getElementById('loadingOverlay').classList.contains('hidden'), dirty: window.__lucid.state.isDirty };
     });
     check(afterCancel.layers === 0 && afterCancel.hidden, 'Esc during the run cancels it: no layer, the card is gone', afterCancel);
+    // In the longest stage, whose work is inside the workers.
+    await page.evaluate(() => { window.__workers.discovery = 0; window.__workers.discoveryEnded = 0; document.getElementById('menuBehaviorDiscover').click(); });
+    await page.click('#bdiGo');
+    await page.waitForFunction(() => /Laying out the bins/.test(document.getElementById('loadingStatus').textContent), null, { timeout: 60000 });
+    const t0Cancel = Date.now();
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => document.getElementById('loadingOverlay').classList.contains('hidden') && window.__workers.discoveryEnded === 2, null, { timeout: 15000 }).catch(() => {});
+    const midCancel = await page.evaluate(async () => {
+        const S = await import('/pose/behavior-states.js');
+        return { layers: S.stateLayers(window.__lucid.state.session).length, workers: window.__workers, hidden: document.getElementById('loadingOverlay').classList.contains('hidden'),
+                 status: document.getElementById('statusText').textContent };
+    });
+    check(midCancel.layers === 0 && midCancel.hidden && midCancel.workers.discovery === 2 && midCancel.workers.discoveryEnded === 2 && /cancelled/.test(midCancel.status),
+        `Esc during the layouts stops them: both workers ended, no layer, in ${((Date.now() - t0Cancel) / 1000).toFixed(1)} s`, midCancel);
 
     console.log('\n-- 2. A run --');
     const seen = await page.evaluate(() => {
@@ -196,13 +210,17 @@ try {
     check(['1/8', '2/8', '3/8', '4/8', '5/8', '6/8', '7/8', '8/8'].filter((x) => stages.includes(x)).length >= 5, `the progress card has its steps (${run.steps.join('; ')})`);
     check(run.workers.discovery === 2 && run.workers.discoveryEnded === 2, 'two discovery workers did the layouts, and both are gone', run.workers);
     check(run.workers.pool > 0, `the behavior pool did the rest (${run.workers.pool} workers)`);
-    const purity = [0, 1, 2, 3].map((i) => {
-        const hits = Object.entries(run.conf).filter(([k]) => k.startsWith(i + '>')).sort((x, y) => y[1] - x[1]);
-        const total = hits.reduce((n, h) => n + h[1], 0);
-        return { cluster: hits[0][0].split('>')[1], share: hits[0][1] / total };
-    });
-    check(purity.every((p) => p.share > 0.85), `each planted state falls in one cluster on over 85% of its frames (${purity.map((p) => Math.round(100 * p.share) + '%').join(', ')})`, purity);
-    check(new Set(purity.map((p) => p.cluster)).size === 4, 'each its own');
+    // Each cluster is mostly one planted state, and every state has a cluster. A state can
+    // come out in pieces: a resting animal's distance to the other one differs bout to bout.
+    const perCluster = new Map();
+    for (const [k, v] of Object.entries(run.conf)) {
+        const [st0, cl0] = k.split('>').map(Number);
+        if (!perCluster.has(cl0)) perCluster.set(cl0, [0, 0, 0, 0]);
+        perCluster.get(cl0)[st0] += v;
+    }
+    const purity = [...perCluster.entries()].map(([cl0, c]) => ({ cluster: cl0, state: c.indexOf(Math.max(...c)), share: Math.max(...c) / c.reduce((x, y) => x + y, 0) }));
+    check(purity.every((p) => p.share > 0.9), `each cluster is mostly one planted state (${purity.map((p) => p.cluster + ': ' + Math.round(100 * p.share) + '%').join(', ')})`, purity);
+    check(new Set(purity.map((p) => p.state)).size === 4, 'and every planted state has a cluster', purity);
     check(run.none < 0.1 * 12000, `nearly every frame has a state (${run.none} of 12,000 do not)`);
     check(eq(run.rows.map((r) => r.slice(0, 2)), [['States', 'id_0'], ['States', 'id_1']]) && eq(run.rows.map((r) => r[2]), run.runs),
         'the timeline\'s "States" group: a row per animal, a segment per run', run.rows);
@@ -243,6 +261,7 @@ try {
         };
     });
     check(sec.count >= 4, `a row per cluster (${sec.count})`);
+    check(sec.marks.every((m) => / · [\d,]+ separate stretch(es)? · /.test(m)), 'each says how many separate stretches of time it comes from', sec.marks);
     check(/^\d+ clusters · /.test(sec.head), 'it says clusters, not syllables: ' + sec.head);
     check(sec.marks.every((m) => /found again in a second layout: \d+%/.test(m) && / [+−]\d+\.\d/.test(m)), 'each row says how well it repeats and what stands out', sec.marks);
     check(sec.canvas && sec.painted > 500 && sec.colors >= 4, `the map is drawn, in the state colors (${sec.painted} pixels, ${sec.colors} colors)`, sec);
@@ -268,7 +287,7 @@ try {
     await page.click(`.behavior-state-row[data-state="${k0}"] button[data-act="next"]`);
     await statusIs(/Cluster 0: .* · example 2 of/, 5000);
     check(true, 'the next click is the next example');
-    // A click on the map: find a point of cluster 1 and click it.
+    // A press on the map: find a point of cluster 1 and press it.
     const point = await page.evaluate(async () => {
         const D = await import('/pose/behavior-discovery.js');
         const B = await import('/ui/behavior-discovery.js');
@@ -306,7 +325,21 @@ try {
     await statusIs(/Cluster 1: id_\d, frame [\d,]+/, 5000);
     await page.waitForSelector('.behavior-state-row.is-selected[data-state="1"]', { timeout: 5000 }).catch(() => {});
     const atPoint = await page.evaluate(() => ({ frame: window.__lucid.state.currentFrame, selected: !!document.querySelector('.behavior-state-row.is-selected[data-state="1"]') }));
-    check(Math.abs(atPoint.frame - rebased.frame) <= 2 && atPoint.selected, `a click on the map goes to that bin's moment (frame ${atPoint.frame}) and selects its cluster`, { atPoint, rebased });
+    check(Math.abs(atPoint.frame - rebased.frame) <= 2 && atPoint.selected, `a press on the map goes to that bin's moment (frame ${atPoint.frame}) and selects its cluster`, { atPoint, rebased });
+    // A repaint of the tab does not rebuild or redraw the map.
+    const kept = await page.evaluate(async () => {
+        const canvas = document.querySelector('.behavior-discovery-map canvas');
+        const g = canvas.getContext('2d');
+        const before = canvas.toDataURL();
+        let rects = 0;
+        const real = g.fillRect;
+        g.fillRect = function () { rects++; return real.apply(this, arguments); };
+        (await import('/ui/behavior-panel.js')).refreshBehaviorPanel();
+        const after = document.querySelector('.behavior-discovery-map canvas');
+        g.fillRect = real;
+        return { same: after === canvas, rects, picture: after.toDataURL() === before };
+    });
+    check(kept.same && kept.rects === 0 && kept.picture, 'a repaint of the tab keeps the map\'s canvas and does not redraw it', kept);
 
     console.log('\n-- 5. Name it, promote it --');
     await page.fill('.behavior-state-row[data-state="1"] input[data-act="name"]', 'stands up');
@@ -386,6 +419,49 @@ try {
     check(bestOf(1)[0].split('>')[1] !== bestOf(3)[0].split('>')[1], 'walking and grooming, labelled alike, come apart', split.conf);
     const shown = await page.evaluate(() => document.querySelector('.behavior-states-head select[data-act="layer"]').value);
     check(shown === 'Split: moving about', 'the section shows the new layer');
+
+    console.log('\n-- 6b. All sessions --');
+    const both = await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js');
+        const AS = await import('/ui/app-state.js');
+        const a = AS.state.session;
+        // A second recording of the same animals: the same poses, shifted along the session.
+        const b = new pd.Session(a.cameras, a.skeleton, [], 'planted too');
+        b.addIdentity('id_0'); b.addIdentity('id_1');
+        let gid = 1;
+        for (const [f, list] of a.instanceGroups) {
+            b.instanceGroups.set(f, list.map((g) => {
+                const made = new pd.InstanceGroup(gid++, b.identities[a.identities.findIndex((x) => x.id === g.identityId)].id);
+                made.points3d = g.points3d;
+                return made;
+            }));
+        }
+        b.totalFrames = AS.state.totalFrames; b.fps = AS.state.fps;
+        AS.state.sessions = [a, b];
+        document.getElementById('menuBehaviorDiscover').click();
+        return true;
+    });
+    check(both, 'a second session is there');
+    check(await page.$('#bdiScope') !== null, 'with several sessions the dialog asks which');
+    await page.selectOption('#bdiScope', 'all');
+    await page.fill('#bdiName', 'Both');
+    await page.click('#bdiGo');
+    await statusIs(/Found \d+ clusters? in .* from 2 sessions · "Both" under States/);
+    const inBoth = await page.evaluate(async () => {
+        const S = await import('/pose/behavior-states.js');
+        const AS = await import('/ui/app-state.js');
+        const [a, b] = AS.state.sessions;
+        const la = S.stateLayer(a, 'Both'), lb = S.stateLayer(b, 'Both');
+        const out = { a: !!la, b: !!lb, same: la && lb && JSON.stringify(S.exportStateLayers(a).layers.find((l) => l.name === 'Both').animals) === JSON.stringify(S.exportStateLayers(b).layers.find((l) => l.name === 'Both').animals),
+                      counted: !!document.querySelector('.behavior-states-head select[data-act="scope"]') };
+        S.removeStateLayer(a, 'Both'); S.removeStateLayer(b, 'Both');
+        AS.state.sessions = [a];
+        (await import('/ui/behavior-coding.js')).requestBehaviorRepaint({ states: true });
+        return out;
+    });
+    check(inBoth.a && inBoth.b, 'each session gets its layer');
+    check(inBoth.same, 'and one numbering: the same poses get the same states in both');
+    check(inBoth.counted, 'the section can count them across sessions');
 
     console.log('\n-- 7. Save -> reopen --');
     const beforeSave = await page.evaluate(async () => {

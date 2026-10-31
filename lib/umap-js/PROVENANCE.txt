@@ -23,7 +23,9 @@ What LUCID replaces from outside (pose/behavior-umap.js, a subclass; the file he
   - the search graph, which only `transform` reads: skipped.
   - the nearest neighbours: exact, in parallel (pose/behavior-discovery-core.js `knnRows`), handed
     in through umap-js's public `setPrecomputedKNN`.
-  - the start positions: the first principal components (through `getEmbedding`), scaled to ±10.
+  - the start positions: the first principal components, or a random linear view of the data for
+    the second layout (through `getEmbedding`), scaled to ±10. umap-js's own random positions can
+    tear a real cluster in two.
 These reach into methods the TypeScript marks private (`fuzzySimplicialSet`, `makeSearchGraph`,
 `makeSearchFns`, `smoothKNNDistance`, `knnDistances`), so on a bump run tests/test-behavior-discovery.mjs
 first: §3 fails if any of them moved.

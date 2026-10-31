@@ -8,13 +8,14 @@
 //   2. Standardized, PCA to 70% of the variance (pose/behavior-embedding.js).
 //   3. UMAP (pose/behavior-umap.js): n_neighbors 60, min_dist 0, from the exact
 //      neighbours in PCA space (worker pool), starting from the first principal
-//      components; and side by side a second layout from random positions, the
-//      test the next step uses.
+//      components; and side by side a second layout from a random view of the same
+//      data, the test the next step uses.
 //   4. HDBSCAN on both layouts (pose/hdbscan.js), at the smallest-cluster size in
-//      0.5–1% of the bins that gives the most clusters that come back in the other
-//      layout; a cluster that does not is noise (these steps find clusters even in
-//      pure noise: pose/behavior-embedding.js). Clusters are numbered by size,
-//      largest first, so state k takes the k-th state color.
+//      0.5–1% of the bins that gives the most clusters which the other layout also
+//      holds and which happen in several separate stretches of time; any other
+//      cluster is noise (these steps find clusters even in pure noise, and in one
+//      long rest: pose/behavior-embedding.js). Clusters are numbered by size, largest
+//      first, so state k takes the k-th state color.
 //   5. A forest per cluster, "this cluster" against everything else (the
 //      classifiers' trees, pose/behavior-forest.js), and one more for the bins in no
 //      cluster when there are any. Whole 10 s stretches are held out to say how well
@@ -50,7 +51,7 @@
 //             pose/behavior-labels.js, pose/behavior-states.js, and when it runs
 //             inline pose/behavior-embedding.js, pose/behavior-umap.js
 
-import { binFrames, binCenters, discoveryFeatureNames, speedFeatures, heldOutAgreement } from './behavior-discovery-core.js';
+import { binFrames, binCenters, discoveryFeatureNames, speedFeatures, heldOutAgreement, randomView } from './behavior-discovery-core.js';
 import { runBehaviorChunks } from './behavior-pool.js';
 import { planChunks, featurePadFrames, sliceChunkData } from './behavior-features.js';
 import { DEFAULT_FOREST_PARAMS, binEdges, binColumn, finalizeForest, encodeColumn, mix32, missingFeatures } from './behavior-forest.js';
@@ -435,7 +436,7 @@ export async function discoverBehaviors(opts) {
         if (knnRun.cancelled) return { cancelled: true };
         lap('neighbors');
 
-        // ---- Two UMAP layouts, from the first two principal components, side by side.
+        // ---- Two UMAP layouts, from the first two principal components and from a random view, side by side.
         var dims = 2;
         var init = new Float32Array(n * dims);
         if (red.d >= dims) { for (var r1 = 0; r1 < n; r1++) for (var d0 = 0; d0 < dims; d0++) init[r1 * dims + d0] = red.Y[r1 * red.d + d0]; }
@@ -445,7 +446,7 @@ export async function discoverBehaviors(opts) {
         steps2 = openStepRunner(cancelled, pause);
         var layouts = await Promise.all([
             steps.call({ type: 'umap', knn: knn, opts: layoutOpts(seed, red.d >= dims ? init : null) }, null, function (d, t) { progress({ stage: 'layout', done: d, total: t, unit: 'epochs' }); }),
-            steps2.call({ type: 'umap', knn: knn, opts: layoutOpts(seed + 1, null) }),
+            steps2.call({ type: 'umap', knn: knn, opts: layoutOpts(seed + 1, randomView(red.Y, n, red.d, seed + 1)) }),
         ]);
         steps2.close();
         if (!layouts[0] || !layouts[1]) return { cancelled: true };
@@ -456,20 +457,25 @@ export async function discoverBehaviors(opts) {
         // ---- HDBSCAN, keeping the clusters that repeat.
         progress({ stage: 'cluster', done: 0, total: 1 });
         var share = opts.clusterShare || CLUSTER_SHARE;
-        var cl = await steps.call({ type: 'cluster', E: um.embedding, E2: layouts[1].embedding, n: n, d: dims, opts: { share: share, floor: clusterFloor(n, k) } });
+        var fpsOf = new Map(plans.map(function (p) { return [p.index, p.fps > 0 ? p.fps : 30]; }));
+        var series = Int32Array.from(red.kept, function (r) { return binSource[r] * 4096 + binAnimal[r]; });
+        var times = Float64Array.from(red.kept, function (r) { return binFrame[r] / fpsOf.get(binSource[r]); });
+        var cl = await steps.call({ type: 'cluster', E: um.embedding, E2: layouts[1].embedding, n: n, d: dims,
+            opts: { share: share, floor: clusterFloor(n, k), series: series, times: times } });
         if (!cl) return { cancelled: true };
         layouts = null;
         lap('cluster');
         steps.close();
         if (cl.count < 2) {
-            return { error: (cl.count ? 'Only one cluster' : 'No cluster') + ' came back in a second layout, so the poses form one continuous blob here: nothing to tell apart', leftOut: leftOut,
-                     report: { bins: n, usable: usableTotal, features: F, pcaDims: red.d, explained: red.explained, neighbors: k, dropped: cl.dropped } };
+            return { error: (cl.count ? 'Only one cluster' : 'No cluster') + ' came back in a second layout and in several separate stretches of time, so the poses form one continuous blob here: nothing to tell apart', leftOut: leftOut,
+                     report: { bins: n, usable: usableTotal, features: F, pcaDims: red.d, explained: red.explained, neighbors: k, dropped: cl.dropped,
+                               minClusterSize: cl.minClusterSize, sizes: cl.sizes, counts: cl.counts } };
         }
 
         // ---- The map, and what stands out in each cluster.
         var kept = red.kept;
         var clusters = clusterProfiles(cl, red, names, n);
-        clusters.forEach(function (c, i) { c.repeat = cl.repeat[i]; });
+        clusters.forEach(function (c, i) { c.repeat = cl.repeat[i]; c.episodes = cl.episodes[i]; });
 
         // ---- A forest per cluster on the clustered bins.
         var forestRun = await fitClusterForests(rows, kept, cl, F, names, binSource, binAnimal, binFrame, plans, { seed: seed, pause: pause, isCancelled: cancelled, progress: progress });
@@ -506,7 +512,8 @@ export async function discoverBehaviors(opts) {
             },
             report: {
                 bins: n, usable: usableTotal, sampled: usableTotal > maxBins, features: red.features.length, pcaDims: red.d, explained: red.explained,
-                neighbors: k, minDist: opts.minDist != null ? opts.minDist : MIN_DIST, minClusterSize: cl.minClusterSize, noise: cl.noise, dropped: cl.dropped,
+                neighbors: k, minDist: opts.minDist != null ? opts.minDist : MIN_DIST, minClusterSize: cl.minClusterSize, sizes: cl.sizes, counts: cl.counts,
+                noise: cl.noise, dropped: cl.dropped,
                 noiseShare: n ? cl.noise / n : 0, heldOut: forestRun.heldOut, heldOutAgreement: forestRun.agreement,
                 trees: forestRun.trees, seed: seed, timings: timings,
             },
@@ -546,7 +553,7 @@ function clusterProfiles(cl, red, names, n) {
 /**
  * The forests that label every frame: one per cluster, and one for the bins in no
  * cluster when there are at least `MIN_CLUSTER_BINS`. Whole stretches of
- * `HOLDOUT_STRETCH_SECONDS` are held out by a seed hash when there are enough bins.
+ * `HOLDOUT_STRETCH_SECONDS` are held out by a seeded hash when there are enough bins.
  * @returns {Promise<{forests: Object[], rest: boolean, agreement: number, heldOut: number, trees: number, cancelled?: boolean}>}
  *   the last forest is the bins in no cluster when `rest`
  */

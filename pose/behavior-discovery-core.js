@@ -240,6 +240,38 @@ export function knnRows(shared, range, k) {
 }
 
 /**
+ * A random view of the data: its rows on two random orthonormal directions, seeded
+ * (the second layout's start). Points close in the data start close, as in the first
+ * two components, so nothing is torn, but the arrangement is another one.
+ * @param {ArrayLike<number>} Y n × d
+ * @returns {Float32Array} n × 2
+ */
+export function randomView(Y, n, d, seed) {
+    var a = (seed >>> 0) || 1;
+    var uniform = function () {
+        a = (a + 0x6D2B79F5) | 0;
+        var t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    var normal = function () { var u = 0; while (!u) u = uniform(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * uniform()); };
+    var e1 = new Float64Array(d), e2 = new Float64Array(d), s1 = 0, s2 = 0, dot = 0;
+    for (var j = 0; j < d; j++) { e1[j] = normal(); e2[j] = normal(); s1 += e1[j] * e1[j]; }
+    s1 = Math.sqrt(s1) || 1;
+    for (var j2 = 0; j2 < d; j2++) { e1[j2] /= s1; dot += e1[j2] * e2[j2]; }
+    for (var j3 = 0; j3 < d; j3++) { e2[j3] -= dot * e1[j3]; s2 += e2[j3] * e2[j3]; }
+    s2 = Math.sqrt(s2) || 1;
+    for (var j4 = 0; j4 < d; j4++) e2[j4] /= s2;
+    var out = new Float32Array(n * 2);
+    for (var r = 0; r < n; r++) {
+        var x = 0, y = 0, o = r * d;
+        for (var j5 = 0; j5 < d; j5++) { x += Y[o + j5] * e1[j5]; y += Y[o + j5] * e2[j5]; }
+        out[2 * r] = x; out[2 * r + 1] = y;
+    }
+    return out;
+}
+
+/**
  * Grow some trees of one cluster's forest, "this cluster" against the rest (a
  * worker job): the classifiers' tree (pose/behavior-forest.js, with its
  * class-balanced bootstrap), seeded from (seed, cluster, tree index) alone.

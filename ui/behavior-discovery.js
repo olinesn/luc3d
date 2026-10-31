@@ -10,7 +10,7 @@
 //
 // The map (`drawDiscoveryMap`) is the sample's layout from the run in this page:
 // a point per bin, in its cluster's state color, gray for bins in no cluster. A
-// click goes to that bin's moment. It is gone after a reopen (only the layer is
+// press goes to that bin's moment. It is gone after a reopen (only the layer is
 // saved), and running again draws it again: the same poses give the same layout.
 //
 // Depends on: ui/app-state.js, ui/loading-overlay.js, ui/behavior-detect.js,

@@ -248,13 +248,25 @@ try {
             report: res.report, fps, T, animals, frames: sum.frames, base,
             clusters: sum.states.map((st2) => {
                 const c = res.clusters[st2.state] || {}, row = per.get(st2.state);
-                return { state: st2.state, share: st2.share, framesShareOfAll: st2.frames / (T * animals.length), runs: st2.runs, medianS: st2.medianFrames / fps, repeat: c.repeat, bins: c.bins,
+                return { state: st2.state, share: st2.share, framesShareOfAll: st2.frames / (T * animals.length), runs: st2.runs, medianS: st2.medianFrames / fps, repeat: c.repeat, episodes: c.episodes, bins: c.bins,
                          top: (c.top || []).map((f) => [f.name, +f.z.toFixed(2)]),
                          rules: Object.fromEntries(Object.entries(row.rules).map(([nm, v]) => [nm, +(v / row.frames).toFixed(3)])) };
             }),
         };
     });
-    if (summary.none) { log('No clusters: ' + summary.status); result.none = summary.status; }
+    if (summary.none) {
+        log('No clusters: ' + summary.status);
+        result.none = summary.status;
+        // The same run again, to see what it found at each size.
+        result.noneDetail = await page.evaluate(async () => {
+            const D = await import('./pose/behavior-discovery.js');
+            const det = await import('./ui/behavior-detect.js');
+            const s = window.__lucid.state.session;
+            const res = await D.discoverBehaviors({ sources: [{ session: s, name: s.name || 'session 1', getCtx: () => det.cachedBehaviorContext(s) }] });
+            return { sessionName: s.name, error: res.error, report: res.report, clusters: res.clusters && res.clusters.map((c) => [c.bins, +c.repeat.toFixed(2)]) };
+        });
+        log('again: ' + JSON.stringify(result.noneDetail));
+    }
     else {
         result.report = summary.report; result.clusters = summary.clusters; result.base = summary.base;
         log('report: ' + JSON.stringify(summary.report));
@@ -262,7 +274,7 @@ try {
         log('rule detectors overall: ' + Object.entries(summary.base).map(([nm, v]) => nm + ' ' + (100 * v).toFixed(1) + '%').join(' · '));
         for (const c of summary.clusters) {
             const rr = Object.entries(c.rules).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([nm, v]) => nm + ' ' + Math.round(100 * v) + '%').join(', ');
-            log(`cluster ${c.state}: ${(100 * c.share).toFixed(1)}% of frames · ${c.runs} runs · median ${c.medianS.toFixed(2)} s · repeats ${c.repeat != null ? c.repeat.toFixed(2) : '?'} | ${rr} | ${c.top.slice(0, 4).map((f) => f[0] + ' ' + f[1]).join(', ')}`);
+            log(`cluster ${c.state}: ${(100 * c.share).toFixed(1)}% of frames · ${c.runs} runs · median ${c.medianS.toFixed(2)} s · repeats ${c.repeat != null ? c.repeat.toFixed(2) : '?'} · ${c.episodes} stretches | ${rr} | ${c.top.slice(0, 4).map((f) => f[0] + ' ' + f[1]).join(', ')}`);
         }
         // Another seed: how many frames keep their cluster (best match by frames).
         if (SEED2) {
@@ -408,7 +420,7 @@ try {
             const fps = summary.fps;
             const tile = (s) => `<figure><img src="data:image/png;base64,${fs.readFileSync(s.file).toString('base64')}">` +
                 `<figcaption>${s.animal} · ${(s.start / fps).toFixed(1)}–${((s.end + 1) / fps).toFixed(1)} s (${((s.end - s.start + 1) / fps).toFixed(2)} s) · ${s.rank} · ${s.view}</figcaption></figure>`;
-            const info = (k) => { const c = summary.clusters.find((x) => x.state === k); return c ? `${(100 * c.share).toFixed(1)}% · median ${c.medianS.toFixed(2)} s · repeats ${c.repeat != null ? c.repeat.toFixed(2) : '?'}<br>${c.top.slice(0, 3).map((f) => f[0] + ' ' + f[1]).join('<br>')}` : ''; };
+            const info = (k) => { const c = summary.clusters.find((x) => x.state === k); return c ? `${(100 * c.share).toFixed(1)}% · median ${c.medianS.toFixed(2)} s · repeats ${c.repeat != null ? c.repeat.toFixed(2) : '?'} · ${c.episodes} stretches<br>${c.top.slice(0, 3).map((f) => f[0] + ' ' + f[1]).join('<br>')}` : ''; };
             const html = `<html><body style="margin:0;background:#1a1a1a;color:#ddd;font:12px -apple-system,sans-serif;padding:10px">
                 <div style="font-size:14px;margin:0 0 8px">${LABEL}: examples of each cluster</div>
                 ${[...rows].map(([t, ss]) => `<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">

@@ -22,10 +22,12 @@
 // States below 0.5% of the frames are folded away until asked for.
 //
 // A layer discovery made in this page also has its map (a canvas, drawn by
-// ui/behavior-discovery.js): every clustered bin, in its state's color. A click on
+// ui/behavior-discovery.js): every clustered bin, in its state's color. A press on
 // a point goes to that moment; a click on a state's number selects it on the map.
 // What stands out in each cluster is listed under its row. Only the layer is saved,
-// so a reopened project has no map until discovery runs again.
+// so a reopened project has no map until discovery runs again. The tab's repaints
+// rebuild the section's HTML, so the canvas lives outside it and is moved back in:
+// it is drawn only when the run, the selected state or its size changed.
 //
 // Timeline: `stateTimelineRows` gives one row per animal of the shown layer,
 // each run in its state's color (`stateColor`), cached per layer version: a
@@ -246,7 +248,7 @@ export function renderStatesSection(session) {
         (isCluster ? 'Click its number for its next example, longest first.' : 'Click its number for its next run.') + '</p><div class="behavior-states-list">';
     shown.forEach(function (s) {
         var cell = labelCell(enr.get(s.state), ui.behavior);
-        var marks = found && found.clusters[s.state] ? 'found again in a second layout: ' + Math.round(100 * found.clusters[s.state].repeat) + '% · ' + standsOut(found.clusters[s.state]) : '';
+        var marks = found && found.clusters[s.state] ? 'found again in a second layout: ' + Math.round(100 * found.clusters[s.state].repeat) + '% · ' + plural(found.clusters[s.state].episodes, 'separate stretch', 'separate stretches') + ' · ' + standsOut(found.clusters[s.state]) : '';
         html += '<div class="behavior-state-row' + (ui.selected === s.state ? ' is-selected' : '') + '" data-state="' + s.state + '">' +
             '<input type="checkbox" data-act="pick" aria-label="Pick ' + word + ' ' + s.state + '"' + (ui.picked.has(s.state) ? ' checked' : '') + '>' +
             '<button class="behavior-state-go" data-act="next" title="' + (isCluster ? 'The next example of cluster ' + s.state + ', longest first'
@@ -257,7 +259,7 @@ export function renderStatesSection(session) {
             '<span class="behavior-state-stats" title="Share of the frames with a ' + word + ' · median run length">' + pct(s.share) + ' · ' +
             (s.medianFrames / fps()).toFixed(2) + ' s</span>' +
             '<span class="behavior-state-labels" title="' + esc(cell.title) + '">' + esc(cell.text === '–' ? 'no labels in it' : cell.text) + '</span>' +
-            (marks ? '<span class="behavior-state-marks" title="How much of the cluster a second UMAP layout finds again, then the features furthest from their mean in it, in standard deviations">' + esc(marks) + '</span>' : '') + '</div>';
+            (marks ? '<span class="behavior-state-marks" title="How much of the cluster a second UMAP layout finds again; how many separate stretches of time its sampled bins come from; the features furthest from their mean in it, in standard deviations">' + esc(marks) + '</span>' : '') + '</div>';
     });
     html += '</div>';
     if (rare.length) {
@@ -275,10 +277,7 @@ export function renderStatesSection(session) {
         }).join('') + '</select> <button class="panel-btn" data-act="promote"' + (ui.picked.size ? '' : ' disabled') +
         ' title="Their runs become predicted bouts of that behavior, to Accept or Reject under Predictions. A new behavior takes their names.">Promote</button></div>';
     host.innerHTML = html;
-    if (found) {
-        var canvas = host.querySelector('.behavior-discovery-map canvas');
-        if (canvas) drawDiscoveryMap(canvas, found, ui.selected);
-    }
+    if (found) placeDiscoveryMap(host, found);
     // A repaint while a name is being typed (Tab to the next one) keeps the field focused.
     var again = focus != null && host.querySelector('.behavior-state-row[data-state="' + focus + '"] input[data-act="name"]');
     if (again) again.focus();
@@ -296,11 +295,29 @@ function discoveryMapHtml(found) {
     var r = found.report || {};
     var bits = [n(r.bins) + (r.sampled ? ' of ' + n(r.usable) : '') + ' bins of 100 ms', n(r.features) + ' features', n(r.pcaDims) + ' principal components (' + Math.round(100 * r.explained) + '% of the variance)',
                 n(r.neighbors) + ' neighbors', 'smallest cluster ' + n(r.minClusterSize) + ' bins'];
-    if (r.dropped) bits.push(plural(r.dropped, 'cluster') + ' dropped, not found again in a second layout');
+    if (r.dropped) bits.push(plural(r.dropped, 'cluster') + ' dropped (not found again in a second layout, or from too few separate stretches of time)');
     if (r.noiseShare) bits.push(Math.round(100 * r.noiseShare) + '% of the bins in no cluster (gray)');
     if (Number.isFinite(r.heldOutAgreement)) bits.push('the forests repeat the clusters on ' + Math.round(100 * r.heldOutAgreement) + '% of bins they never saw');
-    return '<div class="behavior-discovery-map"><canvas aria-label="Every clustered bin laid out by UMAP, in its cluster\'s color. Click a point to go to that moment."></canvas>' +
+    return '<div class="behavior-discovery-map"><div class="behavior-discovery-canvas"></div>' +
         '<p class="behavior-fps-note">' + esc(bits.join(' · ')) + '</p></div>';
+}
+
+var _map = { canvas: null, found: null, selected: null, width: 0, height: 0, dpr: 0 };
+
+/** Put the map's canvas back in the section (it keeps its picture), redrawing it only if it would differ. */
+function placeDiscoveryMap(host, found) {
+    var slot = host.querySelector('.behavior-discovery-canvas');
+    if (!slot) return;
+    if (!_map.canvas) {
+        _map.canvas = document.createElement('canvas');
+        _map.canvas.setAttribute('aria-label', 'Every clustered bin laid out by UMAP, in its cluster\'s color. Press a point to go to that moment.');
+    }
+    var canvas = _map.canvas;
+    slot.appendChild(canvas);
+    var dpr = window.devicePixelRatio || 1;
+    if (_map.found === found && _map.selected === ui.selected && _map.width === canvas.clientWidth && _map.height === canvas.clientHeight && _map.dpr === dpr) return;
+    _map.found = found; _map.selected = ui.selected; _map.width = canvas.clientWidth; _map.height = canvas.clientHeight; _map.dpr = dpr;
+    drawDiscoveryMap(canvas, found, ui.selected);
 }
 
 // ----------------------------------------------------------------------------
@@ -470,11 +487,12 @@ function wireStates(host) {
     host.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && e.target.dataset.act === 'name') { e.preventDefault(); e.target.blur(); }
     });
-    // A click on the map goes to that bin's moment, in its session.
-    host.addEventListener('click', async function (e) {
+    // A press on the map goes to that bin's moment, in its session. On the press, not
+    // the click: a repaint between press and release would lose the click.
+    host.addEventListener('pointerdown', async function (e) {
         var canvas = e.target.closest ? e.target.closest('.behavior-discovery-map canvas') : null;
         var session = state.session;
-        if (!canvas || !session) return;
+        if (!canvas || !session || e.button !== 0) return;
         var layer = shownLayer(session);
         var found = layer && discoveryResult(session, layer.name);
         if (!found) return;
@@ -499,6 +517,9 @@ export function setupBehaviorStates() {
     if (host) wireStates(host);
     var info = document.getElementById('behaviorStatesInfo');
     if (info) { info.innerHTML = ICON_INFO; setInfoTip(info, STATES_INFO); }
+    // A map drawn while folded has no size: draw it when the section opens.
+    var section = document.getElementById('behaviorStatesSection');
+    if (section) section.addEventListener('toggle', function () { if (section.open) requestBehaviorRepaint({ states: true }); });
     onStatesChange(function (session, info2) {
         // A layer just imported or replaced is the one to show.
         if (info2 && info2.layer && !info2.names && !info2.removed) ui.layer = info2.layer;

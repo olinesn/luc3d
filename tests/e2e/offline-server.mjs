@@ -113,6 +113,21 @@ try {
   });
   if (yamlOk !== true) fail('bare "yaml" specifier did not resolve: ' + yamlOk);
 
+  // Discover Behaviors loads the vendored umap-js only when it runs, in its own
+  // workers: run it, on workers, with everything off-localhost blocked.
+  const discovery = await page.evaluate(async () => {
+    try {
+      window.LUCID_BEHAVIOR_WORKER = 2;
+      const [tensor, features, forest, D, W] = await Promise.all(['pose/behavior-tensor.js', 'pose/behavior-features.js', 'pose/behavior-forest.js',
+        'pose/behavior-discovery.js', 'tests/e2e/fixtures/discovery-world.js'].map((p) => import('/' + p)));
+      const ctx = W.discoveryContext(3000, { tensor, features, forest });
+      const res = await D.discoverBehaviors({ sources: [{ session: ctx.session, name: 'world', ctx }] });
+      window.LUCID_BEHAVIOR_WORKER = undefined;
+      return res.error ? 'ERROR: ' + res.error : res.clusters.length;
+    } catch (e) { return 'ERROR: ' + (e && e.message || e); }
+  });
+  if (!(discovery >= 2)) fail('Discover Behaviors did not run offline: ' + discovery);
+
   // No CDN request should ever have been attempted.
   const cdnAttempts = blocked.filter(u => /jsdelivr|unpkg|cdnjs/.test(u));
   if (cdnAttempts.length) {
@@ -130,6 +145,7 @@ try {
     console.log('PASS: app booted offline with all non-localhost requests blocked.');
     console.log(`      blocked ${blocked.length} off-origin request(s), 0 to a CDN`);
     console.log(`      THREE r${probe.revision}, OrbitControls, MP4Box, h5wasm, yaml, dockview css`);
+    console.log(`      Discover Behaviors ran on its workers and the vendored umap-js: ${discovery} clusters`);
     exitCode = 0;
   }
 
