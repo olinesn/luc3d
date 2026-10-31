@@ -213,7 +213,7 @@ On a lazy project `session.frameGroups` holds only hydrated frames. Playback evi
 - **Never write the shared `lazyPlaceholderXY` buffer.** Every in-place writer on `Instance` must call `_ownXY()` first.
 - To read member 2D on a frame you do not hydrate, bracket the read with `hydrateFrameMembers2d`/`releaseFrameMembers2d` (as `frameCropGeometry` in `ui/image-embedder.js` does).
 - **A hydrated row keeps its occlusion** (`lazyRowInstance`, `pose/triangulation.js`): a save rewrites a camera-frame holding a user instance from the resident objects.
-- **A `.slp` with no recording session opens lazily too** (File ▸ Open routes by size alone): one placeholder camera per video (`cameraNamesFromVideos`, also what the eager paths name them with; names must differ). Eager crashes the tab on 8 real cameras (MODULES.md `loading/session-loader.js`), so size is never a reason to fall back. Only what the one store cannot hold is (`openProjectSlp`'s `eagerReason`). A later calibration renames through `Session.renameCameraInAllData`, which reaches the loader (`SioLazyLoader.renameCamera`); a save refuses poses left on a camera the session lacks.
+- **A `.slp` with no recording session opens lazily too** (File ▸ Open routes by size alone): one placeholder camera per video (`cameraNamesFromVideos`, also what the eager paths name them with; names must differ). Eager crashes the tab on 8 real cameras (MODULES.md `loading/session-loader.js`), so size is never a reason to fall back. Only what the one store cannot hold is (`openProjectSlp`'s `eagerReason`). A later calibration renames through `Session.renameCameraInAllData`, which reaches the loader (`SioLazyLoader.renameCamera`); a save keeps poses left on a camera the session lacks, each on its own video ("Frames on a video no session names").
 
 Tests: `test-lazy-residency.mjs`, e2e `lazy-playback-eviction`, `sequence-lazy-workflow`, `lazy-open-plain-slp`.
 
@@ -247,6 +247,19 @@ Tests: `tests/test-slp-format-check.mjs`, e2e `slp-newer-format`.
 - SLEAP analysis `.h5` `point_scores` are dropped on purpose (see the NOTE in `loading/slp-import-worker.js` `parseAnalysisH5`).
 
 Tests: `test-node-scores.mjs`, `test-node-score-export.js`, e2e `node-score-tooltip`.
+
+## Frames on a video no session names
+
+A `.slp` can hold frames on a video no session's camera map lists, and a loader that opens only a file's first session sees the other sessions' frames the same way. They are not shown. A save keeps them, each on its own video: never dropped, never moved onto a camera's video, never left pointing at a video the file does not list (Python raises IndexError). `import-export/outside-frames.js`.
+- **Lazy:** the store already holds them. `buildSessionRefGraph` gives each such video a header place after the session's cameras (`outsideVideos`) and `streamSessionIntoWriter` maps every id the store uses (`_headerMapFor` refuses an id pass 1 did not see, never passes one through raw). The file-wide refs count every store row (`sharedOut`), a camera's or not. Code that rewrites `store.tracks` must keep these rows' track names (`_keepOutsideRowTracks`); row-map walks do not visit them.
+- **Eager:** `session.outsideFrames` (`keepOutsideFrames`: ordinary `Instance`s, the file's track names), written by `buildSlpBytes` (`outsideFramesForSave`). Skeleton node edits re-shape them and `countSkeletonEditImpact` counts them; track edits do not touch them. A loader that skips frames must keep them: `videosClaimedBy` says which videos it read. Never wrap a video index round the cameras.
+- **A camera is one video:** the first its file lists with frames (`SioLazyLoader.open`, `ownVideoOfColumnar`, `ownVideoOfFrames`, on all three reads of a camera file); that file's other videos are outside.
+- **They keep what a detection carries:** tracker score and model identity (`keepOutsideFrames`, `writeFileLabels`; a store's rows keep theirs), through `identityByName` on a lazy save, also with no camera (`sharedIdentityByName`).
+- **A session's track list after edits:** a save lists the session's tracks, then names only these rows use (`headerTrackNames`). A new track moves those rows past it (`SioLazyLoader.tracksPastSession`).
+- The vendored writers file a frame whose video is not in the header under video 0 (`Math.max(0, indexOf)`), so its video must be in the header. `appendStore` writes each row's skeleton id too, so `buildSessionRefGraph` also lists every skeleton the rows use (`skeletonPairsFor`).
+- A file with none saves byte-identically (`save-golden-digest.mjs` must not move). The load's final status says what is not shown (`outsideFramesNote`) and, for a loader that opens only the first session, that a save keeps the others' poses but not their cameras or 3D.
+
+Test: `tests/e2e/poses-outside-session.mjs`.
 
 ## Triangulation must not depend on where the origin is
 
