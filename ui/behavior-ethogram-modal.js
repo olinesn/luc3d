@@ -17,12 +17,12 @@
 
 import { state } from './app-state.js';
 import { sessionAnimals, focalAnimal, armedRange, requestBehaviorRepaint } from './behavior-coding.js';
-import { confirmRemoveBehavior } from './behavior-confirm.js';
+import { confirmRemoveBehavior, confirmMakeMutual } from './behavior-confirm.js';
 import {
     behaviors, addBehavior, updateBehavior, removeBehavior, moveBehavior, serializeEthogram, ingestEthogram,
     behaviorById, BEHAVIOR_KINDS,
 } from '../pose/behavior-ethogram.js';
-import { countBehaviorBouts, deleteBehaviorBouts, markReviewed } from '../pose/behavior-labels.js';
+import { countBehaviorBouts, deleteBehaviorBouts, markReviewed, rekeyBehavior, bothWayPairs } from '../pose/behavior-labels.js';
 import { markDirty, setStatus } from '../import-export/save-load.js';
 
 function esc(s) {
@@ -60,8 +60,11 @@ function rowHtml(b, i, n) {
         '<td><select data-f="kind">' + BEHAVIOR_KINDS.map(function (k) {
             return '<option value="' + k + '"' + (k === b.kind ? ' selected' : '') + '>' + (k === 'state' ? 'State' : 'Point') + '</option>';
         }).join('') + '</select></td>' +
-        '<td class="behavior-ed-center"><input type="checkbox" data-f="social"' + (b.social ? ' checked' : '') +
-            ' title="Has a target animal (actor → target)"></td>' +
+        '<td><select data-f="socialKind" title="Social: done to a target animal (→), or by a pair with no actor and target (↔ mutual)">' +
+            [['none', '—'], ['directed', '→ target'], ['mutual', '↔ mutual']].map(function (o) {
+                var cur = b.mutual ? 'mutual' : b.social ? 'directed' : 'none';
+                return '<option value="' + o[0] + '"' + (o[0] === cur ? ' selected' : '') + '>' + o[1] + '</option>';
+            }).join('') + '</select></td>' +
         '<td><input type="text" data-f="group" value="' + esc(b.group) + '" maxlength="40" class="behavior-ed-group" ' +
             'title="Behaviors sharing a group are mutually exclusive for one animal"></td>' +
         '<td><input type="text" data-f="description" value="' + esc(b.description) + '" maxlength="500" class="behavior-ed-desc"></td>' +
@@ -76,7 +79,8 @@ export function showEthogramModal() {
     var dlg = openOverlay('behavior-ethogram-modal',
         '<h3>Ethogram</h3>' +
         '<p class="behavior-ed-lead">The behaviors you will label, for every session of this project. A <b>state</b> has a start and an end; ' +
-        'a <b>point</b> is one frame. <b>Social</b> behaviors have a target animal. Behaviors in the same <b>group</b> exclude each other.</p>' +
+        'a <b>point</b> is one frame. A <b>social</b> behavior is done to a target animal (→), or is <b>mutual</b> (↔): ' +
+        'a pair with no actor and target, like nose-to-nose sniffing. Behaviors in the same <b>group</b> exclude each other.</p>' +
         '<div class="behavior-ed-table-wrap"><table class="data-table behavior-ed-table"><thead><tr><th></th><th>Name</th><th>Key</th>' +
         '<th>Kind</th><th>Social</th><th>Group</th><th>Description</th><th></th></tr></thead><tbody id="behaviorEdRows"></tbody></table></div>' +
         '<div class="behavior-ed-msg" id="behaviorEdMsg" role="status"></div>' +
@@ -120,6 +124,7 @@ export function showEthogramModal() {
         var tr = e.target.closest('tr[data-id]');
         if (!tr) return;
         var f = e.target.dataset.f;
+        if (f === 'socialKind') { changeSocialKind(tr.dataset.id, e.target.value); return; }
         var fields = {};
         fields[f] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
         var res = updateBehavior(tr.dataset.id, fields);
@@ -153,6 +158,25 @@ export function showEthogramModal() {
             say('Removed "' + b.name + '"' + (total ? ' and its ' + total.toLocaleString('en-US') + ' bouts' : ''));
         });
     });
+    // Social kind: none / directed (→ target) / mutual (↔). Making a behavior
+    // mutual merges bouts labelled both ways round (A → B and B → A), so that
+    // asks first when there are any; its bouts are then stored as pairs.
+    function changeSocialKind(id, kind) {
+        var b = behaviorById(id);
+        var sessions = (state.sessions && state.sessions.length) ? state.sessions : (state.session ? [state.session] : []);
+        var toMutual = kind === 'mutual' && !b.mutual;
+        var merging = 0, holding = 0;
+        if (toMutual) sessions.forEach(function (s) { var c = bothWayPairs(s, id); merging += c; if (c) holding++; });
+        (toMutual ? confirmMakeMutual(b, merging, holding) : Promise.resolve(true)).then(function (ok) {
+            if (!ok) { render(); return; }
+            var res = updateBehavior(id, { social: kind !== 'none', mutual: kind === 'mutual' });
+            if (res.error) { say(res.error, true); render(); return; }
+            if (toMutual) sessions.forEach(function (s) { rekeyBehavior(s, id); });
+            say(kind === 'mutual' ? '"' + b.name + '" is mutual: one bout per pair' : '');
+            ethogramChanged();
+        });
+    }
+
     modal.querySelector('#behaviorEdAdd').addEventListener('click', function () {
         var k = behaviors().length + 1, name = 'behavior ' + k;
         while (behaviors().some(function (b) { return b.name.toLowerCase() === name; })) name = 'behavior ' + (++k);

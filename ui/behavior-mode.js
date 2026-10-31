@@ -33,7 +33,7 @@ import { state } from './app-state.js';
 import {
     behaviorUi, codeBehavior, pickBehaviorTarget, cancelPendingTarget, setFocalAnimal, sessionAnimals, noteBehaviorMode,
     focalAnimal, setRangeIn, setRangeOut, clearArmedRange, armedRange, adjacentBout, goToBehaviorFrame,
-    openBehaviorTab, requestBehaviorRepaint, registerBehaviorRepaint,
+    openBehaviorTab, requestBehaviorRepaint, registerBehaviorRepaint, pairGlyph,
 } from './behavior-coding.js';
 import { shouldIgnoreShortcut } from './keyboard-target.js';
 import { isPlaneModeActive, exitPlaneMode } from './plane-definition.js';
@@ -180,7 +180,7 @@ function renderBar() {
     runningStates(session).forEach(function (r) {
         var b = behaviorById(r.behaviorId);
         if (!b) return;
-        parts.push('● ' + b.name + ' · ' + r.animal + (r.target ? ' → ' + r.target : '') + ' ' +
+        parts.push('● ' + b.name + ' · ' + r.animal + (r.target ? pairGlyph(b) + r.target : '') + ' ' +
             fmtSeconds(Math.max(0, state.currentFrame - r.start + 1)));
     });
     if (ui.rangeIn != null) {

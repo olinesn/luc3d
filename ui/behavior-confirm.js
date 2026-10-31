@@ -103,6 +103,26 @@ export function confirmRetrackWithBehaviorLabels(session, action) {
 }
 
 /**
+ * Before making a behavior mutual when some pair has bouts labelled both ways
+ * round (A → B and B → A): they become one pair, and where they disagree a
+ * frame labelled present either way stays present.
+ * @param {Object} behavior
+ * @param {number} bouts bouts in pairs labelled both ways, across the project
+ * @param {number} sessions sessions holding them
+ * @returns {Promise<boolean>}
+ */
+export function confirmMakeMutual(behavior, bouts, sessions) {
+    if (!bouts) return Promise.resolve(true);
+    return behaviorConfirm({
+        id: 'behaviorMutualConfirm',
+        title: 'Make "' + behavior.name + '" mutual',
+        message: 'A mutual behavior has no actor and target, so bouts labelled both ways round for the same pair are merged into one.',
+        rows: [['Bouts merged', n(bouts)], ['Sessions', n(sessions)]],
+        confirmLabel: 'Make it mutual',
+    });
+}
+
+/**
  * Before removing a behavior from the ethogram: its bouts in every loaded
  * session go with it.
  * @param {Object} behavior

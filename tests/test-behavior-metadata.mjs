@@ -41,6 +41,7 @@ console.log('\n2. Write and read back');
     resetBehaviorState();
     const rear = addBehavior({ name: 'rear', key: 'r' }).behavior;
     const chase = addBehavior({ name: 'chase', key: 'c', social: true, group: 'social' }).behavior;
+    addBehavior({ name: 'nose-to-nose', key: 'n', social: true, mutual: true });
     const s1 = { name: 'day1' }, s2 = { name: 'day2' };
     labelRange(s1, rear.id, 'id_1', '', 10, 20, true);
     labelRange(s1, chase.id, 'id_2', 'id_1', 30, 35, true, { note: 'fast' });
@@ -64,8 +65,9 @@ console.log('\n2. Write and read back');
     const r1 = { name: 'day1' }, r2 = { name: 'day2' };
     readBehaviorMetadata(r1, roundTrip(l1));
     readBehaviorMetadata(r2, roundTrip(l2));
-    check(behaviors().length === 2, 'the ethogram is ingested once across sessions');
+    check(behaviors().length === 3, 'the ethogram is ingested once across sessions');
     check(behaviorByName('chase').social && behaviorByName('chase').group === 'social', 'fields survive');
+    check(behaviorByName('nose-to-nose').mutual && !behaviorByName('chase').mutual, 'and so does mutual');
     check(JSON.stringify(exportBoutRows(r1)) === JSON.stringify(expected), 'bouts read back exactly');
     check(!listBouts(r2).length, 'the bout-less session stays empty');
 }

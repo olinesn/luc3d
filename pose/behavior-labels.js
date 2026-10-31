@@ -24,6 +24,12 @@
 // (`renameAnimal`, `swapAnimalsInRange`, called from Rename Identity and
 // `Session.swapIdentitiesInRange`).
 //
+// A MUTUAL behavior (pose/behavior-ethogram.js) has no actor and target, so
+// its pair is stored once, in name order (`keyOf`): (id_4, id_1) and
+// (id_1, id_4) are the same bout, either animal's key starts or stops it, and
+// it counts and lists for both animals. `rekeyBehavior` merges both directions
+// when an existing behavior becomes mutual.
+//
 // Interval objects are never mutated once stored — every edit builds new
 // lists — so an undo snapshot is just the previous list references.
 //
@@ -50,8 +56,29 @@ var SOURCES = ['m', 'a', 'i'];
 var _stores = new WeakMap();
 var _listeners = [];
 
+/**
+ * The store key of a (behavior, animal, target). A MUTUAL behavior's pair has
+ * no actor and target, so it is stored in name order: (id_4, id_1) and
+ * (id_1, id_4) are the same bout. Every path that makes a key goes through
+ * here, so renames, swaps and reassignments keep pairs in that order too.
+ */
 function keyOf(behaviorId, animal, target) {
+    if (target && target < animal) {
+        var b = behaviorById(behaviorId);
+        if (b && b.mutual) { var t = animal; animal = target; target = t; }
+    }
     return behaviorId + SEP + animal + SEP + (target || '');
+}
+
+/** Is `behaviorId` a mutual (unordered pair) behavior? */
+function isMutualId(behaviorId) {
+    var b = behaviorById(behaviorId);
+    return !!(b && b.mutual);
+}
+
+/** The animals a key's bouts belong to: the actor, plus the partner of a mutual pair. */
+function keyAnimals(k) {
+    return isMutualId(k.behaviorId) && k.target ? [k.animal, k.target] : [k.animal];
 }
 
 function splitKey(k) {
@@ -152,28 +179,38 @@ function writeInterval(st, key, start, end, present, source, note) {
 function clearPeersPresent(st, key, start, end) {
     var k = splitKey(key);
     var b = behaviorById(k.behaviorId);
+    var pks = [];
     exclusivePeers(b).forEach(function (p) {
-        peerKeys(st, p.id, k.animal).forEach(function (pk) {
-            var list = st.bouts.get(pk) || [];
-            var hit = list.filter(function (iv) { return iv.present && iv.end >= start && iv.start <= end; });
-            if (!hit.length) return;
-            var next = list;
-            hit.forEach(function (iv) {
-                var s = Math.max(iv.start, start), e = Math.min(iv.end, end);
-                next = carve(next, s, e);
-                next.push({ start: s, end: e, present: false, source: iv.source, note: '' });
-            });
-            setList(st, pk, tidy(next, isPointKey(pk)));
+        keyAnimals(k).forEach(function (a) {
+            peerKeys(st, p.id, a).forEach(function (pk) { if (pks.indexOf(pk) < 0) pks.push(pk); });
         });
+    });
+    pks.forEach(function (pk) {
+        var list = st.bouts.get(pk) || [];
+        var hit = list.filter(function (iv) { return iv.present && iv.end >= start && iv.start <= end; });
+        if (!hit.length) return;
+        var next = list;
+        hit.forEach(function (iv) {
+            var s = Math.max(iv.start, start), e = Math.min(iv.end, end);
+            next = carve(next, s, e);
+            next.push({ start: s, end: e, present: false, source: iv.source, note: '' });
+        });
+        setList(st, pk, tidy(next, isPointKey(pk)));
     });
 }
 
-/** Every stored or running key of behavior `behaviorId` for `animal` (any target). */
+/**
+ * Every stored or running key of behavior `behaviorId` for `animal` (any
+ * target) — as either animal of a mutual pair.
+ */
 function peerKeys(st, behaviorId, animal) {
-    var prefix = behaviorId + SEP + animal + SEP;
     var out = [];
-    st.bouts.forEach(function (_, k) { if (k.indexOf(prefix) === 0) out.push(k); });
-    st.running.forEach(function (_, k) { if (k.indexOf(prefix) === 0 && out.indexOf(k) < 0) out.push(k); });
+    var take = function (_, k) {
+        var p = splitKey(k);
+        if (p.behaviorId === behaviorId && keyAnimals(p).indexOf(animal) >= 0 && out.indexOf(k) < 0) out.push(k);
+    };
+    st.bouts.forEach(take);
+    st.running.forEach(take);
     return out;
 }
 
@@ -183,7 +220,9 @@ function affectedKeys(st, key, present) {
     if (!present) return keys;
     var k = splitKey(key);
     exclusivePeers(behaviorById(k.behaviorId)).forEach(function (p) {
-        peerKeys(st, p.id, k.animal).forEach(function (pk) { if (keys.indexOf(pk) < 0) keys.push(pk); });
+        keyAnimals(k).forEach(function (a) {
+            peerKeys(st, p.id, a).forEach(function (pk) { if (keys.indexOf(pk) < 0) keys.push(pk); });
+        });
     });
     return keys;
 }
@@ -323,9 +362,11 @@ export function toggleState(session, behaviorId, animal, target, frame) {
         return { stopped: true, start: s, end: e };
     }
     var stopping = [];
+    var mine = keyAnimals(splitKey(key));
     exclusivePeers(b).forEach(function (pb) {
         st.running.forEach(function (r, rk) {
-            if (r.behaviorId === pb.id && r.animal === animal) stopping.push(rk);
+            if (r.behaviorId !== pb.id) return;
+            if (keyAnimals(splitKey(rk)).some(function (a) { return mine.indexOf(a) >= 0; })) stopping.push(rk);
         });
     });
     pushUndo(st, [key].concat(stopping));
@@ -334,7 +375,8 @@ export function toggleState(session, behaviorId, animal, target, frame) {
         st.running.delete(rk);
         if (f - 1 >= r.start) writeInterval(st, rk, r.start, f - 1, true, 'm', '');
     });
-    st.running.set(key, { behaviorId: b.id, animal: animal, target: tgt, start: f });
+    var kp = splitKey(key);                                         // a mutual pair in name order
+    st.running.set(key, { behaviorId: b.id, animal: kp.animal, target: kp.target, start: f });
     emit(session, { edit: 'start' });
     return { started: true, start: f };
 }
@@ -399,7 +441,7 @@ export function markReviewed(session, behaviorIds, animals, allAnimals, start, e
         if (!b) return;
         (animals || []).forEach(function (a) {
             var targets = b.social ? (allAnimals || []).filter(function (o) { return o !== a; }) : [''];
-            targets.forEach(function (tg) { plan.push(keyOf(b.id, a, tg)); });
+            targets.forEach(function (tg) { var k = keyOf(b.id, a, tg); if (plan.indexOf(k) < 0) plan.push(k); });
         });
     });
     if (!plan.length) return 0;
@@ -523,8 +565,9 @@ export function renameAnimal(session, oldName, newName) {
     });
     var running = new Map();
     st.running.forEach(function (r) {
-        var nr = Object.assign({}, r, { animal: r.animal === oldName ? newName : r.animal, target: r.target === oldName ? newName : r.target });
-        running.set(keyOf(nr.behaviorId, nr.animal, nr.target), nr);
+        var nk = keyOf(r.behaviorId, r.animal === oldName ? newName : r.animal, r.target === oldName ? newName : r.target);
+        var kp = splitKey(nk);
+        running.set(nk, Object.assign({}, r, { animal: kp.animal, target: kp.target }));
     });
     st.bouts = bouts; st.running = running; st.undo = []; st.redo = [];
     if (moved) emit(session, { identity: 'rename' });
@@ -564,9 +607,10 @@ export function swapAnimalsInRange(session, nameA, nameB, start, end) {
     acc.forEach(function (list, k) { setList({ bouts: bouts }, k, tidy(list, isPointKey(k))); });
     var running = new Map();
     st.running.forEach(function (r, k) {
-        var inRange = r.start >= s && r.start <= e;
-        var nr = inRange ? Object.assign({}, r, { animal: rename(r.animal, nameA, nameB), target: rename(r.target, nameA, nameB) }) : r;
-        running.set(inRange ? keyOf(nr.behaviorId, nr.animal, nr.target) : k, nr);
+        if (!(r.start >= s && r.start <= e)) { running.set(k, r); return; }
+        var nk = keyOf(r.behaviorId, rename(r.animal, nameA, nameB), rename(r.target, nameA, nameB));
+        var kp = splitKey(nk);
+        running.set(nk, Object.assign({}, r, { animal: kp.animal, target: kp.target }));
     });
     st.bouts = bouts; st.running = running; st.undo = []; st.redo = [];
     if (moved) emit(session, { identity: 'swap' });
@@ -618,6 +662,61 @@ export function reassignAnimal(session, fromName, toName) {
     return n;
 }
 
+/**
+ * Re-store a behavior's bouts after it became MUTUAL: (id_4, id_1) and
+ * (id_1, id_4) are now one pair. Where the two directions disagree, a frame
+ * labelled present either way stays present. Running states follow. Clears the
+ * behavior undo history.
+ * @returns {number} intervals whose key changed
+ */
+export function rekeyBehavior(session, behaviorId) {
+    var st = session && _stores.get(session);
+    if (!st) return 0;
+    var entries = [];
+    st.bouts.forEach(function (list, k) { if (splitKey(k).behaviorId === behaviorId) entries.push([k, list]); });
+    var moved = 0;
+    var acc = new Map();
+    entries.forEach(function (e) {
+        var p = splitKey(e[0]);
+        var nk = keyOf(p.behaviorId, p.animal, p.target);
+        if (nk !== e[0]) moved += e[1].length;
+        if (!acc.has(nk)) acc.set(nk, []);
+        e[1].forEach(function (iv) { acc.get(nk).push(iv); });
+        st.bouts.delete(e[0]);
+    });
+    acc.forEach(function (ivs, nk) {
+        ivs.sort(function (a, b) { return (a.present ? 1 : 0) - (b.present ? 1 : 0); });   // present written last
+        var merged = [];
+        ivs.forEach(function (iv) { merged = carve(merged, iv.start, iv.end); merged.push(iv); });
+        setList(st, nk, tidy(merged, isPointKey(nk)));
+    });
+    var running = new Map();
+    st.running.forEach(function (r, k) {
+        if (r.behaviorId !== behaviorId) { running.set(k, r); return; }
+        var nk = keyOf(r.behaviorId, r.animal, r.target), kp = splitKey(nk);
+        if (!running.has(nk)) running.set(nk, Object.assign({}, r, { animal: kp.animal, target: kp.target }));
+        else moved++;
+    });
+    st.running = running;
+    if (moved) { st.undo = []; st.redo = []; emit(session, { edit: 'rekey' }); }
+    return moved;
+}
+
+/** Bouts of a behavior labelled in BOTH directions of some pair (what making it mutual merges). */
+export function bothWayPairs(session, behaviorId) {
+    var st = session && _stores.get(session);
+    if (!st) return 0;
+    var seen = new Set(), n = 0;
+    st.bouts.forEach(function (list, k) {
+        var p = splitKey(k);
+        if (p.behaviorId !== behaviorId || !p.target) return;
+        var rev = behaviorId + SEP + p.target + SEP + p.animal;
+        if (st.bouts.has(rev) && !seen.has(rev)) n += list.length + st.bouts.get(rev).length;
+        seen.add(k);
+    });
+    return n;
+}
+
 // ----------------------------------------------------------------------------
 // Queries
 // ----------------------------------------------------------------------------
@@ -647,7 +746,7 @@ export function listBouts(session, filter) {
     st.bouts.forEach(function (list, k) {
         var p = splitKey(k);
         if (filter.behaviorId != null && p.behaviorId !== filter.behaviorId) return;
-        if (filter.animal != null && p.animal !== filter.animal) return;
+        if (filter.animal != null && keyAnimals(p).indexOf(filter.animal) < 0) return;
         for (var i = 0; i < list.length; i++) {
             var iv = list[i];
             if (filter.present != null && iv.present !== filter.present) continue;
@@ -716,12 +815,14 @@ export function timeBudget(session) {
     var rows = new Map();
     st.bouts.forEach(function (list, k) {
         var p = splitKey(k);
-        var rk = p.animal + SEP + p.behaviorId;
-        var r = rows.get(rk);
-        if (!r) { r = { animal: p.animal, behaviorId: p.behaviorId, bouts: 0, presentFrames: 0, absentFrames: 0 }; rows.set(rk, r); }
-        list.forEach(function (iv) {
-            var n = iv.end - iv.start + 1;
-            if (iv.present) { r.bouts++; r.presentFrames += n; } else r.absentFrames += n;
+        keyAnimals(p).forEach(function (animal) {                 // a mutual bout counts for both animals
+            var rk = animal + SEP + p.behaviorId;
+            var r = rows.get(rk);
+            if (!r) { r = { animal: animal, behaviorId: p.behaviorId, bouts: 0, presentFrames: 0, absentFrames: 0 }; rows.set(rk, r); }
+            list.forEach(function (iv) {
+                var n = iv.end - iv.start + 1;
+                if (iv.present) { r.bouts++; r.presentFrames += n; } else r.absentFrames += n;
+            });
         });
     });
     return Array.from(rows.values());

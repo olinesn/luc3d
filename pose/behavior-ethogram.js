@@ -7,7 +7,7 @@
 //
 // A behavior is
 //   { id: 'b1', name: 'rear', key: 'r', color: '#…', kind: 'state'|'point',
-//     social: false, group: '', description: '' }
+//     social: false, mutual: false, group: '', description: '' }
 //
 //   * `id` is stable for the life of the project file and is what labelled
 //     bouts reference (pose/behavior-labels.js), so renaming a behavior never
@@ -15,6 +15,9 @@
 //   * `kind`: a state has a start and an end (grooming); a point is one frame
 //     (a jump, a bite).
 //   * `social`: the behavior has a target animal (actor → target, "chases").
+//   * `mutual` (social only): the pair has no actor and target ("nose-to-nose
+//     sniffing", id_1 ↔ id_4) — one bout for the pair, whichever animal was
+//     picked first (pose/behavior-labels.js stores the pair in name order).
 //   * `group`: behaviors that share a non-empty group are mutually exclusive
 //     for one animal — starting one stops the others, and labelling one over a
 //     range clears the others' present labels there (Noldus Observer's
@@ -141,6 +144,9 @@ function clean(fields, base) {
     if (fields.color != null) out.color = String(fields.color).toLowerCase();
     if (fields.kind != null) out.kind = fields.kind === 'point' ? 'point' : 'state';
     if (fields.social != null) out.social = !!fields.social;
+    if (fields.mutual != null) out.mutual = !!fields.mutual;
+    if (out.mutual && fields.social == null && fields.mutual) out.social = true;   // mutual implies social
+    if (!out.social) out.mutual = false;                                         // and needs it
     if (fields.group != null) out.group = String(fields.group).trim().slice(0, GROUP_MAX);
     if (fields.description != null) out.description = String(fields.description).slice(0, DESCRIPTION_MAX);
     return out;
@@ -156,7 +162,7 @@ export function addBehavior(fields) {
     if (err) return { error: err };
     var b = clean(fields, {
         id: 'b' + (_model.nextId++), name: '', key: '', color: nextBehaviorColor(),
-        kind: 'state', social: false, group: '', description: '',
+        kind: 'state', social: false, mutual: false, group: '', description: '',
     });
     _model.behaviors.push(b);
     return { behavior: b };
@@ -172,7 +178,7 @@ export function updateBehavior(id, fields) {
     var merged = Object.assign({}, b, fields || {});
     var err = validateBehaviorFields(merged, id);
     if (err) return { error: err };
-    Object.assign(b, clean(fields || {}, {}));
+    Object.assign(b, clean(fields || {}, b));
     return { behavior: b };
 }
 
@@ -203,6 +209,7 @@ export function serializeEthogram() {
             var o = { id: b.id, name: b.name, color: b.color, kind: b.kind };
             if (b.key) o.key = b.key;
             if (b.social) o.social = true;
+            if (b.mutual) o.mutual = true;
             if (b.group) o.group = b.group;
             if (b.description) o.description = b.description;
             return o;
@@ -235,7 +242,7 @@ export function ingestEthogram(payload) {
         var known = behaviorByName(e.name);
         if (known) { idMap.set(e.id, known.id); return; }
         var fields = {
-            name: e.name, kind: e.kind === 'point' ? 'point' : 'state', social: !!e.social,
+            name: e.name, kind: e.kind === 'point' ? 'point' : 'state', social: !!e.social, mutual: !!(e.social && e.mutual),
             group: typeof e.group === 'string' ? e.group : '',
             description: typeof e.description === 'string' ? e.description : '',
             color: typeof e.color === 'string' && /^#[0-9a-f]{6}$/i.test(e.color) ? e.color : nextBehaviorColor(),
@@ -244,7 +251,7 @@ export function ingestEthogram(payload) {
         if (key && !behaviorByKey(key)) fields.key = key;            // a clashing key is dropped, not the behavior
         var sameId = intoEmpty && /^b\d+$/.test(e.id) && !behaviorById(e.id);
         var b = clean(fields, { id: sameId ? e.id : 'b' + (_model.nextId++), name: '', key: '', color: '',
-            kind: 'state', social: false, group: '', description: '' });
+            kind: 'state', social: false, mutual: false, group: '', description: '' });
         if (sameId) _model.nextId = Math.max(_model.nextId, idNumber(e.id) + 1);
         _model.behaviors.push(b);
         idMap.set(e.id, b.id);
