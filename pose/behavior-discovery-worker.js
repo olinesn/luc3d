@@ -48,6 +48,8 @@ self.onmessage = function (e) {
         } else return;
         self.postMessage({ id: m.id, type: 'done', result: result }, transferables(result, []));
     } catch (err) {
-        self.postMessage({ id: m.id, type: 'error', message: String(err && err.stack || err) });
+        // The message is what the status bar shows; the stack goes to the console.
+        console.error('[behavior-discovery-worker]', err);
+        self.postMessage({ id: m.id, type: 'error', message: String(err && err.message || err) });
     }
 };

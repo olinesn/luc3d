@@ -2934,10 +2934,13 @@ pruning (subtrees all one component, or too far), single linkage, the condensed 
 do not mean infinite stability), Excess of Mass selection, labels (−1 noise). The
 hierarchy does not depend on the cluster size, so `clusterAtSize` re-runs only the last
 steps. `bestTreeOverlaps` asks whether a condensed tree holds a group of points at any
-level, the root aside. Deterministic; pure and import-free; no JS object per point.
+level, the root aside. Points that cannot all be joined (a NaN or Infinity coordinate, or
+a distance too large to square) throw, because the unfilled edges would otherwise give wrong
+labels or a tree that never finishes walking. Deterministic; pure and import-free; no JS
+object per point.
 
 **Exports.** `buildKdTree(X, n, d, leafSize)`, `coreDistances2(tree, k)`,
-`mutualReachabilityMst(tree, core2)` → `{a, b, w}`, `singleLinkage(mst, n)`,
+`mutualReachabilityMst(tree, core2)` → `{a, b, w}` (throws, as above), `singleLinkage(mst, n)`,
 `condenseTree(L, minClusterSize)`, `selectClusters(cond)` → `{labels, count, noise,
 stability}`, `bestTreeOverlaps(labels, count, cond)`, `clusterAtSize(linkage, minClusterSize)`,
 `hdbscanLinkage(X, n, d, {minSamples})`, `hdbscan(X, n, d, {minClusterSize, minSamples})`,
@@ -2945,7 +2948,8 @@ stability}`, `bestTreeOverlaps(labels, count, cond)`, `clusterAtSize(linkage, mi
 
 **Imports.** Nothing. **Imported by** `pose/behavior-embedding.js`. **Tests.**
 `tests/test-behavior-discovery.mjs` §1 (brute-force Prim; labels equal the Python package's
-on `tests/fixtures/hdbscan/`, remade by its `make_fixture.py`).
+on `tests/fixtures/hdbscan/`, remade by its `make_fixture.py`), §1b (coordinates that cannot
+be clustered, with a time limit), `tests/e2e/behavior-discovery.mjs` §1b.
 
 ### pose/behavior-umap.js
 
@@ -3021,7 +3025,8 @@ worker runs exactly this.
 `cluster`). Two per run, so the two layouts run side by side; each has its own heap, and
 terminating it frees what UMAP held. Worker URL: the literal `new
 URL('pose/behavior-discovery-worker.js', document.baseURI)`. No bare imports in its graph;
-not in the startup graph.
+not in the startup graph. A step's error goes back as its message alone (the status bar
+shows it), with the stack in the console.
 
 **Imports.** `./behavior-embedding.js`, `./behavior-umap.js`. **Spawned by**
 `pose/behavior-discovery.js`.

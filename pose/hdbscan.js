@@ -196,6 +196,7 @@ function ufFind(parent, a) {
  * @param {Object} tree from `buildKdTree`
  * @param {Float64Array} core2 from `coreDistances2`
  * @returns {{a: Int32Array, b: Int32Array, w: Float64Array}} original point indices; w = mutual reachability
+ * @throws {Error} when the points cannot all be joined (NaN or Infinity coordinates, or a distance too large to square)
  */
 export function mutualReachabilityMst(tree, core2) {
     var n = tree.n, d = tree.d, P = tree.P, nodes = tree.count;
@@ -276,7 +277,10 @@ export function mutualReachabilityMst(tree, core2) {
             a[edges] = tree.order[bestA[c1]]; b[edges] = tree.order[bestB[c1]]; w[edges] = Math.sqrt(bestW[c1]);
             edges++; added++;
         }
-        if (!added) break;
+        // Any finite distances always give an edge, so this means a NaN or Infinity coordinate,
+        // or a distance too large to square. Going on would leave unfilled edges: linkage then
+        // joins a point to itself, labels come out wrong and condenseTree can walk forever.
+        if (!added) throw new Error('Clustering stopped: some coordinates are not numbers or are too large, so the ' + n.toLocaleString('en-US') + ' points could not all be joined');
         for (var i2 = 0; i2 < n; i2++) comp[i2] = ufFind(uf, i2);
     }
     return { a: a, b: b, w: w };

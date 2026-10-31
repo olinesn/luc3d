@@ -7,6 +7,9 @@
  *      package's (tests/fixtures/hdbscan/, its exact "generic" algorithm, with
  *      min_samples 1: larger values tie, and its own algorithms then differ too);
  *      a blob is all noise; identical points work.
+ *      1b. A coordinate that is not a number, or a distance too large to square, stops
+ *      with an error, each case in a child process with a time limit (one such layout
+ *      used to run forever, and others gave wrong labels); finite points never do.
  *   2. Nearest neighbours: exact, nearest first, the row itself first; the same
  *      however the rows are split into jobs.
  *   3. UMAP's graph (pose/behavior-umap.js): the typed graph is exactly what umap-js
@@ -40,6 +43,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Session, Skeleton, InstanceGroup } from '../pose/pose-data.js';
 import { collectBehaviorInput, resolveBody, featureSpec, floorFrame, brokenPoseFrames } from '../pose/behavior-tensor.js';
@@ -145,6 +149,57 @@ console.log('\n-- 1. HDBSCAN --');
     check(eq(clusterSizes(10000, [0.005, 0.01], 5).slice(0, 2), [50, 52]) && eq(clusterSizes(30000, [0.005, 0.01], 60).slice(-1), [300]),
         'cluster sizes: evenly over the shares');
     check(clusterSizes(1000, [0.005, 0.01], 60)[0] === 60 && clusterSizes(1000, [0.005, 0.01], 60).slice(-1)[0] === 120, 'from the floor to twice it where the shares fall below it');
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n-- 1b. Coordinates that cannot be clustered --');
+{
+    // A child process with a time limit for each: without the check the first case never
+    // comes back, and the test runner has no limit of its own.
+    const LIMIT_S = 30;
+    const url = (file) => JSON.stringify(new URL(file, import.meta.url).href);
+    const outcome = (spoil) => {
+        const src = `
+            import { buildKdTree, coreDistances2, mutualReachabilityMst } from ${url('../pose/hdbscan.js')};
+            import { clusterLayouts } from ${url('../pose/behavior-embedding.js')};
+            import { seededRandom } from ${url('../pose/behavior-forest.js')};
+            const rand = seededRandom(11), n = 2000;
+            const E = Float64Array.from({ length: 2 * n }, () => rand() * 10), E2 = Float64Array.from({ length: 2 * n }, () => rand() * 10);
+            try {
+                ${spoil};
+                console.log('no error: ' + clusterLayouts(E, E2, n, 2, { share: [0.005, 0.01], floor: 60 }).count + ' clusters');
+            } catch (e) { console.log(e.message); }`;
+        const r = spawnSync(process.execPath, ['--input-type=module', '-e', src], { encoding: 'utf8', timeout: LIMIT_S * 1000, killSignal: 'SIGKILL' });
+        return r.error || r.signal ? `still running after ${LIMIT_S} s` : (r.stdout + r.stderr).trim();
+    };
+    const STOPPED = /^Clustering stopped: some coordinates are not numbers or are too large, so the 2,000 points could not all be joined$/;
+    for (const [what, spoil] of [
+        ['every point NaN in one coordinate', 'for (let i = 0; i < n; i++) E[2 * i] = NaN'],
+        ['40 of 2,000 points NaN', 'for (let i = 0; i < 40; i++) E[80 * i] = NaN'],
+        ['one point NaN', 'E[100] = NaN'],
+        ['NaN only in the second layout', 'E2[100] = NaN'],
+        ['one point at Infinity', 'E[100] = Infinity'],
+        ['two groups too far apart to square their distance', 'for (let i = 0; i < n / 2; i++) E[2 * i] += 1e200'],
+        ['the spanning tree on its own', 'E[100] = NaN; const tree = buildKdTree(E, n, 2); mutualReachabilityMst(tree, coreDistances2(tree, 1))'],
+    ]) {
+        const said = outcome(spoil);
+        check(STOPPED.test(said), `${what}: stops with an error` + (STOPPED.test(said) ? '' : ` (said: ${said})`));
+    }
+    check(/^no error: \d+ clusters$/.test(outcome('')), 'the same layouts unspoiled: no error');
+
+    // Finite points are always joined: ties, copies, and every scale whose squares fit.
+    const WORLDS = 300;
+    let whole = 0;
+    for (let w = 0; w < WORLDS; w++) {
+        const r = seededRandom(2000 + w), m = 2 + Math.floor(r() * 150), dims = 1 + Math.floor(r() * 3), spots = 1 + Math.floor(r() * 6);
+        const scale = [1, 1e150, 1e-150, 1e-300][w % 4];
+        const X = Float64Array.from({ length: m * dims }, () => Math.floor(r() * spots) * scale);
+        try {
+            const L = hdbscanLinkage(X, m, dims, { minSamples: 1 + Math.floor(r() * 3) });
+            if (L.size[m - 2] === m && L.left.every((x, e) => x !== L.right[e])) whole++;
+        } catch (e) { /* not counted */ }
+    }
+    check(whole === WORLDS, `${WORLDS} small worlds of ties and copies, at scales from 1e-300 to 1e150: every point joined, no error (${whole})`);
 }
 
 // ---------------------------------------------------------------------------

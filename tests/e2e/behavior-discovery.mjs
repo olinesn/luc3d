@@ -9,6 +9,8 @@
  *
  *  1. The menu opens the dialog; Esc closes it. Esc during a run cancels it, in the
  *     layouts too, and leaves nothing behind.
+ *     1b. A layout spoiled with a NaN on its way to the clustering step: the run stops
+ *     with a one-line message, nothing kept, both workers ended, and the next run works.
  *  2. A run: the progress card has its steps; the behavior pool and two discovery
  *     workers do the work, and the discovery workers are gone at the end. The states
  *     layer's clusters are each mostly one planted state, every state has one, nearly
@@ -166,6 +168,30 @@ try {
     });
     check(midCancel.layers === 0 && midCancel.hidden && midCancel.workers.discovery === 2 && midCancel.workers.discoveryEnded === 2 && /cancelled/.test(midCancel.status),
         `Esc during the layouts stops them: both workers ended, no layer, in ${((Date.now() - t0Cancel) / 1000).toFixed(1)} s`, midCancel);
+
+    console.log('\n-- 1b. A layout that cannot be clustered --');
+    await page.evaluate(() => {
+        window.__workers.discovery = 0; window.__workers.discoveryEnded = 0;
+        const realPost = Worker.prototype.postMessage;
+        window.__restorePost = () => { Worker.prototype.postMessage = realPost; };
+        Worker.prototype.postMessage = function (m, transfer) {
+            if (m && m.type === 'cluster') m.E[0] = NaN;
+            return realPost.call(this, m, transfer);
+        };
+        document.getElementById('menuBehaviorDiscover').click();
+    });
+    await page.click('#bdiGo');
+    await statusIs(/Discover Behaviors failed/);
+    await page.waitForFunction(() => document.getElementById('loadingOverlay').classList.contains('hidden') && window.__workers.discoveryEnded === 2, null, { timeout: 15000 }).catch(() => {});
+    const spoiled = await page.evaluate(async () => {
+        window.__restorePost();
+        const S = await import('/pose/behavior-states.js');
+        return { status: document.getElementById('statusText').textContent, layers: S.stateLayers(window.__lucid.state.session).length,
+                 hidden: document.getElementById('loadingOverlay').classList.contains('hidden'), workers: window.__workers };
+    });
+    check(/^Discover Behaviors failed: Clustering stopped: some coordinates are not numbers or are too large, so the [\d,]+ points could not all be joined$/.test(spoiled.status),
+        `the run stops with one plain line ("${spoiled.status}")`, spoiled);
+    check(spoiled.layers === 0 && spoiled.hidden && spoiled.workers.discovery === 2 && spoiled.workers.discoveryEnded === 2, 'no layer, the card is gone, both workers ended', spoiled);
 
     console.log('\n-- 2. A run --');
     const seen = await page.evaluate(() => {
