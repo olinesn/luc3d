@@ -451,7 +451,7 @@ async function stageReopen(port) {
         const state = await luc3dState(b.page);
         fs.writeFileSync(path.join(OUT, 'reopen.json'), JSON.stringify(state));
         await compareLuc3d(state, want, 'LUC3D reopen');
-        check(!(state.stale && (state.stale.input || state.stale.poses)), 'LUC3D reopen: the predictions do not read stale', state.stale);
+        check(!(state.stale && (state.stale.input || state.stale.poses || (state.stale.settings || []).length)), 'LUC3D reopen: the predictions do not read stale', state.stale);
         summary.reopenStale = state.stale;
     } finally { await b.close(); }
 }
@@ -753,7 +753,7 @@ async function stageReopenApp(port) {
             { luc3d: state.bouts.length, app: rows.bouts.length });
         check(eq(sortRows(state.predicted.map(predKey)), sortRows(rows.preds)), `after sleap-app: every predicted bout (${rows.preds.length.toLocaleString('en-US')})`,
             { luc3d: state.predicted.length, app: rows.preds.length });
-        check(!(state.stale && (state.stale.input || state.stale.poses)), 'after sleap-app: the predictions do not read stale (the poses are the same)', state.stale);
+        check(!(state.stale && (state.stale.input || state.stale.poses || (state.stale.settings || []).length)), 'after sleap-app: the predictions do not read stale (the same poses and settings)', state.stale);
         summary.reopenAppStale = state.stale;
     } finally { await b.close(); }
 }

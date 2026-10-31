@@ -41,6 +41,7 @@ import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.j
 import { renameAnimal } from '../pose/behavior-labels.js';
 import { renamePredictedAnimal } from '../pose/behavior-predictions.js';
 import { renameStateAnimal } from '../pose/behavior-states.js';
+import { renameDiscoveryAnimal } from '../pose/behavior-discovery.js';
 import { behaviors } from '../pose/behavior-ethogram.js';
 import { setupBehaviorUi, updateBehaviorFrame } from './behavior-panel.js';
 import { detectAllFrames, detectThisFrame } from './behavior-detect.js';
@@ -58,12 +59,13 @@ import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
 import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
          loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
+import { OnDemandVideoDecoder, VideoController, hasEmbeddedVideos } from '../loading/video.js';
 
 // Pass 3i-1: tracker functions moved out of app.js.
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
 // The toolbar's Animals field, beside Track Frame / Track All.
 import { wireAnimalCountField } from './animal-count-field.js';
+import { wireReprojThresholdField } from './reproj-threshold-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -232,6 +234,7 @@ function showRenameModal(kind) {
             renameAnimal(state.session, oldIdName, newName);   // behavior labels are keyed by name
             renamePredictedAnimal(state.session, oldIdName, newName);   // and so are predictions
             renameStateAnimal(state.session, oldIdName, newName);   // and behavioral states
+            renameDiscoveryAnimal(state.session, oldIdName, newName);
             setStatus('Renamed identity to: ' + newName, 'success');
         }
         drawAllOverlays(state.currentFrame);
@@ -1582,6 +1585,9 @@ export function setupMenus() {
                 if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
                 handleLoadProject();
             }
+            // Never a file with embedded images: a save writes no images, so it would
+            // destroy them. The next Save asks where to save instead.
+            if (hasEmbeddedVideos(state)) state.slpFileHandle = null;
         } else {
             handleLoadProject();
         }
@@ -1643,6 +1649,7 @@ export function setupMenus() {
                     if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }
                     handleLoadSlpFile(slpFiles[0]);
                 }
+                if (hasEmbeddedVideos(state)) state.slpFileHandle = null;   // see menuLoadProject
             } else {
                 var slpFiles = await pickFiles({ accept: '.slp,.h5' });
                 if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }
@@ -3180,6 +3187,7 @@ export function setupUI() {
     });
 
     wireAnimalCountField();
+    wireReprojThresholdField();
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
@@ -3783,6 +3791,7 @@ export function seekToLabeledFrame(direction) {
             var num = parseFloat(raw);
             if (raw !== '' && !isNaN(num) && num > 0 && num <= 1000) {
                 state.fps = num;
+                if (state.session) state.session.typedFps = num;   // said, not a default (`detectionEnv`)
                 applyPlaybackRate();
                 if (videoController && state.isPlaying) {
                     videoController.stopPlayback();

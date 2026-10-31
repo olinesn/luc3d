@@ -33,7 +33,10 @@
 //   * settings — its detector, the body it measured (the head, tail base and
 //     nodes used, as resolved on the session's skeleton), the floor in effect
 //     (the caller's `floorKey`: the Set Origin frame or plane fit it used), or
-//     the frame rate (`runConfigPrint` differs from the run's `cfg`);
+//     the frame rate (`runConfigPrint` differs from the run's `cfg`). A frame
+//     rate nothing has said is no change (`env.fpsUnknown`: a `.slp` does not
+//     save it, so a project reopened without its videos only holds a default):
+//     the run is checked at the rate it recorded until something says;
 //   * input — the poses it read: the session's identified 3D (or, for a 2D
 //     run, its camera's 2D) no longer has the print taken when it ran
 //     (`predictionInputPrint`: an order-free hash of every value, its frame and
@@ -66,7 +69,7 @@
 //             pose/behavior-states.js, pose/pose-data.js
 
 import { behaviorById, featureSettings, behaviorPost, exclusivePeers } from './behavior-ethogram.js';
-import { boutIntervals, labelBouts } from './behavior-labels.js';
+import { boutIntervals, labelBouts, behaviorFps } from './behavior-labels.js';
 import { resolveBody, POSE_CHECK_VERSION } from './behavior-tensor.js';
 import { stateLayer, layerPrint, cleanLayerName } from './behavior-states.js';
 import { FEATURE_SPEC_VERSION } from './behavior-features.js';
@@ -509,10 +512,38 @@ export async function checkPredictionInputAsync(session, pause) {
 }
 
 /**
+ * The frame rate a session's results recorded, as a stand-in while nothing has
+ * said what it is (a `.slp` does not save one of its own): the one most of its
+ * runs did (a tie: the higher), else the labels', else 0.
+ */
+export function recordedFps(session) {
+    var st = session && _stores.get(session);
+    var count = new Map(), best = 0;
+    if (st) st.runs.forEach(function (run) {
+        if (!(run.fps > 0)) return;
+        var c = (count.get(run.fps) || 0) + 1;
+        count.set(run.fps, c);
+        if (c > (count.get(best) || 0) || (c === count.get(best) && run.fps > best)) best = run.fps;
+    });
+    return best || behaviorFps(session);
+}
+
+/**
+ * The frame rate to check a run against: the one now, or while nothing has said
+ * what it is (`env.fpsUnknown`), the one the run recorded, else the labels'.
+ */
+function fpsToCheck(session, run, env) {
+    var now = env && env.fps;
+    if (!env || !env.fpsUnknown) return now;
+    return run.fps > 0 ? run.fps : (behaviorFps(session) || now);
+}
+
+/**
  * Why a session's predictions are stale.
- * @param {{fps:number, floorKey?:string, labelPrintOf?: function(string): string,
- *          modelHashOf?: function(string): ?string}} env the frame rate and floor now, and for
- *   classifier runs the print of each behavior's training labels now and its current model's hash
+ * @param {{fps:number, fpsUnknown?:boolean, floorKey?:string, labelPrintOf?: function(string): string,
+ *          modelHashOf?: function(string): ?string}} env the frame rate (`fpsUnknown`: only a default,
+ *   nothing has said what it is) and floor now, and for classifier runs the print of each
+ *   behavior's training labels now and its current model's hash
  * @returns {{input: boolean, settings: string[], labels: string[], model: string[]}} behavior ids
  *   whose detector or settings changed since their run (or that no longer exist); whose training
  *   labels changed (classifier runs); whose model was replaced (classifier runs)
@@ -526,7 +557,7 @@ export function predictionStaleness(session, env) {
         // it, so no setting here can make it stale.
         if (run.source === 'file') return;
         var b = behaviorById(id);
-        var now = b && runConfigPrint(b, session, { fps: env && env.fps, mode: run.mode, camera: run.camera, floorKey: env && env.floorKey,
+        var now = b && runConfigPrint(b, session, { fps: fpsToCheck(session, run, env), mode: run.mode, camera: run.camera, floorKey: env && env.floorKey,
                                                    source: run.source, states: run.states });
         if (!b || now !== run.cfg) settings.push(id);
         var hash = runModelHash(run);
@@ -548,7 +579,7 @@ export function isRunStale(session, behaviorId, env) {
  * Do the session's predictions stand — some predicted bout, none of it
  * stale? Drives the blue toolbar button (pose/run-state.js). Cached input
  * state only; never walks the poses.
- * @param {{fps:number, floorKey?:string}} env
+ * @param {{fps:number, fpsUnknown?:boolean, floorKey?:string}} env
  */
 export function predictionsStand(session, env) {
     if (!hasPredictions(session)) return false;

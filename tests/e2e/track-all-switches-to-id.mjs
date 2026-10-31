@@ -1,6 +1,7 @@
 /**
  * track-all-switches-to-id.mjs — after Track All, the toolbar's coloring toggle
- * moves from "Tracks" to "Identity" (#242), in the real app.
+ * moves from "Tracks" to "Identity" (#242), and the timeline's Tracks / IDs /
+ * Both toggle from Tracks to IDs, in the real app.
  *
  * Fixture: two synthetic animals seen by three calibrated cameras over a few
  * frames (the same rig as tests/test-tracker-gui.mjs). Asserted through the
@@ -12,7 +13,11 @@
  *     switch), not only on the next frame change.
  *  3. The user can still switch back to Tracks with the button, and a Track
  *     Frame (single frame) does NOT flip it again.
- *  4. Running Track All with coloring already on Identity changes nothing and does not
+ *  4. The timeline's toggle, through its real buttons: Track All moved it from Tracks
+ *     to IDs in 1 (highlight, mode and the rows built); its Tracks button switches
+ *     back; Track Frame and Track Frame Range leave it on Tracks; Track All leaves
+ *     Both alone.
+ *  5. Running Track All with coloring already on Identity changes nothing and does not
  *     claim a switch.
  *
  * Run: node tests/e2e/track-all-switches-to-id.mjs
@@ -42,7 +47,7 @@ try {
     await answerTrackSetup(page, 2);
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js');
@@ -89,6 +94,19 @@ try {
         identities: window.__lucid.state.session.identities.length,
         threeD: window.__3d,
     }));
+    // The timeline's Tracks / IDs / Both toggle: the highlighted button, the
+    // Timeline's mode, and what its rows were built from.
+    const tlMode = () => page.evaluate(async () => {
+        const tl = (await import('/ui/app-state.js')).timeline;
+        const active = [...document.querySelectorAll('#timelineModeToggle .timeline-mode-btn.active')];
+        const rows = tl ? tl._trackSegments.filter(s => s.trackName) : [];
+        return {
+            button: active.map(b => b.getAttribute('data-mode')).join(','),
+            mode: tl ? tl.getDisplayMode() : null,
+            idRows: rows.filter(s => s._isIdentity).length,
+            trackRows: rows.filter(s => !s._isIdentity).length,
+        };
+    });
     const runTrackAll = async () => {
         const before = await page.evaluate(() => document.getElementById('statusText').textContent);
         await page.click('#tbTrackAll');
@@ -104,12 +122,17 @@ try {
     await page.click('#colorByTracks');
     let t = await toggle();
     check(t.tracks && !t.id && !t.state, 'precondition: Color is on Tracks');
+    let m = await tlMode();
+    check(m.button === 'tracks' && m.mode === 'tracks', `precondition: the timeline is on Tracks (${JSON.stringify(m)})`);
     const threeDBefore = t.threeD;
     await runTrackAll();
     t = await toggle();
     check(t.identities === 2, `Track All assigned identities (${t.identities})`);
     check(t.id && !t.tracks && t.state, 'after Track All the toggle is on Identity (button and state)');
     check(/now coloring by Identity/.test(t.status), `status says so: "${t.status}"`);
+    m = await tlMode();
+    check(m.button === 'identities' && m.mode === 'identities', `after Track All the timeline is on IDs (${JSON.stringify(m)})`);
+    check(m.idRows > 0 && m.trackRows === 0, `...and its rows are the identities (${m.idRows} ID rows, ${m.trackRows} track rows)`);
     const hasViewer = await page.evaluate(async () => !!(await import('/ui/app-state.js')).viewport3d);
     if (hasViewer) check(t.threeD > threeDBefore, `the 3D viewer was refreshed for the recolor (${threeDBefore} -> ${t.threeD})`);
     else console.log('  - no 3D viewer in this build; skipped the 3D recolor check');
@@ -123,7 +146,27 @@ try {
     t = await toggle();
     check(t.tracks && !t.state, 'Track Frame (one frame) leaves Color on Tracks');
 
-    // ---- 4. Track All with coloring already on Identity ----------------------------------
+    // ---- 4. the timeline toggle: switch back, Track Frame, a range, Both ----------
+    await page.click('#timelineToggleBtn');   // Track All closed the timeline; open it to reach its buttons
+    await page.click('#timelineModeToggle .timeline-mode-btn[data-mode="tracks"]');
+    m = await tlMode();
+    check(m.button === 'tracks' && m.mode === 'tracks' && m.trackRows > 0 && m.idRows === 0,
+        `the timeline's Tracks button still switches back (${JSON.stringify(m)})`);
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');
+    await page.waitForTimeout(300);
+    m = await tlMode();
+    check(m.button === 'tracks' && m.mode === 'tracks', `Track Frame leaves the timeline on Tracks (${JSON.stringify(m)})`);
+    const range = await page.evaluate(async () => (await import('/pose/tracker.js')).trackFrameRange(0, 3));
+    m = await tlMode();
+    check(range && range.ok && range.identities > 0, `Track Frame Range assigned identities (${range && range.identities})`);
+    check(m.button === 'tracks' && m.mode === 'tracks', `Track Frame Range leaves the timeline on Tracks (${JSON.stringify(m)})`);
+    await page.click('#timelineModeToggle .timeline-mode-btn[data-mode="both"]');
+    await runTrackAll();
+    m = await tlMode();
+    check(m.button === 'both' && m.mode === 'both' && m.trackRows > 0 && m.idRows > 0,
+        `Track All leaves a timeline on Both alone (${JSON.stringify(m)})`);
+
+    // ---- 5. Track All with coloring already on Identity ----------------------------------
     await page.click('#colorById');
     await runTrackAll();
     t = await toggle();

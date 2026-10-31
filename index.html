@@ -202,6 +202,9 @@
                         title="Write the poses and settings keypoint-MoSeq needs to find behavioral syllables, with the calls to run in Python">Export for keypoint-MoSeq…</div>
                     <div class="menu-dropdown-item" id="menuBehaviorKpmsImport"
                         title="Bring keypoint-MoSeq's syllables back as states: results.h5 or its CSV results">Import keypoint-MoSeq Results…</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuBehaviorDiscover"
+                        title="Find clusters in the poses with no labels (B-SOiD's steps), or split a labelled behavior into candidate sub-behaviors, to look at and name">Discover Behaviors…</div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
@@ -240,7 +243,7 @@
             <div class="menu-item menu-bar-button" id="menuBarDocs" style="margin-left:auto;"
                 title="Open the LUCID documentation in a new tab">Docs</div>
             <div class="menu-item menu-bar-button" id="menuBarSettings"
-                title="Settings: default triangulation, keyboard shortcuts, Tracking Wizard">Settings</div>
+                title="Settings: Tracking Wizard, Triangulation Wizard, Temporal Smoothing, keyboard shortcuts">Settings</div>
             <!-- The deployed release (v1.0.5 on the live page), from the <meta> tags
                  above. Hidden in a working tree, where nothing was stamped. -->
             <div class="menu-bar-version" id="menuBarVersion" hidden></div>
@@ -324,8 +327,16 @@
                                 <label title="Refined: slower; helps when one view's 2D point is clearly wrong"><input type="radio" name="tbTriMethod" value="ba"> Ref</label>
                             </span>
                         </div>
-                        <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
-                            title="Settings ▸ Default Triangulation">Settings…</button>
+                        <!-- The reprojection error threshold every Triangulate run uses
+                             (the Tracking Wizard's setting). Blank = off.
+                             Wired in ui/ui-wiring.js (wireReprojThresholdField). -->
+                        <label class="tri-dropdown-setting" title="Reprojection error threshold: a camera whose reprojection error (the distance on its 2D image between the prediction and the reprojection) is over this many pixels is dropped for that node, the worst first, and the node is solved again. 100 to 15 px is recommended; lower can drop good views too. Leave blank for off. Used by the next Triangulate.">
+                            <span class="tri-dropdown-setting-label">Reprojection error (px)</span>
+                            <input type="number" id="tbReprojThreshold" min="0" max="640" step="1" inputmode="decimal"
+                                placeholder="off" autocomplete="off" aria-label="Reprojection error threshold (px)">
+                        </label>
+                        <button class="tri-dropdown-item" id="tbTriangulateSettings" data-scope="settings" role="menuitem"
+                            title="Settings ▸ Triangulation Wizard">Settings…</button>
                     </div>
                 </div>
                 <!-- Smooth = Temporal Smoothing (luc3d #134), shortened to save
@@ -1606,7 +1617,7 @@
         import {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
-            readSlpStreaming,
+            readSlpStreaming, openH5Worker,
             openSlpWriter, saveSlpMergedFromStores, saveSlpMergedToSink, SlpStreamWriter,
             Camera as SioCamera, CameraGroup, RecordingSession,
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
@@ -1617,7 +1628,7 @@
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
-            readSlpStreaming,
+            readSlpStreaming, openH5Worker,
             openSlpWriter, saveSlpMergedFromStores, saveSlpMergedToSink, SlpStreamWriter,
             Camera: SioCamera, CameraGroup, RecordingSession,
             InstanceGroup: SioInstanceGroup, FrameGroup: SioFrameGroup,

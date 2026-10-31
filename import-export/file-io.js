@@ -20,6 +20,7 @@ import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPoints
 import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
+import { identityCatalogFinder, typedFileLabels, writeFileLabels } from './detection-labels.js';
 import { writePlaneMetadata } from './plane-metadata.js';
 import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js';
 import { writeBehaviorSlpMetadata } from './behavior-metadata.js';
@@ -1459,6 +1460,9 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder, nodeSc
 async function lazyCameraExportBytes(SIO, session, cameraName) {
     var loader = session && session.lazyLoader;
     if (!loader || !loader.labelsByCam || typeof loader.labelsByCam.get !== 'function') return null;
+    // One store shared by every camera (`openProjectSlp`): re-emitting it would
+    // put all of them, and all their videos, in this one camera's file.
+    if (loader._sharedStore) return null;
     // Safety guard: this path re-emits the RAW columnar store verbatim — it
     // has no notion of a live, manually-corrected Instance object sitting in
     // a resident FrameGroup. If any resident frame carries a user-type
@@ -2227,11 +2231,12 @@ export function buildSlpLabelsAllViews(session, views, videoFiles, outside) {
     if (session.identities && session.identities.length > 0) {
         for (var iid = 0; iid < session.identities.length; iid++) {
             var lucidId = session.identities[iid];
-            var sioId = new SIO.Identity({ name: lucidId.name, color: lucidId.color });
+            var sioId = new SIO.Identity({ name: lucidId.name, color: lucidId.color, metadata: lucidId.metadata });
             sioIdentities.push(sioId);
             lucidIdToSioId.set(lucidId.id, sioId);
         }
     }
+    var findDetectionIdentity = identityCatalogFinder(SIO, sioIdentities);
 
     // 4. Build sleap-io Cameras and Videos — one per camera
     var sioCameras = [];
@@ -2249,7 +2254,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles, outside) {
         sioCameras.push(sioCam);
         lucidCamToSioCam.set(cam.name, sioCam);
 
-        var videoPath = cam.name + '.mp4';
+        var videoPath = null;
         var vw = 0, vh = 0, fc = 0;
         for (var vi = 0; vi < (views || []).length; vi++) {
             var v = views[vi];
@@ -2272,16 +2277,29 @@ export function buildSlpLabelsAllViews(session, views, videoFiles, outside) {
                 }
             }
         }
+        // No video loaded (the project was opened without them): the file's own record
+        // of it, so its shape and filename survive the save, as on the streaming writer.
+        var fileVideo = session.fileVideos ? session.fileVideos.get(cam.name) : null;
+        var channels = 1;
+        if (fileVideo) {
+            var fileShape = fileVideo.shape || [];
+            if (!vw && !vh && fileShape[3]) channels = Number(fileShape[3]) || 1;
+            fc = fc || Number(fileShape[0]) || Number(fileVideo.fileFrames) || 0;
+            vh = vh || Number(fileShape[1]) || 0;
+            vw = vw || Number(fileShape[2]) || 0;
+            if (!videoPath && typeof fileVideo.filename === 'string') videoPath = fileVideo.filename;
+        }
+        if (!videoPath) videoPath = cam.name + '.mp4';
         var video = new SIO.Video({
             filename: videoPath,
             backendMetadata: {
                 type: 'MediaVideo',
-                shape: [fc, vh, vw, 1],
+                shape: [fc, vh, vw, channels],
                 filename: videoPath,
             },
             openBackend: false,
         });
-        video.shape = [fc, vh, vw, 1];
+        video.shape = [fc, vh, vw, channels];
         sioVideos.push(video);
     });
 
@@ -2362,6 +2380,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles, outside) {
             // = undefined leaking into SIO.Instance for trackless instances.
             var track = (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
             var sioInst = newSioInstance(inst, track);
+            writeFileLabels(sioInst, inst, findDetectionIdentity);
             lucidToSio.set(inst, sioInst);
             return sioInst;
         }
@@ -2949,16 +2968,21 @@ export async function parseSlpViaSleapIO(file, onProgress) {
 
     // --- videos[] ---
     var videos = (labels.videos || []).map(function (v, i) {
+        // A name is one string below, but an image sequence's is a list of its images.
+        var oneName = function (name) { return Array.isArray(name) ? name[0] : name; };
         var srcName = null;
-        if (v.sourceVideo && v.sourceVideo.filename) srcName = v.sourceVideo.filename;
+        if (v.sourceVideo && v.sourceVideo.filename) srcName = oneName(v.sourceVideo.filename);
         else if (v.backendMetadata && v.backendMetadata.source_filename) srcName = v.backendMetadata.source_filename;
         var embedded = !!v.hasEmbeddedImages;
         return {
             index: i,
-            filename: v.filename != null ? v.filename : null,
+            filename: v.filename != null ? oneName(v.filename) : null,
             sourceFilename: srcName,
             backendType: embedded ? 'HDF5Video' : 'MediaVideo',
             shape: v.shape != null ? v.shape : null,
+            // A file can know a video's frame count but not its size, `[600, 0, 0, 1]`,
+            // which leaves `shape` empty (patch `(video frame count)`).
+            fileFrames: (v.backendMetadata && v.backendMetadata.lucidFileFrames) || 0,
             embedded: embedded,
             dataset: (v.backendMetadata && v.backendMetadata.dataset) != null ? v.backendMetadata.dataset : null,
             // The whole record, for a video a save writes back as it found it
@@ -3003,7 +3027,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
     // --- identities[] (file-level fallback; per-session lives in
     // sessions[].metadata.lucid.identities, which the importer prefers) ---
     var identities = (labels.identities || []).map(function (id) {
-        return { name: id.name, color: id.color != null ? id.color : undefined };
+        return { name: id.name, color: id.color != null ? id.color : undefined, metadata: id.metadata };
     });
 
     return {
@@ -3018,6 +3042,50 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         provenance: labels.provenance || null,
         behaviorEvents: behaviorEvents,
     };
+}
+
+/**
+ * Whether the raw worker can stand in for the typed reader on `file`: not when it holds
+ * what only the typed reader can read (grouping and 3D in `/session_data`, an identity
+ * catalog or labels on detections), and not when that can't be told.
+ */
+async function rawWorkerCanStandIn(file) {
+    var h5;
+    try {
+        h5 = await window.SleapIO.openH5Worker(file, {
+            h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href,
+        });
+    } catch (e) {
+        return false;
+    }
+    var keys = h5.keys();
+    h5.close().catch(function () { /* the answer is already in */ });
+    return !['session_data', 'identity', 'categories', 'embeddings'].some(function (k) { return keys.indexOf(k) >= 0; });
+}
+
+/**
+ * Read a `.slp` for a load: `parseSlpViaSleapIO`, and the raw worker (`parseSlpH5`)
+ * only if that throws on a file the raw worker can read in full, e.g. a non-standard
+ * split-field export. Standing in for the typed reader on a saved project, the raw
+ * worker opens the 2D with every group and all the 3D gone (and the labels on
+ * detections, on a file that has them), with nothing said, and the next save writes
+ * that over the project. And when the file could not be read
+ * (`err.failedRead`, LUCID local patch (failed read)), the error is the answer: nothing
+ * is opened, and opening the file again reads it from the start.
+ *
+ * @param {File} file
+ * @param {(msg:string)=>void} [onProgress]
+ * @returns {Promise<Object>} slpData
+ */
+export async function parseSlpWithRawFallback(file, onProgress) {
+    try {
+        return await parseSlpViaSleapIO(file, onProgress);
+    } catch (err) {
+        // Too new for this reader is too new for the raw worker as well.
+        if (isNewerSlpFormatError(err) || (err && err.failedRead) || !(await rawWorkerCanStandIn(file))) throw err;
+        console.warn('[slp-read] sleap-io.js streaming read failed — falling back to the raw h5wasm worker:', err);
+        return await parseSlpH5(file, onProgress);
+    }
 }
 
 /**
@@ -3065,6 +3133,8 @@ function _typedInstanceToSlpData(inst, typedTracks, numNodes, PredictedInstance)
         points: points,
         occluded: occluded,
         pointScores: isPred && inst._score ? inst._score : null,
+        trackingScore: inst.trackingScore || 0,
+        fileLabels: typedFileLabels(inst),
     };
 }
 

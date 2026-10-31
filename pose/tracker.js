@@ -41,7 +41,7 @@ import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../u
 import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
 import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js';
 import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js';
-import { collapseTimeline } from '../ui/timeline-controller.js';
+import { collapseTimeline, getTimelineDisplayMode, setTimelineDisplayMode } from '../ui/timeline-controller.js';
 import { collapseViewport3D } from '../ui/panel-visibility.js';
 import { noteTrackRun } from './run-state.js';
 import { confirmRetrackWithBehaviorLabels } from '../ui/behavior-confirm.js';
@@ -1669,6 +1669,13 @@ async function runTrackingPass(range) {
         // nothing new to look at. Recolors 2D + 3D through ui-wiring's handler;
         // the overlay redraw below is then a cheap repeat.
         var switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
+        // ...and, after Track All, the timeline's rows from Tracks to IDs (its
+        // Tracks / IDs / Both toggle) for the same reason. IDs or Both already
+        // show them, so those stay; so does a range, inspected on the timeline
+        // as the user left it. The rows are rebuilt once, by refreshTracks below.
+        if (!isRange && lres.numIdentities > 0 && getTimelineDisplayMode() === 'tracks') {
+            setTimelineDisplayMode('identities', { refresh: false });
+        }
         // ...and only the predictions (User, Reproj, Errors off), the layer tracking produced.
         var predOnly = lres.numIdentities > 0 && showPredictedOnly();
         // ...and, after Track All, node trails at ¼ s if they are off: each

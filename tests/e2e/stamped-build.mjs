@@ -22,6 +22,8 @@
  *     graph was fetched up front instead of discovered import by import.
  *  6. The release label the stamp wrote shows beside the menu bar's Settings
  *     button (ui/version-label.js), right of it and inside the window.
+ *  7. Discover Behaviors runs on the stamped copy: its workers and the vendored
+ *     umap-js (neither in the startup graph) load stamped, each once.
  *
  * Run: node tests/e2e/stamped-build.mjs
  */
@@ -85,7 +87,7 @@ try {
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     page.on('request', r => urls.push({ url: r.url(), type: r.resourceType() }));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
     // ---- 5: at ready, every same-site module requested is a preload or one of index.html's own tags
     const atReady = urls.map(r => new URL(r.url)).filter(u => u.host === `localhost:${PORT}` && /\.m?js$/.test(u.pathname));
     const tags = new Set(['/app.js', '/lib/h5wasm/h5wasm.iife.js']);
@@ -116,13 +118,35 @@ try {
     check(v.rightOfSettings && v.inWindow, 'menu bar: the label sits right of Settings, on its line, inside the window');
     check(v.select === 'text', 'menu bar: the label is selectable (the rest of the bar is not)');
 
+    // ---- 7: discovery, which loads its worker and umap-js only when it runs
+    urls.length = 0;
+    const found = await page.evaluate(async (t) => {
+        const v = '?v=' + t;
+        window.LUCID_BEHAVIOR_WORKER = 2;
+        const [tensor, features, forest, D, W] = await Promise.all(['pose/behavior-tensor.js', 'pose/behavior-features.js', 'pose/behavior-forest.js',
+            'pose/behavior-discovery.js', 'tests/e2e/fixtures/discovery-world.js'].map((p) => import('./' + p + v)));
+        const ctx = W.discoveryContext(3000, { tensor, features, forest });
+        const res = await D.discoverBehaviors({ sources: [{ session: ctx.session, name: 'world', ctx }] });
+        window.LUCID_BEHAVIOR_WORKER = undefined;
+        return { error: res.error || null, clusters: res.clusters ? res.clusters.length : 0, frames: res.sources ? Object.keys(res.sources[0].animals).length : 0 };
+    }, TOKEN);
+    check(!found.error && found.clusters >= 2 && found.frames === 2, `discovery runs on the stamped copy (${found.clusters} clusters${found.error ? ', ' + found.error : ''})`);
+    const da = audit(urls);
+    const loaded = urls.map(r => new URL(r.url)).filter(u => u.host === `localhost:${PORT}`);
+    const hasAll = ['/pose/behavior-discovery-worker.js', '/lib/umap-js/umap-js.esm.js', '/pose/behavior-umap.js', '/pose/behavior-worker.js'].filter(p => !loaded.some(u => u.pathname === p));
+    check(hasAll.length === 0, `discovery: its workers and umap-js were requested${hasAll.length ? ' — not: ' + hasAll.join(', ') : ''}`);
+    check(da.unstamped.length === 0, `discovery: ${da.n} code requests, all stamped${da.unstamped.length ? ' — unstamped: ' + da.unstamped.slice(0, 5).join(', ') : ''}`);
+    check(errs.length === 0, 'discovery: no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
+    const inPreload = preloads.filter(u => /umap-js|behavior-umap|behavior-embedding|behavior-discovery-worker/.test(u.pathname)).map(u => u.pathname);
+    check(inPreload.length === 0, `discovery: umap-js and its steps are not in the startup graph${inPreload.length ? ' — ' + inPreload.join(', ') : ''}`);
+
     // ---- 4: the browser suite on the stamped copy
     const tp = await browser.newPage();
     const turls = [], tfails = [];
     tp.on('request', r => turls.push({ url: r.url(), type: r.resourceType() }));
     tp.on('console', m => { if (m.text().startsWith('  FAIL:')) tfails.push(m.text()); });
     await tp.goto(`http://localhost:${PORT}/tests/test-runner.html`);
-    await tp.waitForFunction(() => { const el = document.querySelector('.test-summary'); return el && /\d+\s*\/\s*\d+/.test(el.textContent); }, { timeout: 120000 });
+    await tp.waitForFunction(() => { const el = document.querySelector('.test-summary'); return el && /\d+\s*\/\s*\d+/.test(el.textContent); }, null, { timeout: 120000 });
     const summary = (await tp.textContent('.test-summary')).replace(/\s+/g, ' ').trim();
     const m = summary.match(/(\d+)\s*\/\s*(\d+)/);
     check(m && m[1] === m[2] && +m[2] > 1000 && tfails.length === 0, `browser suite on the stamped copy: ${summary}${tfails.length ? ' — ' + tfails.slice(0, 3).join(' | ') : ''}`);

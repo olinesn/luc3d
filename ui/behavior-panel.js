@@ -25,7 +25,7 @@
 //             scoring near the threshold) and Next disagreement ▸ (labels the
 //             predicted bouts contradict), each shown with Accept / Reject /
 //             Skip ▸ (ui/behavior-train.js)
-//   States    keypoint-MoSeq's syllables, imported from its results: usage,
+//   States    keypoint-MoSeq's syllables and discovery's clusters: usage,
 //             median length, how the labels fall in each, names, Next ▸, and
 //             Promote to predictions (ui/behavior-states.js)
 //   Summary   per animal × behavior: bouts, seconds, share of the labelled
@@ -55,7 +55,7 @@ import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-mo
 import { showBehaviorImportModal, showBehaviorExportModal } from './behavior-io-modal.js';
 import { ABSENT_COLOR } from './behavior-timeline.js';
 import {
-    detectAllFrames, detectAllSessions, detectThisFrame, frameReadout, onFrameReadout, detectionEnv, setupBehaviorDetection,
+    detectAllFrames, detectAllSessions, detectThisFrame, frameReadout, onFrameReadout, detectionEnv, detectionFps, setupBehaviorDetection,
 } from './behavior-detect.js';
 import {
     classifierStatus, activeLearning, setActiveLearningBehavior, nextActiveItem, labelActiveItem, skipActiveItem,
@@ -67,6 +67,7 @@ import { showBehaviorRulesModal } from './behavior-rules-modal.js';
 import { behaviorConfirm } from './behavior-confirm.js';
 import { renderStatesSection, setupBehaviorStates } from './behavior-states.js';
 import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.js';
+import { showBehaviorDiscoveryModal } from './behavior-discovery-modal.js';
 import { setInfoTip } from './info-tip.js';
 import { ICON_INFO } from './plane-definition.js';
 import { isInfoPanelVisible } from './panel-visibility.js';
@@ -105,7 +106,7 @@ function esc(s) {
 }
 function n(x) { return Number(x || 0).toLocaleString('en-US'); }
 function fr(f) { return (f + 1).toLocaleString('en-US'); }
-function fps() { return state.fps > 0 ? state.fps : 30; }
+function fps() { return detectionFps(); }
 function secs(frames) { return (frames / fps()).toFixed(1); }
 function boutKey(b) { return [b.behaviorId, b.animal, b.target, b.start, b.end].join('|'); }
 
@@ -847,6 +848,7 @@ export function setupBehaviorUi(deps) {
     on('menuBehaviorImportModels', showImportClassifiers);
     on('menuBehaviorKpmsExport', showKpmsExportModal);
     on('menuBehaviorKpmsImport', showKpmsImportModal);
+    on('menuBehaviorDiscover', function () { showBehaviorDiscoveryModal(); });
     on('tbBehaviorMode', toggleBehaviorMode);
     on('behaviorModeBtn', toggleBehaviorMode);
     on('behaviorModeExit', exitBehaviorMode);

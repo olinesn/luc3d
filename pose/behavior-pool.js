@@ -21,8 +21,11 @@
  * worker are in memory.
  *
  * Job kinds: 'scores' (rule detectors), 'features' (feature columns), 'rows'
- * (classifier training rows, as codes), 'forest' (classifier scores) and
- * 'trees' (grow some trees of a forest; no poses). What every job of a run
+ * (classifier training rows, as codes), 'forest' (classifier scores), 'trees'
+ * (grow some trees of a forest; no poses), and for behavior discovery
+ * (pose/behavior-discovery-core.js) 'binrows' (features in 100 ms bins), 'knn'
+ * (exact nearest neighbours; no poses), 'clusterTrees' (a cluster's forest; no
+ * poses) and 'clusterLabels' (every frame's cluster). What every job of a run
  * shares — the forests to score with, the binned training matrix — goes to
  * each worker ONCE per run (`opts.shared = {key, value}`; a worker keeps the
  * last one it was sent, and gets it again only when the key changes), not
@@ -44,6 +47,7 @@
 import { computeFeatureChunk } from './behavior-features.js';
 import { scoreDetectorsChunk } from './behavior-rules.js';
 import { extractTrainingRows, scoreForestsChunk, trainTrees } from './behavior-forest.js';
+import { binRowsChunk, clusterLabelsChunk, knnRows, trainClusterTrees } from './behavior-discovery-core.js';
 
 /** Below this many animal-frames a run stays inline. */
 export const MIN_WORKLOAD = 40000;
@@ -101,10 +105,14 @@ function terminatePool() {
  */
 export function runJob(job, shared) {
     if (job.kind === 'trees') return trainTrees(shared, job.trees);
+    if (job.kind === 'clusterTrees') return trainClusterTrees(shared, job.trees);
+    if (job.kind === 'knn') return knnRows(shared, job.range, job.k);
     const chunk = { start: job.chunk.start, end: job.chunk.end, padStart: job.chunk.padStart, padEnd: job.chunk.padEnd, data: job.data };
     if (job.kind === 'scores') return scoreDetectorsChunk(job.spec, chunk, job.plan, job.extra);
     if (job.kind === 'rows') return extractTrainingRows(job.spec, chunk, job.request);
     if (job.kind === 'forest') return scoreForestsChunk(job.spec, chunk, job.plan, shared);
+    if (job.kind === 'binrows') return binRowsChunk(job.spec, chunk, job.request);
+    if (job.kind === 'clusterLabels') return clusterLabelsChunk(job.spec, chunk, job.plan, shared);
     return computeFeatureChunk(job.spec, chunk, job.request);
 }
 

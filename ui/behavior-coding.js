@@ -20,7 +20,7 @@
 // UI-only changes (a new focal animal, a selection) repaint through
 // `requestBehaviorRepaint` here.
 //
-// Depends on: ui/app-state.js, pose/behavior-ethogram.js,
+// Depends on: ui/app-state.js, ui/behavior-detect.js (`sessionFps`), pose/behavior-ethogram.js,
 //             pose/behavior-labels.js, import-export/save-load.js,
 //             ui/id-switch-highlight.js (the node mask boxes share)
 
@@ -30,6 +30,7 @@ import {
     labelRange, clearRange, toggleState, noteBehaviorFps, listBouts, activeAt, hasBehaviorData, runningStates,
 } from '../pose/behavior-labels.js';
 import { setStatus } from '../import-export/save-load.js';
+import { sessionFps } from './behavior-detect.js';
 import { idSwitchBoxNodeMask } from './id-switch-highlight.js';
 
 var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null, mode: false, review: null };
@@ -119,19 +120,21 @@ export function setBehaviorBoxesVisible(on) {
 
 /**
  * The predicted bout being reviewed (the Predictions list's selection), or
- * the stretch the active-learning queue shows (ui/behavior-train.js), or
- * null: `{behaviorId, animal, target, start, end, score, from}`. The viewer
- * boxes its animals, dashed and marked "?", while the playhead is in it.
- * @param {string} [from] who set it: 'predictions' (default) or 'learning' —
- *   each clears only its own
+ * the stretch the active-learning queue shows (ui/behavior-train.js), or a
+ * state's example (ui/behavior-discovery.js: `label` and `color` instead of a
+ * behavior), or null: `{behaviorId, animal, target, start, end, score, from}`.
+ * The viewer boxes its animals, dashed and marked "?", while the playhead is in it.
+ * @param {string} [from] who set it: 'predictions' (default), 'learning' or
+ *   'states' — each clears only its own
  */
 export function setReviewFocus(session, bout, from) {
     var next = session && bout ? { session: session, behaviorId: bout.behaviorId, animal: bout.animal, target: bout.target || '',
-                                   start: bout.start, end: bout.end, score: bout.score, from: from || 'predictions' } : null;
+                                   start: bout.start, end: bout.end, score: bout.score, from: from || 'predictions',
+                                   label: bout.label || '', color: bout.color || '' } : null;
     var cur = ui.review;
     if (!next && !cur) return;
     if (next && cur && cur.session === next.session && cur.behaviorId === next.behaviorId && cur.animal === next.animal &&
-        cur.target === next.target && cur.start === next.start && cur.end === next.end && cur.from === next.from) return;
+        cur.target === next.target && cur.start === next.start && cur.end === next.end && cur.from === next.from && cur.label === next.label) return;
     ui.review = next;
     requestBehaviorRepaint({ ui: true });
 }
@@ -179,7 +182,7 @@ export function behaviorBoxesAt(session, frame, opts) {
                      parts: [[pb.name, pb.color], [' · ', '#ffffff'], who(p.animal), [pairGlyph(pb) + '? (press 1–9)', '#ffffff']] });
     }
     var r = live ? ui.review : null;
-    var rb = r && r.session === session && frame >= r.start && frame <= r.end ? behaviorById(r.behaviorId) : null;
+    var rb = r && r.session === session && frame >= r.start && frame <= r.end ? (r.label ? { name: r.label, color: r.color } : behaviorById(r.behaviorId)) : null;
     if (rb) {
         var rp = [[rb.name + '?', rb.color], [' · ', '#ffffff'], who(r.animal)];
         if (r.target) rp.push([pairGlyph(rb), '#ffffff'], who(r.target));
@@ -303,7 +306,7 @@ function automaticTarget(session, animal) {
 function nameOf(b) { return '"' + b.name + '"'; }
 
 function apply(session, b, animal, target, range, absent, frame) {
-    noteBehaviorFps(session, state.fps);
+    noteBehaviorFps(session, sessionFps(session));
     var who = animal + (target ? pairGlyph(b) + target : '');
     if (range) {
         var r = labelRange(session, b.id, animal, target, range.start, range.end, !absent);
