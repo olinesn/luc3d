@@ -2836,7 +2836,9 @@ floorKey, source})` = detector (a classifier run: its post-processing, its
 exclusive group with the peers' post-processing, `FEATURE_SPEC_VERSION`) +
 resolved body (head, tail base, used nodes, on the
 session's skeleton) + the floor in effect + fps + 2D/3D + `POSE_CHECK_VERSION`
-(which frames count as broken tracking), compared with the run's `cfg` — for a
+(which frames count as broken tracking), compared with the run's `cfg`; while
+`env.fpsUnknown` (nothing has said the frame rate) the print takes the rate the
+run recorded, else the labels' (`behaviorFps`), so a default is no change — for a
 classifier run also when its training labels changed (`env.labelPrintOf(id)`
 ≠ its `labels`) or a newer model replaced its own (`env.modelHashOf(id)` set
 and ≠ its hash; a reopened project has no model until retrained, and retraining
@@ -2879,7 +2881,7 @@ post-processing changed: bouts re-derived from the scores in memory).
 `import-export/behavior-metadata.js`, `pose/run-state.js`, `ui/behavior-detect.js`,
 `ui/behavior-panel.js`, `ui/behavior-timeline.js`, `ui/ui-wiring.js` (Rename
 Identity). **Tests.** `tests/test-behavior-rules.mjs` §6–7,
-`tests/test-behavior-metadata.mjs` §5, `tests/test-behavior-classifier.mjs` §9,
+`tests/test-behavior-metadata.mjs` §5–6, `tests/test-behavior-classifier.mjs` §9,
 `tests/e2e/behavior-rules.mjs`, `tests/e2e/behavior-label-roundtrip.mjs`,
 `tests/e2e/behavior-classifier.mjs`, `tests/test-kpms-io.mjs` §11 (states runs).
 
@@ -12264,7 +12266,8 @@ inline), a readout of each animal / pair, score and condition values, and
 `onFrameReadout`), writing nothing.
 `computeFeatureColumns(ctx, names)`: whole-session columns for the settings
 dialog, broken frames skipped too. `floorKey()` / `detectionEnv()`: the floor in effect and fps, what
-staleness is checked against, and for classifier runs `labelPrintOf` (cached) and `modelHashOf`. `setupBehaviorDetection` registers the markDirty
+staleness is checked against, `fpsUnknown` while nothing has said the active session's rate (no video
+decoded, no campy manifest, `session.typedFps` not what the fps box holds), and for classifier runs `labelPrintOf` (cached) and `modelHashOf`. `setupBehaviorDetection` registers the markDirty
 hook: every edit notes the poses may have changed, and 600 ms after the edits
 stop a SLICED re-print runs between tasks (abandoned and rescheduled by a newer
 edit) — never on a draw. Measured: 180,000 frames × 5 animals × 15 nodes,

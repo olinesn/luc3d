@@ -13,16 +13,20 @@
  *   - a session file added to an open project is merged by behavior name;
  *   - garbage is ignored;
  *   - detectors, feature settings and predictions (Phase 2) are written only
- *     once set, read back, and come in by name like the rest.
+ *     once set, read back, and come in by name like the rest;
+ *   - predictions made at 60 fps stand when the project reopens without its
+ *     videos (the file does not save the frame rate, so it then only holds the
+ *     default 30), and what really changed still makes them stale.
  */
 
-import { writeBehaviorMetadata, readBehaviorMetadata, resetBehaviorState, BEHAVIOR_METADATA_KEYS }
+import { writeBehaviorMetadata, writeBehaviorSlpMetadata, readBehaviorMetadata, resetBehaviorState, BEHAVIOR_METADATA_KEYS }
     from '../import-export/behavior-metadata.js';
 import { addBehavior, behaviors, behaviorByName, setBehaviorDetector, setFeatureSettings, featureSettings }
     from '../pose/behavior-ethogram.js';
 import { labelRange, toggleState, setBehaviorCursor, noteBehaviorFps, exportBoutRows, listBouts, isRunning }
     from '../pose/behavior-labels.js';
-import { setBehaviorRun, predictedBouts, runConfigPrint } from '../pose/behavior-predictions.js';
+import { setBehaviorRun, predictedBouts, runConfigPrint, predictionStaleness, predictionsStand, behaviorRunOf }
+    from '../pose/behavior-predictions.js';
 
 let passed = 0, failed = 0;
 const check = (cond, msg) => {
@@ -30,6 +34,7 @@ const check = (cond, msg) => {
     else { failed++; console.log('  FAIL ' + msg); }
 };
 const roundTrip = (o) => JSON.parse(JSON.stringify(o));
+const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 console.log('\n1. Nothing to say, nothing written');
 {
@@ -151,6 +156,79 @@ console.log('\n5. Detectors, feature settings and predictions');
         'a known behavior without a detector takes the incoming one');
     setFeatureSettings({});
     check(featureSettings() === null, 'settings set back to nothing: null (never written)');
+}
+
+console.log('\n6. A project reopened without its videos: the frame rate');
+{
+    resetBehaviorState();
+    const rear = addBehavior({ name: 'rear' }).behavior;
+    const chase = addBehavior({ name: 'chase', social: true }).behavior;
+    const groom = addBehavior({ name: 'groom' }).behavior;
+    const detector = { conditions: [{ feature: 'Nose height', op: '>', value: 0.5 }], minDuration: 0.3 };
+    setBehaviorDetector(rear.id, detector);
+    setBehaviorDetector(chase.id, { conditions: [{ feature: 'head–head distance', op: '<', value: 0.3 }] });
+    const skeleton = { nodes: ['Nose', 'Head', 'Trunk', 'Tail1'], edges: [[0, 1], [1, 2], [2, 3]] };
+    const s = { name: 's', skeleton };
+    const FLOOR = 'fit';
+    const runAt = (b, fps, source) => ({ behaviorId: b.id, source, cfg: runConfigPrint(b, s, { fps, mode: '3d', floorKey: FLOOR, source }), fps, mode: '3d',
+        bouts: [{ animal: 'id_1', target: b.social ? 'id_2' : '', start: 5, end: 9, score: 0.8 }] });
+    setBehaviorRun(s, runAt(rear, 60));
+    // A classifier run prints the frame rate too.
+    setBehaviorRun(s, runAt(groom, 60, 'model:0123456789abcdef'));
+    const saved = () => roundTrip((() => { const o = {}; writeBehaviorMetadata(o, s); return o; })());
+    const lucid = saved();
+    const slpLucid = {};
+    writeBehaviorSlpMetadata(slpLucid, s);
+    check(lucid.behaviorPredictions.runs.every(r => r.fps === 60) && slpLucid.behaviorPredictions.runs.every(r => r.fps === 60),
+        'both file forms keep each run\'s frame rate with its settings print');
+
+    resetBehaviorState();
+    const back = { name: 's', skeleton };
+    readBehaviorMetadata(back, lucid);
+    const noVideo = { fps: 30, fpsUnknown: true, floorKey: FLOOR };
+    const staleIds = (env) => predictionStaleness(back, env).settings;
+    const bRear = behaviorByName('rear'), bGroom = behaviorByName('groom');
+    check(eq(staleIds({ fps: 30, floorKey: FLOOR }), [bRear.id, bGroom.id]), 'taken at its word, 30 fps is not what they ran at (the false alarm)');
+    check(eq(staleIds(noVideo), []), 'no video: 30 is only a default, so the runs are checked at the 60 they recorded');
+    check(predictionsStand(back, noVideo), 'and they stand');
+    check(eq(staleIds({ fps: 60, floorKey: FLOOR }), []), 'the 60 fps video loaded: fresh');
+    check(eq(staleIds({ fps: 25, floorKey: FLOOR }), [bRear.id, bGroom.id]), 'a 25 fps video loaded: a real difference, stale');
+    check(!predictionsStand(back, { fps: 25, floorKey: FLOOR }), 'and nothing stands');
+
+    // What really changed still shows, with no video.
+    setBehaviorDetector(bRear.id, { conditions: [{ feature: 'Nose height', op: '>', value: 0.6 }], minDuration: 0.3 });
+    check(eq(staleIds(noVideo), [bRear.id]), 'a changed rule: stale');
+    setBehaviorDetector(bRear.id, detector);
+    check(eq(staleIds(noVideo), []), 'put back: fresh');
+    setFeatureSettings({ nodeRoles: { head: 'Head' } });
+    check(eq(staleIds(noVideo), [bRear.id, bGroom.id]), 'another body (the head moved to another node): stale');
+    setFeatureSettings(null);
+    check(eq(staleIds({ fps: 30, fpsUnknown: true, floorKey: 'origin:0,0,0:0,0,1' }), [bRear.id, bGroom.id]), 'a floor that moved: stale');
+    check(eq(staleIds(noVideo), []), 'all put back: fresh');
+
+    // A run made here, before any video: its rate is what it recorded.
+    setBehaviorRun(back, { behaviorId: behaviorByName('chase').id, cfg: runConfigPrint(behaviorByName('chase'), back, { fps: 30, mode: '3d', floorKey: FLOOR }),
+        fps: 30, mode: '3d', bouts: [{ animal: 'id_1', target: 'id_2', start: 1, end: 2, score: 0.9 }] });
+    check(eq(staleIds(noVideo), []), 'runs at different rates: each checked at its own');
+    check(eq(staleIds({ fps: 60, floorKey: FLOOR }), [behaviorByName('chase').id]), 'and the 60 fps video makes only the 30 fps one stale');
+
+    // A save of the reopened project writes what it read.
+    const again = {};
+    writeBehaviorMetadata(again, back);
+    const sameRun = (id) => again.behaviorPredictions.runs.find(r => r.behavior === id);
+    check(sameRun(bRear.id).fps === 60 && sameRun(bRear.id).cfg === behaviorRunOf(back, bRear.id).cfg, 'saving without the video keeps each run\'s rate and print');
+
+    // A file with no rate on its run: the labels' is what is on record.
+    resetBehaviorState();
+    const groomOnly = addBehavior({ name: 'groom' }).behavior;
+    const old = { name: 'old', skeleton };
+    setBehaviorRun(old, { behaviorId: groomOnly.id, cfg: runConfigPrint(groomOnly, old, { fps: 50, mode: '3d', floorKey: FLOOR }), mode: '3d',
+        bouts: [{ animal: 'id_1', target: '', start: 1, end: 2, score: 0.9 }] });
+    check(behaviorRunOf(old, groomOnly.id).fps === 0, 'a run with no rate of its own');
+    check(eq(predictionStaleness(old, noVideo).settings, [groomOnly.id]), 'and no labels: the default is all there is, so it reads stale');
+    noteBehaviorFps(old, 50);
+    check(eq(predictionStaleness(old, noVideo).settings, []), 'with labels made at 50 fps: checked at 50, fresh');
+    check(eq(predictionStaleness(old, { fps: 30, floorKey: FLOOR }).settings, [groomOnly.id]), 'but a real rate of 30 still reads stale');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

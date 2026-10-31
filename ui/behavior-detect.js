@@ -89,12 +89,27 @@ export function floorKey() {
 }
 
 /**
- * What predictions are checked against now: the frame rate and the floor;
- * for classifier runs, each behavior's training labels (a cached print) and
- * its current model.
+ * Has nothing said what the active session's frame rate is? No video decoded,
+ * no campy manifest, nothing typed in the fps box for this session. A `.slp`
+ * does not save the rate, so `state.fps` then only holds a default.
+ */
+function frameRateUnknown() {
+    var session = state.session;
+    var rec = session && session.campyRecording;
+    if (rec && rec.frameRate) return false;
+    if (session && session.typedFps > 0 && session.typedFps === state.fps) return false;
+    return !(state.views || []).some(function (v) {
+        return v && v.decoder && v.decoder.samples && v.decoder.samples.length > 0;
+    });
+}
+
+/**
+ * What predictions are checked against now: the frame rate (`fpsUnknown` when
+ * it is only a default) and the floor; for classifier runs, each behavior's
+ * training labels (a cached print) and its current model.
  */
 export function detectionEnv() {
-    return { fps: detectionFps(), floorKey: floorKey(), modelHashOf: modelHashOf,
+    return { fps: detectionFps(), fpsUnknown: frameRateUnknown(), floorKey: floorKey(), modelHashOf: modelHashOf,
              labelPrintOf: function (id) { return labelPrintOf(state.sessions || [], id); } };
 }
 

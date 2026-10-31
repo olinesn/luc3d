@@ -24,17 +24,25 @@
  *  6. Save → reopen: predictions, detectors and feature settings come back
  *     through the eager writer; a project with none writes no key.
  *  7. 2D fallback: a single-camera session with no 3D detects from its 2D.
+ *  8. Reopened without its videos: predictions made at 60 fps stand through both
+ *     real readers, though `state.fps` is the default 30 (a `.slp` does not save
+ *     the rate) and stays so. A changed rule, body or floor still reads stale;
+ *     so does a rate that is really different: a 10 fps video, the fps box, a
+ *     campy manifest. The 60 fps video keeps them fresh.
  *
  * Run: node tests/e2e/behavior-rules.mjs   (spawns its own http.server; PORT= to move it)
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const PORT = Number(process.env.PORT || 8197);
+const VIDEO_60 = path.join(repoRoot, 'tests', 'fixtures', 'barcode-60', 'barcode-60.mp4');
+const VIDEO_10 = path.join(repoRoot, 'tests', 'fixtures', 'bframes-test', 'bframes-test.mp4');
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
@@ -387,6 +395,174 @@ try {
     check(!twoD.heights, 'without heights');
     check(twoD.bouts.length === 1 && twoD.bouts[0][0] === 'm1' && Math.abs(twoD.bouts[0][1] - 300) <= 4 && Math.abs(twoD.bouts[0][2] - 399) <= 4,
         'm1 running on 300–399 is detected (' + JSON.stringify(twoD.bouts) + ')');
+
+    console.log('\n-- 8. reopened without its videos --');
+    const openApp = async () => {
+        const p = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+        p.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
+        await p.goto(`http://localhost:${PORT}/index.html`);
+        await p.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
+        return p;
+    };
+    // Two mice on two cameras; mouse 0 rears on 500–620. Detected at 60 fps, saved by the real writer.
+    const maker = await openApp();
+    const made = await maker.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js');
+        const AS = await import('/ui/app-state.js');
+        const fileio = await import('/import-export/file-io.js');
+        const eth = await import('/pose/behavior-ethogram.js');
+        const det = await import('/ui/behavior-detect.js');
+        const P = await import('/pose/behavior-predictions.js');
+        const NODES = ['Nose', 'Head', 'Neck', 'Trunk', 'TTI', 'Tail1'];
+        const ALONG = [45, 30, 15, 0, -40, -70], H = [15, 25, 30, 30, 15, 5];
+        const T = 1200, CAMS = ['cam0', 'cam1'];
+        const mtx = [[1000, 0, 128], [0, 1000, 128], [0, 0, 1]];
+        const cams = CAMS.map((n, i) => new pd.Camera(n, mtx, [0, 0, 0, 0, 0], [0, 0.1 * i, 0], [10 * i, 0, -1000], [256, 256]));
+        const s = new pd.Session(cams, new pd.Skeleton('m', NODES, [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5]]), ['t0', 't1'], 'Sixty');
+        const ids = ['id_0', 'id_1'].map(nm => s.addIdentity(nm).id);
+        for (let t = 0; t < T; t++) {
+            const fg = new pd.FrameGroup(t);
+            s.addFrameGroup(fg);
+            s.instanceGroups.set(t, ids.map((id, k) => {
+                const g = new pd.InstanceGroup(t * 10 + k + 1, id);
+                for (const cn of CAMS) {
+                    const inst = new pd.Instance(NODES.map((_, n) => [50 + 2 * n + 80 * k + t * 0.1, 60 + n]), k, 'predicted', 0.9);
+                    g.addInstance(cn, inst);
+                    fg.addInstance(cn, inst);
+                }
+                const ang = t / 120 + k * 3, cx = 700 * k + 200 * Math.cos(ang), cy = 200 * Math.sin(ang), hd = ang + Math.PI / 2;
+                const rear = k === 0 && t >= 500 && t <= 620;
+                const p = new Float64Array(NODES.length * 3);
+                for (let n = 0; n < NODES.length; n++) {
+                    p[3 * n] = cx + ALONG[n] * Math.cos(hd); p[3 * n + 1] = cy + ALONG[n] * Math.sin(hd);
+                    p[3 * n + 2] = rear && n <= 2 ? [95, 85, 65][n] : H[n];
+                }
+                g.points3d = p;
+                return g;
+            }));
+        }
+        AS.state.sessions = [s]; AS.state.activeSessionIdx = 0; AS.state.session = s;
+        AS.state.totalFrames = T; AS.state.currentFrame = 0; AS.state.views = []; AS.state.fps = 60;
+        AS.timeline.setTotalFrames(T); AS.timeline.setData(s);
+        const rear = eth.addBehavior({ name: 'rear', key: 'r' }).behavior;
+        eth.setBehaviorDetector(rear.id, { conditions: [{ feature: 'Nose height', op: '>', value: 0.5 }], minDuration: 0.1, maxGap: 0 });
+        await det.detectAllFrames();
+        const views = CAMS.map(n => ({ name: n, videoWidth: 256, videoHeight: 32, frameCount: T }));
+        const files = CAMS.map(n => ({ name: n, assignedCamera: n, videoPath: n + '.mp4' }));
+        const u = new Uint8Array(await window.SleapIO.saveSlpToBytes(fileio.buildSlpLabelsAllViews(s, views, files)));
+        let bin = '';
+        for (let i = 0; i < u.length; i += 8192) bin += String.fromCharCode.apply(null, u.subarray(i, i + 8192));
+        return { bouts: P.predictedBouts(s).map(b => [b.animal, b.start, b.end]), runFps: P.behaviorRunOf(s, rear.id).fps, slp: btoa(bin) };
+    });
+    await maker.close();
+    check(eq(made.bouts, [['id_0', 500, 620]]) && made.runFps === 60, 'detected at 60 fps: the planted rear');
+
+    /** Open the saved file through a real reader, going on without videos at its prompt. */
+    const reopen = (p, route) => p.evaluate(async ({ route, slp }) => {
+        const skip = setInterval(() => {
+            if (document.getElementById('videoSelectOverlay')) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        }, 50);
+        const file = new File([Uint8Array.from(atob(slp), c => c.charCodeAt(0))], 'sixty.slp');
+        if (route === 'eager') await (await import('/import-export/slp-import.js')).handleLoadSlpFile(file);
+        else await (await import('/loading/session-loader.js')).handleLoadProjectSlpLazy(file);
+        clearInterval(skip);
+    }, { route, slp: made.slp });
+    /** The real File ▸ Load Videos button, with this clip as both cameras' video. */
+    const loadVideos = async (p, clip) => {
+        const buffer = fs.readFileSync(clip);
+        p.once('filechooser', fc => fc.setFiles(['cam0', 'cam1'].map(nm => ({ name: nm + '.mp4', mimeType: 'video/mp4', buffer }))));
+        await p.evaluate(() => document.getElementById('btnLoadVideos').click());
+        await p.waitForFunction(() => window.__lucid.state.views.filter(v => v.decoder && v.decoder.samples && v.decoder.samples.length).length === 2 &&
+            document.getElementById('loadingOverlay').classList.contains('hidden'), null, { timeout: 60000 });
+    };
+    /** What the app says now: the stale check, the blue button and the banner, as the user sees them. */
+    const look = (p) => p.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const P = await import('/pose/behavior-predictions.js');
+        const det = await import('/ui/behavior-detect.js');
+        const s = AS.state.session;
+        for (const t0 = performance.now(); P.predictionCheckPending(s) && performance.now() - t0 < 20000;) await new Promise(r => setTimeout(r, 50));
+        const tab = document.querySelector('.panel-tab[data-tab="tabBehavior"]');
+        if (tab && !tab.classList.contains('active')) tab.click();
+        (await import('/ui/rendering.js')).drawAllOverlays(AS.state.currentFrame);
+        (await import('/ui/behavior-panel.js')).refreshBehaviorPanel();
+        const env = det.detectionEnv();
+        const banner = document.querySelector('.behavior-stale');
+        return { fps: AS.state.fps, shown: document.getElementById('fpsDisplay').textContent, views: AS.state.views.length, lazy: !!s.lazyLoader,
+                 runFps: P.behaviorRunOf(s, 'b1').fps, bouts: P.predictedBouts(s).length, input: P.predictionStaleness(s, env).input,
+                 settings: P.predictionStaleness(s, env).settings, stands: P.predictionsStand(s, env),
+                 blue: document.getElementById('tbBehavior').classList.contains('active'), banner: banner ? banner.textContent : '' };
+    });
+    const isFresh = (v) => !v.settings.length && !v.input && v.stands && v.blue && !v.banner;
+    const isStale = (v) => eq(v.settings, ['b1']) && !v.stands && !v.blue && /settings of rear changed/.test(v.banner);
+    const change = (p, what) => p.evaluate(async (what) => {
+        const eth = await import('/pose/behavior-ethogram.js');
+        if (what === 'rule') eth.setBehaviorDetector('b1', { conditions: [{ feature: 'Nose height', op: '>', value: 0.6 }], minDuration: 0.1, maxGap: 0 });
+        if (what === 'rule back') eth.setBehaviorDetector('b1', { conditions: [{ feature: 'Nose height', op: '>', value: 0.5 }], minDuration: 0.1, maxGap: 0 });
+        if (what === 'body') eth.setFeatureSettings({ nodeRoles: { head: 'Head' } });
+        if (what === 'floor') eth.setFeatureSettings({ floor: { source: 'plane', plane: 99 } });
+        if (what === 'settings back') eth.setFeatureSettings(null);
+    }, what);
+
+    for (const route of ['eager', 'lazy']) {
+        const p = await openApp();
+        await reopen(p, route);
+        const v0 = await look(p);
+        check(v0.lazy === (route === 'lazy') && v0.views === 0 && v0.bouts === 1 && v0.runFps === 60, route + ' reopen, no video: the run and its 60 fps came back');
+        check(v0.fps === 30 && /^30\.0 fps/.test(v0.shown), route + ': state.fps stays the default 30, and the fps box says so');
+        check(isFresh(v0), route + ': not called out of date: blue, no banner ' + JSON.stringify(v0.settings) + ' ' + v0.banner);
+        for (const [what, back] of [['rule', 'rule back'], ['body', 'settings back'], ['floor', 'settings back']]) {
+            await change(p, what);
+            const v = await look(p);
+            check(isStale(v), route + ': a changed ' + what + ' still reads stale');
+            await change(p, back);
+            check(isFresh(await look(p)), route + ': and put back, fresh');
+        }
+        await loadVideos(p, VIDEO_60);
+        const v1 = await look(p);
+        check(Math.abs(v1.fps - 60) < 0.01, route + ': the 60 fps video sets state.fps to 60 (' + v1.fps + ')');
+        check(isFresh(v1), route + ': and the run stays fresh');
+        await p.close();
+
+        const q = await openApp();
+        await reopen(q, route);
+        check(isFresh(await look(q)), route + ': fresh again, reopened');
+        await loadVideos(q, VIDEO_10);
+        const v2 = await look(q);
+        check(Math.abs(v2.fps - 10) < 0.01, route + ': a 10 fps video sets state.fps to 10 (' + v2.fps + ')');
+        check(isStale(v2), route + ': a real difference in frame rate: stale, and the banner says so');
+        // The next project, with no video, is not judged by this one's rate (a lazy open keeps `state.fps`).
+        await reopen(q, route);
+        const v3 = await look(q);
+        check(v3.views === 0 && isFresh(v3), route + ': that file opened again in the same page, no video: fresh at state.fps ' + v3.fps);
+        await q.close();
+    }
+
+    // The fps box is how a project without video says its rate.
+    const typeFps = async (p, value) => {
+        await p.dblclick('#fpsDisplay');
+        await p.fill('#fpsDisplay input', String(value));
+        await p.press('#fpsDisplay input', 'Enter');
+    };
+    const box = await openApp();
+    await reopen(box, 'eager');
+    await typeFps(box, 25);
+    const typed = await look(box);
+    check(typed.fps === 25 && isStale(typed), 'no video, 25 typed in the fps box: stale');
+    await typeFps(box, 60);
+    const typed60 = await look(box);
+    check(typed60.fps === 60 && isFresh(typed60), '60 typed: fresh');
+    await typeFps(box, 30);
+    const typed30 = await look(box);
+    check(typed30.fps === 30 && isStale(typed30), '30 typed is said, not a default: stale');
+    await box.close();
+
+    // So does a campy recording's manifest, even at 30.
+    const camp = await openApp();
+    await reopen(camp, 'eager');
+    await camp.evaluate(() => { window.__lucid.state.session.campyRecording = { frameRate: 30 }; });
+    check(isStale(await look(camp)), 'no video, a campy manifest saying 30 fps: stale');
+    await camp.close();
 
     console.log('\n-- page errors --');
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
