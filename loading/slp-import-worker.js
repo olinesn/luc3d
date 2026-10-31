@@ -50,12 +50,30 @@ var lazyNFrames = 0;
 var lazyTransposed = false;
 var lazyTrackOccupancy = null; // optional, full array (small: nFrames * nTracks bytes)
 var lazyTracksVal = null;      // full decompressed tracks TypedArray (loaded once, fast indexing)
+var failedRead = null;         // the first read of the file that threw (see the init below)
 
 // Initialize h5wasm, then drain any queued messages
 (async function () {
     try {
         await h5wasm.ready;
         FS = h5wasm.FS;
+        // Every read of the file passes through here. The reads below are each
+        // try/caught, to treat something the file doesn't have as absent, and a
+        // failed read lands in the same catches: without this, a file that goes
+        // away part-way through parses to a result with whatever came after it
+        // missing, for the next save to make permanent. After one, HDF5 is stopped
+        // mid-call and nothing it returns can be trusted, so `throwIfFailedRead`
+        // turns the whole parse into that error (the same rule as the `LUCID local
+        // patch (failed read)` in lib/sleap-io's worker).
+        var fsRead = FS.read;
+        FS.read = function () {
+            try {
+                return fsRead.apply(this, arguments);
+            } catch (e) {
+                failedRead = failedRead || e;
+                throw e;
+            }
+        };
         h5wasmReady = true;
         progress('h5wasm initialized');
 
@@ -96,6 +114,10 @@ onmessage = async function (e) {
 
 function progress(msg) {
     postMessage({ type: 'progress', message: msg });
+}
+
+function throwIfFailedRead() {
+    if (failedRead) throw failedRead;
 }
 
 async function parseSlp(file) {
@@ -287,10 +309,13 @@ async function parseSlp(file) {
                         if (isEmbedded && vj.source_video) {
                             sourceFilename = vj.source_video.filename ||
                                 (vj.source_video.backend && vj.source_video.backend.filename) || null;
+                            // An image sequence's name is a list of its images.
+                            if (Array.isArray(sourceFilename)) sourceFilename = sourceFilename[0];
                         }
+                        var videoFilename = backend.filename || vj.filename || null;
                         videos.push({
                             index: vi,
-                            filename: backend.filename || vj.filename || null,
+                            filename: Array.isArray(videoFilename) ? videoFilename[0] : videoFilename,
                             sourceFilename: sourceFilename,
                             backendType: isEmbedded ? 'HDF5Video' : 'MediaVideo',
                             shape: backend.shape || null,
@@ -315,6 +340,10 @@ async function parseSlp(file) {
 
         progress('framesData: ' + (framesData ? 'OK (' + framesData.frame_id.length + ' rows)' : 'NULL'));
         progress('instancesData: ' + (instancesData ? 'OK (' + (instancesData.instance_type ? instancesData.instance_type.length : '?') + ' rows)' : 'NULL'));
+
+        // This reader leaves out what only the typed reader keeps; the caller reads such
+        // a file again with that one (import-export/detection-labels.js).
+        var hasDetectionLabels = !!(f.get('identity/links') || f.get('categories/links') || f.get('embeddings'));
 
         var pointsData = readPoints(f, 'points', ['x', 'y', 'visible', 'complete']);
         var predPointsData = readPoints(f, 'pred_points', ['x', 'y', 'visible', 'complete', 'score']);
@@ -476,6 +505,7 @@ async function parseSlp(file) {
         // A separate frame-worker.js handles on-demand frame extraction
         // using SLPPackageReader, which avoids loading all frames into memory.
 
+        throwIfFailedRead();
         f.close();
         try { FS.unmount('/work'); } catch (e) { /* ignore */ }
 
@@ -505,6 +535,7 @@ async function parseSlp(file) {
             identities: identitiesArr,
             // The file's provenance dict, kept through a save (import-export/slp-provenance.js).
             provenance: metadataJson.provenance || null,
+            hasDetectionLabels: hasDetectionLabels,
         };
         if (columnar) {
             resultData.columnar = columnar;
@@ -513,6 +544,7 @@ async function parseSlp(file) {
                 columnar.frameIdx.buffer, columnar.videoIdx.buffer, columnar.instOffsets.buffer,
                 columnar.trackIdx.buffer, columnar.score.buffer, columnar.type.buffer,
                 columnar.xy.buffer, columnar.occluded.buffer, columnar.pointScore.buffer,
+                columnar.trackingScore.buffer,
             ]);
         } else {
             postMessage({ type: 'result', data: resultData });
@@ -768,6 +800,7 @@ function parseAnalysisH5(f, filename) {
         var skelName = 'skeleton';
         var skeleton = { name: skelName, nodes: nodeNames, edges: edges };
 
+        throwIfFailedRead();
         f.close();
         try { FS.unmount('/work'); } catch (e) { /* ignore */ }
 
@@ -918,6 +951,7 @@ function openH5Lazy(file) {
             dataset: null,
         }];
 
+        throwIfFailedRead();
         progress('Lazy H5 ready: ' + lazyNFrames.toLocaleString('en-US') + ' frames, ' + lazyNTracks + ' tracks, ' + lazyNNodes + ' nodes');
 
         postMessage({
@@ -1067,6 +1101,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
     var xy = new Float64Array(nInstRows * numNodes * 2);
     var occluded = new Uint8Array(nInstRows * numNodes);
     var pointScore = new Float64Array(nInstRows * numNodes);
+    var trackingScore = new Float64Array(nInstRows);
     xy.fill(NaN);
     pointScore.fill(NaN);
     var nF = 0, nI = 0;
@@ -1097,6 +1132,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
             trackIdx[nI] = Number(instancesData.track[ji]);
             score[nI] = Number(instancesData.score[ji]);
             type[nI] = instType === 1 ? 1 : 0;
+            if (instancesData.tracking_score) trackingScore[nI] = Number(instancesData.tracking_score[ji]) || 0;
             nI++;
         }
         if (nI > first) {
@@ -1114,6 +1150,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
         trackIdx: trackIdx.slice(0, nI), score: score.slice(0, nI), type: type.slice(0, nI),
         xy: xy.slice(0, nI * numNodes * 2), occluded: occluded.slice(0, nI * numNodes),
         pointScore: pointScore.slice(0, nI * numNodes),
+        trackingScore: trackingScore.slice(0, nI),
     };
 }
 

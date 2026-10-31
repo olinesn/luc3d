@@ -5277,7 +5277,7 @@ kbd {
   font-size: 13px;
 }
 
-/* Settings ▸ Default Triangulation: the DLT-vs-Refined diagram
+/* Settings ▸ Triangulation Wizard: the DLT-vs-Refined diagram
    (ui/triangulation-methods-figure.js). */
 .tri-methods {
   margin: 16px 0 0;
@@ -5305,7 +5305,7 @@ kbd {
   background: var(--bg-primary);
 }
 
-/* Each card is the choice (Settings ▸ Default Triangulation). */
+/* Each card is the choice (Settings ▸ Triangulation Wizard). */
 .tri-method-choice {
   cursor: pointer;
   transition: background var(--transition-fast),
@@ -6061,12 +6061,31 @@ kbd {
 
 .settings-modal-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
   padding: 12px 18px;
   border-top: 1px solid var(--border-color);
 }
+
+/* Settings ▸ Triangulation Wizard: what Triangulate All will use. */
+.settings-tri-readout {
+  margin-right: auto;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-secondary);
+}
+
+.settings-tri-readout strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-tri-readout-row.is-changed strong { color: var(--accent); }
+
+.settings-tri-readout-was { color: var(--text-muted); }
 
 .settings-btn {
   padding: 7px 18px;
@@ -8461,3 +8480,347 @@ div.track-summary-steps { padding-left: 0; }
 .identity-gallery-map-canvas { display: block; border-radius: 3px; }
 .identity-gallery-map-tip { display: none; position: absolute; pointer-events: none; font-size: 10px; padding: 1px 4px; border-radius: 3px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); font-variant-numeric: tabular-nums; }
 @media (max-width: 820px) { .identity-gallery-row { grid-template-columns: 1fr; } }
+
+/* ===================================================================== */
+/* Behavior labelling (ui/behavior-*.js)                                  */
+/* ===================================================================== */
+
+/* Label Behaviors mode banner: the plane-mode bar in green. */
+.behavior-mode-bar {
+  background: rgba(76, 200, 120, 0.12);
+  border-bottom-color: rgba(76, 200, 120, 0.45);
+}
+.behavior-mode-bar .plane-mode-dot {
+  background: #4cc878;
+  box-shadow: 0 0 6px #4cc878;
+}
+
+.behavior-head {
+  display: flex;
+  gap: 6px;
+  margin: 8px 8px 4px;
+}
+.behavior-head .panel-btn.active {
+  background: rgba(76, 200, 120, 0.25);
+  border-color: rgba(76, 200, 120, 0.6);
+}
+.behavior-empty {
+  margin: 6px 10px;
+}
+
+.behavior-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.behavior-tag {
+  display: inline-block;
+  padding: 0 4px;
+  margin-left: 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-button);
+}
+
+/* Animals: one button each, digit = its key in the mode. */
+.behavior-animals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+.behavior-animal {
+  padding: 2px 8px 2px 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--animal-color, #9aa0a6);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.behavior-animal.is-focal {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  border-left-color: var(--animal-color, #9aa0a6);
+}
+.behavior-animal.is-target-choice {
+  outline: 1px dashed #4cc878;
+  outline-offset: 1px;
+}
+.behavior-digit {
+  display: inline-block;
+  min-width: 12px;
+  margin-right: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.behavior-pending,
+.behavior-armed,
+.behavior-running {
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.behavior-pending {
+  color: #4cc878;
+}
+.behavior-running-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0;
+}
+.behavior-running-row .panel-btn,
+.behavior-armed .panel-btn,
+.behavior-pending .panel-btn {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+/* Behavior buttons (Coding section and the timeline range menu). */
+.behavior-buttons,
+.behavior-range-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+.behavior-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.behavior-chip-btn:hover {
+  background: var(--surface-hover, var(--bg-button-hover));
+}
+.behavior-chip-btn.is-on {
+  border-color: #4cc878;
+  box-shadow: inset 0 0 0 1px #4cc878;
+}
+.behavior-chip-btn kbd {
+  margin-left: 5px;
+  padding: 0 3px;
+  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+}
+.behavior-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.behavior-tools .panel-btn {
+  flex: 0 0 auto;
+}
+
+/* Bouts */
+.behavior-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.behavior-filters .panel-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.behavior-bout {
+  padding: 3px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.behavior-bout:hover {
+  background: var(--bg-tertiary);
+}
+.behavior-bout.is-current {
+  background: var(--accent-dim);
+}
+.behavior-bout.is-absent .behavior-bout-name {
+  color: var(--text-muted);
+}
+.behavior-bout-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.behavior-bout-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.behavior-bout-who {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.behavior-bout-frames,
+.behavior-bout-dur {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.behavior-bout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 2px 16px;
+}
+.behavior-bout-actions .panel-btn {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+.behavior-bout-actions input[type="text"] {
+  flex: 1 1 100px;
+  min-width: 80px;
+}
+
+/* Summary */
+.behavior-summary td.num,
+.behavior-confirm-counts td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.behavior-orphans {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--warning-color);
+}
+.behavior-orphan .panel-btn {
+  flex: 0 0 auto;
+}
+.behavior-fps-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Timeline Shift+drag menu */
+.behavior-range-menu {
+  position: fixed;
+  z-index: 15000;
+  max-width: 420px;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.behavior-range-head {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.behavior-range-who {
+  color: var(--text-secondary);
+}
+.behavior-range-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* Ethogram editor and Mark reviewed (one scroller: the modal itself) */
+.multi-frame-modal.behavior-ethogram-modal {
+  max-width: 900px;
+  width: min(900px, 94vw);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+.behavior-ed-lead {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.behavior-ed-table input[type="text"],
+.behavior-ed-table select {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+}
+.behavior-ed-table input[type="color"] {
+  width: 26px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: none;
+}
+.behavior-ed-name { min-width: 110px; }
+.behavior-ed-key { width: 28px !important; text-align: center; }
+.behavior-ed-group { min-width: 70px; }
+.behavior-ed-desc { min-width: 140px; }
+.behavior-ed-center { text-align: center; }
+.behavior-ed-move {
+  white-space: nowrap;
+}
+.behavior-ed-move button {
+  padding: 1px 5px;
+  font-size: 10px;
+}
+.behavior-ed-msg {
+  min-height: 16px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.behavior-ed-msg.is-warning {
+  color: var(--warning-color);
+}
+.behavior-ed-actions {
+  align-items: center;
+}
+.behavior-ed-spacer {
+  flex: 1 1 auto;
+}
+.behavior-rev-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.behavior-rev-range input[type="number"] {
+  width: 90px;
+}
+.behavior-rev-cols {
+  display: flex;
+  gap: 12px;
+}
+.behavior-rev-cols fieldset {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+.behavior-confirm-counts {
+  margin-top: 10px;
+  font-size: 12px;
+}

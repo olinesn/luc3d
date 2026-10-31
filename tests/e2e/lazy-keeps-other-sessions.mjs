@@ -12,9 +12,10 @@
  * reader and with Python, and both must report what the source holds.
  *
  *  A. Every layout, two saves (see `FILES`): frames in any order, an open session with
- *     no frame or no camera, a (video, frame) listed twice, a frame with no instance, every
- *     kind of thing a session can hold, the same as an old file holds it inline, a video
- *     two sessions share.
+ *     no frame, a (video, frame) listed twice, a frame with no instance, every kind of thing
+ *     a session can hold, identities on poses, the same as an old file holds it inline, a
+ *     video two sessions share. A first session with no camera or no video map, where the
+ *     route differs.
  *  B. The real route: File ▸ Open on a file over 200 MB.
  *  C. Edits on the open session: a corrected frame goes first in the file (every other
  *     frame's position moves), a deleted pose compacts the store, a deleted track
@@ -113,6 +114,8 @@ def read(path):
     except Exception as e:
         return {"error": type(e).__name__ + ": " + str(e)[:160]}
     poses = sorted(pose_row(lf.video.filename, lf.frame_idx, i) for lf in labels.labeled_frames for i in lf.instances)
+    pose_identities = sorted(lf.video.filename + "|" + str(lf.frame_idx) + "|" + num(i.points["xy"][0][0]) + "|" + i.identity.name
+                             for lf in labels.labeled_frames for i in lf.instances if getattr(i, "identity", None) is not None)
     sessions, groups, rich, details = [], [], [], []
     for si, s in enumerate(labels.sessions):
         cams = {}
@@ -155,6 +158,7 @@ def read(path):
         "videoShapes": {v.filename: list(v.backend_metadata.get("shape") or []) for v in labels.videos},
         "identities": [i.name for i in labels.identities],
         "identityOwners": sorted(sorted(v) for v in shared.values()),
+        "poseIdentities": pose_identities,
         "provenance": {k: v for k, v in labels.provenance.items() if k not in ("source", "exported_at", "sleap_version", "filename")},
         "sessions": sessions, "details": details, "poses": poses, "groups": sorted(groups), "rich": sorted(rich),
     }
@@ -230,6 +234,9 @@ save("first_empty.slp", fc + fd, [a, b, c, d],
 a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
 save("first_no_cameras.slp", fc + fd, [c, d],
      [sio.RecordingSession(camera_group=sio.CameraGroup(cameras=[])), session([("camC", c, fc), ("camD", d, fd)], 7.0)])
+a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
+save("first_no_map.slp", fa + fb + fc + fd, [a, b, c, d],
+     [session([("camA", None, []), ("camB", None, [])]), session([("camC", c, fc), ("camD", d, fd)], 7.0)])
 
 # One (video, frame) listed twice, before every closed session's rows: a save that drops
 # or miscounts it sends every later group member to the wrong pose.
@@ -289,25 +296,45 @@ def rich_parts():
 frames, videos, sessions, identities = rich_parts()
 save("rich.slp", frames, videos, sessions, identities=identities)
 
-# The same file the way a writer before /session_data left it: everything inline in sessions_json.
+# The same file with identities on poses too, an open session's and a closed one's. They
+# are matched by name, so a closed group on C must not end up on a second C.
 frames, videos, sessions, identities = rich_parts()
-labels = sio.Labels(labeled_frames=frames, videos=videos, skeletons=[sk], tracks=[T1, T2], sessions=sessions, identities=identities)
-labels.save(os.path.join(out, "legacy.slp"), embed=False)
-with h5py.File(os.path.join(out, "legacy.slp"), "r+") as f:
-    video_to_idx = {v: i for i, v in enumerate(labels.videos)}
-    lf_to_idx = {lf: i for i, lf in enumerate(labels.labeled_frames)}
-    # Python's reader takes NaN as null there.
-    def no_nan(v):
-        if isinstance(v, dict):
-            return {str(k): no_nan(x) for k, x in v.items()}
-        if isinstance(v, (list, tuple)):
-            return [no_nan(x) for x in v]
-        return None if isinstance(v, float) and v != v else v
-    legacy = [json.dumps(no_nan(session_to_dict(s, video_to_idx, lf_to_idx, identities=labels.identities))) for s in labels.sessions]
-    del f["session_data"]
-    del f["sessions_json"]
-    f.create_dataset("sessions_json", data=np.array([x.encode() for x in legacy], dtype=object), dtype=h5py.special_dtype(vlen=bytes))
-    f["metadata"].attrs["format_id"] = 2.7
+by_name = {i.name: i for i in identities}
+for lf in frames:
+    if lf.video.filename == "camA.mp4" and lf.frame_idx == 0:
+        lf.instances[0].identity = by_name["A"]
+    if lf.video.filename == "camD.mp4" and lf.frame_idx == 1:
+        lf.instances[1].identity = by_name["A"]
+    if lf.video.filename == "camE.mp4" and lf.frame_idx == 20:
+        lf.instances[0].identity = by_name["C"]
+save("pose_identities.slp", frames, videos, sessions, identities=identities)
+
+# The same file the way a writer before /session_data left it: everything inline in sessions_json.
+def save_inline(name, labels):
+    labels.save(os.path.join(out, name), embed=False)
+    with h5py.File(os.path.join(out, name), "r+") as f:
+        video_to_idx = {v: i for i, v in enumerate(labels.videos)}
+        lf_to_idx = {lf: i for i, lf in enumerate(labels.labeled_frames)}
+        # Python's reader takes NaN as null there.
+        def no_nan(v):
+            if isinstance(v, dict):
+                return {str(k): no_nan(x) for k, x in v.items()}
+            if isinstance(v, (list, tuple)):
+                return [no_nan(x) for x in v]
+            return None if isinstance(v, float) and v != v else v
+        legacy = [json.dumps(no_nan(session_to_dict(s, video_to_idx, lf_to_idx, identities=labels.identities))) for s in labels.sessions]
+        del f["session_data"]
+        del f["sessions_json"]
+        f.create_dataset("sessions_json", data=np.array([x.encode() for x in legacy], dtype=object), dtype=h5py.special_dtype(vlen=bytes))
+        f["metadata"].attrs["format_id"] = 2.7
+
+frames, videos, sessions, identities = rich_parts()
+save_inline("legacy.slp", sio.Labels(labeled_frames=frames, videos=videos, skeletons=[sk], tracks=[T1, T2], sessions=sessions, identities=identities))
+
+# Two sessions, inline and with no identity: the raw reader stands in only for a file with none of the newer tables.
+a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
+save_inline("old_two_sessions.slp", sio.Labels(labeled_frames=fa + fb + fc + fd, videos=[a, b, c, d], skeletons=[sk], tracks=[T1, T2],
+                                              sessions=[session([("camA", a, fa), ("camB", b, fb)]), session([("camC", c, fc), ("camD", d, fd)], 7.0)]))
 
 # Two sessions naming one video.
 a, b, d = video("camA.mp4"), video("camB.mp4"), video("camD.mp4")
@@ -547,6 +574,7 @@ function compare(what, got, want) {
     }
     if (want.identities && got.identities) check(eq(got.identities, want.identities), what + ': the identity list', got.identities);
     if (want.identityOwners && got.identityOwners) check(eq(got.identityOwners, want.identityOwners), what + ': sessions that shared an identity still do', got.identityOwners);
+    if (want.poseIdentities && got.poseIdentities) check(eq(got.poseIdentities, want.poseIdentities), what + ': identities on poses', diff(got.poseIdentities, want.poseIdentities));
     if (want.provenance && got.provenance) check(eq(got.provenance, want.provenance), what + ': provenance', got.provenance);
 }
 
@@ -555,14 +583,7 @@ function checkSave(what, saved, want) {
     return savedForPython(saved.bytes, what + ', Python', want);
 }
 
-/** `expectedFor`, the eager writer's way: see section I. */
-function expectedForFolder(source, extra) {
-    const want = expectedFor(source, extra);
-    for (const shared of Object.values(source.sessions[0])) delete want.closedVideoShapes[shared];
-    return want;
-}
-
-const FILES = ['two_sessions', 'closed_first', 'first_empty', 'first_no_cameras', 'dup_rows', 'empty_frames', 'rich', 'legacy', 'shared_video', 'shared_reordered'];
+const FILES = ['two_sessions', 'closed_first', 'first_empty', 'dup_rows', 'empty_frames', 'rich', 'pose_identities', 'legacy', 'shared_video', 'shared_reordered'];
 const LAYOUT_FILES = process.env.FILES ? process.env.FILES.split(',') : FILES;
 
 /** What every save of `name` must hold, from Python's read of the source. */
@@ -576,6 +597,7 @@ function expectedFor(source, extra) {
         firstCameras: source.details[0].cameras.map(c => [c.name, c.rvec, c.tvec, c.matrix, c.dist, c.size]),
         identities: source.identities,
         identityOwners: source.identityOwners,
+        poseIdentities: source.poseIdentities,
         closedVideoShapes: Object.fromEntries(source.sessions.slice(1).flatMap(s => Object.values(s)).map(name => [name, source.videoShapes[name]])),
     }, extra);
 }
@@ -606,6 +628,29 @@ async function lazyRoute() {
             checkSave(what, saved, want);
             if (gen === 1) firstVideos = saved.read.videos;
             else check(eq(saved.read.videos, firstVideos), what + ': the video list did not move', [saved.read.videos, firstVideos]);
+            bytes = saved.bytes;
+        }
+    }
+
+    console.log('\nA2. A first session that says little about its videos');
+    for (const [name, route] of [['first_no_cameras', 'lazy'], ['first_no_map', 'eager']]) {
+        // No camera at all: it reads like a plain file, one camera per video, and those
+        // videos are the other session's too. Cameras but no video map: the file goes the
+        // older way, which reads every session. Either way nothing of the other session goes.
+        let bytes = readFile(name);
+        const src = sources[name];
+        for (let gen = 1; gen <= 2; gen++) {
+            const page = await open('lazy', bytes);
+            const lazy = await page.evaluate(() => !!window.__lucid.state.session.lazyLoader);
+            const saved = await saveAndRead(page);
+            const what = `${name}, save ${gen}`;
+            // A save gives the session cameras once, so the second open is an ordinary one.
+            if (gen === 1) check(lazy === (route === 'lazy'), `${what}: opened ${route === 'lazy' ? 'lazily' : 'in full'}`, lazy);
+            check(eq(saved.read.poses, src.poses), `${what}: every pose`, diff(saved.read.poses, src.poses));
+            const closedGroups = list => list.filter(g => /camC=/.test(g)).map(g => g.replace(/^s\d+\|/, ''));
+            check(eq(closedGroups(saved.read.groups), closedGroups(src.groups)), `${what}: the other session's groups`, diff(closedGroups(saved.read.groups), closedGroups(src.groups)));
+            check(saved.read.sessions.some(s => s.camC === 'camC.mp4' && s.camD === 'camD.mp4'), `${what}: the other session's cameras`, saved.read.sessions);
+            savedForPython(saved.bytes, `${what}, Python`, { poses: src.poses });
             bytes = saved.bytes;
         }
     }
@@ -1051,7 +1096,7 @@ async function folderLayouts() {
     console.log('\nI. Every layout, the folder route, two saves');
     for (const name of LAYOUT_FILES) {
         let bytes = readFile(name);
-        const want = expectedForFolder(sources[name]);
+        const want = expectedFor(sources[name]);
         let firstVideos = null;
         for (let gen = 1; gen <= 2; gen++) {
             const page = await open('folder', bytes);
@@ -1070,6 +1115,28 @@ async function folderLayouts() {
             checkSave(what, saved, want);
             if (gen === 1) firstVideos = saved.read.videos;
             else check(eq(saved.read.videos, firstVideos), what + ': the video list did not move', [saved.read.videos, firstVideos]);
+            bytes = saved.bytes;
+        }
+    }
+
+    console.log('\nI2. A first session that says little about its videos, the folder route');
+    for (const name of ['first_no_cameras', 'first_no_map']) {
+        // No camera at all: it reads like a plain file, one camera per video, as on the lazy
+        // route, and those videos are the other session's too. Cameras but no video map: a
+        // video goes to a camera by name. Either way nothing of the other session goes.
+        let bytes = readFile(name);
+        const src = sources[name];
+        for (let gen = 1; gen <= 2; gen++) {
+            const page = await open('folder', bytes);
+            const kept = await page.evaluate(() => !!window.__lucid.state.session.unopenedSessions);
+            const saved = await saveAndRead(page);
+            const what = `${name}, folder, save ${gen}`;
+            check(kept, what + ': the other session is kept', kept);
+            check(eq(saved.read.poses, src.poses), what + ': every pose', diff(saved.read.poses, src.poses));
+            const closedGroups = list => list.filter(g => /camC=/.test(g)).map(g => g.replace(/^s\d+\|/, ''));
+            check(eq(closedGroups(saved.read.groups), closedGroups(src.groups)), what + ': the other session\'s groups', diff(closedGroups(saved.read.groups), closedGroups(src.groups)));
+            check(saved.read.sessions.some(s => s.camC === 'camC.mp4' && s.camD === 'camD.mp4'), what + ': the other session\'s cameras', saved.read.sessions);
+            savedForPython(saved.bytes, what + ', Python', { poses: src.poses });
             bytes = saved.bytes;
         }
     }
@@ -1207,7 +1274,7 @@ async function folderSharedVideo() {
         const poses = src.poses.map(r => (r.startsWith('camB.mp4|1|P|mouse2|') ? 'camB.mp4|1|U|mouse2|888.000,888.000;221.000,20.000|' : r)).sort();
         const groups = src.groups.map(g => g.replace('camB=211.000', 'camB=888.000').replace('camC=211.000', 'camC=888.000')).sort();
         const rich = src.rich.filter(r => !r.startsWith('s0|')).map(g => g.replace('camC=211.000', 'camC=888.000')).sort();
-        checkSave('folder, a corrected pose on a shared video', saved, expectedForFolder(src, { poses, groups, rich }));
+        checkSave('folder, a corrected pose on a shared video', saved, expectedFor(src, { poses, groups, rich }));
     }
     {
         // A delete on a shared frame: the member on the deleted pose goes, the group stays,
@@ -1222,7 +1289,7 @@ async function folderSharedVideo() {
         const poses = src.poses.filter(r => !/^cam[AB]\.mp4\|0\|P\|mouse1\|/.test(r));
         const groups = src.groups.filter(g => !/^s0\|0\|camA=100/.test(g)).map(g => g.replace('camC=200.000|', '')).sort();
         const rich = src.rich.filter(r => !r.startsWith('s0|')).map(g => g.replace('camC=200.000|', '')).sort();
-        checkSave('folder, a deleted pose on a shared video', saved, expectedForFolder(src, { poses, groups, rich }));
+        checkSave('folder, a deleted pose on a shared video', saved, expectedFor(src, { poses, groups, rich }));
     }
     {
         // Only each frame's second pose is grouped in the open session, so the writer lists
@@ -1246,7 +1313,7 @@ async function folderSharedVideo() {
         const poses = src.poses.map(r => (r.startsWith('camB.mp4|1|P|mouse2|') ? 'camB.mp4|1|U|mouse2|888.000,888.000;221.000,20.000|' : r)).sort();
         const groups = src.groups.map(g => g.replace('camB=211.000', 'camB=888.000').replace('camC=211.000', 'camC=888.000')).sort();
         const rich = src.rich.filter(r => !r.startsWith('s0|')).map(g => g.replace('camC=211.000', 'camC=888.000')).sort();
-        checkSave('folder, a corrected pose in a reordered frame', saved, expectedForFolder(src, { poses, groups, rich }));
+        checkSave('folder, a corrected pose in a reordered frame', saved, expectedFor(src, { poses, groups, rich }));
     }
     {
         // Track All regroups the open session's poses and reorders every frame.
@@ -1488,7 +1555,7 @@ async function folderRawWorker() {
             window.__sio = window.SleapIO;
             window.SleapIO = Object.assign({}, window.__sio, { readSlpStreaming: () => { throw new Error('this test wants the raw worker'); } });
         });
-        await LOADERS.folder(page, readFile('two_sessions'));
+        await LOADERS.folder(page, readFile('old_two_sessions'));
         await settle(page, 'folder, raw worker');
         const status = await statusOf(page);
         check(/Only the first of 2 sessions.*not their cameras or 3D/.test(status), 'raw worker: the status says what a save keeps', status);
@@ -1496,7 +1563,7 @@ async function folderRawWorker() {
         check(kept === null, 'raw worker: no typed sessions to keep', kept);
         const saved = await saveAndRead(page);
         const noScores = list => list.map(r => r.split('|').slice(0, 5).join('|')).sort();
-        check(eq(noScores(saved.read.poses), noScores(sources.two_sessions.poses)), 'raw worker: every pose on its own video', diff(noScores(saved.read.poses), noScores(sources.two_sessions.poses)));
+        check(eq(noScores(saved.read.poses), noScores(sources.old_two_sessions.poses)), 'raw worker: every pose on its own video', diff(noScores(saved.read.poses), noScores(sources.old_two_sessions.poses)));
     }
 }
 
@@ -1619,7 +1686,7 @@ async function folderResident() {
 
 try {
     uv(PY_WRITE, [tmp]);
-    const sourcePaths = [...FILES, 'provenance', 'camF_alone', 'camG_alone', 'other_project', 'add_no_map'].map(n => path.join(tmp, n + '.slp'));
+    const sourcePaths = [...FILES, 'first_no_cameras', 'first_no_map', 'provenance', 'one_session', 'camF_alone', 'camG_alone', 'other_project', 'add_no_map', 'old_two_sessions'].map(n => path.join(tmp, n + '.slp'));
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
     for (const p of sourcePaths) sources[path.basename(p, '.slp')] = rawSources[p];
 

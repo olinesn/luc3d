@@ -633,20 +633,30 @@ function catalogEntriesUsed(kept) {
  * (`Identity.id`, set by the loaders from that order) and still the same name. Its
  * header identity then keeps what else the entry held.
  *
+ * Poses can name identities too (`detection-labels.js`), matched by name wherever the
+ * name is, so a name they brought into the header is that entry's as well. Without
+ * that a closed session's group would write a second entry under the same name.
+ *
  * @param {{identities: Array}} kept
  * @param {Array} identities - `session.identities`
  * @param {Map<number, Object>} headerOf - identity id -> the header's identity
+ * @param {Map<string, Object>|null} [namedByPoses] - name -> the header's identity
  * @returns {Map<Object, Object>} catalog entry -> the header's identity
  */
-export function identityEntriesOfOpenSession(kept, identities, headerOf) {
+export function identityEntriesOfOpenSession(kept, identities, headerOf, namedByPoses) {
     var out = new Map();
     (identities || []).forEach(function (identity) {
         var entry = kept.identities[identity.id];
         var header = headerOf.get(identity.id);
         if (!entry || !header || entry.name !== identity.name) return;
         out.set(entry, header);
-        header.metadata = entry.metadata;
+        if (!header.metadata || Object.keys(header.metadata).length === 0) header.metadata = entry.metadata;
     });
+    if (namedByPoses) {
+        kept.identities.forEach(function (entry) {
+            if (!out.has(entry) && namedByPoses.has(entry.name)) out.set(entry, namedByPoses.get(entry.name));
+        });
+    }
     return out;
 }
 

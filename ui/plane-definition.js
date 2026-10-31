@@ -234,6 +234,9 @@ import {
 import {
     setupPlaneAngle, renderAngleButton, isAngleModalOpen, closeAngleModal,
 } from './plane-angle.js';
+// Circular (behavior-mode.js imports `isPlaneModeActive` / `exitPlaneMode`
+// back): call-time use only.
+import { isBehaviorModeActive, exitBehaviorMode } from './behavior-mode.js';
 
 // Re-exported so callers (and tests) can reach the model through the feature
 // module without knowing it was split out.
@@ -1664,6 +1667,8 @@ export { applyPlaneModeToolbarLock } from './plane-toolbar-lock.js';
 
 export function enterPlaneMode() {
     if (planeState.active) return;
+    // The two modes own the same keys and the same panel; one at a time.
+    if (isBehaviorModeActive()) exitBehaviorMode();
     planeState.active = true;
 
     var bar = document.getElementById('planeModeBar');
