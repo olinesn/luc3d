@@ -875,7 +875,8 @@ nothing is wrong is a warning nobody reads.
   DIFFERENT-shaped skeleton is not re-shaped by this edit and goes in `others`,
   so the dialog can say it exists rather than leaving the totals quietly short.
 - `countSkeletonEditImpact(sessions)` → the tally: `userInstances`,
-  `predictedInstances`, `instances`, `reprojectedInstances`, `groups`,
+  `predictedInstances`, `instances` (an eager session's `outsideFrames` poses
+  included: the edit re-shapes them too), `reprojectedInstances`, `groups`,
   `keypoints3d`, the lazy fields above, and `perSession` — the same record once
   per session. Every total is a FOLD of `perSession`, so the dialog's by-session
   rows and its headline cannot be two different arithmetics.
@@ -1525,6 +1526,9 @@ session graph that holds them.
   - **`fileProvenance`** — the provenance of the `.slp` it was loaded from,
     without LUC3D's own keys (null when none); in memory only, written back on
     save by `import-export/slp-provenance.js`.
+  - **`outsideFrames`** — eager loads only: the file's poses on a video no session
+    names (null when none). Not shown; written back on save, and re-shaped by
+    `propagateNodeAdded`/`propagateNodeRemoved` (`import-export/outside-frames.js`).
   - **`predictedNodeScore(cameraName, frameIdx, inst, k)`** is the one answer to
     "what did the model score this node?" — the node tooltip and the streaming
     writer's overlay both ask it. NaN unless `inst` is `'predicted'` (an edit
@@ -12220,7 +12224,9 @@ views, decoderPool, cameras, totalFrames, fps) still happens in camera order —
 the same pattern as `switchSession`. Profile with `_bench-progress-overlay.mjs
 PROFILE_VIDEO=1`; `DIGEST=1` digests the loaded session for comparing loaders.
 Step 2 builds each camera's Instances from the worker's columnar result via
-**`addColumnarFramesToSession(session, camName, columnar, trackRemap)`** — the
+**`addColumnarFramesToSession(session, camName, columnar, trackRemap, ownVideo)`**
+(`ownVideo`: only that video's frames are this camera's; `keepOutsideColumnarFrames`
+keeps the file's others aside) — the
 same track remap / `resolveImportTrackIdx` / `score || 1.0` / occlusion /
 per-node model scores (`columnar.pointScore` → `Instance.setPointScores`,
 predictions only) as the nested-`frames` loop (kept for results without
@@ -12366,6 +12372,8 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
 **Imports from project modules.**
 - `../pose/placeholder-cameras.js` (`makePlaceholderCamera`,
   `hasRealCalibration`, `ensurePlaceholderCameras`),
+- `../import-export/outside-frames.js` (poses on a video no session reads: kept
+  aside, and said in the load's status),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
@@ -12428,7 +12436,9 @@ synchronous.
   videoFrameIdx→store-row map; the skeleton is the first camera BY NAME's and
   `trackNames` is the union over every opened camera (see "Track indices"), so
   nothing depends on which parallel open resolves first; returns THIS camera's
-  own track names.
+  own track names. A camera is one video: a file with frames on more is read as the
+  first it lists with frames (`_ownVideoByCam`; the others' rows stay in the store,
+  out of the row map, and a save keeps them on their own videos).
 - `openProjectSlp(file, onProgress, onReadBytes)` — `onReadBytes(done, total)`
   (optional, awaited) counts the bytes read of the four big tables, which the
   vendored reader then reads in row slices (LUCID local patch, open progress);
@@ -12439,6 +12449,11 @@ synchronous.
   (camName → NATIVE store video id) for the re-save's video-id remap, computes
   each camera's `trackOccupancy` at load, and returns `{labels, typedSession,
   cameraNames, nFrames}` for `reconstructInstanceGroupsFromSessionLazy`.
+- `outsideFrameCounts()` — `{frames, videos}` in the store that belong to no camera
+  of this session, for the load's status. `forEachOutsideRow(visit)` walks those rows
+  (row-map walks do not see them). `remapTracksFromIdentity` keeps those rows'
+  track names (`_keepOutsideRowTracks`): names the new list lacks go after it in
+  `store.tracks`, and `_tracksPastSession` keeps them out of the timeline's count.
 - `getFrame` / `getFrameSync` — typed instances → `{trackIdx (-1 = none, as in
   the store; hydration maps it to `null`), score, type, points, occluded}`,
   LRU-cached. `prefetch`, `close` (also clears `videoIdByCam`).
@@ -13651,6 +13666,35 @@ incl. `planeMetadataConflict`).
 
 ---
 
+### import-export/outside-frames.js
+
+**Purpose.** Poses on a video no recording session names: not shown, and kept by
+every save on their own video. The lazy path keeps them in its store
+(`buildSessionRefGraph`); this module holds them for the eager path, on
+`session.outsideFrames`, and has the rules both share.
+
+**Key exports.**
+- `headerVideoForOutsideFrames(SIO, video, id)` — the `SIO.Video` a header lists for
+  such frames: the file's own record, its source video when the record has embedded
+  images (a save does not copy them), else a placeholder `unknown_video_<id>.mp4` (an
+  id `videos_json` does not hold, as older LUC3D saves left it).
+- `keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap)` — eager load;
+  adds to what `session.outsideFrames` already holds.
+- `ownVideoOfColumnar(col)`, `keepOutsideColumnarFrames(session, slpData, own)` — the
+  per-camera eager load: a camera is the first video its file lists with frames.
+- `outsideFramesForSave(session, skeleton)` — eager save: `{videos, tracks,
+  labeledFrames}`, or null.
+- `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(session)` — the
+  sentence for a load's final status.
+
+**Imports from project modules.** `../pose/pose-data.js` (`Instance`), `./file-io.js`
+(`makePooledSioInstances`).
+
+**Imported by.** `import-export/slp-import.js`, `import-export/save-load.js`,
+`import-export/slp-streaming-write.js`, `loading/session-loader.js`.
+
+**Tests.** `tests/e2e/poses-outside-session.mjs`.
+
 ### import-export/slp-provenance.js
 
 **Purpose.** Keeps a loaded `.slp`'s `provenance` dict through LUC3D's project
@@ -13874,7 +13918,8 @@ session's resident/total) rather than truncate silently. Covered by
   `_typedInstanceToSlpData` pose transform (columnar `_xy`/`_visible` →
   `points[]` + parallel `occluded[]`, NOT `numpy()`; a prediction's per-node
   scores as `pointScores`, the typed instance's own `_score` column by reference,
-  null for a user instance — the importers copy it with `Instance.setPointScores`). Each `sessions[]` entry is
+  null for a user instance — the importers copy it with `Instance.setPointScores`). Each `videos[]` entry
+  carries the typed `Video` as `_typedVideo` (`import-export/outside-frames.js` writes it back whole). Each `sessions[]` entry is
   the verbatim on-disk dict (for the direct calibration/video-map/metadata reads)
   PLUS a `_typedSession` ref (the typed RecordingSession) used by
   `reconstructInstanceGroupsFromSession` for grouping — which reads LUCID's legacy
@@ -13962,9 +14007,18 @@ each holding only one session's data at a time:
   per-`InstanceGroup` refs against `ctx`'s running counter (advancing it for
   the next session), and accumulates this session's cameras/tracks/skeleton
   into `ctx`. Requires `session.lazyLoader` open and Track All/Triangulate All
-  already run. Touches no writer. Returns `{ sioSession, overlayLfs, cam }` —
-  small enough that the caller can evict the session's lazy loader/
-  `frameGroups`/`instanceGroups` right after.
+  already run. Touches no writer. Returns `{ sioSession, overlayLfs, cam,
+  outsideVideos, sharedTrackBase, sharedSkeletonPairs }` — small enough that the caller can evict the
+  session's lazy loader/`frameGroups`/`instanceGroups` right after.
+  **Frames on a video no camera names** (`import-export/outside-frames.js`):
+  `appendStore` writes a whole store, so each such video gets a header place after
+  the session's cameras, and `streamSessionIntoWriter` maps the store's id to it
+  through `_remapStoreVideos`, after `_headerMapFor` has checked every id the store
+  uses is covered. Without that, its rows point past the end of the list (Python's
+  `load_slp` raises IndexError) or at a camera's index, where first write wins. A
+  camera's own file with frames on other videos gets the same (`nativeToHeader`).
+  `skeletonPairsFor` does the same for skeletons: rows on one but the session's find
+  it in the header (`_appendWithHeaderSkeletons`).
   **Non-shared-store track dedup:** for separate per-camera prediction files
   (session-folder load, `loader._sharedStore` false), each camera's
   `labels.tracks` is appended onto `ctx.allTracks` under a growing
@@ -14023,7 +14077,7 @@ pieces make this correct for arbitrary inputs:
 - `buildSessionRefGraph`'s shared-store branch keys its store-row → camera map
   (`videoToCam`) on the NATIVE store video ids (`loader.videoIdByCam`), not on
   the output header order.
-- `_remapSharedStoreVideos(store, headerByNative)` (module-private) +
+- `_remapStoreVideos(store, headerByNative)` (module-private) +
   `streamSessionIntoWriter`: when the native ids differ from the output header
   indices (a project `.slp` written by Python sleap-io, or a multi-session
   save where this session's videos sit at a global offset), the store's
@@ -14258,6 +14312,7 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `../ui/browser-hints.js` (`fileSystemAccessHint` — `saveProjectSlp`, the
   download fallback when there is no save-file picker, says why and how to
   enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
+  `./outside-frames.js` (`outsideFramesForSave`),
   `../ui/app-state.js`, `../loading/session-loader.js`,
   `../loading/sio-lazy-loader.js` (`SioLazyLoader`, for
   `reopenSessionLazyLoader`), `./slp-streaming-write.js`,
@@ -14503,6 +14558,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
   session keeps its part of the file's provenance),
+  `./outside-frames.js` (`keepOutsideFrames`, `keptOutsideCounts`,
+  `outsideFramesNote` — poses on a video no session reads),
   `../loading/video-file-pick.js` (`preferNonCalibrationVideos`),
   `../ui/loading-progress-modal.js` (`getLoadingProgressModal`),
   `../loading/cold-read-guard.js`
@@ -14577,11 +14634,14 @@ compatibility check, track merging, frame merging, group rebuild.
 - `validateSkeletonCompatibility(existing, incoming)` — returns
   `{error, reorderMap}`.
 - `mergeTracksIntoSession(session, incomingTracks)`.
+- `videosClaimedBy(videoIdxToCameraName, nCameras)` — the video indices a session's
+  frame loop reads: its camera map's, or, when it maps none, each camera's own index.
 - `mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName,
   cameras, trackRemap, nodeReorderMap)` — trackless instances (track=-1/null),
   user OR predicted, keep `trackIdx = null`.
   A prediction keeps its per-node model scores (`pointScores`), re-ordered by
-  `nodeReorderMap` exactly as its points are.
+  `nodeReorderMap` exactly as its points are. Skips a video `videosClaimedBy` leaves
+  out (never wrapped round onto a camera); `handleAddSlp` keeps those frames aside.
 - `rebuildInstanceGroupsForFrames(session, frameIndices)` — groups by `trackIdx`;
   trackless instances of any type are skipped (not bucketed into track 0).
 

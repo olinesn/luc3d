@@ -138,6 +138,17 @@ Tests: `tests/test-slp-format-check.mjs`, e2e `slp-newer-format`.
 
 Tests: `test-node-scores.mjs`, `test-node-score-export.js`, e2e `node-score-tooltip`.
 
+## Frames on a video no session names
+
+A `.slp` can hold frames on a video no session's camera map lists, and a loader that opens only a file's first session sees the other sessions' frames the same way. They are not shown. A save keeps them, each on its own video: never dropped, never moved onto a camera's video, never left pointing at a video the file does not list (Python raises IndexError). `import-export/outside-frames.js`.
+- **Lazy:** the store already holds them. `buildSessionRefGraph` gives each such video a header place after the session's cameras (`outsideVideos`) and `streamSessionIntoWriter` maps every id the store uses (`_headerMapFor` refuses an id pass 1 did not see, never passes one through raw). The file-wide refs count every store row (`sharedOut`), a camera's or not. Code that rewrites `store.tracks` must keep these rows' track names (`_keepOutsideRowTracks`); row-map walks do not visit them.
+- **Eager:** `session.outsideFrames` (`keepOutsideFrames`: ordinary `Instance`s, the file's track names), written by `buildSlpBytes` (`outsideFramesForSave`). Skeleton node edits re-shape them and `countSkeletonEditImpact` counts them; track edits do not touch them. A loader that skips frames must keep them: `videosClaimedBy` says which videos it read. Never wrap a video index round the cameras.
+- **A camera is one video:** the first its file lists with frames (`SioLazyLoader.open`, `ownVideoOfColumnar`); that file's other videos are outside.
+- The vendored writers file a frame whose video is not in the header under video 0 (`Math.max(0, indexOf)`), so its video must be in the header. `appendStore` writes each row's skeleton id too, so `buildSessionRefGraph` also lists every skeleton the rows use (`skeletonPairsFor`).
+- A file with none saves byte-identically (`save-golden-digest.mjs` must not move). The load's final status says what is not shown (`outsideFramesNote`) and, for a loader that opens only the first session, that a save keeps the others' poses but not their cameras or 3D.
+
+Test: `tests/e2e/poses-outside-session.mjs`.
+
 ## Triangulation must not depend on where the origin is
 
 `triangulatePointDLT` (`pose/triangulation-core.js`) solves in a frame built from the cameras only (`dltNormalizingFrame`). Without it, the answer would depend on where the world origin is, and Track All's association (`pose/cross-view-tracker.js` `_retriangulate`) scores against these points.
