@@ -30,7 +30,7 @@
 import { state } from './app-state.js';
 import { sessionAnimals, animalColor, requestBehaviorRepaint, goToBehaviorFrame } from './behavior-coding.js';
 import { behaviorConfirm } from './behavior-confirm.js';
-import { sessionFps } from './behavior-detect.js';
+import { detectionFps, sessionFps } from './behavior-detect.js';
 import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.js';
 import { setInfoTip } from './info-tip.js';
 import { ICON_INFO } from './plane-definition.js';
@@ -60,7 +60,7 @@ function esc(s) {
 }
 function n(x) { return Number(x || 0).toLocaleString('en-US'); }
 function fr(f) { return (f + 1).toLocaleString('en-US'); }
-function fps() { return state.fps > 0 ? state.fps : 30; }
+function fps() { return detectionFps(); }
 function plural(k, one, many) { return n(k) + ' ' + (k === 1 ? one : (many || one + 's')); }
 function pct(x) { return x >= 0.995 || x === 0 ? Math.round(100 * x) + '%' : x < 0.01 ? (100 * x).toFixed(1) + '%' : Math.round(100 * x) + '%'; }
 

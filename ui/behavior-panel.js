@@ -55,7 +55,7 @@ import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-mo
 import { showBehaviorImportModal, showBehaviorExportModal } from './behavior-io-modal.js';
 import { ABSENT_COLOR } from './behavior-timeline.js';
 import {
-    detectAllFrames, detectAllSessions, detectThisFrame, frameReadout, onFrameReadout, detectionEnv, setupBehaviorDetection,
+    detectAllFrames, detectAllSessions, detectThisFrame, frameReadout, onFrameReadout, detectionEnv, detectionFps, setupBehaviorDetection,
 } from './behavior-detect.js';
 import {
     classifierStatus, activeLearning, setActiveLearningBehavior, nextActiveItem, labelActiveItem, skipActiveItem,
@@ -105,7 +105,7 @@ function esc(s) {
 }
 function n(x) { return Number(x || 0).toLocaleString('en-US'); }
 function fr(f) { return (f + 1).toLocaleString('en-US'); }
-function fps() { return state.fps > 0 ? state.fps : 30; }
+function fps() { return detectionFps(); }
 function secs(frames) { return (frames / fps()).toFixed(1); }
 function boutKey(b) { return [b.behaviorId, b.animal, b.target, b.start, b.end].join('|'); }
 

@@ -3783,6 +3783,7 @@ export function seekToLabeledFrame(direction) {
             var num = parseFloat(raw);
             if (raw !== '' && !isNaN(num) && num > 0 && num <= 1000) {
                 state.fps = num;
+                if (state.session) state.session.typedFps = num;   // said, not a default (`detectionEnv`)
                 applyPlaybackRate();
                 if (videoController && state.isPlaying) {
                     videoController.stopPlayback();

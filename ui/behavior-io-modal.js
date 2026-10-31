@@ -13,14 +13,15 @@
 // the active session as ONE edit (`labelBouts`), so Undo takes the whole import
 // back; labels already on those frames are replaced, as labelling by hand does.
 //
-// Depends on: ui/app-state.js, ui/behavior-coding.js, pose/behavior-ethogram.js,
+// Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-detect.js, pose/behavior-ethogram.js,
 //             pose/behavior-labels.js, import-export/behavior-io.js,
 //             import-export/save-load.js, loading/cold-read-guard.js
 
 import { state } from './app-state.js';
 import { sessionAnimals, focalAnimal, requestBehaviorRepaint } from './behavior-coding.js';
+import { sessionFps } from './behavior-detect.js';
 import { behaviors, behaviorByName, ingestEthogram } from '../pose/behavior-ethogram.js';
-import { labelBouts, hasBehaviorData, behaviorFps, noteBehaviorFps } from '../pose/behavior-labels.js';
+import { labelBouts, hasBehaviorData, noteBehaviorFps } from '../pose/behavior-labels.js';
 import {
     toDelimited, boutsTable, perFrameTables, timeBudgetTable, borisAggregatedTable, borisTabularTable,
     parseBehaviorFile, ethogramPayload, defaultObservation, defaultSubjectMap, newBehaviorsFor, planBehaviorImport,
@@ -95,7 +96,7 @@ function videoPath(vf) { return vf ? (vf.videoPath || (vf.file && vf.file.name) 
  */
 export function behaviorSessionInfo(session, camera) {
     var active = session === state.session;
-    var fps = active && state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : (behaviorFps(session) || state.fps || 0));
+    var fps = sessionFps(session);
     var frames = active ? (state.totalFrames || 0) : (session.totalFrames || 0);
     if (!frames) frames = session.lazyLoader ? session.numFrames : Math.max(maxKey(session.frameGroups), maxKey(session.instanceGroups)) + 1;
     var files = sessionVideos(session);
