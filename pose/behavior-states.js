@@ -1,7 +1,7 @@
 // pose/behavior-states.js — behavioral STATES, per session: one categorical
 // label per animal and frame from an unsupervised model — keypoint-MoSeq's
-// syllables now (import-export/kpms-io.js), the in-browser discovery's
-// clusters later — kept as named LAYERS of runs.
+// syllables (import-export/kpms-io.js), the in-browser discovery's clusters
+// (pose/behavior-discovery.js) — kept as named LAYERS of runs.
 //
 // ## Storage
 //
@@ -52,7 +52,7 @@ export var STATE_SOURCES = ['keypoint-MoSeq', 'discovery'];
 
 /**
  * State colors on the timeline: state k (keypoint-MoSeq numbers syllables by
- * how often they occur, 0 the most) takes entry k; later states share
+ * how often they occur, 0 the most, and discovery its clusters by size) takes entry k; later states share
  * `OTHER_STATE_COLOR`. Chosen one at a time, each as far (CIEDE2000) from the
  * ones before it and from the gray as it could be, light enough for the dark
  * timeline: tests/test-track-identity-palette.mjs §11.
