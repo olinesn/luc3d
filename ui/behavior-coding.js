@@ -20,7 +20,7 @@
 // UI-only changes (a new focal animal, a selection) repaint through
 // `requestBehaviorRepaint` here.
 //
-// Depends on: ui/app-state.js, pose/behavior-ethogram.js,
+// Depends on: ui/app-state.js, ui/behavior-detect.js (`sessionFps`), pose/behavior-ethogram.js,
 //             pose/behavior-labels.js, import-export/save-load.js,
 //             ui/id-switch-highlight.js (the node mask boxes share)
 
@@ -30,6 +30,7 @@ import {
     labelRange, clearRange, toggleState, noteBehaviorFps, listBouts, activeAt, hasBehaviorData, runningStates,
 } from '../pose/behavior-labels.js';
 import { setStatus } from '../import-export/save-load.js';
+import { sessionFps } from './behavior-detect.js';
 import { idSwitchBoxNodeMask } from './id-switch-highlight.js';
 
 var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null, mode: false, review: null };
@@ -303,7 +304,7 @@ function automaticTarget(session, animal) {
 function nameOf(b) { return '"' + b.name + '"'; }
 
 function apply(session, b, animal, target, range, absent, frame) {
-    noteBehaviorFps(session, state.fps);
+    noteBehaviorFps(session, sessionFps(session));
     var who = animal + (target ? pairGlyph(b) + target : '');
     if (range) {
         var r = labelRange(session, b.id, animal, target, range.start, range.end, !absent);

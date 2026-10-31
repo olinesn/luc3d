@@ -16,7 +16,8 @@
  *     once set, read back, and come in by name like the rest;
  *   - predictions made at 60 fps stand when the project reopens without its
  *     videos (the file does not save the frame rate, so it then only holds the
- *     default 30), and what really changed still makes them stale.
+ *     default 30), and what really changed still makes them stale;
+ *   - what a session has on record decides the rate it is measured at then.
  */
 
 import { writeBehaviorMetadata, writeBehaviorSlpMetadata, readBehaviorMetadata, resetBehaviorState, BEHAVIOR_METADATA_KEYS }
@@ -25,7 +26,7 @@ import { addBehavior, behaviors, behaviorByName, setBehaviorDetector, setFeature
     from '../pose/behavior-ethogram.js';
 import { labelRange, toggleState, setBehaviorCursor, noteBehaviorFps, exportBoutRows, listBouts, isRunning }
     from '../pose/behavior-labels.js';
-import { setBehaviorRun, predictedBouts, runConfigPrint, predictionStaleness, predictionsStand, behaviorRunOf }
+import { setBehaviorRun, predictedBouts, runConfigPrint, predictionStaleness, predictionsStand, behaviorRunOf, recordedFps, clearBehaviorRuns }
     from '../pose/behavior-predictions.js';
 
 let passed = 0, failed = 0;
@@ -229,6 +230,29 @@ console.log('\n6. A project reopened without its videos: the frame rate');
     noteBehaviorFps(old, 50);
     check(eq(predictionStaleness(old, noVideo).settings, []), 'with labels made at 50 fps: checked at 50, fresh');
     check(eq(predictionStaleness(old, { fps: 30, floorKey: FLOOR }).settings, [groomOnly.id]), 'but a real rate of 30 still reads stale');
+}
+
+console.log('\n7. The frame rate a session has on record');
+{
+    resetBehaviorState();
+    const [a, b, c] = ['a', 'b', 'c'].map(name => addBehavior({ name }).behavior);
+    const s = { name: 's' };
+    const runAt = (x, fps, source) => setBehaviorRun(s, { behaviorId: x.id, source, cfg: 'x', fps, mode: '3d', bouts: [{ animal: 'id_1', target: '', start: 1, end: 2, score: 0.9 }] });
+    check(recordedFps(s) === 0 && recordedFps(null) === 0, 'nothing on record: 0');
+    noteBehaviorFps(s, 50);
+    check(recordedFps(s) === 50, 'only labels: theirs');
+    runAt(a, 60);
+    check(recordedFps(s) === 60, 'a run outranks the labels');
+    runAt(b, 30);
+    check(recordedFps(s) === 60, 'two runs that differ: the higher');
+    runAt(c, 30);
+    check(recordedFps(s) === 30, 'more runs at one rate: that rate');
+    runAt(a, 30);
+    runAt(b, 0, 'file');
+    runAt(c, 0, 'file');
+    check(recordedFps(s) === 30, 'a run from another tool has no rate and does not count');
+    clearBehaviorRuns(s);
+    check(recordedFps(s) === 50, 'no runs left: the labels again');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

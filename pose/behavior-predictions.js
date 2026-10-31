@@ -512,6 +512,23 @@ export async function checkPredictionInputAsync(session, pause) {
 }
 
 /**
+ * The frame rate a session's results recorded, as a stand-in while nothing has
+ * said what it is (a `.slp` does not save one of its own): the one most of its
+ * runs did (a tie: the higher), else the labels', else 0.
+ */
+export function recordedFps(session) {
+    var st = session && _stores.get(session);
+    var count = new Map(), best = 0;
+    if (st) st.runs.forEach(function (run) {
+        if (!(run.fps > 0)) return;
+        var c = (count.get(run.fps) || 0) + 1;
+        count.set(run.fps, c);
+        if (c > (count.get(best) || 0) || (c === count.get(best) && run.fps > best)) best = run.fps;
+    });
+    return best || behaviorFps(session);
+}
+
+/**
  * The frame rate to check a run against: the one now, or while nothing has said
  * what it is (`env.fpsUnknown`), the one the run recorded, else the labels'.
  */

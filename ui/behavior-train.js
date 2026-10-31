@@ -25,7 +25,7 @@
 
 import { state } from './app-state.js';
 import { showLoading, showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
-import { buildBehaviorContext, cachedBehaviorContext, detectionEnv } from './behavior-detect.js';
+import { buildBehaviorContext, cachedBehaviorContext, detectionEnv, detectionFps } from './behavior-detect.js';
 import { requestBehaviorRepaint, setReviewFocus, goToBehaviorFrame, BOUT_LEAD_IN_SECONDS, behaviorUi } from './behavior-coding.js';
 import { behaviors, behaviorById, setBehaviorPost, exclusivePeers } from '../pose/behavior-ethogram.js';
 import { labelBouts } from '../pose/behavior-labels.js';
@@ -343,7 +343,7 @@ export function exportClassifiers(behaviorIds) {
     var models = behaviorModels().filter(function (m) { return !behaviorIds || behaviorIds.indexOf(m.behaviorId) >= 0; })
         .filter(function (m) { return !!behaviorById(m.behaviorId); });
     if (!models.length) { setStatus('No classifier to export: train one first (Behavior ▸ Train Classifiers…)', 'warning'); return null; }
-    var file = buildModelFile(models, { fps: state.fps });
+    var file = buildModelFile(models, { fps: detectionFps() });
     var name = modelFileName(models);
     downloadText(JSON.stringify(file), name);
     setStatus('Exported ' + models.length + ' classifier' + (models.length === 1 ? '' : 's') + ' to ' + name, 'success');

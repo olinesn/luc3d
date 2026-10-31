@@ -29,6 +29,10 @@
  *     into a project without the behavior, it brings the behavior (with its
  *     threshold) and scores every frame as before.
  *  7. Esc closes the dialog; no page errors.
+ *  8. No video: trained and predicted at 60 fps, saved, reopened with the app at
+ *     the default 30: retraining measures at the 60 on record, so it gives the
+ *     same forest and the predictions still stand; the threshold dialog's live
+ *     numbers and an exported model file use that rate too.
  *
  * Run: node tests/e2e/behavior-classifier.mjs   (spawns its own http.server; PORT= to move it)
  */
@@ -375,6 +379,65 @@ try {
     check(imp.res.imported === 1 && imp.name === 'dart' && eq(imp.post, { threshold: 0.55, minBout: 0.1 }) && imp.imported,
         'imported into a project without it: dart is back, with its threshold, as an imported classifier');
     check(imp.source === 'model:' + rt.hash && imp.same, 'and it scores every frame exactly as before');
+
+    console.log('\n-- 8. no video --');
+    const noVideo = await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const fileio = await import('/import-export/file-io.js');
+        const meta = await import('/import-export/behavior-metadata.js');
+        const eth = await import('/pose/behavior-ethogram.js');
+        const P = await import('/pose/behavior-predictions.js');
+        const C = await import('/pose/behavior-classifier.js');
+        const T = await import('/ui/behavior-train.js');
+        const det = await import('/ui/behavior-detect.js');
+        const pd = await import('/pose/pose-data.js');
+        const s = AS.state.session;
+        const id = eth.behaviors()[0].id;
+        AS.state.fps = 60;
+        P.clearBehaviorRuns(s);
+        await T.trainClassifiers([id]);
+        await det.detectAllFrames();
+        const hash = C.behaviorModelOf(id).hash;
+        const made = P.behaviorRunOf(s, id);
+        const views = [{ name: 'cam0', videoWidth: 256, videoHeight: 256, frameCount: AS.state.totalFrames }];
+        const files = [{ name: 'cam0', assignedCamera: 'cam0', videoPath: 'cam0.mp4' }];
+        const bytes = await window.SleapIO.saveSlpToBytes(fileio.buildSlpLabelsAllViews(s, views, files));
+        const slp = await fileio.parseSlpViaSleapIO(new File([bytes], 'sixty.slp'), () => {});
+        meta.resetBehaviorState();
+        const fresh = new pd.Session([], s.skeleton, [], 'Darts');
+        fresh.identities = s.identities; fresh.instanceGroups = s.instanceGroups;
+        meta.readBehaviorMetadata(fresh, slp.sessions[0].metadata.lucid, slp.behaviorEvents);
+        AS.state.sessions = [fresh]; AS.state.session = fresh; AS.state.fps = 30;
+        const res = { id, hash, madeFps: made.fps, rate: det.detectionFps(), stands: P.predictionsStand(fresh, det.detectionEnv()) };
+        await T.trainClassifiers([id]);
+        res.retrained = C.behaviorModelOf(id).hash;
+        res.stale = P.predictionStaleness(fresh, det.detectionEnv());
+        res.fps = AS.state.fps;
+        return res;
+    });
+    check(noVideo.madeFps === 60 && noVideo.rate === 60 && noVideo.fps === 30 && noVideo.stands, 'made at 60 fps, reopened at state.fps 30: measured at the 60 on record, and they stand');
+    check(noVideo.retrained === noVideo.hash && !noVideo.stale.model.length && !noVideo.stale.settings.length,
+        'retrained: the same forest as at 60 fps (' + noVideo.retrained + '), so no "newer classifier"');
+    await page.click('[data-menu="behavior"]');
+    await page.click('#menuBehaviorTrain');
+    const minBout = `.bt-card[data-id="${noVideo.id}"] input[data-f="minBout"]`;
+    await page.waitForSelector(minBout, { timeout: 10000 });
+    // Darts last 15–45 frames: at 60 fps a 0.6 s shortest bout keeps few of them, at 30 most.
+    await page.fill(minBout, '0.6');
+    const live = await page.evaluate(async (id) => {
+        const C = await import('/pose/behavior-classifier.js');
+        const post = { threshold: 0.55, minBout: 0.6, maxGap: 0 };
+        const at = (fps) => Math.round(100 * C.evaluateAt(C.behaviorModelOf(id).cv, post, fps, false).bout.recall);
+        return { shown: document.querySelector('.bt-card[data-id="' + id + '"] .bt-live .bt-metrics tbody tr:nth-child(2) td:nth-child(3)').textContent, at60: at(60), at30: at(30) };
+    }, noVideo.id);
+    check(live.at60 !== live.at30 && parseFloat(live.shown) === live.at60,
+        'the threshold dialog\'s live bout recall uses that rate too: ' + live.shown + ' (at 30 fps it would be ' + live.at30 + '%)');
+    await page.keyboard.press('Escape');
+    const [sixtyFile] = await Promise.all([
+        page.waitForEvent('download', { timeout: 30000 }),
+        page.evaluate(async () => (await import('/ui/behavior-train.js')).exportClassifiers()),
+    ]);
+    check(JSON.parse(readFileSync(await sixtyFile.path(), 'utf8')).fps === 60, 'and an exported model file records it');
 
     console.log('\n-- page errors --');
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));

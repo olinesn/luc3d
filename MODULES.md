@@ -2870,7 +2870,9 @@ DOM-free.
 `acceptPredictions`, `rejectPredictions`, `exportPredictionRuns`,
 `importPredictionRuns`, `exportPredictionHeaders`, `exportPredictionEvents`, `resetBehaviorPredictions`, `isRunSource`, `runModelHash`, `runStateLayer`,
 `runThreshold`, `replaceRunBouts(session, id, bouts, cfg)` (a classifier's
-post-processing changed: bouts re-derived from the scores in memory).
+post-processing changed: bouts re-derived from the scores in memory),
+`recordedFps(session)` (the rate most of its runs recorded, a tie the higher, else
+the labels', else 0: what `ui/behavior-detect.js` measures at while nothing has said the rate).
 `predictionStaleness` returns `{input, settings, labels, model}`.
 
 **Imports.** `./behavior-ethogram.js`, `./behavior-labels.js`,
@@ -2881,7 +2883,7 @@ post-processing changed: bouts re-derived from the scores in memory).
 `import-export/behavior-metadata.js`, `pose/run-state.js`, `ui/behavior-detect.js`,
 `ui/behavior-panel.js`, `ui/behavior-timeline.js`, `ui/ui-wiring.js` (Rename
 Identity). **Tests.** `tests/test-behavior-rules.mjs` §6–7,
-`tests/test-behavior-metadata.mjs` §5–6, `tests/test-behavior-classifier.mjs` §9,
+`tests/test-behavior-metadata.mjs` §5–7, `tests/test-behavior-classifier.mjs` §9,
 `tests/e2e/behavior-rules.mjs`, `tests/e2e/behavior-label-roundtrip.mjs`,
 `tests/e2e/behavior-classifier.mjs`, `tests/test-kpms-io.mjs` §11 (states runs).
 
@@ -12060,7 +12062,8 @@ running bout of its own, else the only other animal, else asks.
 `pickBehaviorTarget`, `cancelPendingTarget`, `clearBehaviorRange`,
 `adjacentBout`.
 
-**Imports.** `./app-state.js`, `./id-switch-highlight.js` (`idSwitchBoxNodeMask`),
+**Imports.** `./app-state.js`, `./behavior-detect.js` (`sessionFps`, the rate a label edit
+records), `./id-switch-highlight.js` (`idSwitchBoxNodeMask`),
 `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
 `../import-export/save-load.js`. **Imported by**
 `ui/behavior-mode.js`, `ui/behavior-panel.js`, `ui/behavior-timeline.js`,
@@ -12233,8 +12236,14 @@ fps, frame count, animals, video path).
 ### ui/behavior-detect.js
 
 **Purpose.** Running the behavior detectors and classifiers on a session.
+The rate everything is measured at: `detectionFps()` (the active session) is `state.fps`, or
+while nothing has said the rate (no video decoded, no campy manifest, `session.typedFps` not
+what the fps box holds) what the session recorded (`recordedFps`; 30 when nothing), and Detect's
+status line says so; `state.fps` itself is left alone. `sessionFps(session)` is the same for another
+session: what was said for it (typed, its manifest, its video's rate it was left at), else what it recorded, else
+`detectionFps()`.
 `buildBehaviorContext(session)` (the active session, or another whose poses are
-resident — at the frame rate and length it was left at, `sessionFps`; the floor
+resident — at its `sessionFps` and the length it was left at; the floor
 fit reads that session's cameras) reads the poses (`collectBehaviorInput`),
 resolves the body (`resolveBody` on `featureSettings()`) and the floor
 (`resolveFloor`: the plane chosen as the floor, else the Set Origin frame — the
@@ -12288,7 +12297,7 @@ call-time), `../pose/behavior-ethogram.js`, `../pose/behavior-tensor.js`,
 `../pose/behavior-pool.js`, `../pose/behavior-predictions.js`, `../pose/behavior-classifier.js`,
 `../import-export/save-load.js` (`onMarkDirty`). No top-level side effects
 (registration happens in `setupBehaviorDetection`), so import cycles through
-save-load are safe. **Imported by** `ui/behavior-panel.js`,
+save-load are safe. **Imported by** `ui/behavior-panel.js`, `ui/behavior-coding.js`,
 `ui/behavior-timeline.js`, `ui/behavior-rules-modal.js`, `ui/run-buttons.js`,
 `ui/ui-wiring.js`, `ui/behavior-train.js`, `ui/behavior-train-modal.js`. **Tests.**
 `tests/e2e/behavior-rules.mjs`, `tests/e2e/behavior-classifier.mjs` §2; timing

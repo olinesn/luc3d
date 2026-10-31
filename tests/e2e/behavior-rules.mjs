@@ -28,7 +28,11 @@
  *     real readers, though `state.fps` is the default 30 (a `.slp` does not save
  *     the rate) and stays so. A changed rule, body or floor still reads stale;
  *     so does a rate that is really different: a 10 fps video, the fps box, a
- *     campy manifest. The 60 fps video keeps them fresh.
+ *     campy manifest. The 60 fps video keeps them fresh. Everything measured in
+ *     seconds uses the rate on record: Detect gives the saved bouts and the same
+ *     per-frame scores, bit for bit, and This frame and the settings dialog the
+ *     same numbers, with `state.fps` still 30. Other sessions go by what they
+ *     recorded too; a label edit keeps the labels' rate.
  *
  * Run: node tests/e2e/behavior-rules.mjs   (spawns its own http.server; PORT= to move it)
  */
@@ -446,7 +450,15 @@ try {
         AS.timeline.setTotalFrames(T); AS.timeline.setData(s);
         const rear = eth.addBehavior({ name: 'rear', key: 'r' }).behavior;
         eth.setBehaviorDetector(rear.id, { conditions: [{ feature: 'Nose height', op: '>', value: 0.5 }], minDuration: 0.1, maxGap: 0 });
+        // Two the rate decides. The 121 frames of rearing are 2 s at 60 fps, 4 s at 30; the
+        // mice walk at about 1.2 body lengths a second at 60 fps, 0.6 at 30. So at 60 neither
+        // has a bout (and no run in the file), at 30 both do.
+        const longRear = eth.addBehavior({ name: 'long rear', key: 'l' }).behavior;
+        eth.setBehaviorDetector(longRear.id, { conditions: [{ feature: 'Nose height', op: '>', value: 0.5 }], minDuration: 3, maxGap: 0 });
+        const slow = eth.addBehavior({ name: 'slow', key: 'w' }).behavior;
+        eth.setBehaviorDetector(slow.id, { conditions: [{ feature: 'centroid speed', op: '<', value: 1 }], minDuration: 0, maxGap: 0 });
         await det.detectAllFrames();
+        (await import('/ui/behavior-coding.js')).codeBehavior(rear.id, { animal: 'id_1', start: 100, end: 110 });
         const views = CAMS.map(n => ({ name: n, videoWidth: 256, videoHeight: 32, frameCount: T }));
         const files = CAMS.map(n => ({ name: n, assignedCamera: n, videoPath: n + '.mp4' }));
         const u = new Uint8Array(await window.SleapIO.saveSlpToBytes(fileio.buildSlpLabelsAllViews(s, views, files)));
@@ -454,8 +466,31 @@ try {
         for (let i = 0; i < u.length; i += 8192) bin += String.fromCharCode.apply(null, u.subarray(i, i + 8192));
         return { bouts: P.predictedBouts(s).map(b => [b.animal, b.start, b.end]), runFps: P.behaviorRunOf(s, rear.id).fps, slp: btoa(bin) };
     });
+    /** Everything measured in seconds, at the rate in effect: Detect, This frame (at frame 100), the settings' columns. */
+    const measure = (p) => p.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const P = await import('/pose/behavior-predictions.js');
+        const det = await import('/ui/behavior-detect.js');
+        const s = AS.state.session;
+        // A short clip sizes the project; with no video the poses do (`totalFrames` can be 0).
+        AS.state.currentFrame = AS.state.totalFrames > 0 ? Math.min(100, AS.state.totalFrames - 1) : 100;
+        const readout = det.detectThisFrame().rows.filter(r => r.behaviorId === 'b3').map(r => [r.animal, r.conditions[0].actual]).sort();
+        const cols = (await det.computeFeatureColumns(det.cachedBehaviorContext(s), ['centroid speed'])).animal['centroid speed'];
+        const speed = cols.map(c => { let sum = 0, n = 0; for (const v of c) if (v === v) { sum += v; n++; } return sum / n; });
+        await det.detectAllFrames();
+        let h = 0x811c9dc5, n = 0;
+        P.behaviorRuns(s).slice().sort((a, b) => (a.behaviorId < b.behaviorId ? -1 : 1)).forEach(r => Array.from(r.scores.keys()).sort().forEach(k => {
+            const u = new Uint32Array(r.scores.get(k).buffer);
+            for (let i = 0; i < u.length; i++) { h = Math.imul(h ^ u[i], 0x01000193); n++; }
+        }));
+        return { rate: det.detectionFps(), readout, speed, scores: (h >>> 0) + ':' + n, runFps: P.behaviorRuns(s).map(r => r.fps),
+                 bouts: P.predictedBouts(s).map(b => [b.behaviorId, b.animal, b.start, b.end]), status: document.getElementById('statusText').textContent };
+    });
+    const asMade = await measure(maker);
     await maker.close();
     check(eq(made.bouts, [['id_0', 500, 620]]) && made.runFps === 60, 'detected at 60 fps: the planted rear');
+    check(asMade.rate === 60 && asMade.readout[0][1] > 1.1 && asMade.readout[0][1] < 1.3, 'walking at ' + asMade.readout[0][1].toFixed(2) + ' body lengths a second, at 60 fps');
+    check(!/rate on record/.test(asMade.status), 'the status has nothing to add at the rate the fps box holds');
 
     /** Open the saved file through a real reader, going on without videos at its prompt. */
     const reopen = (p, route) => p.evaluate(async ({ route, slp }) => {
@@ -488,7 +523,7 @@ try {
         (await import('/ui/behavior-panel.js')).refreshBehaviorPanel();
         const env = det.detectionEnv();
         const banner = document.querySelector('.behavior-stale');
-        return { fps: AS.state.fps, shown: document.getElementById('fpsDisplay').textContent, views: AS.state.views.length, lazy: !!s.lazyLoader,
+        return { fps: AS.state.fps, rate: det.detectionFps(), shown: document.getElementById('fpsDisplay').textContent, views: AS.state.views.length, lazy: !!s.lazyLoader,
                  runFps: P.behaviorRunOf(s, 'b1').fps, bouts: P.predictedBouts(s).length, input: P.predictionStaleness(s, env).input,
                  settings: P.predictionStaleness(s, env).settings, stands: P.predictionsStand(s, env),
                  blue: document.getElementById('tbBehavior').classList.contains('active'), banner: banner ? banner.textContent : '' };
@@ -524,6 +559,31 @@ try {
         check(isFresh(v1), route + ': and the run stays fresh');
         await p.close();
 
+        // With no video, everything measured in seconds uses the rate on record.
+        const d = await openApp();
+        await reopen(d, route);
+        check((await look(d)).rate === 60, route + ': measured at the 60 on record, not the 30 in state.fps');
+        await d.click('[data-menu="behavior"]');
+        await d.click('#menuBehaviorRules');
+        await d.waitForFunction(() => ['b1', 'b2', 'b3'].every(id => /^[\d,]+ bouts?/.test((document.querySelector('.bd-card[data-id="' + id + '"] .bd-live') || {}).textContent || '')),
+            null, { timeout: 20000 });
+        const live = await d.evaluate(() => ['b1', 'b2', 'b3'].map(id => document.querySelector('.bd-card[data-id="' + id + '"] .bd-live').textContent));
+        check(/^1 bout · 2\.0 s in all/.test(live[0]) && /^0 bouts/.test(live[1]) && /^0 bouts/.test(live[2]),
+            route + ': the settings dialog counts at 60 fps: "' + live[0].slice(0, 22) + '", and 0 for the two the rate decides');
+        await d.keyboard.press('Escape');
+        const m = await measure(d);
+        check(m.readout.length === 2 && eq(m.readout, asMade.readout), route + ': This frame reads what it read at 60 fps');
+        check(eq(m.speed, asMade.speed), route + ': so do the settings\' feature columns');
+        check(eq(m.bouts, [['b1', 'id_0', 500, 620]]) && m.runFps.every(f => f === 60), route + ': Detect gives the saved bouts, and each run records 60');
+        check(m.scores === asMade.scores, route + ': and the same per-frame scores, bit for bit (' + m.scores + ')');
+        check(/no video: at 60 fps, the rate on record/.test(m.status), route + ': the status says which rate: "' + m.status.slice(0, 80) + '"');
+        const v4 = await look(d);
+        check(v4.fps === 30 && /^30\.0 fps/.test(v4.shown), route + ': state.fps and the fps box stay at 30 (playback)');
+        check(isFresh(v4), route + ': the new run is fresh');
+        await loadVideos(d, VIDEO_60);
+        check(isFresh(await look(d)), route + ': and stays fresh when the 60 fps video loads');
+        await d.close();
+
         const q = await openApp();
         await reopen(q, route);
         check(isFresh(await look(q)), route + ': fresh again, reopened');
@@ -555,14 +615,74 @@ try {
     await typeFps(box, 30);
     const typed30 = await look(box);
     check(typed30.fps === 30 && isStale(typed30), '30 typed is said, not a default: stale');
+    const atTyped = await measure(box);
+    check(atTyped.rate === 30 && atTyped.runFps.every(f => f === 30) && atTyped.bouts.some(b => b[0] === 'b2'),
+        'and Detect measures at the 30 typed, not the 60 on record: the 121 frames are 4 s now, so "long rear" has its bout');
     await box.close();
 
     // So does a campy recording's manifest, even at 30.
     const camp = await openApp();
     await reopen(camp, 'eager');
     await camp.evaluate(() => { window.__lucid.state.session.campyRecording = { frameRate: 30 }; });
-    check(isStale(await look(camp)), 'no video, a campy manifest saying 30 fps: stale');
+    const atManifest = await look(camp);
+    check(atManifest.rate === 30 && isStale(atManifest), 'no video, a campy manifest saying 30 fps: measured at 30, and stale');
     await camp.close();
+
+    // A real rate outranks what is on record.
+    const vid = await openApp();
+    await reopen(vid, 'eager');
+    await loadVideos(vid, VIDEO_10);
+    const at10 = await measure(vid);
+    check(at10.rate === 10 && at10.runFps.every(f => f === 10), 'a 10 fps video: Detect measures at 10, and each run records it');
+    await vid.close();
+
+    // Sessions in the background go by the same rule, and a label edit keeps the labels' rate.
+    const multi = await openApp();
+    await reopen(multi, 'eager');
+    const others = await multi.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const P = await import('/pose/behavior-predictions.js');
+        const L = await import('/pose/behavior-labels.js');
+        const det = await import('/ui/behavior-detect.js');
+        const pd = await import('/pose/pose-data.js');
+        const s = AS.state.session;
+        const other = new pd.Session(s.cameras, s.skeleton, [], 'Other');
+        other.identities = s.identities; other.instanceGroups = s.instanceGroups; other.totalFrames = AS.state.totalFrames;
+        P.setBehaviorRun(other, { behaviorId: 'b1', cfg: 'x', fps: 25, mode: '3d', bouts: [{ animal: 'id_0', target: '', start: 1, end: 2, score: 0.9 }] });
+        AS.state.sessions = [s, other];
+        const out = { onRecord: det.sessionFps(other) };
+        other.fps = 30;
+        out.leftAtDefault = det.sessionFps(other);
+        other.typedFps = 30;
+        out.typed = det.sessionFps(other);
+        other.typedFps = 0; other.campyRecording = { frameRate: 50 };
+        out.manifest = det.sessionFps(other);
+        other.campyRecording = null; other.fps = 40; AS.state.videoFiles = [{ name: 'v', sessionIdx: 1 }];
+        out.video = det.sessionFps(other);
+        AS.state.videoFiles = []; other.fps = 30;
+        out.nothing = det.sessionFps(new pd.Session(s.cameras, s.skeleton, [], 'Empty'));
+        await det.detectAllSessions();
+        out.runs = [P.behaviorRunOf(s, 'b1').fps, P.behaviorRunOf(other, 'b1').fps];
+        out.status = document.getElementById('statusText').textContent;
+        AS.state.sessions = [s];
+        P.clearBehaviorRuns(s);
+        out.labels = L.behaviorFps(s);
+        out.fromLabels = det.detectionFps();
+        (await import('/ui/behavior-coding.js')).codeBehavior('b1', { animal: 'id_0', start: 10, end: 20 });
+        out.labelsAfter = L.behaviorFps(s);
+        out.fps = AS.state.fps;
+        return out;
+    });
+    await multi.close();
+    check(others.onRecord === 25, 'another session on record at 25 fps, with no video: 25');
+    check(others.leftAtDefault === 25, 'left at the default 30, still 25');
+    check(others.typed === 30, 'unless 30 was typed for it');
+    check(others.manifest === 50 && others.video === 40, 'or its manifest (50) or its video (40) said otherwise');
+    check(others.nothing === 60, 'a session with nothing on record takes the app\'s rate');
+    check(eq(others.runs, [60, 25]) && /in 2 sessions · no video: at 60 fps, the rate on record/.test(others.status),
+        'Detect on all sessions measures each at its own rate (' + others.runs.join(', ') + '), and says so');
+    check(others.labels === 60 && others.fromLabels === 60, 'with no runs left, the labels\' 60 from the file is the rate on record');
+    check(others.labelsAfter === 60 && others.fps === 30, 'a label edit with no video keeps it (state.fps stays 30)');
 
     console.log('\n-- page errors --');
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
