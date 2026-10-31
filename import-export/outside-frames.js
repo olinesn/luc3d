@@ -22,11 +22,17 @@
  * project (`Session.propagateNodeAdded`/`propagateNodeRemoved`). Track edits do not
  * touch it: it holds the file's track names, not the session's indices.
  *
+ * A behavior event kept on such a video goes on the entry its poses have, so the
+ * file's `frames` and `events` name one place. Both paths say which entry that is by
+ * the file's own record of the video (`listedVideos`, `buildBehaviorEvents`), never by
+ * its filename: campy names every video `0.mp4`.
+ *
  * Nothing here is written to `metadata.lucid`, and a file with no such frames saves
  * byte-identically (`tests/e2e/save-golden-digest.mjs`).
  */
 
 import { Instance } from '../pose/pose-data.js';
+import { keptVideoRecords } from './behavior-events.js';
 import { makePooledSioInstances } from './file-io.js';
 
 function newHeaderVideo(SIO, filename, shape) {
@@ -105,6 +111,11 @@ export function keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMa
                 // Only the raw worker's records lack `_typedVideo`.
                 filename: record && !record.embedded ? record.filename : null,
                 shape: record ? record.shape : null,
+                // What this file's events know the video by (`fileEventsOf`): the very
+                // object a kept event of this file holds. A video File ▸ Add SLP brought
+                // has another file's record, so even at the same place in its own list
+                // it is never taken for theirs.
+                eventRecord: slpData.behaviorEvents ? slpData.behaviorEvents.videos[fd.videoIdx] : null,
             });
         }
         var instances = [];
@@ -173,53 +184,75 @@ export function keepOutsideColumnarFrames(session, slpData, own) {
 }
 
 /**
- * Eager save: `session`'s kept frames as sleap-io.js objects.
+ * Eager save: `session`'s kept frames as sleap-io.js objects. Called before the
+ * session's Labels are built, because its events must go on these videos
+ * (`buildSlpLabelsAllViews`), and the frames need those Labels' skeleton.
  *
  * @param {Session} session
- * @param {Object} skeleton - the `SIO.Skeleton` of this session's Labels
- * @returns {{videos: Array, tracks: Array, labeledFrames: Array}|null}
+ * @returns {{videos: Array, tracks: Array, listedVideos: Map<Object, Object>, labeledFramesFor: function(Object): Array}|null}
+ *   `listedVideos`: the file's record of a video (`fileEventsOf`) -> its entry here;
+ *   `labeledFramesFor(skeleton)`: the frames, on the `SIO.Skeleton` of the session's Labels
  */
-export function outsideFramesForSave(session, skeleton) {
+export function outsideFramesForSave(session) {
     var SIO = window.SleapIO;
     // A lazy session on this path (a project mixing lazy and eager sessions): its
     // store holds them, and the eager writer would otherwise leave them behind.
     var loader = session.lazyLoader;
-    if (loader && typeof loader.forEachOutsideRow === 'function') return lazyOutsideFramesForSave(SIO, loader);
+    if (loader && typeof loader.forEachOutsideRow === 'function') return lazyOutsideFramesForSave(SIO, session, loader);
     var kept = session.outsideFrames;
     if (!kept) return null;
+    var listedVideos = new Map();
     var videos = kept.videos.map(function (v) {
-        return !v.typed && v.filename ? newHeaderVideo(SIO, v.filename, v.shape)
+        var video = !v.typed && v.filename ? newHeaderVideo(SIO, v.filename, v.shape)
             : headerVideoForOutsideFrames(SIO, v.typed, v.id);
+        if (v.eventRecord) listedVideos.set(v.eventRecord, video);
+        return video;
     });
     var tracks = kept.tracks.map(function (name) { return new SIO.Track(name); });
-    var newSioInstance = makePooledSioInstances(SIO, skeleton, session.skeleton.nodes.length);
-    var labeledFrames = kept.frames.map(function (f) {
-        return new SIO.LabeledFrame({
-            video: videos[f.video],
-            frameIdx: f.frameIdx,
-            instances: f.instances.map(function (inst) {
-                return newSioInstance(inst, inst.trackIdx >= 0 ? tracks[inst.trackIdx] : null);
-            }),
-        });
-    });
-    return { videos: videos, tracks: tracks, labeledFrames: labeledFrames };
+    return {
+        videos: videos, tracks: tracks, listedVideos: listedVideos,
+        labeledFramesFor: function (skeleton) {
+            var newSioInstance = makePooledSioInstances(SIO, skeleton, session.skeleton.nodes.length);
+            return kept.frames.map(function (f) {
+                return new SIO.LabeledFrame({
+                    video: videos[f.video],
+                    frameIdx: f.frameIdx,
+                    instances: f.instances.map(function (inst) {
+                        return newSioInstance(inst, inst.trackIdx >= 0 ? tracks[inst.trackIdx] : null);
+                    }),
+                });
+            });
+        },
+    };
 }
 
-function lazyOutsideFramesForSave(SIO, loader) {
+function lazyOutsideFramesForSave(SIO, session, loader) {
+    // A project file's store lists its videos as the file does, which is where this
+    // session's kept events come from. A per-camera store is another file: no events.
+    var records = loader._sharedStore ? keptVideoRecords(session) : new Map();
+    var listedVideos = new Map();
     var headerVideoOf = new Map();
     var trackByName = new Map();
     var labeledFrames = [];
     loader.forEachOutsideRow(function (store, row, id) {
         var lf = store.materializeFrame(row);
         if (!lf) return;
-        if (!headerVideoOf.has(lf.video)) headerVideoOf.set(lf.video, headerVideoForOutsideFrames(SIO, lf.video, id));
+        if (!headerVideoOf.has(lf.video)) {
+            var headerVideo = headerVideoForOutsideFrames(SIO, lf.video, id);
+            headerVideoOf.set(lf.video, headerVideo);
+            var record = records.get(store.videos.indexOf(lf.video));
+            if (record) listedVideos.set(record, headerVideo);
+        }
         lf.instances.forEach(function (inst) {
             if (inst.track && !trackByName.has(inst.track.name)) trackByName.set(inst.track.name, inst.track);
         });
         labeledFrames.push(new SIO.LabeledFrame({ video: headerVideoOf.get(lf.video), frameIdx: lf.frameIdx, instances: lf.instances }));
     });
     if (labeledFrames.length === 0) return null;
-    return { videos: Array.from(headerVideoOf.values()), tracks: Array.from(trackByName.values()), labeledFrames: labeledFrames };
+    return {
+        videos: Array.from(headerVideoOf.values()), tracks: Array.from(trackByName.values()), listedVideos: listedVideos,
+        labeledFramesFor: function () { return labeledFrames; },
+    };
 }
 
 /**

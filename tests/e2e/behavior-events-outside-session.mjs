@@ -25,12 +25,19 @@
  *     session: only the first camera's events are labels, each other stays where it is.
  *  G. Two uncalibrated sessions: each event stays on its own session's camera.
  *  H. An uncalibrated session written by Python, through LUC3D, Python and LUC3D again.
+ *  I. A video outside the open sessions holding poses AND bouts is ONE entry of the saved
+ *     list, with both on it: last or first in the file, among videos with only poses or only
+ *     bouts, every video named `0.mp4` (campy's name), another session's videos in a loader
+ *     of one session, a camera the folder loader makes by filename, File ▸ Add SLP (a video of
+ *     ANOTHER file at the same place in its list stays apart), a project mixing lazy and
+ *     eager, a two-pass save, two saves in a row, and files real Python wrote.
  *
  * Kinds of event on the other video: a bout, a "not" label (its type must keep saying
  * what it negates), a prediction with framewise scores, an event with no animal.
  * Real Python sleap-io reads the last saves when `uv` is here (skipped without it).
  *
  * Run: node tests/e2e/behavior-events-outside-session.mjs   (spawns its own http.server; PORT= to move it)
+ *      SECTIONS=G,I runs only those sections
  */
 import { chromium } from 'playwright';
 import { spawn, spawnSync } from 'node:child_process';
@@ -43,6 +50,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const PORT = Number(process.env.PORT || 8461);
 const PY_SPEC = process.env.SLEAP_IO_SPEC || 'sleap-io==0.9.5';
+const SECTIONS = process.env.SECTIONS ? process.env.SECTIONS.split(',') : null;
+const runs = (section) => !SECTIONS || SECTIONS.includes(section);
 
 let fails = 0;
 const check = (c, m, got) => {
@@ -62,17 +71,20 @@ async function buildFile(spec) {
     const videoOf = {};
     const videos = spec.videos.map(name => {
         const shape = [400, 64, 64, 1];
-        const v = new SIO.Video({ filename: name, backendMetadata: { type: 'MediaVideo', shape, filename: name }, openBackend: false });
+        const filename = spec.filename || name;
+        const v = new SIO.Video({ filename, backendMetadata: { type: 'MediaVideo', shape, filename }, openBackend: false });
         v.shape = shape;
         videoOf[name] = v;
         return v;
     });
     const frames = [];
     const addFrames = (video) => {
+        // Each video's x values are its own, so a pose that moved cannot pass for another's.
+        const base = 1000 * videos.indexOf(video);
         for (let f = 0; f < 2; f++) {
             const pt = (x, y) => ({ xy: [x, y], visible: true, complete: true, score: 0.9 });
             frames.push(new SIO.LabeledFrame({ video, frameIdx: f, instances: [
-                new SIO.PredictedInstance({ points: [pt(10 + f, 10), pt(20, 20)], skeleton, track, score: 0.9 }),
+                new SIO.PredictedInstance({ points: [pt(base + 10 + f, 10), pt(20, 20)], skeleton, track, score: 0.9 }),
             ] }));
         }
     };
@@ -89,6 +101,7 @@ async function buildFile(spec) {
         return session;
     });
     if (spec.sessions.length === 0) videos.forEach(addFrames);
+    (spec.posesOn || []).forEach(name => addFrames(videoOf[name]));
     const types = {
         attack: new SIO.EventType({ name: 'attack', metadata: { directed: 'true' } }),
         rear: new SIO.EventType({ name: 'rear' }),
@@ -121,15 +134,23 @@ async function readFile() {
     sessions.forEach((s, si) => s.forEach((vi, ci) => where.set(vi, 'session ' + si + (ci === 0 ? ' first camera' : ' camera ' + ci))));
     const place = (vi) => where.get(vi) || videos[vi];
     const round = (a) => (a ? Array.from(a).map(x => Math.round(x * 1000) / 1000) : null);
-    const events = (slp.behaviorEvents ? slp.behaviorEvents.rows : []).map(r => [
+    const rows = slp.behaviorEvents ? slp.behaviorEvents.rows : [];
+    const events = rows.map(r => [
         place(r.video), r.type, r.start, r.end, r.subject, r.target, r.predicted, r.source,
         Number.isFinite(r.score) ? r.score : null, round(r.scores), r.metadata, r.name,
     ]).sort((a, b) => a[2] - b[2]);
+    const ascending = (a) => a.sort((x, y) => x - y);
     return {
         videos, sessions, outside: videos.filter((n, i) => !inSession.has(i)), events,
         types: slp.behaviorEvents ? slp.behaviorEvents.types.map(t => ({ name: t.name, negates: t.metadata.negates || null })) : [],
         framesOffSession: slp.frames.filter(f => !inSession.has(f.videoIdx)).length,
         framesOn: videos.map((n, i) => slp.frames.filter(f => f.videoIdx === i).length),
+        // Each entry of the list: where it sits, its poses (by x) and its events (by first frame).
+        entries: videos.map((n, i) => ({
+            where: place(i),
+            poses: ascending(slp.frames.filter(f => f.videoIdx === i).map(f => Math.round(f.instances[0].points[0][0]))),
+            events: ascending(rows.filter(r => r.video === i).map(r => r.start)),
+        })),
     };
 }
 
@@ -196,9 +217,10 @@ const LOADERS = {
             await (await import('/loading/session-loader.js')).handleLoadProjectSlpLazy(new File([window.__file], 'project.slp'));
         })().then(() => { window.__done = true; }, e => { window.__done = 'ERR ' + (e && e.stack || e); }); });
     },
-    'single .slp folder': async (page, bytes) => {
+    'single .slp folder': async (page, bytes, calibration) => {
         const dir = fs.mkdtempSync(path.join(tmp, 'folder-'));
         fs.writeFileSync(path.join(dir, 'project.slp'), bytes);
+        if (calibration) fs.writeFileSync(path.join(dir, 'calibration.toml'), calibration);
         page.once('filechooser', fc => fc.setFiles(dir));
         return page.evaluate(() => { window.__done = false; (async () => {
             await (await import('/loading/session-loader.js')).handleLoadSessionFolderSingleSlp();
@@ -206,11 +228,8 @@ const LOADERS = {
     },
 };
 
-/** Open `bytes` with a loader, see what it shows, save, read the save. */
-async function openAndSave(loader, bytes) {
-    const page = await newAppPage();
-    await putBytes(page, '__file', bytes);
-    await LOADERS[loader](page, bytes);
+/** Dismiss a load's prompts until it finishes. */
+async function settleLoad(page, what) {
     let done = false;
     for (let i = 0; i < 240 && !done; i++) {
         const s = await page.evaluate(() => {
@@ -222,7 +241,15 @@ async function openAndSave(loader, bytes) {
         done = s.done;
         if (!done) await page.waitForTimeout(100);
     }
-    if (done !== true) throw new Error(loader + ': load did not finish: ' + done);
+    if (done !== true) throw new Error(what + ': load did not finish: ' + done);
+}
+
+/** Open `bytes` with a loader, see what it shows, save, read the save. */
+async function openAndSave(loader, bytes, calibration) {
+    const page = await newAppPage();
+    await putBytes(page, '__file', bytes);
+    await LOADERS[loader](page, bytes, calibration);
+    await settleLoad(page, loader);
     const shown = await page.evaluate(sessionsShown);
     await page.evaluate(saveInPage);
     const saved = await getBytes(page, '__saved');
@@ -308,9 +335,11 @@ async function twoSessions(loader, opensAll) {
             .concat(ownRead('b0.mp4', [[110, 119]], 'animal_B'), ownRead('b1.mp4', [[130, 139]], 'animal_B'), OTHER_READ('other.mp4'), noVideoRead);
     }
     check(eq(one.read.events, expected), 'saved: no event lost or doubled, each where it belongs', one.read.events);
+    check(one.read.videos.length === 5, 'no copy of a video', one.read.videos);
     const two = await openAndSave(loader, one.saved);
     check(eq(two.shown, one.shown), 'reopened, the same', two.shown);
     check(eq(two.read.events, expected), 'saved again: the same', two.read.events);
+    check(eq(two.read.videos, one.read.videos), 'on the same videos', two.read.videos);
 }
 
 /** D: a video in no session with no event on it. */
@@ -410,10 +439,8 @@ async function uncalibratedTwoSessions(loader, opensAll) {
         : aRead.concat([rearOn('b0.mp4', 110, 119, 'animal_B'), rearOn('b1.mp4', 130, 139, 'animal_B')]);
     check(eq(one.shown, shows), 'each session shows its first camera\'s bouts', one.shown);
     check(eq(one.read.events, expected), 'saved: each on its own session\'s camera', one.read.events);
-    // Only where every session opens, so each kept event has a camera to go back to. A loader
-    // of one session writes the other session's videos back instead, and what it does with
-    // their poses is another matter (the single-.slp folder loader makes them extra cameras).
-    if (opensAll) check(one.read.videos.length === 4, 'no copy of a video', one.read.videos);
+    check(one.read.videos.length === 4, 'no copy of a video', one.read.videos);
+    check(eq(one.read.framesOn, [2, 2, 2, 2]), 'and each its poses', one.read.framesOn);
     const two = await openAndSave(loader, one.saved);
     check(eq(two.shown, shows) && eq(two.read.events, expected) && eq(two.read.videos, one.read.videos), 'reopened and saved again: the same', two.read);
 }
@@ -455,6 +482,212 @@ sio.load_slp(sys.argv[1], open_videos=False).save(sys.argv[2], embed=False)
     if (r.status !== 0) throw new Error('python failed: ' + r.stderr);
 }
 
+/** A file real Python writes: poses on every video, bouts as `spec.events` says, by the same x values as `buildFile`. */
+function pythonFile(file, spec) {
+    const script = `
+import json, sys, numpy as np, sleap_io as sio
+spec = json.loads(sys.argv[2])
+skeleton = sio.Skeleton(nodes=["nose", "tail"], edges=[("nose", "tail")])
+videos = [sio.Video(filename=n, open_backend=False) for n in spec["videos"]]
+video_of = dict(zip(spec["videos"], videos))
+for v in videos:
+    v.backend_metadata["shape"] = (400, 64, 64, 1)
+t1 = sio.Track(name="mouse1")
+frames = [sio.LabeledFrame(video=v, frame_idx=f, instances=[
+    sio.PredictedInstance.from_numpy(np.array([[1000.0 * i + 10 + f, 10.0], [20.0, 20.0]]), skeleton=skeleton, track=t1, score=0.9, point_scores=np.array([0.9, 0.9])),
+]) for i, v in enumerate(videos) for f in range(2)]
+sessions = []
+for si, names in enumerate(spec["sessions"]):
+    cameras = [sio.Camera(name=f"s{si}_cam{ci}", rvec=[0.0, 0.1 * ci, 0.0], tvec=[10.0 * ci, 0.0, 0.0], matrix=[[500.0, 0.0, 32.0], [0.0, 500.0, 32.0], [0.0, 0.0, 1.0]]) for ci in range(len(names))]
+    session = sio.RecordingSession(camera_group=sio.CameraGroup(cameras=cameras))
+    for n, c in zip(names, cameras):
+        session.add_video(video_of[n], c)
+    sessions.append(session)
+rear = sio.EventType(name="rear")
+events = [sio.UserEvent(type=rear, video=video_of[e["video"]], start_frame=e["start"], end_frame=e["end"], subject=t1, source=e["source"]) for e in spec["events"]]
+sio.Labels(labeled_frames=frames, videos=videos, skeletons=[skeleton], tracks=[t1], sessions=sessions, event_types=[rear], events=events).save(sys.argv[1], embed=False)
+`;
+    const r = spawnSync('uv', ['run', '--no-project', '--quiet', '--with', PY_SPEC, 'python', '-I', '-c', script, file, JSON.stringify(spec)], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error('python failed: ' + r.stderr);
+    return fs.readFileSync(file);
+}
+
+/** Each entry of a file's video list as Python holds it: frames and events on THAT entry. */
+function pythonEntries(file) {
+    const script = `
+import json, sys, sleap_io as sio
+labels = sio.load_slp(sys.argv[1], open_videos=False)
+print(json.dumps([{
+    "filename": v.filename,
+    "poses": sorted(round(float(lf.instances[0].points["xy"][0][0])) for lf in labels.labeled_frames if lf.video is v),
+    "events": sorted(e.start_frame for e in labels.events if e.video is v),
+} for v in labels.videos]))
+`;
+    const r = spawnSync('uv', ['run', '--no-project', '--quiet', '--with', PY_SPEC, 'python', '-I', '-c', script, file], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error('python failed: ' + r.stderr);
+    return JSON.parse(r.stdout.trim().split('\n').pop());
+}
+
+/** The poses `buildFile` gives the video at this place in the source's list. */
+const posesOf = (i) => [1000 * i + 10, 1000 * i + 11];
+const entry = (where, poses, events) => ({ where, poses, events });
+const rearAt = (video, start) => ({ type: 'rear', video, start, end: start + 1, subject: 'a', source: 'manual' });
+
+/** The saves section I hands to Python: [what, bytes, the app's read of them]. */
+const forPython = [];
+
+/** I: open `spec` with a loader, save, and do it again: `want` is the saved list, entry by entry. */
+async function posesAndBouts(loader, title, spec, want) {
+    const page = await newAppPage();
+    await page.evaluate(buildFile, spec);
+    const source = await getBytes(page, '__built');
+    await page.close();
+    await posesAndBoutsOf(loader, title, source, want);
+}
+
+/** I: the same for a file already made. */
+async function posesAndBoutsOf(loader, title, source, want) {
+    console.log(`\n-- I. ${title}, ${loader} --`);
+    const one = await openAndSave(loader, source);
+    check(eq(one.read.entries, want), 'one entry per video, its poses and bouts both on it', one.read.entries);
+    const two = await openAndSave(loader, one.saved);
+    check(eq(two.read.entries, want), 'saved again: the same', two.read.entries);
+    check(eq(two.read.videos, one.read.videos), 'in the same order', two.read.videos);
+    check(eq(two.read.events, one.read.events), 'and every event unchanged', two.read.events);
+    forPython.push([`${title}, ${loader}`, two.saved, two.read]);
+}
+
+/** The source the rest of section I edits: one session, and a video outside it with both. */
+const ONE_VIDEO_BOTH = { videos: ['a0.mp4', 'a1.mp4', 'other.mp4'], sessions: [['a0.mp4', 'a1.mp4']], posesOn: ['other.mp4'], events: OWN.concat(OTHER) };
+const ONE_VIDEO_BOTH_WANT = [
+    entry('session 0 first camera', posesOf(0), [10, 30]),
+    entry('session 0 camera 1', posesOf(1), []),
+    entry('other.mp4', posesOf(2), [300, 310, 320, 330]),
+];
+
+/** I: a calibration file beside the `.slp`: the folder loader makes a camera of a video no session names, by its filename. */
+async function cameraByFilename() {
+    console.log('\n-- I. the single .slp folder makes a camera of a video no session names --');
+    const page = await newAppPage();
+    await page.evaluate(buildFile, {
+        videos: ['s0_cam0.mp4', 's0_cam1.mp4'], sessions: [['s0_cam0.mp4']], posesOn: ['s0_cam1.mp4'],
+        events: [rearAt('s0_cam0.mp4', 10), rearAt('s0_cam1.mp4', 300)],
+    });
+    const source = await getBytes(page, '__built');
+    await page.close();
+    const calibration = ['s0_cam0', 's0_cam1'].map((name, i) => `[cam_${i}]\nname = "${name}"\nsize = [64, 64]\n` +
+        'matrix = [[500.0, 0.0, 32.0], [0.0, 500.0, 32.0], [0.0, 0.0, 1.0]]\ndistortions = [0.0, 0.0, 0.0, 0.0, 0.0]\n' +
+        `rotation = [0.0, ${0.1 * i}, 0.0]\ntranslation = [${10 * i}.0, 0.0, 0.0]\n`).join('\n');
+
+    const one = await openAndSave('single .slp folder', source, calibration);
+    check(eq(one.read.entries, [entry('session 0 first camera', posesOf(0), [10]), entry('session 0 camera 1', posesOf(1), [300])]),
+        'one entry per video, that camera\'s poses and bout both on it', one.read.entries);
+    forPython.push(['a camera by its filename, single .slp folder', one.saved, one.read]);
+    // The file's session names that camera now, and a bout on a camera of a calibrated session is the session's.
+    const two = await openAndSave('single .slp folder', one.saved, calibration);
+    check(eq(two.read.entries, [entry('session 0 first camera', posesOf(0), [10, 300]), entry('session 0 camera 1', posesOf(1), [])]),
+        'saved again: still one entry per video, the bout now the session\'s', two.read.entries);
+}
+
+/** I: File ▸ Add SLP. The event's video and the added file's video are both at place 2 of their lists. */
+async function addSlpSamePlace() {
+    console.log('\n-- I. File ▸ Add SLP: a video of another file at the same place stays apart --');
+    const page = await newAppPage();
+    await page.evaluate(buildFile, { videos: ['c0.mp4', 'c1.mp4', 'added.mp4'], sessions: [['c0.mp4', 'c1.mp4']], posesOn: ['added.mp4'], events: [] });
+    const added = path.join(tmp, 'added.slp');
+    fs.writeFileSync(added, await getBytes(page, '__built'));
+    await page.evaluate(buildFile, { videos: ['a0.mp4', 'a1.mp4', 'other.mp4'], sessions: [['a0.mp4', 'a1.mp4']], events: OWN.concat(OTHER) });
+    await page.evaluate(() => { window.__file = window.__built; });
+    await LOADERS['File ▸ Open'](page);
+    await settleLoad(page, 'open');
+    page.once('filechooser', fc => fc.setFiles(added));
+    await page.evaluate(() => { window.__done = false; (async () => {
+        await (await import('/import-export/slp-import.js')).handleAddSlp();
+    })().then(() => { window.__done = true; }, e => { window.__done = 'ERR ' + (e && e.stack || e); }); });
+    await settleLoad(page, 'Add SLP');
+    await page.evaluate(saveInPage);
+    const read = await page.evaluate(readFile);
+    await page.close();
+    const on = (name) => read.entries.filter(e => e.where === name);
+    check(eq(on('other.mp4'), [entry('other.mp4', [], [300, 310, 320, 330])]), 'the bouts\' video: once, its bouts and no pose', read.entries);
+    check(eq(on('added.mp4'), [entry('added.mp4', posesOf(2), [])]), 'the added file\'s video: once, its poses and no bout', read.entries);
+}
+
+/** I: a lazy session on the eager writer's path. */
+async function mixedProject() {
+    console.log('\n-- I. a project mixing lazy and eager sessions --');
+    const page = await newAppPage();
+    await page.evaluate(buildFile, ONE_VIDEO_BOTH);
+    await page.evaluate(() => { window.__file = window.__built; });
+    await LOADERS['large project (lazy)'](page);
+    await settleLoad(page, 'open');
+    await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js');
+        const tri = await import('/pose/triangulation.js');
+        const { state } = await import('/ui/app-state.js');
+        for (const f of [0, 1]) await tri.ensureLazyFrameData(f);
+        const cam = new pd.Camera('camE', [[500, 0, 32], [0, 500, 32], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [64, 64]);
+        const eager = new pd.Session([cam], state.session.skeleton, ['mouse1'], 'eager');
+        const fg = new pd.FrameGroup(0);
+        eager.addFrameGroup(fg);
+        fg.addInstance('camE', new pd.Instance([[900, 10], [901, 20]], 0, 'user', 0));
+        state.sessions.push(eager);
+    });
+    await page.evaluate(saveInPage);
+    const read = await page.evaluate(readFile);
+    await page.close();
+    const here = read.entries.filter(e => e.where === 'other.mp4');
+    check(eq(here, [entry('other.mp4', posesOf(2), [300, 310, 320, 330])]), 'that video: once, its poses and bouts both on it', read.entries);
+}
+
+/** I: two lazy sessions go through the two-pass save. */
+async function twoPassSave() {
+    console.log('\n-- I. a two-pass save --');
+    const page = await newAppPage();
+    await page.evaluate(buildFile, { videos: ['camC.mp4'], sessions: [], events: [] });
+    const camC = await getBytes(page, '__built');
+    await page.evaluate(buildFile, ONE_VIDEO_BOTH);
+    await page.evaluate(() => { window.__file = window.__built; });
+    await LOADERS['large project (lazy)'](page);
+    await settleLoad(page, 'open');
+    await putBytes(page, '__camC', camC);
+    const err = await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js');
+        const { SioLazyLoader } = await import('/loading/sio-lazy-loader.js');
+        const AS = await import('/ui/app-state.js');
+        const sl = await import('/import-export/save-load.js');
+        const cam = new pd.Camera('camC', [[500, 0, 32], [0, 500, 32], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [64, 64]);
+        const second = new pd.Session([cam], AS.state.session.skeleton, ['mouse1'], 'second');
+        second.lazyLoader = new SioLazyLoader();
+        await second.lazyLoader.open('camC', new File([window.__camC], 'camC.slp'));
+        AS.state.sessions.push(second);
+        try {
+            window.__saved = await sl.saveAllSessionsStreaming(AS.state.sessions.slice());
+            return null;
+        } catch (e) { return String(e && e.stack || e); }
+    });
+    check(!err, 'the two-pass save runs', err);
+    const read = await page.evaluate(readFile);
+    await page.close();
+    const here = read.entries.filter(e => e.where === 'other.mp4');
+    check(eq(here, [entry('other.mp4', posesOf(2), [300, 310, 320, 330])]), 'that video: once, its poses and bouts both on it', read.entries);
+}
+
+/** I: File ▸ Save twice with the project open: nothing a save leaves behind adds an entry. */
+async function savedTwiceInARow(loader) {
+    console.log(`\n-- I. two saves in a row, ${loader} --`);
+    const page = await newAppPage();
+    await page.evaluate(buildFile, ONE_VIDEO_BOTH);
+    await page.evaluate(() => { window.__file = window.__built; });
+    await LOADERS[loader](page, await getBytes(page, '__built'));
+    await settleLoad(page, loader);
+    await page.evaluate(saveInPage);
+    await page.evaluate(saveInPage);
+    const read = await page.evaluate(readFile);
+    await page.close();
+    check(eq(read.entries, ONE_VIDEO_BOTH_WANT), 'one entry per video, its poses and bouts both on it', read.entries);
+}
+
 /** Each event as [video, start], in frame order. */
 const placed = (py) => py.events.map(e => [e[0], e[2]]).sort((a, b) => a[1] - b[1]);
 
@@ -479,30 +712,138 @@ try {
     await new Promise(r => setTimeout(r, 1200));
     browser = await chromium.launch();
     const finalSaves = {};
-    for (const loader of Object.keys(LOADERS)) {
-        finalSaves[loader] = await oneSession(loader, 'A. one session, the other video last', ['a0.mp4', 'a1.mp4', 'other.mp4']);
+    if (runs('A')) {
+        for (const loader of Object.keys(LOADERS)) {
+            finalSaves[loader] = await oneSession(loader, 'A. one session, the other video last', ['a0.mp4', 'a1.mp4', 'other.mp4']);
+        }
     }
-    for (const loader of Object.keys(LOADERS)) {
-        await oneSession(loader, 'B. one session, the other video first', ['other.mp4', 'a0.mp4', 'a1.mp4']);
+    if (runs('B')) {
+        for (const loader of Object.keys(LOADERS)) {
+            await oneSession(loader, 'B. one session, the other video first', ['other.mp4', 'a0.mp4', 'a1.mp4']);
+        }
     }
-    await twoSessions('File ▸ Open', true);
-    await twoSessions('large project (lazy)', false);
-    await twoSessions('single .slp folder', false);
-    await noEventThere('File ▸ Open');
-    await noEventThere('large project (lazy)');
+    if (runs('C')) {
+        await twoSessions('File ▸ Open', true);
+        await twoSessions('large project (lazy)', false);
+        await twoSessions('single .slp folder', false);
+    }
+    if (runs('D')) {
+        await noEventThere('File ▸ Open');
+        await noEventThere('large project (lazy)');
+    }
     const separate = {};
-    separate['File ▸ Open'] = await separateVideos('File ▸ Open', 'File ▸ Open');
-    separate['large project (lazy)'] = await separateVideos('File ▸ Open', 'large project (lazy)');
-    separate['single .slp folder'] = await separateVideos('single .slp folder', 'single .slp folder');
-    for (const loader of Object.keys(LOADERS)) await uncalibratedShuffled(loader);
-    await uncalibratedTwoSessions('File ▸ Open', true);
-    await uncalibratedTwoSessions('large project (lazy)', false);
-    await uncalibratedTwoSessions('single .slp folder', false);
+    if (runs('E')) {
+        separate['File ▸ Open'] = await separateVideos('File ▸ Open', 'File ▸ Open');
+        separate['large project (lazy)'] = await separateVideos('File ▸ Open', 'large project (lazy)');
+        separate['single .slp folder'] = await separateVideos('single .slp folder', 'single .slp folder');
+    }
+    if (runs('F')) {
+        for (const loader of Object.keys(LOADERS)) await uncalibratedShuffled(loader);
+    }
+    if (runs('G')) {
+        await uncalibratedTwoSessions('File ▸ Open', true);
+        await uncalibratedTwoSessions('large project (lazy)', false);
+        await uncalibratedTwoSessions('single .slp folder', false);
+    }
+
+    if (runs('I')) {
+        for (const loader of Object.keys(LOADERS)) {
+            await posesAndBouts(loader, 'the video last', ONE_VIDEO_BOTH, ONE_VIDEO_BOTH_WANT);
+            await posesAndBouts(loader, 'the video first', Object.assign({}, ONE_VIDEO_BOTH, { videos: ['other.mp4', 'a0.mp4', 'a1.mp4'] }), [
+                entry('session 0 first camera', posesOf(1), [10, 30]),
+                entry('session 0 camera 1', posesOf(2), []),
+                entry('other.mp4', posesOf(0), [300, 310, 320, 330]),
+            ]);
+            // The writers list the cameras, then the videos with poses, then those with only bouts.
+            await posesAndBouts(loader, 'among videos with only poses or only bouts', {
+                videos: ['a0.mp4', 'a1.mp4', 'both1.mp4', 'poses.mp4', 'bouts.mp4', 'both2.mp4'], sessions: [['a0.mp4', 'a1.mp4']],
+                posesOn: ['both1.mp4', 'poses.mp4', 'both2.mp4'],
+                events: OWN.concat([rearAt('both2.mp4', 500), rearAt('bouts.mp4', 400), rearAt('both1.mp4', 300)]),
+            }, [
+                entry('session 0 first camera', posesOf(0), [10, 30]),
+                entry('session 0 camera 1', posesOf(1), []),
+                entry('both1.mp4', posesOf(2), [300]),
+                entry('poses.mp4', posesOf(3), []),
+                entry('both2.mp4', posesOf(5), [500]),
+                entry('bouts.mp4', [], [400]),
+            ]);
+            // campy names every video `0.mp4`: only the file's own record tells them apart.
+            await posesAndBouts(loader, 'every video named 0.mp4', {
+                videos: ['a0', 'a1', 'x', 'y'], filename: '0.mp4', sessions: [['a0', 'a1']], posesOn: ['x', 'y'],
+                events: [rearAt('a0', 10), rearAt('a1', 30), rearAt('x', 300), rearAt('y', 400)],
+            }, [
+                entry('session 0 first camera', posesOf(0), [10, 30]),
+                entry('session 0 camera 1', posesOf(1), []),
+                entry('0.mp4', posesOf(2), [300]),
+                entry('0.mp4', posesOf(3), [400]),
+            ]);
+        }
+        // A multi-session file: a loader of one session holds the others' videos like any other.
+        const twoSessionsBoth = {
+            videos: ['a0.mp4', 'a1.mp4', 'b0.mp4', 'b1.mp4', 'other.mp4'], sessions: [['a0.mp4', 'a1.mp4'], ['b0.mp4', 'b1.mp4']], posesOn: ['other.mp4'],
+            events: OWN.concat([rearAt('b0.mp4', 110), rearAt('b1.mp4', 130)], OTHER),
+        };
+        for (const loader of ['large project (lazy)', 'single .slp folder']) {
+            await posesAndBouts(loader, 'two sessions, this loader opens the first', twoSessionsBoth, [
+                entry('session 0 first camera', posesOf(0), [10, 30]),
+                entry('session 0 camera 1', posesOf(1), []),
+                entry('b0.mp4', posesOf(2), [110]),
+                entry('b1.mp4', posesOf(3), [130]),
+                entry('other.mp4', posesOf(4), [300, 310, 320, 330]),
+            ]);
+        }
+        await posesAndBouts('File ▸ Open', 'two sessions, both open', twoSessionsBoth, [
+            entry('session 0 first camera', posesOf(0), [10, 30]),
+            entry('session 0 camera 1', posesOf(1), []),
+            entry('other.mp4', posesOf(4), [300, 310, 320, 330]),
+            entry('session 1 first camera', posesOf(2), [110, 130]),
+            entry('session 1 camera 1', posesOf(3), []),
+        ]);
+        await cameraByFilename();
+        await addSlpSamePlace();
+        await mixedProject();
+        await twoPassSave();
+        for (const loader of Object.keys(LOADERS)) await savedTwiceInARow(loader);
+    }
 
     console.log('\n-- real Python reads the saves --');
     if (spawnSync('uv', ['--version'], { encoding: 'utf8' }).status !== 0) {
         console.log('  - skipped: no uv');
     } else {
+        if (runs('I')) {
+            const pyFile = path.join(tmp, 'python-source.slp');
+            const otherFirst = pythonFile(pyFile, {
+                videos: ['other.mp4', 'a0.mp4', 'a1.mp4'], sessions: [['a0.mp4', 'a1.mp4']],
+                events: [rearAt('a0.mp4', 10), rearAt('other.mp4', 300), rearAt('other.mp4', 310)],
+            });
+            for (const loader of ['File ▸ Open', 'large project (lazy)']) {
+                await posesAndBoutsOf(loader, 'a file Python wrote', otherFirst, [
+                    entry('session 0 first camera', posesOf(1), [10]),
+                    entry('session 0 camera 1', posesOf(2), []),
+                    entry('other.mp4', posesOf(0), [300, 310]),
+                ]);
+            }
+            const twoSessionsFile = pythonFile(pyFile, {
+                videos: ['a0.mp4', 'a1.mp4', 'b0.mp4', 'b1.mp4', 'other.mp4'], sessions: [['a0.mp4', 'a1.mp4'], ['b0.mp4', 'b1.mp4']],
+                events: [rearAt('a0.mp4', 10), rearAt('b0.mp4', 110), rearAt('b1.mp4', 130), rearAt('other.mp4', 300)],
+            });
+            for (const loader of ['large project (lazy)', 'single .slp folder']) {
+                await posesAndBoutsOf(loader, 'two sessions Python wrote, this loader opens the first', twoSessionsFile, [
+                    entry('session 0 first camera', posesOf(0), [10]),
+                    entry('session 0 camera 1', posesOf(1), []),
+                    entry('b0.mp4', posesOf(2), [110]),
+                    entry('b1.mp4', posesOf(3), [130]),
+                    entry('other.mp4', posesOf(4), [300]),
+                ]);
+            }
+        }
+        for (const [what, saved, read] of forPython) {
+            const file = path.join(tmp, 'both-for-python.slp');
+            fs.writeFileSync(file, saved);
+            const want = read.videos.map((filename, i) => ({ filename, poses: read.entries[i].poses, events: read.entries[i].events }));
+            const py = pythonEntries(file);
+            check(eq(py, want), `${what}: each video once, its poses and bouts on that entry`, py);
+        }
         for (const [loader, { saved, videos }] of Object.entries(separate)) {
             const file = path.join(tmp, 'separate-for-python.slp');
             fs.writeFileSync(file, saved);
@@ -511,8 +852,8 @@ try {
                 `separate videos, ${loader}: every event on its video`, py.events);
         }
 
-        console.log('\n-- H. an uncalibrated session from Python, through LUC3D, Python and LUC3D --');
-        for (const loader of Object.keys(LOADERS)) {
+        if (runs('H')) console.log('\n-- H. an uncalibrated session from Python, through LUC3D, Python and LUC3D --');
+        for (const loader of runs('H') ? Object.keys(LOADERS) : []) {
             const file = path.join(tmp, 'python-uncalibrated.slp');
             pythonUncalibrated(file);
             const shows = [{ bouts: [['rear', 10, 19, 1]], predicted: 0 }];

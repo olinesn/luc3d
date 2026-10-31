@@ -13099,7 +13099,7 @@ skeleton-only 3D-points import prompts before discarding it.
 
 ---
 
-**Behavior labels.** `handleLoadProjectSlpLazy` resets and reads behavior metadata like the eager reader; `handleLoadSessionFolderSingleSlp` resets only when it starts a project, and otherwise merges the file's ethogram by name (its bouts remapped).
+**Behavior labels.** `handleLoadProjectSlpLazy` resets and reads behavior metadata like the eager reader; `handleLoadSessionFolderSingleSlp` resets only when it starts a project, and otherwise merges the file's ethogram by name (its bouts remapped). When its filename fallback makes a camera of a video no session names, the events it keeps on that video go back on that camera's entry, with the poses (`eventScope.cameras`).
 
 ### loading/sio-lazy-loader.js
 
@@ -14291,7 +14291,10 @@ the first camera's events are labels, and each other stays on its camera. DOM-fr
 
 **Exports.** `buildBehaviorEvents(SIO, items)` → `{eventTypes, events}` (an event on a
 video outside `items[].videos` brings it along: `new SIO.Labels` and `openSlpWriter`
-add it to the file's list),
+add it to the file's list, unless `items[].listedVideos` says the writer lists it already,
+for its poses, and then it goes on that entry),
+`keptVideoRecords(session)` → `Map` from a video's place in the file to the record of it,
+for the videos the session keeps events on (a lazy writer's way to `listedVideos`),
 `fileEventsOf(labels)` → plain `{types, rows, videos}` or null,
 `sessionVideoIdxs(rawSession)` → `Set<number>` or null,
 `sessionEventScope(rawSessions, nVideos, idx, onlyThisSession?)` → `{videos, keep, cameras, noVideo}`
@@ -14304,7 +14307,8 @@ else null: a place, never the file's video number, so a save finds that camera's
 **Imports.** `pose/behavior-ethogram.js`, `pose/behavior-labels.js`,
 `pose/behavior-predictions.js`, `pose/placeholder-cameras.js` (`hasRealCalibration`, on a
 file's raw cameras). **Imported by** `import-export/behavior-metadata.js`,
-`import-export/file-io.js`, `import-export/slp-import.js`, `import-export/slp-streaming-write.js`,
+`import-export/file-io.js`, `import-export/outside-frames.js`, `import-export/slp-import.js`,
+`import-export/slp-streaming-write.js`,
 `loading/session-loader.js`. **Tests.** `tests/test-behavior-events.mjs`, e2e
 `behavior-label-roundtrip` (with files sleap-app and Python wrote,
 `tests/fixtures/behavior-events/`), `behavior-events-outside-session` (the three loaders and
@@ -14554,16 +14558,19 @@ every save on their own video. The lazy path keeps them in its store
   images (a save does not copy them), else a placeholder `unknown_video_<id>.mp4` (an
   id `videos_json` does not hold, as older LUC3D saves left it).
 - `keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap)` — eager load;
-  adds to what `session.outsideFrames` already holds.
+  adds to what `session.outsideFrames` already holds. Each kept video remembers the
+  record its file's events name it by (`eventRecord`, `fileEventsOf`).
 - `ownVideoOfColumnar(col)`, `keepOutsideColumnarFrames(session, slpData, own)` — the
   per-camera eager load: a camera is the first video its file lists with frames.
-- `outsideFramesForSave(session, skeleton)` — eager save: `{videos, tracks,
-  labeledFrames}`, or null.
+- `outsideFramesForSave(session)` — eager save, before the session's Labels are built:
+  `{videos, tracks, listedVideos, labeledFramesFor(skeleton)}`, or null. `listedVideos`
+  (the file's record -> the entry) is what puts a kept event on the entry its video's
+  poses have (`buildBehaviorEvents`).
 - `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(session)` — the
   sentence for a load's final status.
 
 **Imports from project modules.** `../pose/pose-data.js` (`Instance`), `./file-io.js`
-(`makePooledSioInstances`).
+(`makePooledSioInstances`), `./behavior-events.js` (`keptVideoRecords`).
 
 **Imported by.** `import-export/slp-import.js`, `import-export/save-load.js`,
 `import-export/slp-streaming-write.js`, `loading/session-loader.js`.
@@ -14757,7 +14764,9 @@ session's resident/total) rather than truncate silently. Covered by
   reload — the canonical `identity_idx`/`ig.identity` resolve against the
   file-level concat and mis-scope for multi-session files). The file-level
   `identities_json` is a cross-session concatenation, NOT the per-session
-  source of truth on reload.
+  source of truth on reload. Its optional fourth argument is
+  `outsideFramesForSave`'s result (`import-export/outside-frames.js`): those videos
+  go in the list after the cameras, and the session's events on them on those entries.
   **Its 2D instances come from `makePooledSioInstances(SIO, skeleton, numNodes)`**
   (exported), not `new SIO.Instance({ points: _buildSioPoints(...) })` (four
   typed arrays per instance, held for the whole save — about 4x the heap). The
@@ -14894,6 +14903,9 @@ each holding only one session's data at a time:
   uses is covered. Without that, its rows point past the end of the list (Python's
   `load_slp` raises IndexError) or at a camera's index, where first write wins. A
   camera's own file with frames on other videos gets the same (`nativeToHeader`).
+  A behavior event kept on such a video goes on the same entry: the project file's
+  store and the file's events count videos alike (`keptVideoRecords`), so
+  `addOutsideVideos` fills the session's `listedVideos` for `buildBehaviorEvents`.
   `skeletonPairsFor` does the same for skeletons: rows on one but the session's find
   it in the header (`_appendWithHeaderSkeletons`).
   **Non-shared-store track dedup:** for separate per-camera prediction files
