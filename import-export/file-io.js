@@ -20,8 +20,10 @@ import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPoints
 import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
+import { identityCatalogFinder, typedFileLabels, writeFileLabels } from './detection-labels.js';
 import { writePlaneMetadata } from './plane-metadata.js';
 import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js';
+import { writeBehaviorMetadata } from './behavior-metadata.js';
 
 // ============================================
 // Generic file picker
@@ -1453,6 +1455,9 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder, nodeSc
 async function lazyCameraExportBytes(SIO, session, cameraName) {
     var loader = session && session.lazyLoader;
     if (!loader || !loader.labelsByCam || typeof loader.labelsByCam.get !== 'function') return null;
+    // One store shared by every camera (`openProjectSlp`): re-emitting it would
+    // put all of them, and all their videos, in this one camera's file.
+    if (loader._sharedStore) return null;
     // Safety guard: this path re-emits the RAW columnar store verbatim — it
     // has no notion of a live, manually-corrected Instance object sitting in
     // a resident FrameGroup. If any resident frame carries a user-type
@@ -2192,11 +2197,12 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     if (session.identities && session.identities.length > 0) {
         for (var iid = 0; iid < session.identities.length; iid++) {
             var lucidId = session.identities[iid];
-            var sioId = new SIO.Identity({ name: lucidId.name, color: lucidId.color });
+            var sioId = new SIO.Identity({ name: lucidId.name, color: lucidId.color, metadata: lucidId.metadata });
             sioIdentities.push(sioId);
             lucidIdToSioId.set(lucidId.id, sioId);
         }
     }
+    var findDetectionIdentity = identityCatalogFinder(SIO, sioIdentities);
 
     // 4. Build sleap-io Cameras and Videos — one per camera
     var sioCameras = [];
@@ -2214,7 +2220,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
         sioCameras.push(sioCam);
         lucidCamToSioCam.set(cam.name, sioCam);
 
-        var videoPath = cam.name + '.mp4';
+        var videoPath = null;
         var vw = 0, vh = 0, fc = 0;
         for (var vi = 0; vi < (views || []).length; vi++) {
             var v = views[vi];
@@ -2230,20 +2236,36 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 var vf = videoFiles[vfi];
                 if ((vf.name === cam.name || vf.assignedCamera === cam.name) && vf.videoPath) {
                     videoPath = vf.videoPath;
+                    // A view does not always carry it. Without it another app opens this
+                    // video as 0 frames until the video itself is found.
+                    if (!fc) fc = vf.frameCount || 0;
                     break;
                 }
             }
         }
+        // No video loaded (the project was opened without them): the file's own record
+        // of it, so its shape and filename survive the save, as on the streaming writer.
+        var fileVideo = session.fileVideos ? session.fileVideos.get(cam.name) : null;
+        var channels = 1;
+        if (fileVideo) {
+            var fileShape = fileVideo.shape || [];
+            if (!vw && !vh && fileShape[3]) channels = Number(fileShape[3]) || 1;
+            fc = fc || Number(fileShape[0]) || Number(fileVideo.fileFrames) || 0;
+            vh = vh || Number(fileShape[1]) || 0;
+            vw = vw || Number(fileShape[2]) || 0;
+            if (!videoPath && typeof fileVideo.filename === 'string') videoPath = fileVideo.filename;
+        }
+        if (!videoPath) videoPath = cam.name + '.mp4';
         var video = new SIO.Video({
             filename: videoPath,
             backendMetadata: {
                 type: 'MediaVideo',
-                shape: [fc, vh, vw, 1],
+                shape: [fc, vh, vw, channels],
                 filename: videoPath,
             },
             openBackend: false,
         });
-        video.shape = [fc, vh, vw, 1];
+        video.shape = [fc, vh, vw, channels];
         sioVideos.push(video);
     });
 
@@ -2291,6 +2313,9 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     writePlaneMetadata(sioSession.metadata.lucid, session);
     // Temporal Smoothing's last run, only while something is smoothed.
     writeSmoothingMetadata(sioSession.metadata.lucid, session);
+    // The ethogram (project-scoped, in every session) and this session's
+    // behavior bouts, only when there are any.
+    writeBehaviorMetadata(sioSession.metadata.lucid, session);
     session.cameras.forEach(function (cam, i) {
         sioSession.addVideo(sioVideos[i], sioCameras[i]);
     });
@@ -2322,6 +2347,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
             // = undefined leaking into SIO.Instance for trackless instances.
             var track = (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
             var sioInst = newSioInstance(inst, track);
+            writeFileLabels(sioInst, inst, findDetectionIdentity);
             lucidToSio.set(inst, sioInst);
             return sioInst;
         }
@@ -2903,16 +2929,21 @@ export async function parseSlpViaSleapIO(file, onProgress) {
 
     // --- videos[] ---
     var videos = (labels.videos || []).map(function (v, i) {
+        // A name is one string below, but an image sequence's is a list of its images.
+        var oneName = function (name) { return Array.isArray(name) ? name[0] : name; };
         var srcName = null;
-        if (v.sourceVideo && v.sourceVideo.filename) srcName = v.sourceVideo.filename;
+        if (v.sourceVideo && v.sourceVideo.filename) srcName = oneName(v.sourceVideo.filename);
         else if (v.backendMetadata && v.backendMetadata.source_filename) srcName = v.backendMetadata.source_filename;
         var embedded = !!v.hasEmbeddedImages;
         return {
             index: i,
-            filename: v.filename != null ? v.filename : null,
+            filename: v.filename != null ? oneName(v.filename) : null,
             sourceFilename: srcName,
             backendType: embedded ? 'HDF5Video' : 'MediaVideo',
             shape: v.shape != null ? v.shape : null,
+            // A file can know a video's frame count but not its size, `[600, 0, 0, 1]`,
+            // which leaves `shape` empty (patch `(video frame count)`).
+            fileFrames: (v.backendMetadata && v.backendMetadata.lucidFileFrames) || 0,
             embedded: embedded,
             dataset: (v.backendMetadata && v.backendMetadata.dataset) != null ? v.backendMetadata.dataset : null,
             // The whole record, for a video a save writes back as it found it
@@ -2954,7 +2985,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
     // --- identities[] (file-level fallback; per-session lives in
     // sessions[].metadata.lucid.identities, which the importer prefers) ---
     var identities = (labels.identities || []).map(function (id) {
-        return { name: id.name, color: id.color != null ? id.color : undefined };
+        return { name: id.name, color: id.color != null ? id.color : undefined, metadata: id.metadata };
     });
 
     return {
@@ -3015,6 +3046,8 @@ function _typedInstanceToSlpData(inst, typedTracks, numNodes, PredictedInstance)
         points: points,
         occluded: occluded,
         pointScores: isPred && inst._score ? inst._score : null,
+        trackingScore: inst.trackingScore || 0,
+        fileLabels: typedFileLabels(inst),
     };
 }
 

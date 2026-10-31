@@ -287,10 +287,13 @@ async function parseSlp(file) {
                         if (isEmbedded && vj.source_video) {
                             sourceFilename = vj.source_video.filename ||
                                 (vj.source_video.backend && vj.source_video.backend.filename) || null;
+                            // An image sequence's name is a list of its images.
+                            if (Array.isArray(sourceFilename)) sourceFilename = sourceFilename[0];
                         }
+                        var videoFilename = backend.filename || vj.filename || null;
                         videos.push({
                             index: vi,
-                            filename: backend.filename || vj.filename || null,
+                            filename: Array.isArray(videoFilename) ? videoFilename[0] : videoFilename,
                             sourceFilename: sourceFilename,
                             backendType: isEmbedded ? 'HDF5Video' : 'MediaVideo',
                             shape: backend.shape || null,
@@ -315,6 +318,10 @@ async function parseSlp(file) {
 
         progress('framesData: ' + (framesData ? 'OK (' + framesData.frame_id.length + ' rows)' : 'NULL'));
         progress('instancesData: ' + (instancesData ? 'OK (' + (instancesData.instance_type ? instancesData.instance_type.length : '?') + ' rows)' : 'NULL'));
+
+        // This reader leaves out what only the typed reader keeps; the caller reads such
+        // a file again with that one (import-export/detection-labels.js).
+        var hasDetectionLabels = !!(f.get('identity/links') || f.get('categories/links') || f.get('embeddings'));
 
         var pointsData = readPoints(f, 'points', ['x', 'y', 'visible', 'complete']);
         var predPointsData = readPoints(f, 'pred_points', ['x', 'y', 'visible', 'complete', 'score']);
@@ -505,6 +512,7 @@ async function parseSlp(file) {
             identities: identitiesArr,
             // The file's provenance dict, kept through a save (import-export/slp-provenance.js).
             provenance: metadataJson.provenance || null,
+            hasDetectionLabels: hasDetectionLabels,
         };
         if (columnar) {
             resultData.columnar = columnar;
@@ -513,6 +521,7 @@ async function parseSlp(file) {
                 columnar.frameIdx.buffer, columnar.videoIdx.buffer, columnar.instOffsets.buffer,
                 columnar.trackIdx.buffer, columnar.score.buffer, columnar.type.buffer,
                 columnar.xy.buffer, columnar.occluded.buffer, columnar.pointScore.buffer,
+                columnar.trackingScore.buffer,
             ]);
         } else {
             postMessage({ type: 'result', data: resultData });
@@ -1067,6 +1076,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
     var xy = new Float64Array(nInstRows * numNodes * 2);
     var occluded = new Uint8Array(nInstRows * numNodes);
     var pointScore = new Float64Array(nInstRows * numNodes);
+    var trackingScore = new Float64Array(nInstRows);
     xy.fill(NaN);
     pointScore.fill(NaN);
     var nF = 0, nI = 0;
@@ -1097,6 +1107,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
             trackIdx[nI] = Number(instancesData.track[ji]);
             score[nI] = Number(instancesData.score[ji]);
             type[nI] = instType === 1 ? 1 : 0;
+            if (instancesData.tracking_score) trackingScore[nI] = Number(instancesData.tracking_score[ji]) || 0;
             nI++;
         }
         if (nI > first) {
@@ -1114,6 +1125,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
         trackIdx: trackIdx.slice(0, nI), score: score.slice(0, nI), type: type.slice(0, nI),
         xy: xy.slice(0, nI * numNodes * 2), occluded: occluded.slice(0, nI * numNodes),
         pointScore: pointScore.slice(0, nI * numNodes),
+        trackingScore: trackingScore.slice(0, nI),
     };
 }
 

@@ -13,7 +13,7 @@ import {
 import {
     getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
-import { hasRealCalibration } from '../pose/placeholder-cameras.js';
+import { hasRealCalibration, cameraNamesFromVideos } from '../pose/placeholder-cameras.js';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
 } from './file-io.js';
@@ -22,7 +22,8 @@ import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames, videosClaimedBy,
 } from './slp-merge.js';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder, closeEmbeddedFrames } from '../loading/video.js';
+import { embeddedVideoForEntry } from '../loading/slp-package-reader.js';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
@@ -42,10 +43,15 @@ import {
 import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js';
 import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
+import { adoptIdentityMetadata, adoptTypedLabels } from './detection-labels.js';
 import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
 import { keepOutsideFrames, keptOutsideCounts, outsideFramesNote } from './outside-frames.js';
 import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js';
 import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js';
+import {
+    applyMovedGroupIdentities, reconcileSessionIdentities, reconcileSessionTracks,
+    remapFrameIdentityTrackSlots, typedSessionGroups,
+} from './file-edits.js';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
 } from './save-load.js';
@@ -70,6 +76,7 @@ import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
+import { readBehaviorMetadata, resetBehaviorState } from './behavior-metadata.js';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -94,6 +101,93 @@ async function parseSlpForImport(file, onProgress) {
         }
     }
     return await parseSlpH5(file, onProgress);
+}
+
+/**
+ * Start a frame worker on a `.slp` file. For a file with embedded images, the
+ * worker then stays open as long as the project does (add it to
+ * `state.frameWorkers`): it reads each frame when it is asked for.
+ *
+ * @param {File} slpFile
+ * @returns {Promise<{worker: Worker, videos: Array}>} `videos`: the file's embedded
+ *   videos (`SLPPackageReader.getVideos`), empty when it has none
+ */
+function openEmbeddedFrames(slpFile) {
+    var frameWorker = new Worker(new URL('../loading/frame-worker.js', import.meta.url), { type: 'module' });
+    return new Promise(function (resolve, reject) {
+        var fail = function (message) {
+            frameWorker.terminate();
+            reject(new Error(message));
+        };
+        frameWorker.onmessage = function (e) {
+            var msg = e.data;
+            if (msg.type === 'ready') {
+                frameWorker.postMessage({ type: 'loadFile', file: slpFile });
+            } else if (msg.type === 'loaded') {
+                resolve({ worker: frameWorker, videos: msg.videos || [] });
+            } else if (msg.type === 'error') {
+                fail(msg.error || 'Frame worker error');
+            }
+        };
+        frameWorker.onerror = function (err) {
+            fail('Frame worker failed: ' + (err.message || 'unknown'));
+        };
+    });
+}
+
+/**
+ * Give a file's videos a camera each, for a file with no sessions: each camera, one
+ * per video in list order, has its list position added when an earlier one has its
+ * name. Every video with no source file is named after the `.slp`, and campy names
+ * every video `0.mp4`. Two videos on one camera would put both's poses on it, and
+ * leave one with no view.
+ *
+ * @param {Camera[]} cameras
+ * @param {Object} videoIdxToCameraName - list position to camera name
+ */
+function makeCameraNamesUnique(cameras, videoIdxToCameraName) {
+    cameras.forEach(function (camera, listIdx) {
+        var taken = cameras.slice(0, listIdx).some(function (c) { return c.name === camera.name; });
+        if (!taken) return;
+        camera.name = camera.name + '_' + listIdx;
+        videoIdxToCameraName[listIdx] = camera.name;
+    });
+}
+
+/**
+ * Whether a `.slp` file holds embedded images. Costs one worker start and a
+ * metadata read. A file that cannot be read says no: the real read reports it.
+ *
+ * @param {File} slpFile
+ * @returns {Promise<boolean>}
+ */
+export async function slpHasEmbeddedImages(slpFile) {
+    try {
+        var opened = await openEmbeddedFrames(slpFile);
+        opened.worker.terminate();
+        return opened.videos.length > 0;
+    } catch (err) {
+        return false;
+    }
+}
+
+/**
+ * The frame to open a session of embedded images on: its first labeled frame with
+ * an image, else its first image. A `.slp` holds images of only some frames, so
+ * its first labeled frame, or frame 0, can leave every view empty.
+ *
+ * @param {number[]} frameIndices - the session's labeled frames, sorted
+ * @param {EmbeddedVideoDecoder[]} decoders - its videos
+ * @returns {number}
+ */
+function embeddedFrameToOpenOn(frameIndices, decoders) {
+    for (var fi = 0; fi < frameIndices.length; fi++) {
+        var labeled = frameIndices[fi];
+        if (decoders.some(function (d) { return d.hasFrame(labeled); })) return labeled;
+    }
+    var firsts = decoders.map(function (d) { return d.firstFrame; })
+        .filter(function (f) { return f !== null; });
+    return firsts.length > 0 ? Math.min.apply(null, firsts) : 0;
 }
 
 /**
@@ -239,6 +333,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                             // The group dict has no per-node scores; the raw
                             // row it replaces does.
                             inst.adoptPointScoresFrom(_dupCamInsts[_dpi]);
+                            inst.adoptFileLabelsFrom(_dupCamInsts[_dpi]);
                             _dupCamInsts.splice(_dpi, 1);
                             break;
                         }
@@ -315,13 +410,16 @@ function fileIdentityIndex(fileIdentities) {
  *   written by another tool (campy-live-export), never a LUC3D project — lets a
  *   group with neither take its canonical `identity_idx` (`typedIG.identity`), as
  *   `reconstructInstanceGroupsFromSessionLazy` does.
+ *   Exception: `opts.identityOf`, when another tool edited the groups' identities
+ *   (`reconcileSessionIdentities`), decides every group; the groups it moves to a
+ *   different animal come back in `movedGroups`.
  *
  * @param {Session} session - LUCID session whose frameGroups hold pass-1 raw instances
  * @param {Object} typedSession - sleap-io.js RecordingSession (with frameGroups Map)
  * @param {Object|null} rawSession - the verbatim sessions_json dict (legacy identity fallback)
  * @param {string[]} nodeNames - skeleton node names (point-array length)
- * @param {{onProgress?:(msg:string)=>void, batch?:number, fileIdentities?:Array}} [opts]
- * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
+ * @param {{onProgress?:(msg:string)=>void, batch?:number, fileIdentities?:Array, identityOf?:function(Object):number}} [opts]
+ * @returns {Promise<{restoredGroups:number, restoredWith3d:number, movedGroups:Array}>}
  */
 export async function reconstructInstanceGroupsFromSession(session, typedSession, rawSession, nodeNames, opts) {
     opts = opts || {};
@@ -329,6 +427,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
     var BATCH = opts.batch || 20000;
     var onProgress = opts.onProgress || function () {};
     var restoredGroups = 0, restoredWith3d = 0;
+    var movedGroups = [];
     var fileIdentityIdx = fileIdentityIndex(opts.fileIdentities);
     // For deriving type/trackIdx/score from resolved typed instances when slim
     // metadata (#134) omits them.
@@ -376,7 +475,9 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             // Per-session identity: prefer metadata.lucid.identityId (5.2+),
             // else the legacy raw dict's identity_idx (both per-session).
             var identityId = -1;
-            if (igLucid.identityId != null) {
+            if (opts.identityOf) {
+                identityId = opts.identityOf(typedIG);
+            } else if (igLucid.identityId != null) {
                 identityId = igLucid.identityId;
             } else {
                 var rawIG = rawFg && rawFg.instance_groups && rawFg.instance_groups[igi];
@@ -448,6 +549,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 if (instMeta.nulledNodes) {
                     inst.nulledNodes = new Set(instMeta.nulledNodes);
                 }
+                adoptTypedLabels(inst, typedInst);
 
                 // Remove the matching pass-1 raw-SLP duplicate for this
                 // frame/cam (same rationale as reconstructInstanceGroupsFromDicts).
@@ -485,6 +587,9 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 adoptSmoothingSource(session, fgFrameIdx, group, i3d);
             }
 
+            if (opts.identityOf && identityId !== (igLucid.identityId != null ? igLucid.identityId : -1)) {
+                movedGroups.push([fgFrameIdx, group]);
+            }
             groups.push(group);
             restoredGroups++;
         }
@@ -501,7 +606,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             + 'some 2D poses/tracks may be misattributed between animals (#158). If this fires on a freshly-saved '
             + 'file, the write-side fix in slp-streaming-write.js did not fully resolve the issue.');
     }
-    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d, refCollisions: _refCollisions };
+    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d, refCollisions: _refCollisions, movedGroups: movedGroups };
 }
 
 /**
@@ -534,22 +639,27 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  * LUC3D: a group without `identityId` then takes its canonical `identity_idx`
  * (`typedIG.identity`) instead. Never pass it for a LUC3D project, whose
  * per-session identity list does not match the file-level catalog's order.
+ * `opts.identityOf`, when another tool edited the groups' identities, decides every
+ * group instead; the groups it moves to a different animal come back in `movedGroups`.
  *
  * @param {Session} session - target session (identities/tracks already set)
  * @param {Object} typedSession - sleap-io.js RecordingSession (mutated: frameGroups drained)
  * @param {SioLazyLoader} loader - the open project loader (for `_rawInstIndex` refs)
  * @param {string[]} nodeNames - skeleton node names
- * @param {{onProgress?:(msg:string)=>void, batch?:number, yieldMs?:number, fileIdentities?:Array}} [opts]
- * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
+ * @param {{onProgress?:(msg:string)=>void, batch?:number, yieldMs?:number, fileIdentities?:Array, identityOf?:function(Object):number}} [opts]
+ * @returns {Promise<{restoredGroups:number, restoredWith3d:number, movedGroups:Array}>}
  */
 export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
     opts = opts || {};
+    // A file with no recording session has nothing to restore.
+    if (!typedSession) return { restoredGroups: 0, restoredWith3d: 0, movedGroups: [] };
     var numNodes = nodeNames.length;
     var BATCH = opts.batch || 20000;
     var onProgress = opts.onProgress || function () {};
     var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
     var PredI = _SIO && _SIO.PredictedInstance;
     var restoredGroups = 0, restoredWith3d = 0;
+    var movedGroups = [];
     var fileIdentityIdx = fileIdentityIndex(opts.fileIdentities);
     // Time-based yielding: materializing 108k frames + building ~1.25M member
     // Instances is ~tens of seconds of work; yield every ~40ms so the tab stays
@@ -576,7 +686,8 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
             var instanceMetaMap = igLucid.instanceMeta || {};
 
             var identityId = -1;
-            if (igLucid.identityId != null) identityId = igLucid.identityId;
+            if (opts.identityOf) identityId = opts.identityOf(typedIG);
+            else if (igLucid.identityId != null) identityId = igLucid.identityId;
             else if (fileIdentityIdx && typedIG.identity && fileIdentityIdx.has(typedIG.identity)) {
                 identityId = fileIdentityIdx.get(typedIG.identity);
             }
@@ -652,6 +763,9 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 adoptSmoothingSource(session, fgFrameIdx, group, i3d);
             }
 
+            if (opts.identityOf && identityId !== (igLucid.identityId != null ? igLucid.identityId : -1)) {
+                movedGroups.push([fgFrameIdx, group]);
+            }
             groups.push(group);
             restoredGroups++;
         }
@@ -667,7 +781,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
         }
     }
     if (opts.onCount) await opts.onCount(fgKeys.length, fgKeys.length);
-    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
+    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d, movedGroups: movedGroups };
 }
 
 // `stampFrameIdentitiesFromGroups` moved to ./frame-identity-metadata.js, beside
@@ -730,6 +844,21 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
     var hasSessionData = hasTypedSession
         || !!(_sessData2 && _sessData2.frame_group_dicts && _sessData2.frame_group_dicts.length > 0);
 
+    // Another tool's edits to the identities (file-edits.js). Only on the columnar
+    // layout: an older file's `identity_idx` was per session, so it can look edited.
+    var identityEdits = null;
+    if (hasTypedSession && perSessionIdentities && perSessionIdentities.length > 0
+        && !(_sessData2.frame_group_dicts && _sessData2.frame_group_dicts.length > 0)) {
+        identityEdits = reconcileSessionIdentities(perSessionIdentities,
+            typedSessionGroups(_sessData2._typedSession));
+    }
+    if (identityEdits) {
+        console.log('[load-slp] identities edited outside LUC3D; following the file, session', slpSessIdx);
+        session.identities = identityEdits.identities.map(function (idData, idx) {
+            return new Identity(idx, idData.name || ('id_' + idx), idData.color || null);
+        });
+    }
+
     if (hasSessionData) {
         // === Reconstruct InstanceGroups from sessions_json ===
         var sessData2 = slpData.sessions[slpSessIdx];
@@ -767,6 +896,7 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
                 session, sessData2._typedSession, sessData2, nodeNames, {
                     onProgress: onProgress,
                     fileIdentities: identitiesFromFile ? (sessData2._typedIdentities || null) : null,
+                    identityOf: identityEdits ? identityEdits.identityOf : null,
                 });
         } else {
             _recon = await reconstructInstanceGroupsFromDicts(
@@ -779,6 +909,9 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
         // rebuild the rest from the groups just restored.
         if (await readFrameIdentityMetadata(session, lucidMeta, { onProgress: onProgress })) {
             console.log('[load-slp] rebuilt', session.frameIdentityMap.size, 'per-frame identities from instance groups');
+        }
+        if (_recon.movedGroups && _recon.movedGroups.length) {
+            applyMovedGroupIdentities(session, _recon.movedGroups);
         }
 
         // A file with the identities only on its groups (no LUC3D identity
@@ -815,6 +948,8 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
             }
         }
     }
+
+    adoptIdentityMetadata(session.identities, slpData.identities);
 
     // Move non-grouped instances into unlinkedInstances so they are
     // interactive (clickable/draggable). Instances in fg.instances that are NOT
@@ -964,6 +1099,7 @@ export async function handleLoadSlpFile(slpFile) {
             if (state.isPlaying) videoController.pause();
             setVideoController(null);
         }
+        closeEmbeddedFrames(state);
         state.views = [];
         state.videoFiles = [];
         state.sessions = [];
@@ -972,6 +1108,7 @@ export async function handleLoadSlpFile(slpFile) {
         // only restores into an EMPTY model, so without this the previous
         // project's planes would survive and the new one's be dropped.
         resetPlaneState();
+        resetBehaviorState();   // the ethogram, likewise project-scoped
         // Reset decoder pool + cold reserve on new project load. Old decoders
         // point at the previous project's files and must be released to avoid
         // dangling mp4box references / leaked file handles.
@@ -1021,6 +1158,7 @@ export async function handleLoadSlpFile(slpFile) {
             });
         }
 
+        var embeddedFrames = null;   // this file's frame worker, once a session needs it
         // Whether the session loaded last — the one left active — has 3D.
         var lastSessionHas3d = false;
         // Video indices some session reads; frames on any other are kept aside below.
@@ -1075,18 +1213,13 @@ export async function handleLoadSlpFile(slpFile) {
 
         // Fallback: use video filenames as camera names
         if (cameras.length === 0) {
-            for (var dvi = 0; dvi < Math.max(slpData.videos.length, 1); dvi++) {
-                var vMeta = slpData.videos[dvi];
-                var dName = vMeta ? (vMeta.sourceFilename || vMeta.filename) : null;
-                if (dName && dName !== '.') {
-                    dName = dName.replace(/\.[^.]+$/, '').split('/').pop().split('\\').pop();
-                } else {
-                    dName = 'cam_' + dvi;
-                }
-                cameras.push(new Camera(dName, [[1,0,0],[0,1,0],[0,0,1]],
+            var dNames = cameraNamesFromVideos(slpData.videos.length > 0 ? slpData.videos : [null]);
+            for (var dvi = 0; dvi < dNames.length; dvi++) {
+                cameras.push(new Camera(dNames[dvi], [[1,0,0],[0,1,0],[0,0,1]],
                     [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
-                videoIdxToCameraName[dvi] = dName;
+                videoIdxToCameraName[dvi] = dNames[dvi];
             }
+            makeCameraNamesUnique(cameras, videoIdxToCameraName);
         }
 
         // Use per-session skeleton/tracks from lucid metadata if available,
@@ -1133,6 +1266,25 @@ export async function handleLoadSlpFile(slpFile) {
         }
         videosClaimedBy(videoIdxToCameraName, cameras.length).forEach(function (v) { claimedVideos.add(v); });
 
+        // Another tool's edits to the tracks (file-edits.js): its names are the file's,
+        // and the session's list must know them or its detections read as trackless.
+        if (hasPerSessionTracks) {
+            var usedFileTracks = new Set();
+            for (var ufi = 0; ufi < totalFrames; ufi++) {
+                var ufd = slpData.frames[ufi];
+                if (sessVideoIndices.size > 0 && !sessVideoIndices.has(ufd.videoIdx)) continue;
+                for (var uii = 0; uii < ufd.instances.length; uii++) {
+                    usedFileTracks.add(ufd.instances[uii].trackIdx);
+                }
+            }
+            var trackEdits = reconcileSessionTracks(sessTracks, slpData.tracks, usedFileTracks);
+            if (trackEdits.edited) {
+                console.log('[load-slp] tracks edited outside LUC3D; following the file, session', slpSessIdx);
+                sessTracks = trackEdits.names.length ? trackEdits.names : ['track_0'];
+                if (trackEdits.slotMap) remapFrameIdentityTrackSlots(earlyMeta.lucid, trackEdits.slotMap);
+            }
+        }
+
         // Ensure enough track slots for instances in this session. Only for
         // non-lucid SLPs, where the per-instance trackIdx is used as-is against
         // the global list. For lucid multi-session projects the per-instance
@@ -1156,9 +1308,17 @@ export async function handleLoadSlpFile(slpFile) {
         // The file's provenance (e.g. campy-live-export's records), written back on save.
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), slpSessIdx);
+        // What the file says about each camera's video, for a save with none loaded.
+        session.fileVideos = new Map();
+        for (var fvk in videoIdxToCameraName) {
+            var fileVideo = slpData.videos[parseInt(fvk)];
+            if (fileVideo && !fileVideo.embedded) session.fileVideos.set(videoIdxToCameraName[fvk], fileVideo);
+        }
         readVisibilityMetadata(session, earlyVisibility);
         // Temporal Smoothing's last run (the groups' sources come with the 3D).
         readSmoothingMetadata(session, earlyVisibility);
+        // The ethogram (first session read) and this session's behavior bouts.
+        readBehaviorMetadata(session, earlyVisibility);
         // Define Planes state — pool/planes/origin from the first session that
         // carries them, this session's per-view 2D onto this session.
         readPlaneMetadata(session, earlyVisibility);
@@ -1202,6 +1362,8 @@ export async function handleLoadSlpFile(slpFile) {
                 );
                 if (instData.occluded) inst.setOccludedFrom(instData.occluded);
                 if (instData.pointScores) inst.setPointScores(instData.pointScores);
+                if (instData.trackingScore) inst.trackingScore = instData.trackingScore;
+                if (instData.fileLabels) inst.fileLabels = instData.fileLabels;
                 // Rebuild the occlusion flag for a user label whose occluded
                 // node was saved as finite-xy + not-visible. Grouped instances
                 // get their explicit nulledNodes back from metadata below (and
@@ -1265,28 +1427,23 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js', import.meta.url), { type: 'module' });
-            var embeddedVideoInfos = await new Promise(function (resolve, reject) {
-                frameWorker.onmessage = function (e) {
-                    var msg = e.data;
-                    if (msg.type === 'ready') {
-                        frameWorker.postMessage({ type: 'loadFile', file: slpFile });
-                    } else if (msg.type === 'loaded') {
-                        resolve(msg.videos || []);
-                    } else if (msg.type === 'error') {
-                        reject(new Error(msg.error || 'Frame worker error'));
-                    }
-                };
-                frameWorker.onerror = function (err) {
-                    reject(new Error('Frame worker failed: ' + (err.message || 'unknown')));
-                };
-            });
+            // One worker for the load: every session's images are in this file.
+            if (!embeddedFrames) {
+                embeddedFrames = await openEmbeddedFrames(slpFile);
+                state.frameWorkers.push(embeddedFrames.worker);
+            }
+            var frameWorker = embeddedFrames.worker;
+            var sessEmbeddedDecoders = [];
 
-            console.log('[load-slp] Frame worker loaded, embedded videos:', embeddedVideoInfos.length);
+            console.log('[load-slp] Frame worker loaded, embedded videos:', embeddedFrames.videos.length);
 
-            for (var evi = 0; evi < embeddedVideoInfos.length; evi++) {
-                var evInfo = embeddedVideoInfos[evi];
-                var evCamName = videoIdxToCameraName[evInfo.idx] || ('cam_' + evInfo.idx);
+            for (var evi = 0; evi < slpData.videos.length; evi++) {
+                // This session's videos, each on the camera its frames went to above.
+                if (sessVideoIndices.size > 0 && !sessVideoIndices.has(evi)) continue;
+                var evInfo = embeddedVideoForEntry(embeddedFrames.videos, slpData.videos[evi], evi);
+                if (!evInfo) continue;
+                var evCamName = videoIdxToCameraName[evi]
+                    || (cameras.length > 0 ? cameras[evi % cameras.length].name : 'cam_' + evi);
                 var evWidth = evInfo.width || 0;
                 var evHeight = evInfo.height || 0;
 
@@ -1317,17 +1474,20 @@ export async function handleLoadSlpFile(slpFile) {
                     }
                 }
 
+                var evLabeled = session.frameIndices;
                 var decoder = new EmbeddedVideoDecoder({
                     worker: frameWorker,
                     videoInfo: evInfo,
                     cacheSize: 60,
+                    minFrames: evLabeled.length > 0 ? evLabeled[evLabeled.length - 1] + 1 : 0,
                 });
                 if (evWidth && evHeight) {
                     decoder.videoTrack.video.width = evWidth;
                     decoder.videoTrack.video.height = evHeight;
                 }
+                sessEmbeddedDecoders.push(decoder);
 
-                var evSlpVideo = slpData.videos[evInfo.idx];
+                var evSlpVideo = slpData.videos[evi];
                 var evVideoPath = evSlpVideo
                     ? (evSlpVideo.sourceFilename || evSlpVideo.filename || null)
                     : null;
@@ -1346,14 +1506,12 @@ export async function handleLoadSlpFile(slpFile) {
                     // case).
                     slpFilename: null,
                     videoPath: evVideoPath || (evCamName + '.mp4'),
+                    sessionIdx: slpSessIdx,
                 });
             }
 
-            state._frameWorker = frameWorker;
-
-            for (var evi2 = 0; evi2 < state.videoFiles.length; evi2++) {
-                createViewForVideoFile(state.videoFiles[evi2]);
-            }
+            // Views are created after the session loop, for the active session only.
+            session.lastFrame = embeddedFrameToOpenOn(session.frameIndices, sessEmbeddedDecoders);
         } else {
             // --- No embedded videos: prompt for session folder ---
             hideLoading();
@@ -1637,7 +1795,8 @@ export async function handleLoadSlpFile(slpFile) {
         if (videoController && state.views.length > 0 && state.session) {
             var firstFrame = 0;
             var sortedFrames = state.session.frameIndices;
-            if (sortedFrames.length > 0) firstFrame = sortedFrames[0];
+            if (hasEmbedded) firstFrame = state.session.lastFrame;
+            else if (sortedFrames.length > 0) firstFrame = sortedFrames[0];
             state.currentFrame = firstFrame;
             await videoController.seekToFrame(firstFrame);
         }
@@ -1733,6 +1892,7 @@ export async function handleLoadSlpFile(slpFile) {
                 noteSessionCalibrationDivergence(state.sessions);
             });
         }
+        return true;   // opened: a failure above has set its own status
     } catch (err) {
         console.error('[load-slp] FATAL:', err);
         hideLoading();
@@ -1838,18 +1998,13 @@ export async function handleAddSlp() {
 
         // Fallback: use video filenames as camera names
         if (cameras.length === 0) {
-            for (var dvi = 0; dvi < Math.max(slpData.videos.length, 1); dvi++) {
-                var vMeta = slpData.videos[dvi];
-                var dName = vMeta ? (vMeta.sourceFilename || vMeta.filename) : null;
-                if (dName && dName !== '.') {
-                    dName = dName.replace(/\.[^.]+$/, '').split('/').pop().split('\\').pop();
-                } else {
-                    dName = 'cam_' + dvi;
-                }
-                cameras.push(new Camera(dName, [[1,0,0],[0,1,0],[0,0,1]],
+            var dNames = cameraNamesFromVideos(slpData.videos.length > 0 ? slpData.videos : [null]);
+            for (var dvi = 0; dvi < dNames.length; dvi++) {
+                cameras.push(new Camera(dNames[dvi], [[1,0,0],[0,1,0],[0,0,1]],
                     [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
-                videoIdxToCameraName[dvi] = dName;
+                videoIdxToCameraName[dvi] = dNames[dvi];
             }
+            makeCameraNamesUnique(cameras, videoIdxToCameraName);
         }
 
         var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
@@ -1919,26 +2074,20 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js', import.meta.url), { type: 'module' });
-            var embeddedVideoInfos = await new Promise(function (resolve, reject) {
-                frameWorker.onmessage = function (e) {
-                    var msg = e.data;
-                    if (msg.type === 'ready') {
-                        frameWorker.postMessage({ type: 'loadFile', file: slpFile });
-                    } else if (msg.type === 'loaded') {
-                        resolve(msg.videos || []);
-                    } else if (msg.type === 'error') {
-                        reject(new Error(msg.error || 'Frame worker error'));
-                    }
-                };
-                frameWorker.onerror = function (err) {
-                    reject(new Error('Frame worker failed: ' + (err.message || 'unknown')));
-                };
-            });
+            var addedFrames = await openEmbeddedFrames(slpFile);
+            state.frameWorkers.push(addedFrames.worker);
+            var frameWorker = addedFrames.worker;
+            var addCamerasMapped = Object.keys(videoIdxToCameraName).length > 0;
 
-            for (var mevi = 0; mevi < embeddedVideoInfos.length; mevi++) {
-                var mevInfo = embeddedVideoInfos[mevi];
-                var mevCamName = videoIdxToCameraName[mevInfo.idx] || ('cam_' + mevInfo.idx);
+            for (var mevi = 0; mevi < slpData.videos.length; mevi++) {
+                // Each on the camera its frames were merged onto (`mergeSlpFramesIntoSession`).
+                // With a session's camera map, that session's videos only: an
+                // added file brings its first session's cameras.
+                if (addCamerasMapped && !videoIdxToCameraName[mevi]) continue;
+                var mevInfo = embeddedVideoForEntry(addedFrames.videos, slpData.videos[mevi], mevi);
+                if (!mevInfo) continue;
+                var mevCamName = videoIdxToCameraName[mevi]
+                    || (cameras.length > 0 ? cameras[mevi % cameras.length].name : 'cam_' + mevi);
                 var mevWidth = mevInfo.width || 0;
                 var mevHeight = mevInfo.height || 0;
 
@@ -1968,17 +2117,19 @@ export async function handleAddSlp() {
                     }
                 }
 
+                var mLabeled = state.session.frameIndices;
                 var mDecoder = new EmbeddedVideoDecoder({
                     worker: frameWorker,
                     videoInfo: mevInfo,
                     cacheSize: 60,
+                    minFrames: mLabeled.length > 0 ? mLabeled[mLabeled.length - 1] + 1 : 0,
                 });
                 if (mevWidth && mevHeight) {
                     mDecoder.videoTrack.video.width = mevWidth;
                     mDecoder.videoTrack.video.height = mevHeight;
                 }
 
-                var mevSlpVideo = slpData.videos[mevInfo.idx];
+                var mevSlpVideo = slpData.videos[mevi];
                 var mevVideoPath = mevSlpVideo
                     ? (mevSlpVideo.sourceFilename || mevSlpVideo.filename || null)
                     : null;
