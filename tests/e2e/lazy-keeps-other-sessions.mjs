@@ -14,7 +14,7 @@
  *  A. Every layout, two saves (see `FILES`): frames in any order, an open session with
  *     no frame, a (video, frame) listed twice, every kind of thing a session can hold,
  *     identities on poses, the same as an old file holds it inline, a video two sessions
- *     share. An open session with no camera at all goes the older way, which reads them all.
+ *     share. A first session with no camera or no video map, where the route differs.
  *  B. The real route: File ▸ Open on a file over 200 MB.
  *  C. Edits on the open session: a corrected frame goes first in the file (every other
  *     frame's position moves), a deleted pose compacts the store, a deleted track
@@ -213,6 +213,9 @@ save("first_empty.slp", fc + fd, [a, b, c, d],
 a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
 save("first_no_cameras.slp", fc + fd, [c, d],
      [sio.RecordingSession(camera_group=sio.CameraGroup(cameras=[])), session([("camC", c, fc), ("camD", d, fd)], 7.0)])
+a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
+save("first_no_map.slp", fa + fb + fc + fd, [a, b, c, d],
+     [session([("camA", None, []), ("camB", None, [])]), session([("camC", c, fc), ("camD", d, fd)], 7.0)])
 
 # One (video, frame) listed twice, before every closed session's rows: a save that drops
 # or miscounts it sends every later group member to the wrong pose.
@@ -537,7 +540,7 @@ function expectedFor(source, extra) {
 
 try {
     uv(PY_WRITE, [tmp]);
-    const sourcePaths = [...FILES, 'first_no_cameras', 'provenance', 'one_session', 'camF_alone', 'camG_alone'].map(n => path.join(tmp, n + '.slp'));
+    const sourcePaths = [...FILES, 'first_no_cameras', 'first_no_map', 'provenance', 'one_session', 'camF_alone', 'camG_alone'].map(n => path.join(tmp, n + '.slp'));
     const sources = {};
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
     for (const p of sourcePaths) sources[path.basename(p, '.slp')] = rawSources[p];
@@ -578,22 +581,25 @@ try {
         }
     }
 
-    console.log('\nA2. An open session with no camera at all');
-    {
-        // Such a session says nothing about its videos, so the file goes the older way,
-        // which reads every session.
-        let bytes = readFile('first_no_cameras');
-        const src = sources.first_no_cameras;
+    console.log('\nA2. A first session that says little about its videos');
+    for (const [name, route] of [['first_no_cameras', 'lazy'], ['first_no_map', 'eager']]) {
+        // No camera at all: it reads like a plain file, one camera per video, and those
+        // videos are the other session's too. Cameras but no video map: the file goes the
+        // older way, which reads every session. Either way nothing of the other session goes.
+        let bytes = readFile(name);
+        const src = sources[name];
         for (let gen = 1; gen <= 2; gen++) {
             const page = await open('lazy', bytes);
-            const shape = await page.evaluate(() => ({ lazy: !!window.__lucid.state.session.lazyLoader, sessions: window.__lucid.state.sessions.length }));
+            const lazy = await page.evaluate(() => !!window.__lucid.state.session.lazyLoader);
             const saved = await saveAndRead(page);
-            check(!shape.lazy, `no camera, save ${gen}: opened in full`, shape);
-            check(eq(saved.read.poses, src.poses), `no camera, save ${gen}: every pose`, diff(saved.read.poses, src.poses));
+            const what = `${name}, save ${gen}`;
+            // A save gives the session cameras once, so the second open is an ordinary one.
+            if (gen === 1) check(lazy === (route === 'lazy'), `${what}: opened ${route === 'lazy' ? 'lazily' : 'in full'}`, lazy);
+            check(eq(saved.read.poses, src.poses), `${what}: every pose`, diff(saved.read.poses, src.poses));
             const closedGroups = list => list.filter(g => /camC=/.test(g)).map(g => g.replace(/^s\d+\|/, ''));
-            check(eq(closedGroups(saved.read.groups), closedGroups(src.groups)), `no camera, save ${gen}: the other session's groups`, diff(closedGroups(saved.read.groups), closedGroups(src.groups)));
-            check(saved.read.sessions.some(s => s.camC === 'camC.mp4' && s.camD === 'camD.mp4'), `no camera, save ${gen}: the other session's cameras`, saved.read.sessions);
-            savedForPython(saved.bytes, `no camera, save ${gen}, Python`, { poses: src.poses });
+            check(eq(closedGroups(saved.read.groups), closedGroups(src.groups)), `${what}: the other session's groups`, diff(closedGroups(saved.read.groups), closedGroups(src.groups)));
+            check(saved.read.sessions.some(s => s.camC === 'camC.mp4' && s.camD === 'camD.mp4'), `${what}: the other session's cameras`, saved.read.sessions);
+            savedForPython(saved.bytes, `${what}, Python`, { poses: src.poses });
             bytes = saved.bytes;
         }
     }
