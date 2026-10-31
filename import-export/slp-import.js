@@ -651,7 +651,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
 export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
     opts = opts || {};
     // A file with no recording session has nothing to restore.
-    if (!typedSession) return { restoredGroups: 0, restoredWith3d: 0 };
+    if (!typedSession) return { restoredGroups: 0, restoredWith3d: 0, movedGroups: [] };
     var numNodes = nodeNames.length;
     var BATCH = opts.batch || 20000;
     var onProgress = opts.onProgress || function () {};
