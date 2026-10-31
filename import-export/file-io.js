@@ -2787,6 +2787,7 @@ export function parseSlpH5(file, onProgress, opts) {
             type: 'parse', file: file,
             columnar: !!(opts && opts.columnar),
             formatOnly: !!(opts && opts.formatOnly),
+            poseDetail: !!(opts && opts.poseDetail),
         });
     });
 }
@@ -2849,9 +2850,12 @@ export async function checkSlpFileFormat(file) {
  *
  * @param {File} file - The .slp file
  * @param {Function} [onProgress] - Optional progress callback `(msg) => void`
+ * @param {{poseDetail?: boolean}} [opts] - `poseDetail`: every pose keeps its reader's
+ *   instance as `_typed`, for a caller keeping them all aside (outside-frames.js). A
+ *   file with more than one skeleton always does.
  * @returns {Promise<Object>} `slpData` matching parseSlpH5's result shape
  */
-export async function parseSlpViaSleapIO(file, onProgress) {
+export async function parseSlpViaSleapIO(file, onProgress, opts) {
     var SIO = window.SleapIO;
     if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
         throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
@@ -2912,7 +2916,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
                 var instData = _typedInstanceToSlpData(lfInsts[ii], typedTracks, skelEntry.nodes.length, PredictedInstance);
                 // The record itself: a save writes it back untouched if the session
                 // does not show this skeleton (outside-frames.js).
-                if (manySkeletons) instData._typed = lfInsts[ii];
+                if (manySkeletons || (opts && opts.poseDetail)) instData._typed = lfInsts[ii];
                 instances.push(instData);
             }
             if (instances.length > 0) skelEntry.frames.push({ frameIdx: lf.frameIdx, videoIdx: videoIdx, instances: instances });

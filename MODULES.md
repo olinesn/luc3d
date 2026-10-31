@@ -3027,6 +3027,10 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   camera whose map moved has its dense occupancy grid re-keyed into the SPARSE
   form by `denseOccupancyToSparse` (a wider dense grid would cost nFrames × the
   whole union). Covered by `tests/test-lazy-track-union.js`.
+  **`LazyFrameLoader.settleCameraSkeletons()`**, once every camera has opened: the
+  skeleton this session shows (`loading/folder-skeleton.js`, `declareSkeleton`), node order
+  fixed in `_remapFrameTracks`, and a camera on other nodes let go of and returned, because
+  its poses stay in a worker with no store for a save to keep them in.
   **A hydrated trackless instance is `trackIdx: null`, never `-1`.** Both lazy
   loaders hand over the store's trackless value, `-1`; the four hydration paths —
   `ensureLazyFrameData`, `hydrateLazyCameras`, `buildLazyFrameGroupSync`,
@@ -3151,6 +3155,8 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   button.
 - `../loading/track-union.js` — `unionTrackNames`, `remapTrackIdx`,
   `isIdentityRemap` (`LazyFrameLoader`'s track union).
+- `../loading/folder-skeleton.js` — `chooseFolderSkeleton`, `cameraSkeletonFit`
+  (`LazyFrameLoader.settleCameraSkeletons`).
 - `./initialization.js` — `update3DViewport` (circular).
 
 **Imported by.** `pose/tracker.js`, `pose/initialization.js`,
@@ -12037,6 +12043,44 @@ single-SLP folder loader, and `attachVideosForLazyReopen`),
 **Tests.** `tests/test-video-file-pick.mjs`,
 `tests/e2e/calibration-named-videos-load.mjs` (both real loaders).
 
+### loading/folder-skeleton.js
+
+**Purpose.** Which skeleton a per-camera session folder shows, and what each camera's
+file does about it, as one rule both routes of `handleLoadSessionFolderPerCamera` use
+(eager loop, `SioLazyLoader`, `LazyFrameLoader`).
+
+**The decision.** The session shows the skeleton the folder declares (`skeleton.json`),
+else the node SET most cameras have poses on, in the node order of the first such camera
+by name, so one odd camera hides only itself. A camera's file is judged by its first
+skeleton with a pose (`validateSkeletonCompatibility`, the rule File ▸ Add SLP applies):
+- Same nodes in the same order: shown as they are. Edges and the skeleton's name do not
+  count: the session draws one set, and every value stays under its own name.
+- Same nodes in another order: shown, read by name.
+- Other nodes: not shown, and a save keeps every pose on its own skeleton
+  (`import-export/outside-frames.js`). Keeping was chosen over refusing the camera because
+  the same pose in a single `.slp`, or beside the session's poses in the same camera's
+  file, is kept: a refusal would treat one pose two ways for no reason in the data, and the
+  project file would be silently missing it. Refused only where it cannot be kept: an
+  analysis `.h5` opened lazily, which has no store and whose poses stay in a worker.
+
+**Key exports.** `chooseFolderSkeleton(cameras, declared)`,
+`cameraSkeletonFit(shown, skeleton)` → `{onOtherNodes, reorderMap}`,
+`readCameraPosesByName(slpData, reorderMap)` (the worker's columnar or nested poses, in
+place), `reorderStoreNodes(store, skeletonIds, reorderMap)` (a lazy store's point tables,
+in place, on those skeletons' rows; a row whose point count is not its skeleton's is left
+alone), `camerasOnOtherNodesNote(cameras, shown)` and `camerasRefusedNote(cameras, shown)`
+(the load's status).
+
+**Imports from project modules.** `../import-export/slp-merge.js`
+(`validateSkeletonCompatibility`).
+
+**Imported by.** `loading/session-loader.js`, `loading/sio-lazy-loader.js`,
+`pose/triangulation.js`.
+
+**Tests.** `tests/test-folder-skeleton.mjs`, `tests/e2e/poses-camera-other-skeleton.mjs`,
+`tests/e2e/track-all-camera-other-skeleton.mjs` (Track All and Triangulate All on such a
+folder: known 3D, so a node read by position misses).
+
 ### loading/track-union.js
 
 **Purpose.** What `session.tracks` IS for a per-camera session folder, where
@@ -12065,7 +12109,8 @@ and left other cameras with out-of-range or misnamed track indices.
 
 **Key exports.**
 - `unionTrackNames(perCamera)` → `{names, remapByCam}` for
-  `[{camName, names}]`. Input order is irrelevant. Names are matched as a
+  `[{camName, names}]`. A camera showing no poses (`loading/folder-skeleton.js`) is left
+  out: the list is about what the session shows. Input order is irrelevant. Names are matched as a
   MULTISET (the k-th `x` of a camera maps to the k-th `x` slot), so a camera
   that repeats a name keeps distinct tracks and every per-camera map is
   injective. Camera names compare by UTF-16 code unit (`<`), so the order is
@@ -12102,6 +12147,9 @@ its poses (`keepGroupAside`, `import-export/outside-frames.js`). Import-free, be
   `instancesData` and the multi-session save keeps them together, so the flags move with
   their rows. The writers read named columns only, so it never reaches a file.
 - `markRowNotShown(store, instanceRow)` — flag one row; creates the column.
+- `markAllRowsNotShown(store)`, `clearRowsNotShown(store)` — every row, for a camera whose
+  whole file is on other nodes (`SioLazyLoader._settleSkeletons`), and back: no flag, no
+  column.
 - `shownSkeletonEntry(entries, record, onSessionVideos)` — the skeleton a session shows:
   the one its `metadata.lucid.skeleton` names (by nodes and edges, else nodes; a project
   can hold sessions on different skeletons), else the first with a pose on its videos,
@@ -12308,6 +12356,21 @@ predictions. The lazy loader is chosen when all lazy jobs are `.slp` (analysis
 rather than falling back to the OOM-prone eager path. It plugs into the
 `state.session.lazyLoader` seam, so rendering/scrubbing are unchanged.
 
+**One skeleton for the folder, whichever path and whichever file opens first** — the
+rule in `loading/folder-skeleton.js`. `declaredSkeleton` (a parent folder's `skeleton.json`
+through `opts`, else this folder's) is read before anything else, because it decides which
+cameras show; a declared skeleton no camera has hides them all, and is never read by
+position. Eager: `chooseFolderSkeleton` over the parse results, `readCameraPosesByName` for a
+camera in another node order, and a camera on other nodes is read again whole
+(`parseSlpForImport` with `poseDetail`, since the fast read leaves out a tracking score,
+`complete` and `from_predicted`) and handed to `keepCameraOnOtherNodes`. Lazy: `SioLazyLoader`
+decides (`declareSkeleton`, `_settleSkeletons`), and `LazyFrameLoader.settleCameraSkeletons`
+for `.h5` (refuses a camera on other nodes). The final status names those cameras. A second
+folder's skeleton joins the project only if every other session shows the same nodes
+(`adoptFolderSkeleton`): re-pointing a session on other nodes would put its poses under
+these names by position. `handleLoadMultiSession` repeats the outside-frames note and any
+refusal (below), since each session's own status is gone by then.
+
 **One `session.tracks` for the folder, whichever path and whichever file
 opens first** — the union rule in `loading/track-union.js`. The eager loop
 builds the union from every parse result BEFORE adding any camera's instances
@@ -12333,7 +12396,7 @@ downgrades to `error`, rather than leaving an empty view under a success-styled
 A file too new to read (`loading/slp-format-check.js`) is treated the same on both
 routes, so a lazy camera refused this way no longer stops the folder, and the
 status (`slpFailuresStatus`) leads with the reason, because the way past it is the
-user's to take. The function returns `{slpFailures}` for `handleLoadMultiSession`.
+user's to take. The function returns `{slpFailures, refusedNote}` for `handleLoadMultiSession`.
 
 **Video load failures are surfaced, with the reason.** Every loader reports a
 video the browser couldn't play via `videoLoadFailureText` (the decoder's codec
@@ -12394,9 +12457,10 @@ neither step (`tests/e2e/lazy-reopen-group-identities.mjs`).
 `noteSessionCalibrationDivergence(state.sessions)` LAST, once every session is
 in, and queued behind the skeleton prompt (as its `onDone`) so two modals never
 stack. See `ui/calibration-notice.js`. **It also ends on the annotation files that
-could not be read** (`slpFailuresStatus`, every session's): each session's own status
-only lasts until the next one's, and the skeleton steps set theirs after this one's,
-so that same tail sets it again last.
+could not be read** (`slpFailuresStatus`, every session's), **the cameras refused, and
+the poses not shown** (`outsideFramesNote`): each session's own status only lasts until
+the next one's, and the skeleton steps set theirs after this one's, so that same tail
+sets it again last.
 
 **No calibration → placeholder cameras, so the folder can be saved.** A folder
 loaded with no `calibration.toml` (and nothing embedded) gets one PLACEHOLDER
@@ -12436,6 +12500,8 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   session, single-SLP folder, per-camera folder), `../import-export/file-io.js`,
   `../pose/triangulation.js` (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
+  `./folder-skeleton.js` (`chooseFolderSkeleton`, `cameraSkeletonFit`,
+  `readCameraPosesByName`, `camerasOnOtherNodesNote`, `camerasRefusedNote`),
   `./track-union.js` (`unionTrackNames`, `remapTrackIdx`),
   `../import-export/save-load.js`,
   `../ui/rendering.js` (`drawAllOverlays`, `setReprojErrorVisible`),
@@ -12444,7 +12510,8 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   `../ui/frame-readout.js` (`refreshReadoutTotals`, wherever the loaders set
   `state.totalFrames` / `state.fps`),
   `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
-  `../import-export/slp-import.js`, `../ui/loading-progress-modal.js`,
+  `../import-export/slp-import.js` (`parseSlpForImport` and more),
+  `../ui/loading-progress-modal.js`,
   `../ui/loading-overlay.js` (`showLoadingProgress`, `createProgressPacer`,
   `yieldToPaint`), `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
@@ -12482,10 +12549,10 @@ synchronous.
 
 **Key export.** class `SioLazyLoader`:
 - `open(camName, file, onProgress)` — reads metadata + builds a
-  videoFrameIdx→store-row map; the skeleton is the first camera BY NAME's and
-  `trackNames` is the union over every opened camera (see "Track indices"), so
-  nothing depends on which parallel open resolves first; returns THIS camera's
-  own track names. A camera is one video: a file with frames on more is read as the
+  videoFrameIdx→store-row map; the skeleton is settled over every opened camera (see
+  "A camera on another skeleton") and `trackNames` is the union over every shown camera
+  (see "Track indices"), so nothing depends on which parallel open resolves first; returns
+  THIS camera's own track names. A camera is one video: a file with frames on more is read as the
   first it lists with frames (`_ownVideoByCam`; the others' rows stay in the store,
   out of the row map, and a save keeps them on their own videos). A file on more than
   one skeleton shows one (`_chooseShownSkeleton`, below). Cameras whose files are on
@@ -12530,6 +12597,26 @@ synchronous.
   the `File` it was opened from — a cheap lazy handle, kept so the multi-session
   streaming save's pass 2 can reopen the same cameras,
   `reopenSessionLazyLoader` in `import-export/save-load.js`).
+
+**A camera on another skeleton (`_settleSkeletons`, `loading/folder-skeleton.js`).** After
+each `open()` every camera so far is weighed again, so the result depends only on which
+files are open. `_skeletonByCam` holds the skeleton each file shows (`_chooseShownSkeleton`),
+`nodes` in the order its store's rows hold them now.
+- **Hidden** (`hiddenCameras`: a camera on other nodes): every row of its store is flagged
+  (`loading/poses-not-shown.js`) and `otherSkeletonIds` holds all its ids, so it is a pose
+  not shown like any other, on every row. A later open can take that back
+  (`_flagFileOtherSkeletons`: the flags go back to what the file alone says). Its store keeps
+  its file's own track list and is left out of the union. `_extractCamFrame` and
+  `lazyCamerasMissingFrom` skip it, so it is neither materialized nor hydrated again on
+  every visit. `nFrames` follows the cameras shown.
+- **Same nodes, another order** (`_putCameraInSessionOrder`): its point rows are rewritten
+  into the session's order in memory, with the store's skeleton (`materializeFrame` and
+  `predictedPointScore` name points by it), so hydration reads by position and a save writes
+  the rows on the session's skeleton. A re-open repeats it from the file, so it does not set
+  `_storeEditedInMemory`.
+- `declareSkeleton(skeleton)`, before `open()`: what the session must show. A copy, and
+  `declaredSkeleton` gives it to the fresh loader of a multi-session save's pass 2, which must
+  decide as this one did.
 
 **Track indices: one list, every store re-indexed into it (`_unifyTracks`).**
 `session.tracks` for a per-camera folder is the union of the cameras' own track
@@ -12670,8 +12757,9 @@ no score. NaN for a user row, an offset outside the frame's rows, a missing
 frame/camera, or a NaN score. Pinned by `tests/test-node-scores.mjs` and
 `tests/e2e/node-score-tooltip.mjs`.
 
-**Imports.** `./track-union.js` (`unionTrackNames`);
-`window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
+**Imports.** `./track-union.js` (`unionTrackNames`), `./folder-skeleton.js`
+(`chooseFolderSkeleton`, `cameraSkeletonFit`, `reorderStoreNodes`), `./poses-not-shown.js`;
+`window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` / `window.SleapIO.Skeleton` (via the index.html
 bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 `h5wasmUrl`).
 
@@ -12679,7 +12767,9 @@ bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 (`handleLoadSessionFolderPerCamera` routing, `handleLoadProjectSlpLazy`) and
 `import-export/save-load.js` (`reopenSessionLazyLoader`). `describeStoreFrame` is
 called duck-typed from `pose/lazy-residency.js`, `predictedPointScore` from
-`Session.predictedNodeScore` (`pose/pose-data.js`).
+`Session.predictedNodeScore` (`pose/pose-data.js`), `hiddenCameras` from
+`pose/triangulation.js` (`lazyCamerasMissingFrom`) and
+`import-export/slp-streaming-write.js`.
 
 **User-facing features.** Lets a session folder of large multi-camera prediction
 `.slp` files — and a large saved project `.slp` (Load Project) — load and render
@@ -12696,12 +12786,15 @@ zero-copy access. Two modes: full eager parse, or lazy
 open-and-stream-frames.
 
 **Message protocol.**
-- IN: `{type: 'parse', file, slowCompound?, columnar?, formatOnly?}` — full eager
+- IN: `{type: 'parse', file, slowCompound?, columnar?, formatOnly?, poseDetail?}` — full eager
   parse. `slowCompound: true` forces h5wasm's `Dataset.value` for the compound
   tables (the equivalence test's reference path; also a kill switch). `columnar:
   true` returns the poses as flat TRANSFERRED typed arrays in `data.columnar` (and
   an empty `data.frames`) — see below. `formatOnly: true` stops after the format
   check and posts an empty result (`checkSlpFileFormat`).
+  `poseDetail: true` gives the poses on the first skeleton too what a save writes
+  back besides the pose (`row`, `fromPredicted`, `trackingScore`, `complete`), for
+  a caller keeping them all aside.
 - IN: `{type: 'open', file}` — lazy open, return metadata only.
 - IN: `{type: 'getFrame', frameIdx, requestId}` — read one frame lazily.
 - IN: `{type: 'getFrames', startIdx, endIdx, requestId}` — read range.
@@ -13748,8 +13841,9 @@ incl. `planeMetadataConflict`).
 on a video no recording session names, each on its own video, and those on a skeleton
 their session does not show, each on its own skeleton with its own nodes, on any video.
 The lazy path keeps both in its store (`buildSessionRefGraph`) and flags the second kind
-so nothing reads it by position (`loading/poses-not-shown.js`); this module holds them
-for the eager path, on `session.outsideFrames`, and has the rules both share.
+so nothing reads it by position (`loading/poses-not-shown.js`), every row of a camera whose
+whole file is on other nodes; this module holds them for the eager path, on
+`session.outsideFrames`, and has the rules both share.
 
 **Key exports.**
 - `headerVideoForOutsideFrames(SIO, video, id)` — the `SIO.Video` a header lists for
@@ -13783,17 +13877,24 @@ for the eager path, on `session.outsideFrames`, and has the rules both share.
 - `ownVideoOfColumnar(col, slpData)`, `keepOutsideColumnarFrames(session, slpData, own, camName)`
   — the per-camera eager load: a camera is the first video its file lists with frames,
   on any skeleton.
+- `keepCameraOnOtherNodes(session, slpData, camName)` — the same load, for a camera whose
+  whole file is on other nodes than the session's (`loading/folder-skeleton.js`): every pose
+  is set aside, on the camera's video or as a video in no session. `slpData` is read with
+  `poseDetail`, so nothing is lost on the save.
 - `outsideFramesForSave(session, labels)` — eager save: `{videos, tracks, identities,
   labeledFrames}`, only what `labels` (this session's `buildSlpLabelsAllViews` result)
   lacks, or null. A kept pose on a camera's video goes into the frame `labels` already
   has there, because a lazy reopen's save keeps only the first row of each video and
-  frame. `new SIO.Labels` lists a kept pose's skeleton by itself. A lazy session on this
-  writer (a mixed project) has its poses not shown read from the store and its kept
-  groups rebuilt on them (`lazyOutsideFramesForSave`).
+  frame. `new SIO.Labels` lists a kept pose's skeleton by itself. Two kept skeletons with
+  one name, nodes, edges and symmetries (two camera files on one skeleton), or one matching
+  the session's, become one entry. A lazy session on this writer (a mixed project) has its
+  poses not shown read from the store and its kept groups rebuilt on them
+  (`lazyOutsideFramesForSave`).
 - `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(sessions)` — the
   sentences for a load's final status: what is on no session's video, what on a
   camera's video is not shown for being on another skeleton, and how many groups went
-  aside with such a pose.
+  aside with such a pose. `keptOutsideCounts` also adds a lazy session's
+  `outsideFrameCounts`.
 
 **Imports from project modules.** `../pose/pose-data.js` (`Instance`, `pooledPoints3d`),
 `./file-io.js` (`makePooledSioInstances`), `../loading/poses-not-shown.js`
@@ -13802,7 +13903,8 @@ for the eager path, on `session.outsideFrames`, and has the rules both share.
 **Imported by.** `import-export/slp-import.js`, `import-export/save-load.js`,
 `import-export/slp-streaming-write.js`, `loading/session-loader.js`.
 
-**Tests.** `tests/e2e/poses-outside-session.mjs`, `tests/e2e/poses-other-skeleton.mjs`.
+**Tests.** `tests/e2e/poses-outside-session.mjs`, `tests/e2e/poses-other-skeleton.mjs`,
+`tests/e2e/poses-camera-other-skeleton.mjs`.
 
 ### import-export/slp-provenance.js
 
@@ -14014,14 +14116,16 @@ session's resident/total) rather than truncate silently. Covered by
   `slp-import-worker.js`. Kept for SLEAP analysis `.h5`, as the
   `parseSlpViaSleapIO` fallback, and for the per-camera session-folder load,
   which passes `{ columnar: true }` to receive the poses as flat transferred
-  typed arrays (`data.columnar`) instead of nested `data.frames`. The rejection
-  keeps the worker's error `name`.
+  typed arrays (`data.columnar`) instead of nested `data.frames`. `{ poseDetail: true }`
+  passes through to the worker. The rejection keeps the worker's error `name`.
 - `checkSlpFileFormat(file)` — rejects only if the file is too new to read
   (`loading/slp-format-check.js`), reading nothing but its metadata; any other
   failure resolves and is left to the real read. For a loader that clears the open
   project before its read (`handleLoadProjectSlpLazy`). Costs a worker start, so
   the loaders that change nothing before they read don't use it.
-- SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress)` —
+- SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress, opts)` — `{ poseDetail:
+  true }` keeps every pose's reader instance as `_typed`, as a file with more than one
+  skeleton always does, for a caller keeping them all aside —
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` and adapts
   the typed `Labels` into the `slpData` shape via the private
   `_typedInstanceToSlpData` pose transform (columnar `_xy`/`_visible` →
@@ -14145,6 +14249,14 @@ each holding only one session's data at a time:
   members (`refForKeptMember`, through the overlay's `byOffset` when one moved them), with
   their own 3D, score and metadata. `headerIdentityFor` puts their identity in this save's
   list.
+  The session's own skeleton is deduped by name AND nodes (`skeletonByName`), since two
+  sessions can share a name on other nodes.
+  **A hidden camera** (`SioLazyLoader.hiddenCameras`) is written like any camera on its
+  video, every id of its store on its own header entry. Its store's own track list is
+  resolved by name onto the header (`trackHeader`, `_withHeaderTracks`), after every shown
+  camera. A pose drawn on its frame goes in an overlay whose `trackIdx` indexes the
+  session's list (`sessionTrackBase`), with the store row's poses after it, as for any pose
+  not shown.
   **Non-shared-store track dedup:** for separate per-camera prediction files
   (session-folder load, `loader._sharedStore` false), each camera's
   `labels.tracks` is appended onto `ctx.allTracks` under a growing
@@ -14359,9 +14471,10 @@ loading-overlay/status-text UI helpers.
   approaches the tab's ceiling. **No UI currently drives that interactive
   per-session flow** (open → Track All → Triangulate All → commit → evict →
   next session) — `reopenSessionLazyLoader(session, sourceFileEntries,
-  wasSharedStore)` (internal) supports it via `SioLazyLoader.sourceFiles`
+  wasSharedStore, declaredSkeleton)` (internal) supports it via `SioLazyLoader.sourceFiles`
   (retained `File` handles, so pass 2's restream doesn't need Track
-  All/Triangulate All redone). For a shared-store project session (every
+  All/Triangulate All redone). `declaredSkeleton` is what the folder declared at load
+  (`SioLazyLoader.declaredSkeleton`): pass 2 must hide the same cameras pass 1's header did. For a shared-store project session (every
   camera's sourceFiles entry is the SAME `.slp`), it reopens via
   `SioLazyLoader.openProjectSlp` so the one interleaved store is read once and
   `_sharedStore`/`videoIdByCam` are restored — per-camera `open()` would
@@ -14496,8 +14609,8 @@ rate is session.json's, and the final status gains each session's warnings
 (`campyRecordingWarnings`). No calibration hash check here: the calibration
 came from the `.slp`.
 
-The `.slp` parse is dispatched by the private `parseSlpForImport(file,
-onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
+The `.slp` parse is dispatched by `parseSlpForImport(file, onProgress, opts)` (exported for
+the per-camera folder's camera on other nodes): real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
 streaming reader), with `parseSlpH5` (raw h5wasm worker) kept for SLEAP
 analysis `.h5` and as a fallback on any typed-read error but a refusal of a file
 too new to read (`loading/slp-format-check.js`), which the raw worker would refuse

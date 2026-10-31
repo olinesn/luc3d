@@ -14,7 +14,9 @@
  *    put its values under the session's node names and drop its extra nodes. Each
  *    stays on its own skeleton, with its own nodes. One on a camera's own video stays
  *    on that video, in the camera's frame. On the eager path a group linking such a
- *    pose cannot be held, so that load refuses (`groupsAcrossSkeletonsRefusal`).
+ *    pose cannot be held, so that load refuses (`groupsAcrossSkeletonsRefusal`). A
+ *    per-camera folder has these too: a camera whose whole file is on other nodes than
+ *    the session's (loading/folder-skeleton.js).
  *
  * The lazy path keeps both where they already are, in its columnar store:
  * `buildSessionRefGraph` gives each such video and skeleton a place in the header,
@@ -377,11 +379,12 @@ export function noteVideoReaders(readers, session, entry, claimedVideos, videoId
  * @param {Object} slpData - `parseSlpViaSleapIO` / `parseSlpH5` result
  * @param {Map} readers - `noteVideoReaders`
  * @param {Session} fallback
- * @param {Object} fallbackEntry - the `fileSkeletons` entry `fallback` shows
+ * @param {Object|null} fallbackEntry - the `fileSkeletons` entry `fallback` shows;
+ *   null when it shows none of this file (`keepCameraOnOtherNodes`)
  */
 export function keepOtherSkeletonFrames(slpData, readers, fallback, fallbackEntry) {
     var entries = fileSkeletons(slpData);
-    if (entries.length <= 1) return;
+    if (entries.length <= 1 && fallbackEntry) return;
     var SIO = window.SleapIO;
     var trackByName = new Map();
     function trackOf(trackIdx) {
@@ -484,6 +487,25 @@ export function keepOutsideColumnarFrames(session, slpData, own, camName) {
 }
 
 /**
+ * Per-camera eager load: a camera whose whole file is on other nodes than the session's
+ * (loading/folder-skeleton.js). Every pose in it is set aside: on the camera's video
+ * (`ownVideoOfColumnar`'s rule, so the routes agree) in the camera's frame, on any other
+ * video as a video in no session.
+ *
+ * @param {Session} session
+ * @param {Object} slpData - read with `poseDetail`, so nothing is lost on the save
+ * @param {string} camName
+ */
+export function keepCameraOnOtherNodes(session, slpData, camName) {
+    var own = ownVideoOfColumnar({ nFrames: 0 }, slpData);
+    keepOtherSkeletonFrames(slpData, new Map([[own, { session: session, entry: null, camera: camName }]]), session, null);
+}
+
+function skeletonSignature(skeleton) {
+    return JSON.stringify([skeleton.name, skeleton.nodeNames, skeleton.edgeIndices, skeleton.symmetryNames]);
+}
+
+/**
  * Eager save: `session`'s kept frames as sleap-io.js objects. There is one row per
  * video and frame, because a lazy reopen's save keeps only the first row of each: a
  * kept pose on a camera's video goes into the frame `labels` already has there, so
@@ -537,6 +559,9 @@ export function outsideFramesForSave(session, labels) {
         var trackNames = new Set(kept.tracks);
         var identityByName = new Map();
         (labels.identities || []).forEach(function (id) { identityByName.set(id.name, id); });
+        // Two camera files on one skeleton hold it twice: one entry in the file.
+        var skeletonBySignature = new Map();
+        (labels.skeletons || []).forEach(function (s) { skeletonBySignature.set(skeletonSignature(s), s); });
         kept.otherSkeletonFrames.forEach(function (f) {
             var video = videoOfSlot[f.video];
             var lf = frameMap(video).get(f.frameIdx);
@@ -546,6 +571,9 @@ export function outsideFramesForSave(session, labels) {
                 labeledFrames.push(lf);
             }
             f.instances.forEach(function (inst) {
+                var signature = skeletonSignature(inst.skeleton);
+                if (!skeletonBySignature.has(signature)) skeletonBySignature.set(signature, inst.skeleton);
+                inst.skeleton = skeletonBySignature.get(signature);
                 lf.instances.push(inst);
                 if (inst.track && !trackNames.has(inst.track.name)) {
                     trackNames.add(inst.track.name);
@@ -611,6 +639,8 @@ function lazyOutsideFramesForSave(SIO, session, labels) {
         return identityByName.get(identity.name);
     }
     var placed = new Map();     // "camera:row:offset" -> { inst, lf }
+    var skeletonBySignature = new Map();
+    (labels.skeletons || []).forEach(function (s) { skeletonBySignature.set(skeletonSignature(s), s); });
     session.cameras.forEach(function (cam, camIdx) {
         var camLabels = loader.labelsByCam.get(cam.name);
         var rowMap = loader.frameRowByCam.get(cam.name);
@@ -621,6 +651,10 @@ function lazyOutsideFramesForSave(SIO, session, labels) {
             loader.posesNotShownAt(cam.name, frameIdx).forEach(function (pose) {
                 var inst = pose.inst;
                 if (!otherIds || !otherIds.has(skeletons.indexOf(inst.skeleton))) inst.skeleton = labels.skeletons[0];
+                // Two camera files on one skeleton hold it twice: one entry in the file.
+                var signature = skeletonSignature(inst.skeleton);
+                if (!skeletonBySignature.has(signature)) skeletonBySignature.set(signature, inst.skeleton);
+                inst.skeleton = skeletonBySignature.get(signature);
                 inst.identity = headerIdentity(inst.identity);
                 noteTrack(inst);
                 var lf = frameFor(labels.videos[camIdx], frameIdx);
@@ -703,13 +737,24 @@ export function outsideFramesNote(counts, fileSessions) {
 }
 
 /**
- * What `session.outsideFrames` holds, as `outsideFramesNote` counts it.
+ * What `session.outsideFrames`, or a lazy session's stores, hold, as `outsideFramesNote`
+ * counts it.
  *
  * @param {Session|Session[]} sessions
  */
 export function keptOutsideCounts(sessions) {
     var counts = { frames: 0, videos: 0, cameraPoses: 0, cameraSkeletons: [] };
     [].concat(sessions).forEach(function (session) {
+        var loader = session && session.lazyLoader;
+        if (loader && typeof loader.outsideFrameCounts === 'function') {
+            var held = loader.outsideFrameCounts();
+            counts.frames += held.frames;
+            counts.videos += held.videos;
+            counts.cameraPoses += held.cameraPoses || 0;
+            (held.cameraSkeletons || []).forEach(function (name) {
+                if (counts.cameraSkeletons.indexOf(name) < 0) counts.cameraSkeletons.push(name);
+            });
+        }
         var kept = session && session.outsideFrames;
         if (!kept) return;
         // A frame holding poses of both kinds is one frame.

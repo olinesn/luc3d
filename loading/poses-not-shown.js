@@ -45,6 +45,27 @@ export function markRowNotShown(store, instanceRow) {
     if (instanceRow >= 0 && instanceRow < flags.length) flags[instanceRow] = 1;
 }
 
+/**
+ * Flag every row, for a store whose whole file the session does not show.
+ *
+ * @param {Object} store
+ */
+export function markAllRowsNotShown(store) {
+    var idn = store.instancesData;
+    var col = idn.instance_type || idn.point_id_start;
+    if (!idn[NOT_SHOWN]) idn[NOT_SHOWN] = new Uint8Array(col ? col.length : 0);
+    idn[NOT_SHOWN].fill(1);
+}
+
+/**
+ * Take every flag off, and the column with it: a store with none pays nothing.
+ *
+ * @param {Object} store
+ */
+export function clearRowsNotShown(store) {
+    delete store.instancesData[NOT_SHOWN];
+}
+
 function edgeKeys(edges) {
     return (edges || []).map(function (e) { return e[0] + '-' + e[1]; }).sort().join(',');
 }

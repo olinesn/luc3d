@@ -26,6 +26,7 @@ import { markDirty, setStatus, showLoading, hideLoading } from '../import-export
 import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
+import { cameraSkeletonFit, chooseFolderSkeleton } from '../loading/folder-skeleton.js';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
          dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
@@ -1196,6 +1197,57 @@ export class LazyFrameLoader {
         this._pending = new Map();
         /** camName -> Int32Array own track index -> session index; absent when it is the identity. */
         this._trackRemapByCam = new Map();
+        /** camName -> reorderMap (`cameraSkeletonFit`); absent when its nodes are in the session's order. */
+        this._nodeOrderByCam = new Map();
+        /** `declareSkeleton`: what the session must show. */
+        this._declaredSkeleton = null;
+    }
+
+    /**
+     * The skeleton this session must show, for a folder that declares one. Call it
+     * before `open()`.
+     */
+    declareSkeleton(skeleton) {
+        this._declaredSkeleton = skeleton;
+    }
+
+    /**
+     * Once every camera has opened: choose the skeleton this session shows
+     * (`loading/folder-skeleton.js`), put a camera with the same nodes in another order
+     * in the session's, and let go of a camera on other nodes. Its poses stay in its
+     * worker, and there is no store for a save to keep them in, so they are not read at
+     * all rather than read by position.
+     *
+     * @returns {string[]} the cameras let go of
+     */
+    settleCameraSkeletons() {
+        var self = this;
+        var cams = Array.from(this.metadata.keys());
+        var shown = chooseFolderSkeleton(cams.map(function (c) {
+            var md = self.metadata.get(c);
+            return { camName: c, skeleton: md.skeleton, hasPoses: md.nFrames > 0 };
+        }), this._declaredSkeleton);
+        this.skeleton = shown;
+        var refused = [];
+        cams.forEach(function (c) {
+            var fit = cameraSkeletonFit(shown, self.metadata.get(c).skeleton);
+            if (fit.reorderMap) self._nodeOrderByCam.set(c, fit.reorderMap);
+            if (!fit.onOtherNodes) return;
+            var worker = self.workers.get(c);
+            try { worker.postMessage({ type: 'close' }); worker.terminate(); } catch (e) { }
+            self.workers.delete(c);
+            self.metadata.delete(c);
+            self.videos.delete(c);
+            self.trackOccupancy.delete(c);
+            self._trackRemapByCam.delete(c);
+            refused.push(c);
+        });
+        if (refused.length > 0) {
+            this.nFrames = 0;
+            this.metadata.forEach(function (md) { if (md.nFrames > self.nFrames) self.nFrames = md.nFrames; });
+            this._unifyTracks();
+        }
+        return refused.sort();
     }
 
     /**
@@ -1268,13 +1320,23 @@ export class LazyFrameLoader {
         return names;
     }
 
-    /** Re-index one worker frame's instances (own -> session track index), in place. */
+    /**
+     * Re-index one worker frame's instances (own -> session track index, and each node to
+     * its place in the session's order), in place.
+     */
     _remapFrameTracks(cameraName, instances) {
         var remap = this._trackRemapByCam.get(cameraName);
-        if (!remap || !instances) return;
+        var nodeOrder = this._nodeOrderByCam.get(cameraName);
+        if ((!remap && !nodeOrder) || !instances) return;
         for (var i = 0; i < instances.length; i++) {
             var inst = instances[i];
-            if (inst && inst.trackIdx != null && inst.trackIdx >= 0) inst.trackIdx = remapTrackIdx(remap, inst.trackIdx);
+            if (!inst) continue;
+            if (remap && inst.trackIdx != null && inst.trackIdx >= 0) inst.trackIdx = remapTrackIdx(remap, inst.trackIdx);
+            if (nodeOrder) {
+                var byName = new Array(nodeOrder.length).fill(null);
+                for (var k = 0; k < nodeOrder.length; k++) byName[nodeOrder[k]] = inst.points[k] || null;
+                inst.points = byName;
+            }
         }
     }
 
@@ -1394,7 +1456,7 @@ export class LazyFrameLoader {
         for (var entry of this.workers) {
             try { entry[1].postMessage({ type: 'close' }); entry[1].terminate(); } catch (e) { }
         }
-        this.workers.clear(); this.metadata.clear(); this.cache.clear(); this._trackRemapByCam.clear();
+        this.workers.clear(); this.metadata.clear(); this.cache.clear(); this._trackRemapByCam.clear(); this._nodeOrderByCam.clear();
         this.cacheOrder = []; this._pending.clear();
     }
 }
@@ -1561,6 +1623,8 @@ export function lazyCamerasMissingFrom(session, fg) {
     if (!camMap || typeof camMap.keys !== 'function') return [];
     var missing = [];
     for (var cn of camMap.keys()) {
+        // It shows nothing, so hydrating it again on every visit would find nothing.
+        if (loader.hiddenCameras && loader.hiddenCameras.has(cn)) continue;
         var linked = fg.instances.get(cn);
         if (linked && linked.length > 0) continue;
         var unlinked = fg.getUnlinkedInstances(cn);

@@ -84,19 +84,20 @@ import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
  *
  * @param {File} file
  * @param {(msg:string)=>void} onProgress
+ * @param {{poseDetail?: boolean}} [opts] - see `parseSlpViaSleapIO`
  * @returns {Promise<Object>} slpData
  */
-async function parseSlpForImport(file, onProgress) {
+export async function parseSlpForImport(file, onProgress, opts) {
     if (/\.slp$/i.test(file.name || '')) {
         try {
-            return await parseSlpViaSleapIO(file, onProgress);
+            return await parseSlpViaSleapIO(file, onProgress, opts);
         } catch (err) {
             // Too new for this reader is too new for the raw worker as well.
             if (isNewerSlpFormatError(err)) throw err;
             console.warn('[slp-import] sleap-io.js streaming read failed — falling back to the raw h5wasm worker:', err);
         }
     }
-    return await parseSlpH5(file, onProgress);
+    return await parseSlpH5(file, onProgress, opts);
 }
 
 /**

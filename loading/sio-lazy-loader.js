@@ -32,7 +32,8 @@
  */
 
 import { unionTrackNames } from './track-union.js';
-import { markRowNotShown, notShownRows, shownSkeletonEntry } from './poses-not-shown.js';
+import { clearRowsNotShown, markAllRowsNotShown, markRowNotShown, notShownRows, shownSkeletonEntry } from './poses-not-shown.js';
+import { cameraSkeletonFit, chooseFolderSkeleton, reorderStoreNodes } from './folder-skeleton.js';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -128,8 +129,25 @@ export class SioLazyLoader {
          * it; `openProjectSlp`'s one shared store already has one list.
          */
         this._trackSourceByCam = new Map();
-        /** camName -> skeleton dict, so `skeleton` is chosen by camera name, not by I/O timing. */
+        /**
+         * camName -> the skeleton its file shows (`_chooseShownSkeleton`): `{ name, nodes,
+         * edges, hasPoses, fileOtherIds }`, `nodes` in the order its store's rows hold them
+         * now. Every camera here is weighed each time, so `skeleton` does not depend on I/O
+         * timing.
+         */
         this._skeletonByCam = new Map();
+        /** camName -> its last labeled frame, so `nFrames` follows the cameras shown. */
+        this._lastFrameByCam = new Map();
+        /** `declareSkeleton`: what the session must show, whatever the cameras are on. */
+        this._declaredSkeleton = null;
+        /**
+         * The cameras whose whole file is on other nodes than the session's
+         * (`loading/folder-skeleton.js`). Every row of such a store is flagged
+         * (`loading/poses-not-shown.js`), so nothing reads it by position, and a save writes
+         * them on their own skeletons, on this camera's video. Its store keeps its file's
+         * own track list, out of the session's (`_unifyTracks`).
+         */
+        this.hiddenCameras = new Set();
         /**
          * True once a store has been edited IN MEMORY (`remapTracksFromIdentity`,
          * `deleteInstanceRows`) — i.e. the columns no longer match the source
@@ -167,11 +185,11 @@ export class SioLazyLoader {
     /**
      * Open one camera's `.slp` lazily and record its metadata. Callers open
      * every camera in PARALLEL, so nothing here may depend on which open
-     * finishes first: the skeleton is the one of the first camera BY NAME that
-     * has one, and `trackNames` is the union of every opened camera's tracks,
-     * with each camera's store re-indexed into it (`_unifyTracks`). The result
-     * is the same for any resolution order — including a later re-open of the
-     * same files (`reopenSessionLazyLoader`, the multi-session save's pass 2).
+     * finishes first: the skeleton is settled over every camera opened so far
+     * (`_settleSkeletons`), and `trackNames` is the union of every shown camera's
+     * tracks, with each camera's store re-indexed into it (`_unifyTracks`). The
+     * result is the same for any resolution order — including a later re-open of
+     * the same files (`reopenSessionLazyLoader`, the multi-session save's pass 2).
      */
     async open(cameraName, file, onProgress) {
         var SIO = window.SleapIO;
@@ -221,11 +239,11 @@ export class SioLazyLoader {
         // frame. Replaces the old manual reach-in into `labels._lazyFrameList.cache`.
         try { labels.frameCacheLimit = this.internalFrameCacheLimit; } catch (e) { /* older bundle */ }
 
+        var store = labels._lazyDataStore;
         // Build videoFrameIdx -> store-row map from the columnar frame_idx column,
         // so the app's video frame number resolves to the correct lazy-frame row
         // even if the labeled frames are sparse (unlabeled video frames map to
         // nothing → an empty frame).
-        var store = labels._lazyDataStore;
         var frameIdxCol = (store && store.framesData && store.framesData.frame_idx) || [];
         // A camera is one video. A file with frames on more is read as the first
         // it lists that has any; the others' rows stay in the store, out of this
@@ -243,16 +261,14 @@ export class SioLazyLoader {
         var ownRawSess = (labels.rawSessionsJson && labels.rawSessionsJson[0]) || null;
         var skel = this._chooseShownSkeleton(labels, ownRawSess && ownRawSess.metadata && ownRawSess.metadata.lucid && ownRawSess.metadata.lucid.skeleton,
             function (v) { return v === ownVideo; });
+        var instanceCol = store && store.instancesData && (store.instancesData.instance_type || store.instancesData.point_id_start);
         this._skeletonByCam.set(cameraName, skel ? {
             name: skel.name || 'skeleton',
             nodes: skel.nodeNames,
             edges: skel.edgeIndices,
+            hasPoses: !!instanceCol && instanceCol.length > 0,
+            fileOtherIds: this._otherSkeletonIds.get(labels) || null,
         } : null);
-        this.skeleton = null;
-        var skelCams = Array.from(this._skeletonByCam.keys()).sort();
-        for (var sci = 0; sci < skelCams.length && !this.skeleton; sci++) {
-            this.skeleton = this._skeletonByCam.get(skelCams[sci]);
-        }
         this.numNodesByCam.set(cameraName, skel ? skel.nodeNames.length : 0);
         var rowMap = new Map();
         var maxFrameIdx = -1;
@@ -263,7 +279,8 @@ export class SioLazyLoader {
             if (fi > maxFrameIdx) maxFrameIdx = fi;
         }
         this.frameRowByCam.set(cameraName, rowMap);
-        if (maxFrameIdx + 1 > this.nFrames) this.nFrames = maxFrameIdx + 1;
+        this._lastFrameByCam.set(cameraName, maxFrameIdx);
+        var shownAgain = this._settleSkeletons();
 
         // This camera's own tracks, then re-index every camera into the union.
         // The store still holds this file's own indices, so its map starts as
@@ -274,7 +291,7 @@ export class SioLazyLoader {
         var ownToSession = new Int32Array(ownNames.length);
         for (var oi = 0; oi < ownToSession.length; oi++) ownToSession[oi] = oi;
         this._trackSourceByCam.set(cameraName, { names: ownNames, toSession: ownToSession });
-        this._unifyTracks(cameraName);
+        this._unifyTracks(cameraName, shownAgain);
 
         var ownVideoIdx = this._ownVideoByCam.has(cameraName) && store && typeof store.videoIndexFor === 'function'
             ? store.videoIndexFor(ownVideo) : 0;
@@ -289,6 +306,128 @@ export class SioLazyLoader {
             nFrames: this.nFrames,
             videos: [this.videos.get(cameraName)],
         };
+    }
+
+    /**
+     * The skeleton this session must show, for a folder that declares one
+     * (`skeleton.json`). Call it before `open()`. A copy: the session's own skeleton
+     * can be edited later, and a re-open must decide as the first load did.
+     *
+     * @param {{name: string, nodes: string[], edges: number[][]}|null} skeleton
+     */
+    declareSkeleton(skeleton) {
+        this._declaredSkeleton = skeleton ? { name: skeleton.name, nodes: skeleton.nodes.slice(), edges: (skeleton.edges || []).slice() } : null;
+    }
+
+    /** The skeleton a fresh loader must be told to decide as this one did. */
+    get declaredSkeleton() {
+        return this._declaredSkeleton;
+    }
+
+    /**
+     * Decide, over every camera opened so far, which skeleton the session shows and what
+     * each camera does about it (`loading/folder-skeleton.js`): as it is, in the session's
+     * node order, or hidden. Run after each `open()`, so a later camera can change it: the
+     * result depends only on which files are open, as with `_unifyTracks`.
+     *
+     * @returns {Set<string>} cameras that were hidden and now show
+     */
+    _settleSkeletons() {
+        var self = this;
+        var cams = Array.from(this._skeletonByCam.keys());
+        var shown = chooseFolderSkeleton(cams.map(function (c) {
+            var entry = self._skeletonByCam.get(c);
+            return { camName: c, skeleton: entry, hasPoses: !!entry && entry.hasPoses };
+        }), this._declaredSkeleton);
+        this.skeleton = shown;
+        var shownAgain = new Set();
+        cams.forEach(function (c) {
+            var entry = self._skeletonByCam.get(c);
+            var fit = cameraSkeletonFit(shown, entry);
+            // A file with no pose has nothing to hide.
+            var hide = fit.onOtherNodes && entry.hasPoses;
+            var wasHidden = self.hiddenCameras.has(c);
+            if (hide && !wasHidden) {
+                var labels = self.labelsByCam.get(c);
+                self.hiddenCameras.add(c);
+                markAllRowsNotShown(labels._lazyDataStore);
+                self._otherSkeletonIds.set(labels, new Set((labels.skeletons || []).map(function (s, id) { return id; })));
+                self.trackOccupancy.delete(c);
+                self._dropFrameCaches();
+            } else if (!hide && wasHidden) {
+                self.hiddenCameras.delete(c);
+                self._flagFileOtherSkeletons(self.labelsByCam.get(c), entry.fileOtherIds);
+                self._dropFrameCaches();
+                shownAgain.add(c);
+            }
+            if (!hide && fit.reorderMap) self._putCameraInSessionOrder(c, entry, shown, fit.reorderMap);
+        });
+        var last = -1;
+        for (var shownCam of this.labelsByCam.keys()) {
+            if (!this.hiddenCameras.has(shownCam) && this._lastFrameByCam.get(shownCam) > last) last = this._lastFrameByCam.get(shownCam);
+        }
+        this.nFrames = last + 1;
+        return shownAgain;
+    }
+
+    /**
+     * Back to what the file alone says: only its rows on `otherIds` are flagged. For a
+     * camera a later `open()` shows after all.
+     *
+     * @param {Object} labels
+     * @param {Set<number>|null} otherIds - `fileOtherIds`; null when it shows them all
+     */
+    _flagFileOtherSkeletons(labels, otherIds) {
+        var store = labels._lazyDataStore;
+        clearRowsNotShown(store);
+        if (!otherIds) {
+            this._otherSkeletonIds.delete(labels);
+            return;
+        }
+        this._otherSkeletonIds.set(labels, otherIds);
+        var skeletonCol = store.instancesData.skeleton;
+        var skeletons = labels.skeletons || [];
+        for (var row = 0, n = skeletonCol.length; row < n; row++) {
+            var id = Number(skeletonCol[row]);
+            if (otherIds.has(skeletons[id] ? id : 0)) markRowNotShown(store, row);
+        }
+    }
+
+    /**
+     * Same nodes, another order: rewrite this camera's point rows into the session's, in
+     * memory, so hydration can read them by position and a save writes them on the
+     * session's skeleton, each value under its own name. The store's skeleton goes with
+     * them, because `materializeFrame` and `predictedPointScore` name points by it. A
+     * re-open repeats this from the file.
+     */
+    _putCameraInSessionOrder(camName, entry, shown, reorderMap) {
+        var labels = this.labelsByCam.get(camName);
+        var store = labels._lazyDataStore;
+        var SIO = window.SleapIO;
+        var ids = new Set();
+        (store.skeletons || []).forEach(function (s, id) { if (!entry.fileOtherIds || !entry.fileOtherIds.has(id)) ids.add(id); });
+        reorderStoreNodes(store, ids, reorderMap);
+        ids.forEach(function (id) {
+            var old = store.skeletons[id];
+            var moved = new SIO.Skeleton({
+                nodes: shown.nodes.slice(),
+                edges: old.edgeIndices.map(function (e) { return [reorderMap[e[0]], reorderMap[e[1]]]; }),
+                symmetries: old.symmetryNames,
+                name: old.name,
+            });
+            store.skeletons[id] = moved;
+            var inLabels = (labels.skeletons || []).indexOf(old);
+            if (inLabels >= 0) labels.skeletons[inLabels] = moved;
+        });
+        entry.nodes = shown.nodes.slice();
+        entry.edges = entry.edges.map(function (e) { return [reorderMap[e[0]], reorderMap[e[1]]]; });
+        if (labels._lazyFrameList && typeof labels._lazyFrameList.clearCache === 'function') labels._lazyFrameList.clearCache();
+        this._dropFrameCaches();
+    }
+
+    _dropFrameCaches() {
+        this.cache.clear();
+        this.cacheOrder = [];
     }
 
     /**
@@ -320,12 +459,16 @@ export class SioLazyLoader {
      * name-signature dedup (`buildSessionRefGraph`) write the tracks ONCE,
      * rather than one copy per camera.
      *
+     * A hidden camera (`hiddenCameras`) is left out of the union and keeps its file's own
+     * list: the session's track list is about what it shows.
+     *
      * @param {string} [newCam] - the camera just opened
+     * @param {Set<string>} [shownAgain] - `_settleSkeletons`: they have no occupancy yet
      */
-    _unifyTracks(newCam) {
+    _unifyTracks(newCam, shownAgain) {
         var self = this;
         var cams = Array.from(this._trackSourceByCam.keys());
-        var union = unionTrackNames(cams.map(function (c) {
+        var union = unionTrackNames(cams.filter(function (c) { return !self.hiddenCameras.has(c); }).map(function (c) {
             return { camName: c, names: self._trackSourceByCam.get(c).names };
         }));
         var TrackCtor = window.SleapIO && window.SleapIO.Track;
@@ -333,7 +476,9 @@ export class SioLazyLoader {
         for (var ci = 0; ci < cams.length; ci++) {
             var cam = cams[ci];
             var src = this._trackSourceByCam.get(cam);
-            var next = union.remapByCam.get(cam);
+            var hidden = this.hiddenCameras.has(cam);
+            var next = hidden ? Int32Array.from(src.names.keys()) : union.remapByCam.get(cam);
+            var listNames = hidden ? src.names : union.names;
             var labels = this.labelsByCam.get(cam);
             var store = labels && labels._lazyDataStore;
             var tracks = labels && labels.tracks;
@@ -360,13 +505,13 @@ export class SioLazyLoader {
             }
 
             // 2. labels.tracks -> the union, in place, reusing this camera's Track objects.
-            var rebuilt = new Array(union.names.length);
+            var rebuilt = new Array(listNames.length);
             for (var ti = 0; ti < next.length; ti++) {
                 var own = src.toSession[ti] < tracks.length ? tracks[src.toSession[ti]] : null;
                 if (own) rebuilt[next[ti]] = own;
             }
             for (var ui = 0; ui < rebuilt.length; ui++) {
-                if (!rebuilt[ui]) rebuilt[ui] = TrackCtor ? new TrackCtor(union.names[ui]) : { name: union.names[ui] };
+                if (!rebuilt[ui]) rebuilt[ui] = TrackCtor ? new TrackCtor(listNames[ui]) : { name: listNames[ui] };
             }
             tracks.length = 0;
             for (var pi = 0; pi < rebuilt.length; pi++) tracks.push(rebuilt[pi]);
@@ -374,7 +519,9 @@ export class SioLazyLoader {
 
             // 3. Occupancy, keyed by session index.
             var occ = this.trackOccupancy.get(cam);
-            if (cam === newCam || rewritten > 0) {
+            if (hidden) {
+                // Shows nothing, so no bars.
+            } else if (cam === newCam || rewritten > 0 || (shownAgain && shownAgain.has(cam))) {
                 try {
                     var nf = 0;
                     var rm = this.frameRowByCam.get(cam);
@@ -735,7 +882,7 @@ export class SioLazyLoader {
      */
     _extractCamFrame(cameraName, videoFrameIdx) {
         var labels = this.labelsByCam.get(cameraName);
-        if (!labels) return [];
+        if (!labels || this.hiddenCameras.has(cameraName)) return [];
         var rowMap = this.frameRowByCam.get(cameraName);
         var row = rowMap ? rowMap.get(videoFrameIdx) : undefined;
         if (row === undefined) return [];
@@ -1712,6 +1859,8 @@ export class SioLazyLoader {
         this.numNodesByCam.clear();
         this._trackSourceByCam.clear();
         this._skeletonByCam.clear();
+        this._lastFrameByCam.clear();
+        this.hiddenCameras.clear();
         this._ownVideoByCam.clear();
         this._tracksPastSession.clear();
         this._otherSkeletonIds.clear();

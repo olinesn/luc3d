@@ -948,7 +948,7 @@ function restoreEditedStoreColumns(loader, kept) {
  * bytes, so this is cheap relative to the FIRST open — no Track All/
  * Triangulate All is redone, only the columnar store is reconstructed.
  */
-async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStore) {
+async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStore, declaredSkeleton) {
     var loader = new SioLazyLoader();
     if (wasSharedStore) {
         // Lazily-reopened single-file project: every camera's sourceFiles entry
@@ -967,6 +967,9 @@ async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStor
     // so this re-derives the track columns the original load had. A store
     // edited in memory since is not in the files; `finalizeMultiSessionSave`
     // puts pass 1's columns back over these (`restoreEditedStoreColumns`).
+    // A folder's declared skeleton must decide here as it did then, or a camera hidden
+    // in pass 1's header would come back shown.
+    loader.declareSkeleton(declaredSkeleton);
     var opens = [];
     for (var i = 0; i < sourceFileEntries.length; i++) {
         var entry = sourceFileEntries[i];
@@ -1032,7 +1035,7 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     var editedColumns = keepEditedStoreColumns(session.lazyLoader);
     handle.pending.push({
         session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore,
-        editedColumns: editedColumns,
+        editedColumns: editedColumns, declaredSkeleton: session.lazyLoader.declaredSkeleton,
     });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
@@ -1080,7 +1083,7 @@ export async function finalizeMultiSessionSave(handle, opts) {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
             if (onProgress) await onProgress('frames', j, handle.pending.length, 'sessions');
-            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore);
+            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.declaredSkeleton);
             if (p.editedColumns) restoreEditedStoreColumns(p.session.lazyLoader, p.editedColumns);
             await streamSessionIntoWriter(writer, p.session, p.refGraph);
             p.session.lazyLoader.close();
