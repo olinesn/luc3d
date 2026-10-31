@@ -2957,6 +2957,9 @@ export async function parseSlpViaSleapIO(file, onProgress) {
             shape: v.shape != null ? v.shape : null,
             embedded: embedded,
             dataset: (v.backendMetadata && v.backendMetadata.dataset) != null ? v.backendMetadata.dataset : null,
+            // The whole record, for a video a save writes back as it found it
+            // (outside-frames.js).
+            _typedVideo: v,
         };
     });
 

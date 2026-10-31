@@ -55,6 +55,7 @@
 
 import { _buildSioPoints } from './file-io.js';
 import { points3dNodeCount } from '../pose/pose-data.js';
+import { headerVideoForOutsideFrames } from './outside-frames.js';
 import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { writePlaneMetadata } from './plane-metadata.js';
@@ -153,6 +154,47 @@ function resolveVideoPath(cam, views, videoFiles, lazyVid) {
     }
     if (lazyVid && lazyVid.filename) return lazyVid.filename;
     return cam.name + '.mp4';
+}
+
+/** The id a camera's rows carry in a shared store's `framesData.video` column. */
+function nativeVideoId(loader, camInfo) {
+    return (loader.videoIdByCam && loader.videoIdByCam.has(camInfo.name))
+        ? loader.videoIdByCam.get(camInfo.name) : camInfo.videoIndex;
+}
+
+/**
+ * Every video id a store uses, ascending: its frame rows', plus any annotation's
+ * (those are keyed `"video:frame"`, and a video can have annotations and no frames).
+ */
+function storeVideoIds(store) {
+    var ids = new Set();
+    var col = (store.framesData || {}).video || [];
+    var last;
+    for (var r = 0; r < col.length; r++) {
+        var id = Number(col[r]);
+        if (id !== last) { ids.add(id); last = id; }
+    }
+    [store._roiByFrame, store._maskByFrame, store._bboxByFrame, store._centroidByFrame, store._labelImageByFrame].forEach(function (annMap) {
+        if (!annMap) return;
+        for (var key of annMap.keys()) {
+            var s = String(key);
+            var sep = s.indexOf(':');
+            if (sep > 0) ids.add(Number(s.slice(0, sep)));
+        }
+    });
+    return Array.from(ids).sort(function (a, b) { return a - b; });
+}
+
+/** Every skeleton id a store's instance rows use. */
+function storeSkeletonIds(store) {
+    var ids = new Set();
+    var col = (store.instancesData || {}).skeleton || [];
+    var last;
+    for (var j = 0; j < col.length; j++) {
+        var id = Number(col[j]);
+        if (id !== last) { ids.add(id); last = id; }
+    }
+    return Array.from(ids);
 }
 
 /**
@@ -296,6 +338,16 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     var sessionVideoIndices = [];  // parallel to session.cameras / sioCameras
     var cam = [];                  // loaded cameras only: { name, sioCam, videoIndex, framesData, instancesData, rowMap, nFrames, trackBase }
 
+    // A shared store's tracks go into the header ONCE (else 2357 tracks × N cameras).
+    function sharedTrackBaseOf(labels) {
+        if (_sharedTrackBase < 0) {
+            _sharedTrackBase = ctx.allTracks.length;
+            var camTracksS = (labels.tracks || []);
+            for (var tiS = 0; tiS < camTracksS.length; tiS++) ctx.allTracks.push(new SIO.Track(camTracksS[tiS].name));
+        }
+        return _sharedTrackBase;
+    }
+
     for (var ci = 0; ci < session.cameras.length; ci++) {
         var c = session.cameras[ci];
 
@@ -348,15 +400,10 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         // store's `instancesData.track` ids index into this camera's own tracks;
         // appendStore's trackOffset rebases them into the combined list. For a
         // shared store every camera has the SAME `labels.tracks`, so add them
-        // ONCE and reuse one trackBase (else 2357 tracks × N cameras).
+        // ONCE and reuse one trackBase.
         var trackBase;
         if (_sharedStore) {
-            if (_sharedTrackBase < 0) {
-                _sharedTrackBase = ctx.allTracks.length;
-                var camTracksS = (labels.tracks || []);
-                for (var tiS = 0; tiS < camTracksS.length; tiS++) ctx.allTracks.push(new SIO.Track(camTracksS[tiS].name));
-            }
-            trackBase = _sharedTrackBase;
+            trackBase = sharedTrackBaseOf(labels);
         } else {
             var camTracks = (labels.tracks || []);
             // Name-list signature ('|~|'-joined — a track/identity name
@@ -384,6 +431,70 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             name: c.name, sioCam: sioCam, videoIndex: videoIndex, framesData: framesData, instancesData: instancesData,
             rowMap: rowMap, nFrames: nFrames, trackBase: trackBase,
         });
+    }
+
+    // ---- Frames on a video no camera of this session names ----
+    // `appendStore` writes a WHOLE store, and a project file can hold frames on a
+    // video no recording session names — or, when the loader opened only the
+    // first session of a multi-session file, on the other sessions' videos. Each
+    // such video gets its own place in the header, after this session's cameras,
+    // and the store's id for it is mapped there (`streamSessionIntoWriter`).
+    // Without one, its rows point past the end of the list (Python cannot open
+    // the file) or at a camera's index (first write wins, so its poses replace
+    // that camera's). See outside-frames.js.
+    var outsideVideos = [];        // { native, videoIndex }: slim, outlives the loader's eviction
+    function addOutsideVideos(store, claimed) {
+        var added = [];
+        var used = storeVideoIds(store);
+        for (var uvi = 0; uvi < used.length; uvi++) {
+            if (claimed.has(used[uvi])) continue;
+            var storeVideoIdx = typeof store.videoIndexFor === 'function' ? store.videoIndexFor(used[uvi]) : used[uvi];
+            added.push({ native: used[uvi], videoIndex: ctx.allVideos.length });
+            ctx.allVideos.push(headerVideoForOutsideFrames(SIO, (store.videos || [])[storeVideoIdx], used[uvi]));
+        }
+        return added;
+    }
+    var sharedLabels = _sharedStore
+        ? (loader._projectLabels || (cam[0] ? loader.labelsByCam.get(cam[0].name) : null)) : null;
+    var sharedStoreData = sharedLabels && sharedLabels._lazyDataStore;
+    if (sharedStoreData) {
+        outsideVideos = addOutsideVideos(sharedStoreData, new Set(cam.map(function (c) { return nativeVideoId(loader, c); })));
+        // No camera has a row, so none of them added the tracks these rows name.
+        if (outsideVideos.length > 0) sharedTrackBaseOf(sharedLabels);
+    }
+    // One camera's own file can hold other videos' frames too (`SioLazyLoader.open`).
+    if (!_sharedStore && loader._ownVideoByCam) {
+        for (var ovi = 0; ovi < cam.length; ovi++) {
+            var ownVideoId = loader._ownVideoByCam.get(cam[ovi].name);
+            if (ownVideoId === undefined) continue;
+            cam[ovi].ownVideo = ownVideoId;
+            cam[ovi].nativeToHeader = [[ownVideoId, cam[ovi].videoIndex]].concat(
+                addOutsideVideos(loader.labelsByCam.get(cam[ovi].name)._lazyDataStore, new Set([ownVideoId]))
+                    .map(function (o) { return [o.native, o.videoIndex]; }));
+        }
+    }
+
+    // ---- Skeletons the stores' rows use ----
+    // `appendStore` writes each row's skeleton id too, so a row on any skeleton
+    // but the session's (the store's first) must find it in the header, or Python
+    // raises IndexError on the file. Same name and same nodes: one entry.
+    function skeletonPairsFor(store) {
+        return storeSkeletonIds(store).map(function (id) {
+            var other = id > 0 ? (store.skeletons || [])[id] : null;
+            if (!other) return [id, ctx.allSkeletons.indexOf(skeleton)];
+            var sig = JSON.stringify([other.name, other.nodeNames]);
+            for (var ski = 0; ski < ctx.allSkeletons.length; ski++) {
+                if (JSON.stringify([ctx.allSkeletons[ski].name, ctx.allSkeletons[ski].nodeNames]) === sig) return [id, ski];
+            }
+            ctx.allSkeletons.push(other);
+            return [id, ctx.allSkeletons.length - 1];
+        });
+    }
+    var sharedSkeletonPairs = sharedStoreData ? skeletonPairsFor(sharedStoreData) : null;
+    if (!_sharedStore) {
+        for (var spi = 0; spi < cam.length; spi++) {
+            cam[spi].skeletonPairs = skeletonPairsFor(loader.labelsByCam.get(cam[spi].name)._lazyDataStore);
+        }
     }
 
     // ---- RecordingSession (ref-based grouping) ----
@@ -506,22 +617,25 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     var overlayBase = ctx.runningOut;
     var E = overlayLfs.length;
     var runningOut = overlayBase + E;
-    if (_sharedStore && cam.length > 0) {
+    if (_sharedStore && cam.length === 0) {
+        // No camera has a row: nothing refers to these rows, but they are
+        // written, so the next session's refs must count them.
+        if (outsideVideos.length > 0) runningOut += ((sharedStoreData.framesData || {}).video || []).length;
+    } else if (_sharedStore) {
         // Shared multi-camera store, appended ONCE: build a SINGLE store-row →
         // output-lf map that every camera reuses. A store row belongs to one
         // camera via its NATIVE video id (`loader.videoIdByCam`, captured at
         // openProjectSlp); `streamSessionIntoWriter` remaps those native ids
         // onto the output header order when they differ. Skip rows overlaid by
-        // a user correction for that camera.
+        // a user correction for that camera. A row on a video no camera names
+        // is written too, so it counts here like any other.
         var sInfo = cam[0];
         var sharedOut = new Map();
         var sFidx = sInfo.framesData.frame_idx || sInfo.framesData.frame_id || [];
         var sVideo = sInfo.framesData.video || [];
         var videoToCam = new Map(); // NATIVE store video id -> camera name
         for (var vci = 0; vci < cam.length; vci++) {
-            var vNat = (loader.videoIdByCam && loader.videoIdByCam.has(cam[vci].name))
-                ? loader.videoIdByCam.get(cam[vci].name) : cam[vci].videoIndex;
-            videoToCam.set(vNat, cam[vci].name);
+            videoToCam.set(nativeVideoId(loader, cam[vci]), cam[vci].name);
         }
         for (var srow = 0; srow < sInfo.nFrames; srow++) {
             var sCamName = videoToCam.get(numAt(sVideo, srow));
@@ -534,8 +648,11 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             var soInfo = cam[so];
             soInfo.storeOutIndex = new Map();
             var soFidx = soInfo.framesData.frame_idx || soInfo.framesData.frame_id || [];
+            var soVideo = soInfo.framesData.video || [];
             for (var row = 0; row < soInfo.nFrames; row++) {
-                if (overlaidKeys.has(soInfo.name + ':' + numAt(soFidx, row))) continue;
+                // A correction replaces this camera's own row, not another video's.
+                if (overlaidKeys.has(soInfo.name + ':' + numAt(soFidx, row))
+                    && (soInfo.ownVideo === undefined || numAt(soVideo, row) === soInfo.ownVideo)) continue;
                 soInfo.storeOutIndex.set(row, runningOut++);
             }
         }
@@ -693,9 +810,17 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     // Returned `cam` is intentionally slim — no `framesData`/`instancesData`/
     // `rowMap` references, so the caller's eviction of `session.lazyLoader`
     // actually frees that memory instead of it surviving via this result.
-    var camOut = cam.map(function (c) { return { name: c.name, videoIndex: c.videoIndex, trackBase: c.trackBase }; });
+    var camOut = cam.map(function (c) {
+        return {
+            name: c.name, videoIndex: c.videoIndex, trackBase: c.trackBase,
+            nativeToHeader: c.nativeToHeader || null, skeletonPairs: c.skeletonPairs || null,
+        };
+    });
 
-    return { sioSession: sioSession, overlayLfs: overlayLfs, cam: camOut };
+    return {
+        sioSession: sioSession, overlayLfs: overlayLfs, cam: camOut,
+        outsideVideos: outsideVideos, sharedTrackBase: _sharedTrackBase, sharedSkeletonPairs: sharedSkeletonPairs,
+    };
 }
 
 /**
@@ -731,7 +856,25 @@ export async function openProjectWriter(ctx, allSioSessions, provenance) {
 }
 
 /**
- * Remap a shared store's `framesData.video` column (and the video-keyed
+ * `pairs` ([store video id, header index]) as a Map, after checking it covers every
+ * id the store uses. Pass 2 of a multi-session save re-reads the file: a video id
+ * pass 1 never saw has no place in the header. Refuse, rather than write its rows
+ * at whatever index that id happens to be.
+ */
+function _headerMapFor(store, pairs) {
+    var map = new Map(pairs);
+    var used = storeVideoIds(store);
+    for (var i = 0; i < used.length; i++) {
+        if (!map.has(used[i])) {
+            throw new Error('Save: a loaded file has frames on video ' + used[i] +
+                ', which were not there when the save started. Did it change on disk? Nothing was written.');
+        }
+    }
+    return map;
+}
+
+/**
+ * Remap a store's `framesData.video` column (and the video-keyed
  * annotation/negative-frame keys) from NATIVE store video ids onto the output
  * header's GLOBAL video indices, as a shallow wrapper — the underlying columns
  * are shared, only the video column is copied (O(nFrames) numbers). Needed
@@ -742,17 +885,16 @@ export async function openProjectWriter(ctx, allSioSessions, provenance) {
  * `appendStore`/`collectStoreAnnotations` read (framesData, instancesData,
  * points/predPoints, negativeFrames, the 5 `_*ByFrame` maps + 5
  * `_undistributed*` lists).
+ *
+ * `headerByNative` must cover every id the store uses (`_headerMapFor` checks):
+ * an id left raw could equal another video's header index.
  */
-function _remapSharedStoreVideos(store, headerByNative) {
+function _remapStoreVideos(store, headerByNative) {
     var fd = store.framesData || {};
     var vidCol = fd.video || [];
     var n = vidCol.length;
     var remapped = new Float64Array(n);
-    for (var r = 0; r < n; r++) {
-        var raw = Number(vidCol[r]);
-        var mapped = headerByNative.get(raw);
-        remapped[r] = mapped !== undefined ? mapped : raw;
-    }
+    for (var r = 0; r < n; r++) remapped[r] = headerByNative.get(Number(vidCol[r]));
     function remapKey(key) {
         var s = String(key);
         var ci = s.indexOf(':');
@@ -788,6 +930,34 @@ function _remapSharedStoreVideos(store, headerByNative) {
 }
 
 /**
+ * One `appends` entry, with the store's skeleton ids onto the header's. `pairs` is
+ * [store skeleton id, header index] (`buildSessionRefGraph`). The usual store uses
+ * one skeleton and needs only `appendStore`'s offset; one using more gets a copy of
+ * that one column, as `_remapStoreVideos` does for the video column.
+ */
+function _appendWithHeaderSkeletons(target, opts, pairs) {
+    if (!pairs || pairs.length === 0) return [target, opts];
+    if (pairs.length === 1) {
+        opts.skeletonOffset = pairs[0][1] - pairs[0][0];
+        return [target, opts];
+    }
+    var headerOf = new Map(pairs);
+    var col = target.instancesData.skeleton;
+    var remapped = new Float64Array(col.length);
+    for (var j = 0; j < col.length; j++) {
+        var header = headerOf.get(Number(col[j]));
+        if (header === undefined) {
+            throw new Error('Save: a loaded file has poses on skeleton ' + Number(col[j]) +
+                ', which were not there when the save started. Did it change on disk? Nothing was written.');
+        }
+        remapped[j] = header;
+    }
+    var out = Object.create(target);
+    out.instancesData = Object.assign({}, target.instancesData, { skeleton: remapped });
+    return [out, opts];
+}
+
+/**
  * PASS 2, per session: stream this session's 2D data into an already-open
  * writer, using the offsets computed for it in pass 1
  * (`refGraphResult.cam[i].videoIndex`/`.trackBase`). Requires
@@ -817,26 +987,33 @@ export async function streamSessionIntoWriter(writer, session, refGraphResult, o
         // column whenever they differ (Python-written files, multi-session
         // saves where this session's videos sit at a global offset).
         var anyCam = refGraphResult.cam[0];
-        if (anyCam) {
-            var sLabels = loader.labelsByCam.get(anyCam.name);
+        var outside = refGraphResult.outsideVideos || [];
+        if (anyCam || outside.length > 0) {
+            var sLabels = loader._projectLabels || (anyCam ? loader.labelsByCam.get(anyCam.name) : null);
             var sStore = sLabels && sLabels._lazyDataStore;
             if (sStore) {
-                var headerByNative = new Map(); // native store video id -> global header video index
+                var nativeToHeader = []; // [native store video id, global header video index]
                 var identityMap = true;
                 for (var hci = 0; hci < refGraphResult.cam.length; hci++) {
                     var hc = refGraphResult.cam[hci];
-                    var hNat = (loader.videoIdByCam && loader.videoIdByCam.has(hc.name))
-                        ? loader.videoIdByCam.get(hc.name) : hc.videoIndex;
-                    headerByNative.set(hNat, hc.videoIndex);
+                    var hNat = nativeVideoId(loader, hc);
+                    nativeToHeader.push([hNat, hc.videoIndex]);
                     if (hNat !== hc.videoIndex) identityMap = false;
                 }
+                for (var hoi = 0; hoi < outside.length; hoi++) {
+                    nativeToHeader.push([outside[hoi].native, outside[hoi].videoIndex]);
+                    if (outside[hoi].native !== outside[hoi].videoIndex) identityMap = false;
+                }
+                var headerByNative = _headerMapFor(sStore, nativeToHeader);
                 var appendTarget = sStore;
                 if (!identityMap) {
                     console.log('[slp-streaming-write] shared store: remapping native video ids -> header indices:',
                         Array.from(headerByNative.entries()).map(function (e) { return e[0] + '->' + e[1]; }).join(', '));
-                    appendTarget = _remapSharedStoreVideos(sStore, headerByNative);
+                    appendTarget = _remapStoreVideos(sStore, headerByNative);
                 }
-                appends.push([appendTarget, { videoIndexOffset: 0, trackOffset: anyCam.trackBase }]);
+                appends.push(_appendWithHeaderSkeletons(appendTarget,
+                    { videoIndexOffset: 0, trackOffset: anyCam ? anyCam.trackBase : refGraphResult.sharedTrackBase },
+                    refGraphResult.sharedSkeletonPairs));
             }
         }
     } else {
@@ -845,7 +1022,11 @@ export async function streamSessionIntoWriter(writer, session, refGraphResult, o
             var labels = loader.labelsByCam.get(camInfo.name);
             var store = labels && labels._lazyDataStore;
             if (!store) continue;
-            appends.push([store, { videoIndexOffset: camInfo.videoIndex, trackOffset: camInfo.trackBase }]);
+            appends.push(camInfo.nativeToHeader
+                ? _appendWithHeaderSkeletons(_remapStoreVideos(store, _headerMapFor(store, camInfo.nativeToHeader)),
+                    { videoIndexOffset: 0, trackOffset: camInfo.trackBase }, camInfo.skeletonPairs)
+                : _appendWithHeaderSkeletons(store,
+                    { videoIndexOffset: camInfo.videoIndex, trackOffset: camInfo.trackBase }, camInfo.skeletonPairs));
         }
     }
     if (!onProgress || typeof writer.appendStoreAsync !== 'function') {

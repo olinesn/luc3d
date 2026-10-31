@@ -1847,6 +1847,14 @@ export class Session {
          * @type {Object|null}
          */
         this.fileProvenance = null;
+        /**
+         * Eager loads only: frames of the loaded .slp on a video no session
+         * names. Not shown; a save writes them back on their own video
+         * (`import-export/outside-frames.js`). A lazy session keeps these in its
+         * store. Null when there are none.
+         * @type {{videos: Array, tracks: string[], frames: Array<{video: number, frameIdx: number, instances: Instance[]}>}|null}
+         */
+        this.outsideFrames = null;
     }
 
     addIdentity(name, color) {
@@ -3534,6 +3542,9 @@ export class Session {
                 }
             }
         }
+        // Poses on a video no session names get an empty slot: nobody can click
+        // a node on a frame that is not shown, so none is placed there.
+        for (const inst of this._outsideFrameInstances()) inst.insertNodeAt(inst.numNodes);
         // Keep the 3D node-aligned with the 2D. `points3d` is a flat
         // Float64Array(3N) on the SAME node index space, so a group left at the
         // old length would report the new node as triangulated-at-garbage the
@@ -3553,6 +3564,12 @@ export class Session {
                 group.markDirty();
             }
         }
+    }
+
+    /** Every pose in `outsideFrames`. */
+    *_outsideFrameInstances() {
+        if (!this.outsideFrames) return;
+        for (const frame of this.outsideFrames.frames) yield* frame.instances;
     }
 
     /**
@@ -3589,6 +3606,7 @@ export class Session {
                 }
             }
         }
+        for (const inst of this._outsideFrameInstances()) inst.removeNodeAt(nodeIdx);
         // Mark all instance groups as dirty (triangulation needs recomputing)
         // and splice the removed node out of their 3D, re-pooling it for the
         // same reason as in `propagateNodeAdded`.
