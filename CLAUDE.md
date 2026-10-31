@@ -322,6 +322,8 @@ node tests/e2e/<name>.mjs           # Playwright, one file per behavior
 
 `scripts/json_to_slp.py`, `scripts/json_to_h5.py` (JSON export → `.slp`/HDF5; need h5py, numpy). `scripts/validate_slp_sleap_compat.py` asserts LUCID `.slp` files load in SLEAP (`--compare`, `--metadata-roundtrip`); run with `uv run --with sleap-io --with numpy --with h5py python …`.
 
+`scripts/sleap_backward.py` runs a SLEAP centroid + centered-instance pair backward (skeleton in, image out) and `scripts/sleap_negatives_compare.py` compares centroid models for seeing animals that aren't there (e.g. with vs without `use_negative_frames`). Run both with sleap-nn's Python; each file's header explains its use and its measured design choices. Their later, larger versions live in `olinesn/sleap-io` under `contrib/synthetic_sessions/`.
+
 ## Maintenance
 
 - **When modifying any module, update its `MODULES.md` entry** (purpose, exports, dependencies).
