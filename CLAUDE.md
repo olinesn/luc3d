@@ -139,8 +139,10 @@ On a lazy project `session.frameGroups` holds only hydrated frames. Playback evi
 - To read member 2D on a frame you do not hydrate, bracket the read with `hydrateFrameMembers2d`/`releaseFrameMembers2d` (as `frameCropGeometry` in `ui/image-embedder.js` does).
 - **A hydrated row keeps its occlusion** (`lazyRowInstance`, `pose/triangulation.js`): a save rewrites a camera-frame holding a user instance from the resident objects.
 - **A `.slp` with no recording session opens lazily too** (File ▸ Open routes by size alone): one placeholder camera per video (`cameraNamesFromVideos`, also what the eager paths name them with; names must differ). Eager crashes the tab on 8 real cameras (MODULES.md `loading/session-loader.js`), so size is never a reason to fall back. Only what the one store cannot hold is (`openProjectSlp`'s `eagerReason`). A later calibration renames through `Session.renameCameraInAllData`, which reaches the loader (`SioLazyLoader.renameCamera`); a save refuses poses left on a camera the session lacks.
+- **A lazy session stays loaded for as long as it is in the project.** File ▸ Save (`keepLoaded`) and `switchSession` close nothing: its groups, 3D and edits exist nowhere else, and a `File` cannot be read again once a save in place has overwritten it. Anything that drops a session's loader and groups must set `lazyEvicted`, or the next Save writes it with no poses and no word.
+- **A save that cannot write every session refuses first** (`saveRefusal`, asked by `refuseSave` before the save picker, which can empty the file it is given): a session with `lazyEvicted`, or a lazy session with frames out of memory in a project that also has an eager one.
 
-Tests: `test-lazy-residency.mjs`, e2e `lazy-playback-eviction`, `sequence-lazy-workflow`, `lazy-open-plain-slp`.
+Tests: `test-lazy-residency.mjs`, e2e `lazy-playback-eviction`, `sequence-lazy-workflow`, `lazy-open-plain-slp`, `lazy-session-stays-saveable`.
 
 ## `.slp` files newer than LUC3D can read
 

@@ -1857,6 +1857,12 @@ export class Session {
         this.numAnimals = null;
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
+        /**
+         * True once `commitSessionForMultiSessionSave` has dropped this session's
+         * loader and groups on purpose. No save will write it from then on
+         * (`saveRefusal`, import-export/save-load.js). File ▸ Save never does this.
+         */
+        this.lazyEvicted = false;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */
         this.trackOccupancy = null;
         /**

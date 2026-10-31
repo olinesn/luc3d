@@ -287,6 +287,12 @@ export function newProject(force) {
  * @returns {boolean} true when serialization is safe to proceed
  */
 function assertJsonSaveCoversProject(session) {
+    var evictedMsg = evictedSessionsRefusal(session ? [session] : []);
+    if (evictedMsg) {
+        console.error('[save-load] ' + evictedMsg);
+        setStatus(evictedMsg, 'error');
+        return false;
+    }
     var loader = session && session.lazyLoader;
     if (!loader) return true;                       // fully-resident project: fine
     var total = loader.nFrames || 0;
@@ -373,9 +379,8 @@ async function ensureSleapIO() {
 }
 
 export function markDirty() {
-    // Per-session dirty (active-session memory model): the switch-away save
-    // prompt and safe lazy-eviction key off THIS flag, so it must be set even
-    // when the global flag is already true from another session.
+    // Which sessions have unsaved changes, as well as whether any does: set it
+    // even when the global flag is already true from another session.
     if (state.session) state.session.isDirty = true;
     if (state.isDirty) return;
     state.isDirty = true;
@@ -578,6 +583,71 @@ function sessionsToSave() {
     return state.sessions.length > 0 ? state.sessions : [state.session];
 }
 
+/**
+ * The words refusing to save `sessions` when one was evicted on purpose
+ * (`commitSessionForMultiSessionSave` without `keepLoaded`), or null. Nothing is
+ * left of its poses or groups but what the file it came from holds, so no writer
+ * can include it. Nothing in the app evicts a session any more; this is what keeps
+ * a caller that does from then saving it empty.
+ */
+function evictedSessionsRefusal(sessions) {
+    var evicted = sessions.filter(function (s) { return s && s.lazyEvicted; });
+    if (evicted.length === 0) return null;
+    return 'Cannot save: ' + evicted.map(function (s) { return '"' + (s.name || 'unnamed session') + '"'; }).join(', ') +
+        (evicted.length > 1 ? ' are' : ' is') + ' no longer loaded, so saving would write ' +
+        (evicted.length > 1 ? 'them' : 'it') + ' with no poses. Open the project again, then save.';
+}
+
+/**
+ * Why `sessions` must not be saved at all, in words for the status bar, or null.
+ * `streaming` says the save would take the streaming path, which writes every
+ * frame of every session.
+ *
+ * MIXED PROJECT. The eager builder iterates only the RESIDENT `frameGroups`,
+ * which is correct for a fully-resident project and silently catastrophic for a
+ * lazy one. The streaming path requires EVERY session to be lazy, so a project
+ * with one lazy session and one hand-labeled session goes eager — and would write
+ * a structurally valid .slp containing the resident handful of the lazy session's
+ * frames (31 of 180,210 in the measured case) with no error. Same precedent as
+ * `assertJsonSaveCoversProject` above. Sessions that are merely SMALL are
+ * unaffected: a non-lazy session has every frame resident by definition.
+ */
+function saveRefusal(sessions, streaming) {
+    var evictedMsg = evictedSessionsRefusal(sessions);
+    if (evictedMsg) return evictedMsg;
+    if (streaming) return null;
+    var truncated = [];
+    for (var i = 0; i < sessions.length; i++) {
+        var s = sessions[i];
+        var loader = s && s.lazyLoader;
+        if (!loader) continue;
+        var total = loader.nFrames || 0;
+        var resident = s.frameGroups ? s.frameGroups.size : 0;
+        if (total > 0 && resident < total) {
+            truncated.push('"' + (s.name || 'session ' + i) + '" (' +
+                resident.toLocaleString('en-US') + ' of ' + total.toLocaleString('en-US') + ' frames in memory)');
+        }
+    }
+    if (truncated.length === 0) return null;
+    return 'Cannot save: this project mixes lazily-loaded and fully-loaded sessions, and the combined ' +
+        'save can only write frames that are in memory: ' + truncated.join('; ') + '. Saving would drop ' +
+        'the rest. File ▸ Export SLEAP File Per Session writes the 2D poses of the session on screen.';
+}
+
+/**
+ * The check `quickSave` and `saveProjectSlp` run before anything else, the save
+ * picker above all (picking an existing file can already empty it). Says why in
+ * the status bar and returns true when the save must not start.
+ */
+function refuseSave() {
+    var sessions = sessionsToSave();
+    var refusal = saveRefusal(sessions, sessions.every(function (s) { return !!(s && s.lazyLoader); }));
+    if (!refusal) return false;
+    console.error('[save-slp] ' + refusal);
+    setStatus(refusal, 'error');
+    return true;
+}
+
 /** The views of `session`: on screen for the active one, its stash otherwise. */
 function sessionViewsForSave(session) {
     if (session === state.session) return state.views || [];
@@ -680,6 +750,15 @@ async function buildSlpBytes(opts) {
 
     var sessionsToExport = sessionsToSave();
 
+    // Before anything changes. `quickSave` and `saveProjectSlp` have asked already;
+    // this one knows the streaming writer is really there.
+    var refusal = saveRefusal(sessionsToExport, isStreamingSave(sessionsToExport, SIO));
+    if (refusal) {
+        console.error('[save-slp] ' + refusal);
+        setStatus(refusal, 'error');
+        throw new Error(refusal);
+    }
+
     // Every path below writes one video per `session.cameras` entry and picks
     // the views, videos and poses to write by that list — a view or pose whose
     // camera is missing is dropped without a word. An uncalibrated session
@@ -701,7 +780,8 @@ async function buildSlpBytes(opts) {
     // streaming writer so the whole ~108k×N-frame graph is never resident and no
     // unvisited frame is dropped (the eager path below iterates only the resident
     // `frameGroups`). Requires EVERY session to be lazy-loaded — a mixed project
-    // (some hand-labeled, some lazy) falls through to the eager path below.
+    // (some hand-labeled, some lazy) is refused above, unless its lazy sessions
+    // happen to have every frame in memory.
     // When `opts.sink` is given, the finished bytes stream straight to it (e.g. a
     // `FileSystemWritableFileStream`) instead of being materialized as one big
     // `Uint8Array` — for a multi-GB multi-session project that in-memory copy is
@@ -741,42 +821,8 @@ async function buildSlpBytes(opts) {
             return await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles,
                 { sink: opts.sink || undefined, provenance: buildSaveProvenance([lazySess]), onProgress: onProgress });
         }
-        return await saveAllSessionsStreaming(sessionsToExport, { sink: opts.sink, onProgress: onProgress });
-    }
-
-    // MIXED PROJECT GUARD. The eager builder below iterates only the RESIDENT
-    // `frameGroups`, which is correct for a fully-resident project and silently
-    // catastrophic for a lazy one. The streaming path above requires EVERY
-    // session to be lazy, so a project with one lazy session and one
-    // hand-labeled session falls through to here — and writes a structurally
-    // valid .slp containing the resident handful of the lazy session's frames
-    // (31 of 180,210 in the measured case) with no error. That is silent data
-    // loss on the primary save path, so refuse instead: same precedent as
-    // `assertJsonSaveCoversProject` above. Sessions that are merely SMALL are
-    // unaffected — a non-lazy session has every frame resident by definition,
-    // and an all-lazy project never reaches this line.
-    var _truncated = [];
-    for (var _gi = 0; _gi < sessionsToExport.length; _gi++) {
-        var _gs = sessionsToExport[_gi];
-        var _gl = _gs && _gs.lazyLoader;
-        if (!_gl) continue;
-        var _gTotal = _gl.nFrames || 0;
-        var _gResident = _gs.frameGroups ? _gs.frameGroups.size : 0;
-        if (_gTotal > 0 && _gResident < _gTotal) {
-            _truncated.push('"' + (_gs.name || 'session ' + _gi) + '" (' +
-                _gResident.toLocaleString() + ' of ' + _gTotal.toLocaleString() + ' frames resident)');
-        }
-    }
-    if (_truncated.length > 0) {
-        var _msg = 'Cannot save: this project mixes lazily-loaded and fully-loaded ' +
-            'sessions, and the combined save path can only write frames that are ' +
-            'currently in memory — ' + _truncated.join('; ') + '. Saving would ' +
-            'silently drop the rest. Export the lazy session(s) on their own ' +
-            '(File → Save As with only those sessions), or use "Export SLEAP File ' +
-            'Per Session".';
-        console.error('[save-slp] ' + _msg);
-        setStatus(_msg, 'error');
-        throw new Error(_msg);
+        // The project goes on being worked on after a save: keep every session loaded.
+        return await saveAllSessionsStreaming(sessionsToExport, { sink: opts.sink, onProgress: onProgress, keepLoaded: true });
     }
 
     // The eager writer below runs without a break: show its one step first.
@@ -995,19 +1041,26 @@ async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStor
  * as a plain object, not module state, so it can be parked on `state` across
  * interactive steps (e.g. a future "commit this session, then load the next"
  * UI flow) without this module needing to know about that UI.
+ *
+ * `opts.keepLoaded` (File ▸ Save) leaves every session exactly as it is and
+ * streams from the loaders already open, which reads nothing back from the source
+ * files. Without it the save EVICTS every session and leaves it evicted.
  */
-export function beginMultiSessionSave() {
-    return { ctx: createProjectWriterContext(), pending: [] };
+export function beginMultiSessionSave(opts) {
+    return { ctx: createProjectWriterContext(), pending: [], keepLoaded: !!(opts && opts.keepLoaded) };
 }
 
 /**
  * PASS 1, per session: `session` must currently have compute results
  * (Track All/Triangulate All already run — this function does not run them)
  * and an open `lazyLoader`. Builds its ref graph against `handle.ctx`'s
- * running counter, then EVICTS the session's heavy state (lazy loader,
- * `frameGroups`, `instanceGroups`) — safe because the small ref graph +
- * cheap `sourceFiles` handles are kept in `handle.pending`, plus, for a store
- * edited in memory, its frame + instance columns (`keepEditedStoreColumns`).
+ * running counter. Unless the handle says `keepLoaded`, it then EVICTS the
+ * session's heavy state (lazy loader, `frameGroups`, `instanceGroups`), which
+ * the save itself can do without because the small ref graph + cheap
+ * `sourceFiles` handles are kept in `handle.pending`, plus, for a store edited
+ * in memory, its frame + instance columns (`keepEditedStoreColumns`). The session
+ * itself cannot: its groups, 3D and edits now exist only in the file being
+ * written, so it is marked `lazyEvicted` and no later save will touch it.
  *
  * This is the piece that must be interleaved with each session's OWN
  * compute step for truly memory-bounded end-to-end processing of sessions
@@ -1031,10 +1084,14 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     var sessVideoFiles = state.videoFiles.filter(function (vf) {
         return session.cameras.some(function (c) { return c.name === vf.assignedCamera; });
     });
+    var refGraph = await buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx, onProgress);
+    if (handle.keepLoaded) {
+        handle.pending.push({ session: session, refGraph: refGraph });
+        return;
+    }
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
     var cameraRenames = session.lazyLoader.cameraRenames;
     var wasSharedStore = !!session.lazyLoader._sharedStore;
-    var refGraph = await buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx, onProgress);
     // A store edited in memory is not what pass 2 will read back from the
     // files: keep its frame + instance columns (`keepEditedStoreColumns`).
     var editedColumns = keepEditedStoreColumns(session.lazyLoader);
@@ -1050,6 +1107,7 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     session.lazyLoader = null;
     session.frameGroups = new Map();
     session.instanceGroups = new Map();
+    session.lazyEvicted = true;
     console.log('[save-slp] pass 1/2: committed ref graph for session', session.name || '(unnamed)', '- evicted its lazy loader');
     // See `encourageGC` — dereferencing doesn't force reclamation; nudge the
     // engine toward a real (mark-compact) collection before the next
@@ -1061,8 +1119,9 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
  * PASS 2: open the writer (every session's ref graph is now final) then
  * re-stream each session's 2D data from a freshly (cheaply) reopened lazy
  * loader — no recompute needed, `appendStore` reads straight from the
- * columnar store — evicting again after each. Returns the finished bytes
- * (or null if `opts.sink` was given).
+ * columnar store — evicting again after each. With `keepLoaded`, from the loader
+ * that is already open instead. Returns the finished bytes (or null if
+ * `opts.sink` was given).
  */
 export async function finalizeMultiSessionSave(handle, opts) {
     // Per-phase timing — a merged save of a tracked+triangulated project takes
@@ -1088,14 +1147,18 @@ export async function finalizeMultiSessionSave(handle, opts) {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
             if (onProgress) await onProgress('frames', j, handle.pending.length, 'sessions');
-            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.cameraRenames);
-            if (p.editedColumns) restoreEditedStoreColumns(p.session.lazyLoader, p.editedColumns);
+            if (!handle.keepLoaded) {
+                await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.cameraRenames);
+                if (p.editedColumns) restoreEditedStoreColumns(p.session.lazyLoader, p.editedColumns);
+            }
             await streamSessionIntoWriter(writer, p.session, p.refGraph);
-            p.session.lazyLoader.close();
-            p.session.lazyLoader = null;
             console.log('[save-slp] pass 2/2: streamed session', p.session.name || j, 'into the project writer');
             _lap('stream session ' + (p.session.name || j));
-            await encourageGC(1000);
+            if (!handle.keepLoaded) {
+                p.session.lazyLoader.close();
+                p.session.lazyLoader = null;
+                await encourageGC(1000);
+            }
         }
         if (onProgress) await onProgress('finish');
         var _out = await finalizeProjectWriter(writer, opts);
@@ -1122,9 +1185,11 @@ export async function finalizeMultiSessionSave(handle, opts) {
  * each session's OWN compute step (see `commitSessionForMultiSessionSave`
  * for that), so it does not, on its own, bound peak memory for sessions
  * whose compute alone approaches the ceiling.
+ *
+ * `opts.keepLoaded`: see `beginMultiSessionSave`. File ▸ Save always passes it.
  */
 export async function saveAllSessionsStreaming(sessions, opts) {
-    var handle = beginMultiSessionSave();
+    var handle = beginMultiSessionSave({ keepLoaded: opts && opts.keepLoaded });
     var onProgress = (opts && opts.onProgress) || undefined;
     for (var i = 0; i < sessions.length; i++) await commitSessionForMultiSessionSave(handle, sessions[i], onProgress);
     return await finalizeMultiSessionSave(handle, opts);
@@ -1150,6 +1215,7 @@ export async function quickSave() {
         setStatus('Save already in progress...', 'warning');
         return;
     }
+    if (refuseSave()) return;
 
     try {
         // If no file handle yet, prompt for one
@@ -1222,14 +1288,14 @@ export async function quickSave() {
     } catch (err) {
         state.isSaving = false;
         hideLoading();
+        // `writable` (if it got that far) already has an open swap file —
+        // abort() discards it WITHOUT touching the original file at
+        // `state.slpFileHandle`, unlike close(), which would overwrite it
+        // with zero bytes.
+        if (typeof writable !== 'undefined' && writable && typeof writable.abort === 'function') {
+            try { await writable.abort(); } catch (e) { /* best effort */ }
+        }
         if (err && err.name === 'SaveCancelledError') {
-            // `writable` (if it got that far) already has an open swap file —
-            // abort() discards it WITHOUT touching the original file at
-            // `state.slpFileHandle`, unlike close(), which would overwrite it
-            // with zero bytes.
-            if (typeof writable !== 'undefined' && writable && typeof writable.abort === 'function') {
-                try { await writable.abort(); } catch (e) { /* best effort */ }
-            }
             setStatus('Save cancelled', 'warning');
             return;
         }
@@ -1239,6 +1305,7 @@ export async function quickSave() {
 }
 
 export async function saveAs() {
+    if (state.session && refuseSave()) return;
     // Force a new file picker regardless of existing handle
     state.slpFileHandle = null;
     await quickSave();
@@ -1254,6 +1321,7 @@ export async function saveProjectSlp() {
         setStatus('Save already in progress...', 'warning');
         return;
     }
+    if (refuseSave()) return;
     // In Brave the save-file picker is OFF by default, so Save lands here: the
     // whole file is built in memory and downloaded (risky for a large
     // project, and never updates the file in place). Say why, and how to fix.

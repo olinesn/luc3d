@@ -914,8 +914,7 @@ try {
         const cams = s.cameras.map(c => c.name);
         const groupsOf = (f) => (s.instanceGroups.get(f) || []).slice();
         // Each delete starts from a CLEAN project, so `dirty[k]` is that delete's
-        // own doing: an unmarked delete is lost without a prompt on closing the
-        // tab, or on switching sessions (which evicts the session's store).
+        // own doing: an unmarked delete is lost without a prompt on closing the tab.
         const at = async (f) => {
             await tri.ensureLazyFrameData(f); st.currentFrame = f; im.clearSelection(); saveLoad.clearDirty();
         };

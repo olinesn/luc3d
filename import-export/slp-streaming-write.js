@@ -38,6 +38,11 @@
  *   Track All/Triangulate needed, ~1.2 GB not ~3.7 GB), stream its frames via
  *   `streamSessionIntoWriter()`, evict again.
  *
+ * That eviction is for a caller that computes one session at a time, and leaves the
+ * session unusable (`commitSessionForMultiSessionSave`, import-export/save-load.js).
+ * File ▸ Save runs the same two passes without it: every session stays loaded and
+ * pass 2 streams from the loader that is already open.
+ *
  * `appendStore` streams each camera's columnar `LazyDataStore` window-by-window
  * into resizable HDF5 datasets, constructing zero per-frame JS objects — so
  * nothing more than one internal window is ever resident. The 2D pose comes

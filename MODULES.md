@@ -1550,6 +1550,9 @@ session graph that holds them.
     been asked, which is what makes Track Frame / Track All prompt. Saved as
     `metadata.lucid.numAnimals` (`import-export/visibility-metadata.js`), read
     and set through `pose/tracker.js`.
+  - **`lazyEvicted`** — set by `commitSessionForMultiSessionSave` when it drops
+    the session's loader and groups on purpose; no save writes the session after
+    that (`saveRefusal`, `import-export/save-load.js`). File ▸ Save never sets it.
   - `numFrames` returns `lazyLoader.nFrames` on a lazy session (`frameGroups`
     there holds only the resident window) and `frameGroups.size` otherwise.
   - **Tracks and identities are per-session.** The constructor copies the
@@ -8420,7 +8423,7 @@ multi-video docking layout.
 - `../loading/video.js` — `OnDemandVideoDecoder`, `ZOOM_PRESET_PERCENTS`,
   `zoomRatioLabel` (the zoom badge's preset menu).
 - `../import-export/save-load.js` — `setStatus`, `showLoading`,
-  `hideLoading`, `quickSave`, `markDirty`.
+  `hideLoading`, `markDirty`.
 - `./video-filters.js` — the `CONTRAST_*` / `BRIGHTNESS_*` / `ROTATION_*`
   bounds, `clampContrast` / `clampBrightness` / `clampRotation` /
   `clampRotationSetting`, `buildVideoFilter`, and the three per-session
@@ -8462,16 +8465,17 @@ brace-walked `switchSession` test harnesses
 `test-switchsession-parallel-decoders.js`) need no extra stub. The same
 constraint shapes the inlined `_uploadedCameras` recompute.
 
-**Active-session memory model — dirty prompt + eviction.** `switchSession`
-prompts Save/Discard/Cancel when leaving a dirty session (`_leaving.isDirty`,
-per-session via `markDirty`/`clearDirty`); Save proceeds only if `quickSave()`
-cleared the flag. It then frees the outgoing session's lazy state: if
-`_leaving.lazyLoader` is set, it is closed and
-`frameGroups`/`instanceGroups`/`triangulationResults` reset. On a multi-session
-project a successful save (`saveAllSessionsStreaming`) has usually evicted every
-`lazyLoader` already; this is what reclaims the memory for a single-lazy-session
-project or the Discard path. Re-activating an evicted session requires reopening
-it from scratch — there is no lazy re-hydration within one open project `.slp`.
+**Switching sessions unloads nothing.** `switchSession` leaves the outgoing
+session as it is. A lazy session keeps its `lazyLoader`, `frameGroups` and
+`instanceGroups`: only it holds its groups, 3D and edits, and a save writes every
+session. It used to close the loader and empty the groups, and nothing ever
+reopened them, so the session stayed blank and the next Save wrote it with no
+poses. That included the multi-session folder load, whose last step is
+`switchSession(0)`. So there is no save prompt on a switch (nothing is lost), and
+`isDirty` stays set until a save. What a left session holds in memory is what it
+held when loaded plus its groups, so each session's Track All adds to the tab's JS
+heap and a very large project can now reach the ceiling where it used to lose data
+instead. Covered by `tests/e2e/lazy-session-stays-saveable.mjs`.
 
 **User-facing features.** Video pane docking (drag/move/resize), view
 strip (top), session strip (bottom), per-pane brightness/contrast/rotation
@@ -12751,9 +12755,10 @@ synchronous.
 - Fields `nFrames`, `skeleton`, `trackNames`, `videos`, `trackOccupancy`,
   `videoIdByCam` (`null` on the per-camera path), `isSync = true` (so
   `batchLoadLazyFrames` takes its worker-free path), and `sourceFiles` (camName →
-  the `File` it was opened from — a cheap lazy handle, kept so the multi-session
-  streaming save's pass 2 can reopen the same cameras,
-  `reopenSessionLazyLoader` in `import-export/save-load.js`).
+  the `File` it was opened from — a cheap lazy handle, kept so a multi-session
+  streaming save that evicts can reopen the same cameras in pass 2,
+  `reopenSessionLazyLoader` in `import-export/save-load.js`; File ▸ Save never
+  does, and a `File` overwritten by a save in place cannot be read again).
 
 **Track indices: one list, every store re-indexed into it (`_unifyTracks`).**
 `session.tracks` for a per-camera folder is the union of the cameras' own track
@@ -14600,11 +14605,19 @@ eager path shows them.
   (`import-export/slp-streaming-write.js`) for a single lazy session, or
   `saveAllSessionsStreaming(sessions)` (below) for multiple — instead of the
   eager `buildSlpLabelsAllViews` + `saveSlpToBytes` (which would OOM and
-  silently drop every unvisited frame). A mixed project (any session without a
-  `lazyLoader`, e.g. hand-labeled) falls through to the eager path, whose peak
-  is the `Labels` graph rather than the writer (the vendored
-  `writeLabeledFrames` appends through fixed-size buffers — `luc3d eager-save`
-  patch — and `buildSlpLabelsAllViews` uses `makePooledSioInstances`).
+  silently drop every unvisited frame). A project with no lazy session takes the
+  eager path, whose peak is the `Labels` graph rather than the writer (the
+  vendored `writeLabeledFrames` appends through fixed-size buffers — `luc3d
+  eager-save` patch — and `buildSlpLabelsAllViews` uses `makePooledSioInstances`).
+- **A save that cannot write every session refuses, and changes nothing.**
+  `saveRefusal(sessions, streaming)` (internal) gives the words for the status bar
+  or null: a session evicted on purpose (`lazyEvicted`, `evictedSessionsRefusal`),
+  or a project mixing lazy and eager sessions while a lazy one has frames out of
+  memory (the eager writer sees resident frames only). `quickSave`, `saveAs` and
+  `saveProjectSlp` ask first (`refuseSave`), before the save picker, because picking
+  an existing file can already empty it; `buildSlpBytes` asks again before it
+  changes anything. A save that fails later aborts its `FileSystemWritableFileStream`,
+  so the file stays as it was. `saveProject` (JSON) refuses an evicted session too.
   **Large-project size warning:** before entering the streaming path,
   `estimateSaveCagePressureBytes(sessionsToExport)` (exported) prices the
   RESIDENT state the merged save holds in V8's capped heap (per-object costs
@@ -14621,12 +14634,21 @@ eager path shows them.
   instead of `close()`, so a cancelled save doesn't overwrite the destination
   file with zero bytes. Bypass via `opts.skipSizeWarning` on `buildSlpBytes`.
   Covered by `tests/test-save-load-lazy-risk.js`.
-- **`saveAllSessionsStreaming(sessions)`** / **`beginMultiSessionSave()`** +
+- **`saveAllSessionsStreaming(sessions, opts)`** / **`beginMultiSessionSave(opts)`** +
   **`commitSessionForMultiSessionSave(handle, session)`** +
   **`finalizeMultiSessionSave(handle, opts)`** — the multi-session
   generalization of the streaming writer (see `slp-streaming-write.js`'s
   two-pass split). `saveAllSessionsStreaming` is the wrapper for when every
-  session is already computed and resident. The three-piece API lets a caller interleave
+  session is already computed and resident.
+  **`opts.keepLoaded` is what File ▸ Save passes:** every session stays exactly as
+  it is, and pass 2 streams from the loaders already open, as the single-session
+  save does. That reads nothing back from the source files, so it cannot fail on a
+  `File` that a save in place has since overwritten. Its tables equal the evicting
+  writer's value for value (`tests/e2e/lazy-session-stays-saveable.mjs` §D).
+  Everything below this point describes the evicting mode, which nothing in the app
+  uses: **it leaves each session marked `lazyEvicted`, with no loader and no groups,
+  and no later save will write it.**
+  The three-piece API lets a caller interleave
   PASS 1's per-session commit (`commitSessionForMultiSessionSave` — builds the
   ref graph, then evicts that session's `lazyLoader`/`frameGroups`/
   `instanceGroups`) with that session's OWN compute step, one session at a
