@@ -1152,6 +1152,12 @@ export async function handleLoadSlpFile(slpFile) {
         // The file's provenance (e.g. campy-live-export's records), written back on save.
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), slpSessIdx);
+        // What the file says about each camera's video, for a save with none loaded.
+        session.fileVideos = new Map();
+        for (var fvk in videoIdxToCameraName) {
+            var fileVideo = slpData.videos[parseInt(fvk)];
+            if (fileVideo && !fileVideo.embedded) session.fileVideos.set(videoIdxToCameraName[fvk], fileVideo);
+        }
         readVisibilityMetadata(session, earlyVisibility);
         // Temporal Smoothing's last run (the groups' sources come with the 3D).
         readSmoothingMetadata(session, earlyVisibility);
