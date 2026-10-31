@@ -2588,7 +2588,7 @@ ids; into a non-empty one matches BY NAME and returns the file-id → project-id
 map for remapping bouts).
 
 **Imports.** None. **Imported by** `pose/behavior-labels.js`,
-`import-export/behavior-metadata.js`, every `ui/behavior-*.js`,
+`import-export/behavior-metadata.js`, `import-export/behavior-io.js`, every `ui/behavior-*.js`,
 `ui/ui-wiring.js` (Hot Keys help). **Tests.** `tests/test-behavior-labels.mjs`
 §1–2, `tests/test-behavior-metadata.mjs`, `tests/test-track-identity-palette.mjs` §10.
 
@@ -2601,7 +2601,11 @@ an interval is `{start, end (inclusive), present, source 'm'|'a'|'i', note}`.
 Present vs explicit absent vs unlabelled are distinct (training reads only
 labelled frames). A MUTUAL behavior's pair is keyed in name order (`keyOf`),
 so either order is the same bout, either animal's key starts/stops it, and it
-lists, counts (`timeBudget`) and takes exclusive peers for both animals. Animals are identity NAMES because ids are renumbered on
+lists, counts (`timeBudget`) and takes exclusive peers for both animals.
+`timeBudget(session, {includeRunning})` counts a frame once however many of
+the animal's bouts cover it (`presentFrames`; `boutFrames` is the bouts' summed
+length, for a mean), with running states ending at the cursor when asked, as
+the exports do. Animals are identity NAMES because ids are renumbered on
 reopen; it registers on `pose/pose-data.js`'s `onIdentitySwap`, so every
 `Session.swapIdentitiesInRange` (ID-switch Fix and its Undo, identity
 reassignment) swaps the bouts on the same frames, splitting at the edges.
@@ -2610,7 +2614,9 @@ Running states (Label Behaviors mode) are kept apart until stopped; a save
 writes them as ending at the cursor without stopping them. DOM-free.
 
 **Exports.** Edits (each notifies `onBehaviorChange` listeners and is one
-undo step): `labelRange`, `clearRange`, `toggleState`, `closeRunning`,
+undo step): `labelRange`, `labelBouts` (many bouts as ONE edit, source
+'imported' by default — an import; the undo snapshot is every list reference
+that changed, exclusive peers included), `clearRange`, `toggleState`, `closeRunning`,
 `closeRunningAtCursor`, `cancelRunning`, `markReviewed`, `deleteBout`,
 `editBout`, `deleteBehaviorBouts`, `reassignAnimal`; identity:
 `renameAnimal`, `swapAnimalsInRange`, `orphanedAnimals`, `rekeyBehavior`
@@ -2624,8 +2630,9 @@ save/load: `exportBoutRows`, `importBoutRows` (replaces; never notifies),
 `resetBehaviorLabels`; `onBehaviorChange`.
 
 **Imports.** `./behavior-ethogram.js`, `./pose-data.js` (`onIdentitySwap`).
-**Imported by** `import-export/behavior-metadata.js`, `ui/behavior-*.js`,
-`ui/ui-wiring.js` (Rename Identity). **Tests.** `tests/test-behavior-labels.mjs`,
+**Imported by** `import-export/behavior-metadata.js`, `import-export/behavior-io.js`,
+`ui/behavior-*.js`, `ui/ui-wiring.js` (Rename Identity). **Tests.**
+`tests/test-behavior-labels.mjs`, `tests/test-behavior-io.mjs` §4, §10,
 `tests/e2e/behavior-labelling.mjs`.
 
 ### pose/triangulation.js
@@ -11620,8 +11627,10 @@ question, timeline behavior, Undo, Mark reviewed…, On video), Bouts
 `BOUT_LEAD_IN_SECONDS` early; set start/end to the playhead, behavior,
 target, note, delete) and Summary (time budget, orphaned labels of a deleted
 identity to reassign or delete). Skips rendering while hidden.
-`setupBehaviorUi` (from `setupMenus`) binds the menu, toolbar, tab buttons and
-catalog handler and makes every label edit `markDirty()` and repaint.
+`setupBehaviorUi` (from `setupMenus`) binds the menu (including Import Labels… /
+Export Labels…, `ui/behavior-io-modal.js`), toolbar, tab buttons and
+catalog handler and makes every label edit `markDirty()` and repaint. The
+Summary's mean bout is `boutFrames / bouts`.
 `updateBehaviorFrame` (every frame, from `updateSeekbarVisual`) keeps the save
 cursor, grows running states, lights the buttons, and closes the running
 states of a session just left (so `switchSession` needs no hook).
@@ -11629,7 +11638,7 @@ states of a session just left (so `switchSession` needs no hook).
 **Exports.** `refreshBehaviorPanel`, `updateBehaviorFrame`, `setupBehaviorUi`.
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-mode.js`,
-`./behavior-ethogram-modal.js`, `./behavior-timeline.js`,
+`./behavior-ethogram-modal.js`, `./behavior-io-modal.js`, `./behavior-timeline.js`,
 `./panel-visibility.js`, `./section-state.js`, `./settings.js`,
 `./rendering.js`, `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
 `../import-export/save-load.js`. **Imported by** `ui/ui-wiring.js`,
@@ -11666,7 +11675,10 @@ re-keys them in every session (`rekeyBehavior`). The editor
 applies each field on change (a refused change says why and reverts; the
 table is NOT re-rendered on a valid edit, which would steal focus); removing a
 behavior with bouts asks (`confirmRemoveBehavior`) and deletes its bouts in
-every loaded session; ethogram JSON export/import (merged by name). Mark
+every loaded session; ethogram JSON export/import (merged by name; Import
+also takes a BORIS project's ethogram through `import-export/behavior-io.js`,
+exclusions as groups where they form cliques; files read through
+`readBlobArrayBuffer`). Mark
 Range Reviewed turns unlabelled frames of a range into "not" labels for the
 chosen animals and behaviors. Both close on Esc; one scroller (the modal).
 
@@ -11674,8 +11686,38 @@ chosen animals and behaviors. Both close on Esc; one scroller (the modal).
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-confirm.js`,
 `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
-`../import-export/save-load.js`. **Imported by** `ui/behavior-panel.js`.
-**Tests.** `tests/e2e/behavior-labelling.mjs` §4.
+`../import-export/behavior-io.js`, `../import-export/save-load.js`,
+`../loading/cold-read-guard.js`. **Imported by** `ui/behavior-panel.js`.
+**Tests.** `tests/e2e/behavior-labelling.mjs` §4, `tests/e2e/behavior-import-export.mjs` §6.
+
+### ui/behavior-io-modal.js
+
+**Purpose.** Behavior ▸ Export Labels… and Import Labels…, over
+`import-export/behavior-io.js`. Export: one table (bouts, time budget, BORIS
+aggregated or tabular events) for this session or all of them, downloaded;
+or one per-frame table per labelled animal, written into a folder picked with
+`showDirectoryPicker` (asked inside the click, for user activation) or else
+downloaded one by one. Comma or tab; for BORIS tables, which camera's video is
+the media file. Choices are browser-local (`localStorage` `lucid.behaviorExport`).
+Import: a file chooser, then a dialog showing what would happen — the
+observation (defaulting to the one named like the session or coded on its
+video), each subject → an animal or Skip (same name, "no subject" → the
+selected animal), the behaviors it adds (a BORIS project's ethogram with its
+exclusion groups; behaviors a table uses that the ethogram lacks), the bouts
+it labels and skips, the fps conversion — and Import writes them into the
+active session as ONE `labelBouts` edit (Undo takes it all back). Both close
+on Esc; files are read through `readBlobArrayBuffer`.
+
+**Exports.** `showBehaviorExportModal`, `showBehaviorImportModal` (file
+chooser), `importBehaviorFile(file)` (the dialog for a File),
+`behaviorSessionInfo(session, camera)` (the `info` the exports take: name,
+fps, frame count, animals, video path).
+
+**Imports.** `./app-state.js`, `./behavior-coding.js`,
+`../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+`../import-export/behavior-io.js`, `../import-export/save-load.js`,
+`../loading/cold-read-guard.js`. **Imported by** `ui/behavior-panel.js`.
+**Tests.** `tests/e2e/behavior-import-export.mjs`.
 
 ### ui/behavior-confirm.js
 
@@ -13455,6 +13497,48 @@ and `_restoreProjectV2`), and the readers `import-export/slp-import.js`
 (`handleLoadSessionFolderSingleSlp`, `handleLoadProjectSlpLazy`), plus
 `pose/initialization.js` (sample session reset). **Tests.**
 `tests/test-behavior-metadata.mjs`, `tests/e2e/behavior-label-roundtrip.mjs`.
+
+### import-export/behavior-io.js
+
+**Purpose.** Behavior labels to and from files. Frames are the truth: seconds
+are frames / fps at the session's rate, every table carries its fps, frame
+numbers count from 0 (the timeline shows index 0 as frame 1), and a bout ends
+when its last frame does, `(end + 1) / fps` — what BORIS records — so
+`start = round(t × fps)`, `end = round(t_stop × fps) − 1` round-trips exactly
+(3 decimals up to 100 fps, 6 above). Exports (running states end at the
+playhead, as a save writes them): the bouts table (present and "not", kind,
+social, target, source, note), per-frame tables (one per labelled animal; a
+column per behavior and per partner of a social one; 1 / 0 / blank = doing it
+/ "not" / unlabelled; a mutual pair in both tables), the time budget (every
+animal × behavior; unlabelled frames counted), and BORIS 8's tabular (START /
+STOP / POINT; SimBA imports it) and aggregated layouts — present bouts only,
+the target as `Modifier #1`. Their `Image index` columns hold the bout's first
+and LAST frame (times keep BORIS's `(end + 1) / fps` stop): SimBA takes frames
+from `Image index` and labels START to STOP inclusive. Imports, in two steps that change nothing:
+`parseBehaviorFile` reads a BORIS project (ethogram with kinds, keys, colors,
+exclusions; a behavior whose events all name another subject in a modifier is
+social; untyped events toggle), BORIS tabular/aggregated tables (BORIS 7 or 8,
+TSV/CSV/semicolon; an old preamble above the header is read for the
+observation id, offset and media), a LUC3D bouts table, or an ethogram JSON;
+`planBehaviorImport` maps one observation onto a session (subjects → animals
+through the dialog's map or by name, the time offset taken off, a social
+target from a table's `target` or the first modifier naming another animal,
+bouts outside the video skipped) and counts what it skips. `ethogramPayload`
+turns entries into an `ingestEthogram` payload, BORIS exclusions becoming
+groups where they form cliques (named after a shared category, numbered past
+groups in use). RFC 4180 cells (`delimitedCell`, `toDelimited`,
+`parseDelimited`, `detectSeparator`). DOM-free.
+
+**Exports.** `NO_FOCAL_SUBJECT`, `delimitedCell`, `toDelimited`,
+`detectSeparator`, `parseDelimited`, `BOUT_COLUMNS`, `boutsTable`,
+`perFrameColumnName`, `perFrameTables`, `BUDGET_COLUMNS`, `timeBudgetTable`,
+`borisTabularTable`, `borisAggregatedTable`, `parseBehaviorFile`,
+`ethogramPayload`, `defaultObservation`, `defaultSubjectMap`,
+`newBehaviorsFor`, `planBehaviorImport`.
+
+**Imports.** `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`.
+**Imported by** `ui/behavior-io-modal.js`, `ui/behavior-ethogram-modal.js`.
+**Tests.** `tests/test-behavior-io.mjs`, `tests/e2e/behavior-import-export.mjs`.
 
 ### import-export/plane-metadata.js
 

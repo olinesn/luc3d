@@ -315,6 +315,52 @@ export function labelRange(session, behaviorId, animal, target, start, end, pres
     return { start: s, end: e };
 }
 
+/**
+ * Label many bouts as ONE edit (an import): one undo step, one notification.
+ * Each bout is written in order as `labelRange` would write it — replacing
+ * what its key said on its frames, present labels clearing exclusive peers.
+ *
+ * @param {Array<{behaviorId:string, animal:string, target?:string, start:number, end:number,
+ *                present?:boolean, note?:string}>} bouts
+ * @param {{source?: string}} [opts] default 'i' (imported)
+ * @returns {{kept:number, dropped:number}} dropped: unknown behavior, bad frames, a social bout without a target
+ */
+export function labelBouts(session, bouts, opts) {
+    var st = storeOf(session);
+    if (!st) return { kept: 0, dropped: 0 };
+    var source = (opts && opts.source) || 'i';
+    // Lists are never mutated, so the map's references ARE the undo snapshot:
+    // every key whose list reference changed goes in it, peers included.
+    var before = new Map(st.bouts);
+    var kept = 0, dropped = 0;
+    (Array.isArray(bouts) ? bouts : []).forEach(function (bt) {
+        var b = bt && behaviorById(bt.behaviorId);
+        var s = bt ? frameInt(bt.start) : null, e = bt ? frameInt(bt.end) : null;
+        if (!b || !bt.animal || s == null || e == null) { dropped++; return; }
+        if (s > e) { var t = s; s = e; e = t; }
+        var present = bt.present !== false;
+        if (b.kind === 'point' && present) e = s;
+        var tgt = targetFor(b, bt.target);
+        if (b.social && (!tgt || tgt === bt.animal)) { dropped++; return; }
+        var key = keyOf(b.id, bt.animal, tgt);
+        writeInterval(st, key, s, e, present, source, bt.note);
+        if (present) clearPeersPresent(st, key, s, e);
+        kept++;
+    });
+    if (!kept) return { kept: 0, dropped: dropped };
+    var keys = new Set(before.keys());
+    st.bouts.forEach(function (_, k) { keys.add(k); });
+    var snap = [];
+    keys.forEach(function (k) {
+        if (before.get(k) !== st.bouts.get(k)) snap.push([k, before.get(k) || null, st.running.get(k) || null]);
+    });
+    st.undo.push(snap);
+    if (st.undo.length > UNDO_CAP) st.undo.shift();
+    st.redo.length = 0;
+    emit(session, { edit: 'import' });
+    return { kept: kept, dropped: dropped };
+}
+
 /** Remove every label of one behavior/animal/target on [start, end] (they become unlabelled). */
 export function clearRange(session, behaviorId, animal, target, start, end) {
     var st = storeOf(session);
@@ -805,27 +851,61 @@ export function activeAt(session, frame) {
     return out;
 }
 
+/** How many frames the union of `ivs` ([start, end] pairs, inclusive) covers, minus those in sorted, merged `cut`. */
+function unionFrames(ivs, cut) {
+    if (!ivs.length) return { frames: 0, merged: [] };
+    ivs.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+    var merged = [];
+    ivs.forEach(function (iv) {
+        var last = merged[merged.length - 1];
+        if (last && iv[0] <= last[1] + 1) last[1] = Math.max(last[1], iv[1]);
+        else merged.push([iv[0], iv[1]]);
+    });
+    var frames = 0;
+    merged.forEach(function (m) {
+        var n = m[1] - m[0] + 1;
+        (cut || []).forEach(function (c) {
+            var s = Math.max(m[0], c[0]), e = Math.min(m[1], c[1]);
+            if (e >= s) n -= e - s + 1;
+        });
+        frames += n;
+    });
+    return { frames: frames, merged: merged };
+}
+
 /**
- * Per animal × behavior: present bouts and frames, absent frames.
- * @returns {Array<{animal, behaviorId, bouts, presentFrames, absentFrames}>}
+ * Per animal × behavior: how often and how long. A frame counts once however
+ * many of the animal's bouts cover it (chasing two animals at once is not
+ * twice the time), and a mutual bout counts for both animals.
+ *
+ * @param {{includeRunning?: boolean}} [opts] count running states as ending
+ *   at the cursor, as a save and the exports do
+ * @returns {Array<{animal, behaviorId, bouts, presentFrames, absentFrames, boutFrames}>}
+ *   presentFrames: frames doing it; absentFrames: frames labelled "not" and not
+ *   doing it; boutFrames: the bouts' summed length (for a mean bout length)
  */
-export function timeBudget(session) {
+export function timeBudget(session, opts) {
     var st = session && _stores.get(session);
     if (!st) return [];
+    var bouts = opts && opts.includeRunning ? savedBouts(st) : st.bouts;
     var rows = new Map();
-    st.bouts.forEach(function (list, k) {
+    bouts.forEach(function (list, k) {
         var p = splitKey(k);
-        keyAnimals(p).forEach(function (animal) {                 // a mutual bout counts for both animals
+        keyAnimals(p).forEach(function (animal) {
             var rk = animal + SEP + p.behaviorId;
             var r = rows.get(rk);
-            if (!r) { r = { animal: animal, behaviorId: p.behaviorId, bouts: 0, presentFrames: 0, absentFrames: 0 }; rows.set(rk, r); }
+            if (!r) { r = { animal: animal, behaviorId: p.behaviorId, bouts: 0, boutFrames: 0, pres: [], abs: [] }; rows.set(rk, r); }
             list.forEach(function (iv) {
-                var n = iv.end - iv.start + 1;
-                if (iv.present) { r.bouts++; r.presentFrames += n; } else r.absentFrames += n;
+                if (iv.present) { r.bouts++; r.boutFrames += iv.end - iv.start + 1; r.pres.push([iv.start, iv.end]); }
+                else r.abs.push([iv.start, iv.end]);
             });
         });
     });
-    return Array.from(rows.values());
+    return Array.from(rows.values()).map(function (r) {
+        var pres = unionFrames(r.pres);
+        return { animal: r.animal, behaviorId: r.behaviorId, bouts: r.bouts, boutFrames: r.boutFrames,
+                 presentFrames: pres.frames, absentFrames: unionFrames(r.abs, pres.merged).frames };
+    });
 }
 
 /** How many bouts a behavior has in this session. */
@@ -859,6 +939,19 @@ export function behaviorFps(session) {
     return (st && st.fps) || 0;
 }
 
+/** The bouts as a save sees them: running states written as present bouts ending at the cursor. */
+function savedBouts(st) {
+    if (!st.running.size) return st.bouts;
+    var copy = { bouts: new Map(st.bouts) };
+    st.running.forEach(function (r, k) {
+        var e = Math.max(r.start, st.cursor);
+        var list = carve(copy.bouts.get(k) || [], r.start, e);
+        list.push({ start: r.start, end: e, present: true, source: 'm', note: '' });
+        setList(copy, k, tidy(list, isPointKey(k)));
+    });
+    return copy.bouts;
+}
+
 /**
  * The bouts as saved rows, sorted:
  * `[behaviorId, animal, target, start, end, present (1|0), source, note]`.
@@ -868,17 +961,7 @@ export function behaviorFps(session) {
 export function exportBoutRows(session) {
     var st = session && _stores.get(session);
     if (!st) return [];
-    var bouts = st.bouts;
-    if (st.running.size) {
-        var copy = { bouts: new Map(st.bouts) };
-        st.running.forEach(function (r, k) {
-            var e = Math.max(r.start, st.cursor);
-            var list = carve(copy.bouts.get(k) || [], r.start, e);
-            list.push({ start: r.start, end: e, present: true, source: 'm', note: '' });
-            setList(copy, k, tidy(list, isPointKey(k)));
-        });
-        bouts = copy.bouts;
-    }
+    var bouts = savedBouts(st);
     var rows = [];
     bouts.forEach(function (list, k) {
         var p = splitKey(k);

@@ -8146,3 +8146,84 @@ div.track-summary-steps { padding-left: 0; }
   margin-top: 10px;
   font-size: 12px;
 }
+
+/* Behavior ▸ Import Labels… / Export Labels… (one scroller: the modal itself) */
+.multi-frame-modal.behavior-io-modal {
+  max-width: 600px;
+  width: min(600px, 94vw);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+.behavior-io-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.behavior-io-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.behavior-io-choice input {
+  margin-top: 3px;
+}
+.behavior-io-choice-text {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.behavior-io-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.behavior-io-opts select {
+  margin-left: 4px;
+}
+.multi-frame-modal .behavior-io-file,
+.multi-frame-modal .behavior-io-into,
+.multi-frame-modal .behavior-io-detail,
+.multi-frame-modal .behavior-io-summary,
+.multi-frame-modal .behavior-io-warn {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.multi-frame-modal .behavior-io-file,
+.multi-frame-modal .behavior-io-summary {
+  color: var(--text-primary);
+}
+.multi-frame-modal .behavior-io-warn {
+  color: var(--warning-color);
+}
+.behavior-io-detail:empty {
+  display: none;
+}
+.behavior-io-check {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.behavior-io-obs {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.behavior-io-subjects {
+  width: 100%;
+  margin-bottom: 8px;
+}
+.behavior-io-subjects select {
+  width: 100%;
+}
+.behavior-io-body.is-off {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.behavior-io-modal [hidden] {
+  display: none !important;
+}

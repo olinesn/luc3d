@@ -5,7 +5,8 @@
 // says why and reverts), so there is no Apply step to forget; Esc or Close
 // leave. Removing a behavior that has bouts asks first and deletes its bouts
 // in every loaded session. Ethogram JSON can be exported and imported (merged
-// by behavior name), to reuse a scheme across projects.
+// by behavior name), to reuse a scheme across projects; Import also takes a
+// BORIS project's ethogram (exclusions become groups where they can).
 //
 // Mark Range Reviewed turns the unlabelled frames of a range into "not"
 // labels, for the chosen animals and behaviors — what a classifier needs to
@@ -13,17 +14,20 @@
 //
 // Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-confirm.js,
 //             pose/behavior-ethogram.js, pose/behavior-labels.js,
-//             import-export/save-load.js
+//             import-export/behavior-io.js, import-export/save-load.js,
+//             loading/cold-read-guard.js
 
 import { state } from './app-state.js';
 import { sessionAnimals, focalAnimal, armedRange, requestBehaviorRepaint } from './behavior-coding.js';
 import { confirmRemoveBehavior, confirmMakeMutual } from './behavior-confirm.js';
 import {
     behaviors, addBehavior, updateBehavior, removeBehavior, moveBehavior, serializeEthogram, ingestEthogram,
-    behaviorById, BEHAVIOR_KINDS,
+    behaviorById, behaviorByName, BEHAVIOR_KINDS,
 } from '../pose/behavior-ethogram.js';
 import { countBehaviorBouts, deleteBehaviorBouts, markReviewed, rekeyBehavior, bothWayPairs } from '../pose/behavior-labels.js';
+import { parseBehaviorFile, ethogramPayload } from '../import-export/behavior-io.js';
 import { markDirty, setStatus } from '../import-export/save-load.js';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 
 function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -86,11 +90,11 @@ export function showEthogramModal() {
         '<div class="behavior-ed-msg" id="behaviorEdMsg" role="status"></div>' +
         '<div class="modal-actions behavior-ed-actions">' +
         '<button id="behaviorEdAdd">+ Add behavior</button>' +
-        '<button id="behaviorEdImport" title="Add the behaviors of an ethogram JSON file (matched by name)">Import…</button>' +
+        '<button id="behaviorEdImport" title="Add the behaviors of an ethogram JSON file or a BORIS project (matched by name)">Import…</button>' +
         '<button id="behaviorEdExport" title="Save this ethogram as JSON, to reuse in another project">Export…</button>' +
         '<span class="behavior-ed-spacer"></span>' +
         '<button class="primary" id="behaviorEdClose">Close</button></div>' +
-        '<input type="file" id="behaviorEdFile" accept=".json,application/json" hidden>');
+        '<input type="file" id="behaviorEdFile" accept=".json,.boris,application/json" hidden>');
     _open = dlg.overlay;
     var modal = dlg.modal;
     var tbody = modal.querySelector('#behaviorEdRows');
@@ -203,14 +207,25 @@ export function showEthogramModal() {
     file.addEventListener('change', function () {
         var f = file.files && file.files[0];
         if (!f) return;
-        f.text().then(function (txt) {
-            var before = behaviors().length;
-            var data = JSON.parse(txt);
-            ingestEthogram(data && data.ethogram ? data.ethogram : data);
+        readBlobArrayBuffer(f).then(function (buf) {
+            var parsed = parseBehaviorFile(f.name, new TextDecoder('utf-8').decode(new Uint8Array(buf)));
+            if (parsed.error || (parsed.kind !== 'ethogram' && parsed.kind !== 'boris-project')) {
+                throw new Error(parsed.error || 'it holds labels, not an ethogram (use Behavior ▸ Import Labels…)');
+            }
+            var before = behaviors().length, groups = [];
+            if (parsed.kind === 'ethogram') ingestEthogram(parsed.ethogramPayload);
+            else {
+                var fresh = parsed.ethogram.filter(function (e) { return !behaviorByName(e.name); });
+                var res = ethogramPayload(fresh, behaviors().map(function (b) { return b.group; }).filter(Boolean));
+                ingestEthogram(res.payload);
+                groups = res.groups;
+            }
             var added = behaviors().length - before;
-            ethogramChanged();
+            if (added) ethogramChanged();
             render();
-            say(added ? 'Added ' + added + ' behavior' + (added === 1 ? '' : 's') + ' from ' + f.name : 'No new behaviors in ' + f.name);
+            say(added ? 'Added ' + added + ' behavior' + (added === 1 ? '' : 's') + ' from ' + f.name +
+                (groups.length ? ' (BORIS exclusions became ' + groups.length + ' group' + (groups.length === 1 ? '' : 's') + ')' : '')
+                : 'No new behaviors in ' + f.name);
         }).catch(function (err) {
             say('Could not read ' + f.name + ': ' + err.message, true);
         }).finally(function () { file.value = ''; });
