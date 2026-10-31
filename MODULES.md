@@ -6716,7 +6716,10 @@ Settings…), so they open, and each run item is a `<button>` in
 `PLANE_LOCKED_TOOLBAR_IDS` (a new run item there must be too; Smooth's
 Remove/Restore smoothing toggle, `tbSmoothToggle`, is one). A disabled
 button still opens its menu on hover (`tests/e2e/plane-mode-toolbar-lock.mjs`
-§4b).
+§4b). Nothing opens those three by keyboard, so their settings are mouse-only in
+the mode, on purpose: planes are placed by dragging, only runs read those
+settings, and the mode blocks runs. Making the menus Tab stops works, but puts
+nine more presses between Sessions and the User checkbox.
 
 **Imports** `planeState` from `ui/plane-definition.js` — circular, and safe only
 because the binding is read INSIDE the function body. **Imported by**

@@ -60,6 +60,12 @@ const PLANE_LOCKED_TOOLBAR_IDS = [
  * `<button>` disabled one by one (the list above). A new run item in those
  * menus must be a `<button>` and go in that list.
  *
+ * Nothing opens those three by keyboard, because their buttons are disabled, so
+ * their settings are mouse-only in the mode. That is on purpose: planes are placed
+ * by dragging, only runs read those settings, and the mode blocks runs. Making the
+ * menus Tab stops works, but puts nine more presses between Sessions and the User
+ * checkbox.
+ *
  * @type {string[]}
  */
 const PLANE_LOCKED_DROPDOWN_IDS = ['instanceDropdown', 'groupDropdown'];
