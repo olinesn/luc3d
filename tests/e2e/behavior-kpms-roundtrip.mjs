@@ -283,7 +283,7 @@ try {
         meta.resetBehaviorState();          // as every load does
         const lucid = slp.sessions[0].metadata.lucid;
         const fresh = new pd.Session([], s.skeleton, [], 'reopened');
-        meta.readBehaviorMetadata(fresh, lucid);
+        meta.readBehaviorMetadata(fresh, lucid, slp.behaviorEvents);
         const after = { states: S.exportStateLayers(fresh), runs: P.exportPredictionRuns(fresh) };
         // And a session with no states writes no key.
         const bare = new pd.Session([], s.skeleton, [], 'bare');

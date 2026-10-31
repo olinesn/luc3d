@@ -2,11 +2,12 @@
  * behavior-label-roundtrip.mjs — behavior labels survive save -> reopen, in
  * the real app, through BOTH `.slp` writers.
  *
- * `import-export/behavior-metadata.js` puts the ethogram (project-scoped, in
- * every session) and each session's bouts under `metadata.lucid`. The Node
- * test `tests/test-behavior-metadata.mjs` pins the payload; this one pins the
- * seam: that both writers call it, and that the file reads back through the
- * real `parseSlpViaSleapIO` adapter the importer uses.
+ * A `.slp` carries bouts and predicted bouts as sleap-io events
+ * (`import-export/behavior-events.js`) and what only LUC3D reads under
+ * `metadata.lucid` (`import-export/behavior-metadata.js`). The Node tests
+ * `tests/test-behavior-events.mjs` and `tests/test-behavior-metadata.mjs` pin the
+ * payloads; this one pins the seam: that both writers call them, and that the file
+ * reads back through the real `parseSlpViaSleapIO` adapter the importer uses.
  *
  *  1. Eager writer (`buildSlpLabelsAllViews` + `saveSlpToBytes`): the ethogram
  *     and every bout — present, "not", social with a target, a note, an
@@ -16,6 +17,9 @@
  *     session reopens with its own bouts and the same ethogram.
  *  3. A project with no ethogram and no bouts writes neither key, so untouched
  *     projects keep their bytes (`tests/e2e/save-golden-digest.mjs`).
+ *  4. Files other tools wrote (`tests/fixtures/behavior-events/`, from sleap-app and
+ *     Python sleap-io; `behavior-cross-app` makes the first) read in, and saved again
+ *     lose nothing.
  *  Both writers also carry the detection settings and predictions (Phase 2):
  *  a behavior's detector, the changed feature settings, and each session's
  *  predicted bouts with their scores; and each session's behavioral states
@@ -54,6 +58,7 @@ try {
         const fileio = await import('/import-export/file-io.js');
         const saveLoad = await import('/import-export/save-load.js');
         const lazyMod = await import('/loading/sio-lazy-loader.js');
+        const events = await import('/import-export/behavior-events.js');
         const meta = await import('/import-export/behavior-metadata.js');
         const eth = await import('/pose/behavior-ethogram.js');
         const L = await import('/pose/behavior-labels.js');
@@ -133,12 +138,14 @@ try {
             for (const sd of (slpData.sessions || [])) {
                 const lucid = (sd.metadata && sd.metadata.lucid) || {};
                 const fresh = new Session([], skelOf(), [], 'reopened');
-                meta.readBehaviorMetadata(fresh, lucid);
+                meta.readBehaviorMetadata(fresh, lucid, slpData.behaviorEvents, events.sessionVideoIdxs(sd));
                 out.push({
                     sessionName: lucid.sessionName,
                     hasEthogramKey: Object.prototype.hasOwnProperty.call(lucid, 'ethogram'),
                     hasLabelsKey: Object.prototype.hasOwnProperty.call(lucid, 'behaviorLabels'),
                     fps: lucid.behaviorLabels ? lucid.behaviorLabels.fps : null,
+                    boutsInLucid: !!(lucid.behaviorLabels && lucid.behaviorLabels.bouts),
+                    predictedBoutsInLucid: !!(lucid.behaviorPredictions && lucid.behaviorPredictions.runs.some(r => r.bouts)),
                     rows: L.exportBoutRows(fresh),
                     predictions: predRows(fresh),
                     states: S.exportStateLayers(fresh),
@@ -146,7 +153,7 @@ try {
                     otherKeys: ['sessionName', 'identities', 'skeleton', 'tracks'].every(k => Object.prototype.hasOwnProperty.call(lucid, k)),
                 });
             }
-            return { sessions: out, ethogram: eth.serializeEthogram(), features: eth.featureSettings() };
+            return { sessions: out, ethogram: eth.serializeEthogram(), features: eth.featureSettings(), fileEvents: slpData.behaviorEvents };
         }
 
         const res = {};
@@ -208,12 +215,57 @@ try {
             const labels = fileio.buildSlpLabelsAllViews(s, viewsFor(SPECS[0]), videoFilesFor(SPECS[0]));
             res.untouched = await reopen(await window.SleapIO.saveSlpToBytes(labels), 'untouched.slp');
         }
+        // ---- 4. files other tools wrote, through the real adapter
+        async function fromOtherTool(fixture) {
+            const bytes = await (await fetch('/tests/fixtures/behavior-events/' + fixture)).arrayBuffer();
+            const slpData = await fileio.parseSlpViaSleapIO(new File([bytes], fixture), () => {});
+            meta.resetBehaviorState();
+            const s = new Session([], skelOf(), [], 'other tool');
+            const read = meta.readBehaviorMetadata(s, (slpData.sessions[0] && slpData.sessions[0].metadata || {}).lucid || null,
+                slpData.behaviorEvents, null);
+            const out = { read, behaviors: eth.behaviors().map(b => ({ name: b.name, key: b.key, social: b.social, kind: b.kind, color: b.color })),
+                          rows: L.exportBoutRows(s).map(r => [eth.behaviorById(r[0]).name].concat(r.slice(1))),
+                          predicted: P.predictedBouts(s).map(p => [eth.behaviorById(p.behaviorId).name, p.animal, p.start, p.end, p.score]) };
+            // And saved again, nothing of theirs is lost.
+            const video = new window.SleapIO.Video({ filename: 'again.mp4', openBackend: false });
+            const again = events.buildBehaviorEvents(window.SleapIO, [{ session: s, video, identities: [], tracks: [] }]);
+            out.saved = again.events.map(e => [e.type.name, e.startFrame, e.endFrame, e.subject ? e.subject.name : '', e.target ? e.target.name : '',
+                                               e.isPredicted, e.source, e.isPredicted && e.scores ? e.scores.length : 0]);
+            return out;
+        }
+        res.fromApp = await fromOtherTool('sleap_app_behavior.slp');
+        res.fromPython = await fromOtherTool('py_written_26_events.slp');
         return res;
     });
 
+    console.log('\n-- 4. files other tools wrote --');
+    const fa = rt.fromApp;
+    check(fa.behaviors.map(b => b.name).join() === 'rear,chase' && fa.behaviors[0].key === 'r' && fa.behaviors[1].social, 'sleap-app: its ethogram');
+    check(eq(fa.rows.map(r => r.slice(0, 7)), [
+        ['rear', 'mouse1', '', 10, 19, 1, 'm'],
+        ['chase', 'mouse2', 'mouse1', 30, 39, 1, 'm'],
+        ['rear', 'mouse2', '', 50, 59, 0, 'm'],
+    ]), 'sleap-app: its bouts on tracks, a "not" as a "not"');
+    const fp = rt.fromPython;
+    check(fp.behaviors.map(b => b.name).join() === 'attack,rear,never used', 'Python: the catalog, an unused type too');
+    check(fp.behaviors[0].social && fp.behaviors[0].color === '#e6194b', 'Python: a target makes it social; its color comes along');
+    check(fp.rows.some(r => r[0] === 'attack' && r[1] === 'mouse1' && r[2] === 'mouse2' && r[3] === 100 && r[4] === 140 && r[6] === 'm'), 'Python: a bout between tracks');
+    check(fp.rows.some(r => r[0] === 'rear' && r[1] === 'animal_A' && r[3] === 50), 'Python: a bout on an identity');
+    check(fp.predicted.length === 0, 'Python: its predictions have no target or no animal, so they are not offered for review');
+    check(fp.saved.some(e => e[0] === 'attack' && e[5] && e[6] === 'classifier' && e[7] === 5), 'saved again: they are written back, with where they came from and their framewise scores');
+    check(fp.saved.some(e => e[0] === 'rear' && e[1] === 300 && e[2] === 301 && e[3] === ''), 'saved again: an event with no animal is written back');
+    check(fp.saved.some(e => e[0] === 'rear' && e[1] === 7 && e[3] === '' && e[5]), 'and a prediction with no animal');
+
     console.log('\n-- 1. eager writer --');
     const e0 = rt.eager.sessions[0];
-    check(rt.eager.sessions.length === 1 && e0.hasEthogramKey && e0.hasLabelsKey, 'one session, with the ethogram and its bouts');
+    check(rt.eager.sessions.length === 1 && e0.hasEthogramKey && e0.hasLabelsKey, 'one session, with what only LUC3D reads');
+    const fe = rt.eager.fileEvents;
+    check(!e0.boutsInLucid && !e0.predictedBoutsInLucid, 'the bouts are not in metadata.lucid');
+    check(!!fe && fe.types.map(t => t.name).join() === 'rear,groom,chase,bite,not rear', `the file has the shared event catalog (${fe && fe.types.map(t => t.name).join()})`);
+    check(!!fe && fe.rows.length === rt.expectedA.length + rt.expectedPredA.length && fe.rows.every(r => r.video === 0),
+        'every bout is one event, on the session\'s first camera');
+    check(!!fe && fe.rows.some(r => r.type === 'not rear' && !r.predicted) && fe.rows.some(r => r.type === 'rear' && r.predicted && r.source === 'rule' && r.score === 0.9),
+        'a "not" label has its own type; a prediction its source and score');
     check(eq(rt.eager.ethogram, rt.expectedEthogram), 'the ethogram reads back exactly (ids, kinds, social, group, description)');
     check(eq(e0.rows, rt.expectedA), `every bout reads back exactly (${e0.rows.length} rows)`);
     check(rt.stillRunning && e0.rows.some(r => r[1] === 'mouseA' && r[3] === 52 && r[4] === 57),
@@ -233,7 +285,8 @@ try {
         check(false, 'saveAllSessionsStreaming threw: ' + rt.streamErr.slice(0, 400));
     } else {
         check(rt.streaming.sessions.length === 2, `both sessions in the file (got ${rt.streaming.sessions.length})`);
-        check(rt.streaming.sessions.every(s => s.hasEthogramKey), 'the ethogram is in every session');
+        check(rt.streaming.sessions.every(s => s.hasEthogramKey), 'the settings only LUC3D reads are in every session');
+        check(!!rt.streaming.fileEvents && rt.streaming.fileEvents.types.some(t => t.name === 'rear'), 'the file has the shared event catalog');
         check(eq(rt.streaming.sessions.map(s => s.rows), rt.expectedStream), 'each session reopens with its own bouts');
         check(eq(rt.streaming.sessions.map(s => s.predictions), rt.expectedStreamPred) && rt.expectedStreamPred[1].length === 1,
             'and its own predicted bouts (streaming)');
@@ -244,6 +297,7 @@ try {
     console.log('\n-- 3. untouched project --');
     const u = rt.untouched.sessions[0];
     check(!!u && !u.hasEthogramKey && !u.hasLabelsKey && !u.hasStatesKey, 'no ethogram, bouts or states: none of their keys is written');
+    check(rt.untouched.fileEvents === null, 'and no events in the file');
     check(!!u && u.otherKeys, 'and the file still carries the other metadata.lucid keys');
 
     check(errs.length === 0, `no page errors (${errs.join(' | ').slice(0, 300)})`);

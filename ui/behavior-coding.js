@@ -194,9 +194,15 @@ export function behaviorBoxesAt(session, frame, opts) {
 // Animals and selection
 // ----------------------------------------------------------------------------
 
-/** The session's animals: its identity names, in identity order (what digits 1–9 pick). */
+/**
+ * The session's animals, in order (what digits 1–9 pick): its identity names. A
+ * one-camera project with no identities (a plain SLEAP file, as sleap-app labels it)
+ * has its track names instead; on several cameras, tracks are per camera and not animals.
+ */
 export function sessionAnimals(session) {
-    return session && session.identities ? session.identities.map(function (i) { return i.name; }) : [];
+    if (!session) return [];
+    if (session.identities && session.identities.length) return session.identities.map(function (i) { return i.name; });
+    return session.cameras && session.cameras.length === 1 && session.tracks ? session.tracks.slice() : [];
 }
 
 /** How a pair reads: "↔" for a mutual behavior (no actor and target), "→" otherwise. */

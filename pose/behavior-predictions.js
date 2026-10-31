@@ -7,7 +7,7 @@
 // Per session (a WeakMap, like the labels), one RUN per behavior — the last
 // time that behavior was detected:
 //
-//   { behaviorId, source: 'rule' | 'model:<hash>' | 'states:<layer>',
+//   { behaviorId, source: 'rule' | 'model:<hash>' | 'states:<layer>' | 'file',
 //     cfg,               // a print of what produced it: the detector (a model
 //                        // run: its post-processing and exclusive group), the
 //                        // body and floor settings, the frame rate, 2D or 3D;
@@ -20,10 +20,12 @@
 //     bouts: [{animal, target, start, end (inclusive), score}],   sorted
 //     scores: Map<'animal\u0001target', Float32Array> | null }    per frame, in memory only
 //
-// Bouts are saved (`metadata.lucid.behaviorPredictions`, through
-// import-export/behavior-metadata.js, only when there are any); per-frame
-// scores are not — they are recomputed by running again. A MUTUAL behavior's
-// pair is stored in name order, as labels are.
+// Bouts are saved (as events in a `.slp`, in `metadata.lucid.behaviorPredictions`
+// in a project JSON, through import-export/behavior-metadata.js and
+// behavior-events.js, only when there are any); per-frame scores are not — they
+// are recomputed by running again. A MUTUAL behavior's pair is stored in name
+// order, as labels are. A 'file' run is one another tool wrote into the file: it
+// is reviewed like any run and never goes stale.
 //
 // ## Stale
 //
@@ -74,7 +76,7 @@ var SEP = '\u0001';
 
 /** Is `s` a run source: 'rule', 'model:' and a forest's 16-hex-digit hash, or 'states:' and a layer name? */
 export function isRunSource(s) {
-    return s === 'rule' || (typeof s === 'string' && (/^model:[0-9a-f]{16}$/.test(s) ||
+    return s === 'rule' || s === 'file' || (typeof s === 'string' && (/^model:[0-9a-f]{16}$/.test(s) ||
         (s.indexOf('states:') === 0 && cleanLayerName(s.slice(7)) === s.slice(7) && s.length > 7)));
 }
 
@@ -332,7 +334,9 @@ export function setBehaviorRun(session, run) {
 function normalizeRun(run) {
     var bouts = (run.bouts || []).map(function (b) {
         var p = orderPair(run.behaviorId, b.animal, b.target);
-        return { animal: p[0], target: p[1], start: b.start, end: b.end, score: Number.isFinite(b.score) ? b.score : NaN };
+        var out = { animal: p[0], target: p[1], start: b.start, end: b.end, score: Number.isFinite(b.score) ? b.score : NaN };
+        if (b.ext) out.ext = b.ext;
+        return out;
     }).filter(function (b) { return b.animal && b.end >= b.start && b.start >= 0; });
     bouts.sort(function (a, b) { return a.start - b.start || a.end - b.end || (a.animal < b.animal ? -1 : a.animal > b.animal ? 1 : 0); });
     var source = isRunSource(run.source) ? run.source : 'rule';
@@ -518,6 +522,9 @@ export function predictionStaleness(session, env) {
     if (!st || !st.runs.size) return { input: false, settings: [], labels: [], model: [] };
     var settings = [], labels = [], model = [];
     st.runs.forEach(function (run, id) {
+        // A run another tool made (read from a file's events): nothing here produced
+        // it, so no setting here can make it stale.
+        if (run.source === 'file') return;
         var b = behaviorById(id);
         var now = b && runConfigPrint(b, session, { fps: env && env.fps, mode: run.mode, camera: run.camera, floorKey: env && env.floorKey,
                                                    source: run.source, states: run.states });
@@ -686,6 +693,44 @@ export function exportPredictionRuns(session) {
 }
 
 /**
+ * What a `.slp` keeps in `metadata.lucid.behaviorPredictions` beside its events:
+ * each run with a bout, without the bouts (`exportPredictionEvents`). Null when
+ * there is no predicted bout (nothing is written).
+ */
+export function exportPredictionHeaders(session) {
+    var payload = exportPredictionRuns(session);
+    if (!payload) return null;
+    return {
+        v: 2,
+        runs: payload.runs.map(function (r) {
+            var o = Object.assign({}, r);
+            delete o.bouts;
+            return o;
+        }),
+    };
+}
+
+/**
+ * Every predicted bout of the session, one entry each, for saving as events:
+ * `{behaviorId, source, animal, target, start, end, score, ext}`. Scores are rounded
+ * as `exportPredictionRuns` rounds them. `ext` is what a file said about a bout read
+ * from it that LUC3D does not use, written back unchanged.
+ */
+export function exportPredictionEvents(session) {
+    var st = session && _stores.get(session);
+    var out = [];
+    if (!st) return out;
+    st.runs.forEach(function (run) {
+        if (!behaviorById(run.behaviorId)) return;
+        run.bouts.forEach(function (b) {
+            out.push({ behaviorId: run.behaviorId, source: run.source, animal: b.animal, target: b.target, start: b.start, end: b.end,
+                       score: Number.isFinite(b.score) ? Math.round(b.score * 1000) / 1000 : NaN, ext: b.ext || null });
+        });
+    });
+    return out;
+}
+
+/**
  * Replace a session's predictions with saved ones (a load). Runs naming a
  * behavior the ethogram does not have are dropped. Their poses are taken as
  * loaded (the first input check prints them). Does not notify.
@@ -706,8 +751,10 @@ export function importPredictionRuns(session, payload, idMap) {
         r.bouts.forEach(function (b) {
             var s = Array.isArray(b) ? Math.round(Number(b[2])) : NaN, e = Array.isArray(b) ? Math.round(Number(b[3])) : NaN;
             if (!Array.isArray(b) || typeof b[0] !== 'string' || !b[0] || !(s >= 0) || !(e >= s)) { dropped++; return; }
-            bouts.push({ animal: b[0], target: typeof b[1] === 'string' ? b[1] : '', start: s, end: e,
-                         score: b[4] == null ? NaN : Number(b[4]) });
+            var bout = { animal: b[0], target: typeof b[1] === 'string' ? b[1] : '', start: s, end: e,
+                         score: b[4] == null ? NaN : Number(b[4]) };
+            if (b[5] && typeof b[5] === 'object') bout.ext = b[5];
+            bouts.push(bout);
         });
         kept += bouts.length;
         st.runs.set(id, normalizeRun({ behaviorId: id, source: r.source, cfg: typeof r.cfg === 'string' ? r.cfg : '',

@@ -2824,11 +2824,13 @@ Pure (the worker loads it).
 
 **Purpose.** Predicted behavior bouts per session (a `WeakMap`), shared by
 every source (rules, classifiers, promoted states; discovery later):
-one RUN per behavior `{behaviorId, source: 'rule'|'model:<16-hex hash>'|'states:<layer>', cfg,
+one RUN per behavior `{behaviorId, source: 'rule'|'model:<16-hex hash>'|'states:<layer>'|'file', cfg,
 labels (a classifier run: the print of the labels its model learned from, null
 for an imported model), states (a states run: the promoted states, sorted), fps, mode, camera,
-bouts: [{animal, target, start, end, score}], scores: Map<'animal\u0001target',
-Float32Array> (in memory only)}`, a mutual pair in name order. STALE when the
+bouts: [{animal, target, start, end, score, ext?}], scores: Map<'animal\u0001target',
+Float32Array> (in memory only)}`, a mutual pair in name order. A `'file'` run is one another
+tool wrote into a `.slp` (`ext` keeps what the file said, written back unchanged); it never goes
+stale. Otherwise STALE when the
 settings changed — `runConfigPrint(behavior, session, {fps, mode, camera,
 floorKey, source})` = detector (a classifier run: its post-processing, its
 exclusive group with the peers' post-processing, `FEATURE_SPEC_VERSION`) +
@@ -2864,7 +2866,7 @@ DOM-free.
 `predictionStaleness(session, env)`, `isRunStale`, `predictionsStand`,
 `renamePredictedAnimal`, `reviewStatus`, `REVIEW_ORDERS`, `reviewQueue`,
 `acceptPredictions`, `rejectPredictions`, `exportPredictionRuns`,
-`importPredictionRuns`, `resetBehaviorPredictions`, `isRunSource`, `runModelHash`, `runStateLayer`,
+`importPredictionRuns`, `exportPredictionHeaders`, `exportPredictionEvents`, `resetBehaviorPredictions`, `isRunSource`, `runModelHash`, `runStateLayer`,
 `runThreshold`, `replaceRunBouts(session, id, bouts, cfg)` (a classifier's
 post-processing changed: bouts re-derived from the scores in memory).
 `predictionStaleness` returns `{input, settings, labels, model}`.
@@ -10851,6 +10853,12 @@ drive a private timer-based stepper (`startNoVideoPlayback` /
 `state.fps` over `[0, totalFrames-1]`, rendering each via `navigateToFrame` and
 stopping at the last frame; the step transport buttons/keys stop it first.
 
+**The save handle is recorded after the load.** File ▸ Open and File ▸ Load SLP
+set `state.slpFileHandle` only once the loader has not returned `false`. Save writes
+to that handle, so a file that did not open (refused as too new, say) would otherwise
+be overwritten with whatever project is open. Set Env refuses as a whole if any
+environment file is too new, rather than triangulating from the readable cameras.
+
 **Key exports.**
 - Menu / setup: `setupMenus`, `setupUI`. The menu bar ends with a **Help**
   dropdown (Docs, Settings) after Hot Keys; Docs / Settings are ALSO direct
@@ -12021,7 +12029,8 @@ actually stops the corresponding rendering / data work.
 ### ui/behavior-coding.js
 
 **Purpose.** What Label Behaviors mode, the Behavior tab and the behavior
-timeline rows share: the coding state (focal animal, the behavior the
+timeline rows share: the animals (`sessionAnimals`: identity names; on one camera with no
+identities, track names), the coding state (focal animal, the behavior the
 timeline shows, the `[` `]` armed range, a social behavior waiting for its
 target — browser memory only), the coding actions, a repaint bus
 (requests coalesce into one animation frame), the frame navigator, and the
@@ -12551,6 +12560,36 @@ only cites it in a comment.)
 
 **Tests.** `tests/test-calibration-file-pick.mjs`.
 
+### loading/slp-format-check.js
+
+**Purpose.** The rule for refusing a `.slp` newer than LUC3D can read. Python
+sleap-io 0.10 writes SLP format 3.0 by default, where every table is a group of
+columns; LUC3D's two readers know the 2.x layout only, and without this read such
+a file as 0 frames with no error, under a success message. Same rule as Python's
+`_check_format_id`: refuse at or above the limit, and let a file with no
+`format_id` through.
+
+**No imports, deliberately.** The raw worker and a Node test load it. The vendored
+reader cannot (`lib/` stays self-contained), so it has its own copy of the rule and
+the wording (`LUCID local patch (luc3d newer-format)`), and
+`tests/e2e/slp-newer-format.mjs` fails if the two messages differ.
+
+**Key exports.**
+- `SLP_FORMAT_ID_LIMIT` — `3.0`.
+- `newerSlpFormatMessage(formatId, fileName)` — what a refused file tells the user.
+- `checkSlpFormatAttrs(metadataAttrs, fileName)` — throws an `Error` named
+  `UnsupportedSlpFormatError` (with `formatId`). Takes h5wasm's `{value}` wrappers
+  or bare values; no attributes pass.
+- `isNewerSlpFormatError(err)` — by name, so it holds for the vendored class and
+  for what `parseSlpH5` rebuilds from the worker's message.
+- `slpReadErrorStatus(prefix, err)` — status text for a failed read: a refusal
+  stands alone, anything else gets `prefix: message`.
+
+**Imported by.** `loading/slp-import-worker.js`, `import-export/file-io.js`,
+`import-export/slp-import.js`, `loading/session-loader.js`, `ui/ui-wiring.js`.
+
+**Tests.** `tests/test-slp-format-check.mjs`, `tests/e2e/slp-newer-format.mjs`.
+
 ### loading/campy-session.js
 
 **Purpose.** What a campy recording folder says about itself. campy (2.1.1+)
@@ -12914,6 +12953,10 @@ are collected per camera (`slpFailures`) and named in the status line, which
 downgrades to `error`, rather than leaving an empty view under a success-styled
 "Loaded N camera(s)". The worker's `f.keys()` check (see
 `loading/slp-import-worker.js`) is what turns a non-HDF5 file into a rejection.
+A file too new to read (`loading/slp-format-check.js`) is treated the same on both
+routes, so a lazy camera refused this way no longer stops the folder, and the
+status (`slpFailuresStatus`) leads with the reason, because the way past it is the
+user's to take. The function returns `{slpFailures}` for `handleLoadMultiSession`.
 
 **Video load failures are surfaced, with the reason.** Every loader reports a
 video the browser couldn't play via `videoLoadFailureText` (the decoder's codec
@@ -12924,7 +12967,11 @@ attach step lists the reason per file too.
 
 **Lazy project reopen (`handleLoadProjectSlpLazy`).** The memory-bounded "Load
 Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
-`import-export/save-load.js` via `shouldUseLazySlp`). **It shows the progress
+`import-export/save-load.js` via `shouldUseLazySlp`). **It frees the open project
+before it reads the new one**, for the memory, so it runs `checkSlpFileFormat`
+first: refusing a file too new to read must not cost the user that project. It
+resolves `false` for that (and for a cancelled load), like `handleLoadSlpFile`.
+**It shows the progress
 card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
 test), one step per stage, the file name on the detail line: 1. Reading the
 project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal
@@ -12969,7 +13016,10 @@ neither step (`tests/e2e/lazy-reopen-group-identities.mjs`).
 **`handleLoadMultiSession` ends with a calibration cross-check.** The tail calls
 `noteSessionCalibrationDivergence(state.sessions)` LAST, once every session is
 in, and queued behind the skeleton prompt (as its `onDone`) so two modals never
-stack. See `ui/calibration-notice.js`.
+stack. See `ui/calibration-notice.js`. **It also ends on the annotation files that
+could not be read** (`slpFailuresStatus`, every session's): each session's own status
+only lasts until the next one's, and the skeleton steps set theirs after this one's,
+so that same tail sets it again last.
 
 **No calibration → placeholder cameras, so the folder can be saved.** A folder
 loaded with no `calibration.toml` (and nothing embedded) gets one PLACEHOLDER
@@ -13243,18 +13293,19 @@ zero-copy access. Two modes: full eager parse, or lazy
 open-and-stream-frames.
 
 **Message protocol.**
-- IN: `{type: 'parse', file, slowCompound?, columnar?}` — full eager parse.
-  `slowCompound: true` forces h5wasm's `Dataset.value` for the compound tables
-  (the equivalence test's reference path; also a kill switch). `columnar: true`
-  returns the poses as flat TRANSFERRED typed arrays in `data.columnar` (and an
-  empty `data.frames`) — see below.
+- IN: `{type: 'parse', file, slowCompound?, columnar?, formatOnly?}` — full eager
+  parse. `slowCompound: true` forces h5wasm's `Dataset.value` for the compound
+  tables (the equivalence test's reference path; also a kill switch). `columnar:
+  true` returns the poses as flat TRANSFERRED typed arrays in `data.columnar` (and
+  an empty `data.frames`) — see below. `formatOnly: true` stops after the format
+  check and posts an empty result (`checkSlpFileFormat`).
 - IN: `{type: 'open', file}` — lazy open, return metadata only.
 - IN: `{type: 'getFrame', frameIdx, requestId}` — read one frame lazily.
 - IN: `{type: 'getFrames', startIdx, endIdx, requestId}` — read range.
 - IN: `{type: 'close'}` — close lazy file.
 - OUT: `{type: 'progress', message}`, `{type: 'result', data: {...}}`,
   `{type: 'metadata', data: {...}}`, `{type: 'frameData', ...}`,
-  `{type: 'framesData', ...}`, `{type: 'error', message}`.
+  `{type: 'framesData', ...}`, `{type: 'error', message, name?}`.
 
 **An unopenable file must reject, not resolve empty.** `new h5wasm.File(path,
 'r')` does **not** throw on non-HDF5 bytes, and every `f.get()` in `parseSlp` is
@@ -13262,6 +13313,12 @@ try/caught to null (right for optional datasets), so a non-SLP file would post
 an ordinary `result` with 0 frames. `parseSlp` therefore checks `f.keys()` right
 after the open and throws `Not a readable HDF5/SLP file (no root datasets)`.
 Covered by `tests/e2e/percam-slp-choice-and-failure.mjs`.
+
+**So must a file too new to read.** The tables of SLP format 3.0 are not where this
+code looks, so it would post a result with 0 frames. `parseSlp` runs
+`checkSlpFormatAttrs` (`loading/slp-format-check.js`) before reading anything else.
+That error goes out with its `name` and without the stack every other error gets
+appended, since it ends up in the status bar as it stands.
 
 **Fast compound reads (`readCompoundColumnsFast`).** SLEAP-written `.slp` files
 store `frames` / `instances` / `points` / `pred_points` as HDF5 **compound**
@@ -14197,10 +14254,42 @@ Blender (both files put the tracked corner at (0, 0, 300)).
 
 ---
 
+### import-export/behavior-events.js
+
+**Purpose.** Behavior labels as sleap-io events, the form sleap-app and Python
+sleap-io also read and write (SLP 2.6). `/event_types` is the ethogram (name,
+description; metadata `color`, `key`, `group`, `kind`, `directed`, `mutual`,
+`lucid_id`), `/events` each labelled and predicted bout (span inclusive, the
+session's FIRST camera as `video`, the animal as `subject` by identity else track,
+`source`, `score`, metadata `note`). A "not" label is its own type (`not <name>`,
+metadata `negates`). Reading is by name; an event on any camera of a session is
+that session's. An event the labels cannot hold (no subject; social with no target)
+is kept per session (`setKeptEventRows`) and written back unchanged. DOM-free.
+
+**Exports.** `buildBehaviorEvents(SIO, items)` → `{eventTypes, events}`,
+`fileEventsOf(labels)` → plain `{types, rows}` or null,
+`sessionVideoIdxs(rawSession)` → `Set<number>` or null, `onlyVideoOf(file)` → 0 or null,
+`eventsToBehaviorData(fileEvents, lucid, videoIdxs, onlyVideo)` → `{ethogram, labelRows, runs, kept}`
+(ids are the file's), `setKeptEventRows(session, rows)`.
+
+**Imports.** `pose/behavior-ethogram.js`, `pose/behavior-labels.js`,
+`pose/behavior-predictions.js`. **Imported by** `import-export/behavior-metadata.js`,
+`import-export/file-io.js`, `import-export/slp-streaming-write.js`,
+`loading/session-loader.js`. **Tests.** `tests/test-behavior-events.mjs`, e2e
+`behavior-label-roundtrip` (with files sleap-app and Python wrote,
+`tests/fixtures/behavior-events/`), `behavior-cross-app` (the two real apps, both ways,
+with Python reading the result; needs a sleap-app checkout, skips without one).
+
 ### import-export/behavior-metadata.js
 
-**Purpose.** Behavior labels in the project file, under `metadata.lucid`, each
-key only when non-empty (an untouched project's bytes are unchanged):
+**Purpose.** Behavior labels in the project file. In a `.slp`, labels and predicted
+bouts are events (`import-export/behavior-events.js`), and `writeBehaviorSlpMetadata`
+writes under `metadata.lucid` only what no other tool reads: `ethogram`
+(`{v:2, behaviors:[{id, name, detector?, post?}], features?}`), `behaviorLabels`
+(`{v:2, fps}`), `behaviorPredictions` (`{v:2, runs:[each run without its bouts]}`) and
+`behaviorStates`. A project JSON, and `.slp` files saved before events, hold the
+full v1 form below, each key only when non-empty (an untouched project's bytes are
+unchanged); `readBehaviorMetadata` reads both:
 `ethogram` (project-scoped, the same payload in every session, read from the
 first one ingested — later sessions map onto it by name; carries each
 behavior's `detector`, its classifier's `post` and the project's feature
@@ -14217,7 +14306,8 @@ merges its ethogram by name and remaps its bouts' and predictions' ids. The four
 `metadata.lucid` writer module (with visibility, smoothing and plane). DOM-free.
 
 **Exports.** `BEHAVIOR_METADATA_KEYS`, `writeBehaviorMetadata(lucid, session)`,
-`readBehaviorMetadata(session, lucid)` → `{kept, dropped}` (also
+`writeBehaviorSlpMetadata(lucid, session)`,
+`readBehaviorMetadata(session, lucid, fileEvents?, videoIdxs?, onlyVideo?)` → `{kept, dropped}` (also
 `noteLabelsChanged`, so the cached label prints are redone),
 `resetBehaviorState()` (forget the ethogram, the trained classifiers with
 their row cache, and every session's states; before every load and on New Project).
@@ -14630,7 +14720,13 @@ session's resident/total) rather than truncate silently. Covered by
   `slp-import-worker.js`. Kept for SLEAP analysis `.h5`, as the
   `parseSlpViaSleapIO` fallback, and for the per-camera session-folder load,
   which passes `{ columnar: true }` to receive the poses as flat transferred
-  typed arrays (`data.columnar`) instead of nested `data.frames`.
+  typed arrays (`data.columnar`) instead of nested `data.frames`. The rejection
+  keeps the worker's error `name`.
+- `checkSlpFileFormat(file)` — rejects only if the file is too new to read
+  (`loading/slp-format-check.js`), reading nothing but its metadata; any other
+  failure resolves and is left to the real read. For a loader that clears the open
+  project before its read (`handleLoadProjectSlpLazy`). Costs a worker start, so
+  the loaders that change nothing before they read don't use it.
 - SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress)` —
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` and adapts
   the typed `Labels` into the `slpData` shape via the private
@@ -14893,7 +14989,8 @@ loading-overlay/status-text UI helpers.
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
   large `.slp` — over 200 MB, `LARGE_SLP_BYTES` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
-  eager parse, freeing any previously loaded project first). A `.json` loaded
+  eager parse, freeing any previously loaded project first). Resolves `false` when
+  a `.slp` did not open and the project is as it was (see `handleLoadSlpFile`). A `.json` loaded
   WITHOUT video (Continue Without Video / `Esc` on `forceVideoSelection`) has no
   decoder to size it, so `state.totalFrames` comes from the last labeled frame
   (`adoptLabeledFrameCount`), the view opens on the first, and the status line
@@ -15087,8 +15184,9 @@ came from the `.slp`.
 The `.slp` parse is dispatched by the private `parseSlpForImport(file,
 onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
 streaming reader), with `parseSlpH5` (raw h5wasm worker) kept for SLEAP
-analysis `.h5` and as a fallback on any typed-read error. Both yield the same
-`slpData` shape.
+analysis `.h5` and as a fallback on any typed-read error but a refusal of a file
+too new to read (`loading/slp-format-check.js`), which the raw worker would refuse
+too. Both yield the same `slpData` shape.
 
 On load, identities are restored **per session**: each session prefers its
 own `metadata.lucid.identities` (from `sessions_json`) and only falls back to
@@ -15118,7 +15216,9 @@ path uses `resolveImportTrackIdx`, and the grouped-reconstruction path keeps
 first track.
 
 **Key exports.**
-- `handleLoadSlpFile(slpFile)` — replace-current-state load. Pre-allocates all
+- `handleLoadSlpFile(slpFile)` — replace-current-state load. Resolves `false` when
+  the file did not open and the project is as it was (cancelled, refused as too new,
+  unreadable), which is how File ▸ Open knows not to keep its save handle. Pre-allocates all
   N session groups in the LoadingProgressModal before the per-session loop so
   the header reads the true "Session n of N"; re-engages `showLoading` after the
   non-embedded folder picker so the overlay stays up during video decode. Calls

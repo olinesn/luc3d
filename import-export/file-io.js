@@ -18,10 +18,12 @@ import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPoints
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
 import { writeVisibilityMetadata } from './visibility-metadata.js';
+import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { writePlaneMetadata } from './plane-metadata.js';
 import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js';
-import { writeBehaviorMetadata } from './behavior-metadata.js';
+import { writeBehaviorSlpMetadata } from './behavior-metadata.js';
+import { buildBehaviorEvents, fileEventsOf } from './behavior-events.js';
 
 // ============================================
 // Generic file picker
@@ -1357,12 +1359,16 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
     // Identities are a lucid-internal concept; losing the color/name
     // metadata in the Export output is acceptable (Export is a flat
     // per-camera dump, not a lucid-project round-trip).
+    // Behavior labels go along, on this camera's video.
+    var cameraEvents = buildBehaviorEvents(SIO, [{ session: session, video: video, identities: [], tracks: tracks }]);
     return new SIO.Labels({
         labeledFrames: labeledFrames,
         videos: [video],
         skeletons: [skeleton],
         tracks: tracks,
         provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+        eventTypes: cameraEvents.eventTypes,
+        events: cameraEvents.events,
     });
 }
 
@@ -1469,7 +1475,24 @@ async function lazyCameraExportBytes(SIO, session, cameraName) {
     }
     var lazyLabels = loader.labelsByCam.get(cameraName);
     if (!lazyLabels || !lazyLabels.isLazy || typeof SIO.saveSlpToBytes !== 'function') return null;
-    return await SIO.saveSlpToBytes(lazyLabels);
+    // The store's Labels belong to the loader: behavior labels ride along for this
+    // write only, on this camera's video.
+    var videoAt = session.cameras.findIndex(function (c) { return c.name === cameraName; });
+    var cameraEvents = buildBehaviorEvents(SIO, [{
+        session: session, video: lazyLabels.videos[lazyLabels.videos.length === 1 ? 0 : videoAt] || null,
+        identities: [], tracks: lazyLabels.tracks,
+    }]);
+    var ownTypes = lazyLabels.eventTypes, ownEvents = lazyLabels.events, ownIdentities = lazyLabels.identities;
+    lazyLabels.eventTypes = cameraEvents.eventTypes;
+    lazyLabels.events = cameraEvents.events;
+    lazyLabels.identities = ownIdentities.slice();
+    try {
+        return await SIO.saveSlpToBytes(lazyLabels);
+    } finally {
+        lazyLabels.eventTypes = ownTypes;
+        lazyLabels.events = ownEvents;
+        lazyLabels.identities = ownIdentities;
+    }
 }
 
 /** Copied from pose/tracker.js's identical helper — see that file's doc. */
@@ -1603,6 +1626,7 @@ export async function exportCameraSlpStreaming(session, cameraName, reprojAsUser
     env.instanceFilter = instanceFilter;
     env.reprojAsUser = reprojAsUser;
 
+    var cameraEvents = buildBehaviorEvents(SIO, [{ session: session, video: env.video, identities: [], tracks: env.tracks }]);
     var writer = await SIO.openSlpWriter({
         skeletons: [env.skeleton],
         videos: [env.video],
@@ -1610,6 +1634,8 @@ export async function exportCameraSlpStreaming(session, cameraName, reprojAsUser
         identities: [],
         sessions: [],
         provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+        eventTypes: cameraEvents.eventTypes,
+        events: cameraEvents.events,
     });
 
     // COVERAGE PRECONDITION. `sweepLazyFrameWindows` hydrates through
@@ -1788,6 +1814,8 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
     for (var ut = 0; ut < unionNames.length; ut++) trackByName[unionNames[ut]] = unionTracks[ut];
 
     // 4. Per selection, build video + labeled frames, re-pointing track refs via name.
+    var behaviorItems = [];        // each selection's behavior labels, on its own video
+    var behaviorIdentities = [];
     var videos = [];
     var labeledFrames = [];
     var numNodes = baseNodes.length;
@@ -1837,6 +1865,7 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
         });
         video.shape = [fc, vh, vw, 1];
         videos.push(video);
+        behaviorItems.push({ session: session, video: video, identities: behaviorIdentities, tracks: unionTracks });
 
         var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
         for (var fi = 0; fi < allFrameIndices.length; fi++) {
@@ -1941,12 +1970,15 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
         }
     }
 
+    var selectionEvents = buildBehaviorEvents(SIO, behaviorItems);
     return new SIO.Labels({
         labeledFrames: labeledFrames,
         videos: videos,
         skeletons: [skeleton],
         tracks: unionTracks,
         provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+        eventTypes: selectionEvents.eventTypes,
+        events: selectionEvents.events,
     });
 }
 
@@ -2230,6 +2262,9 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 var vf = videoFiles[vfi];
                 if ((vf.name === cam.name || vf.assignedCamera === cam.name) && vf.videoPath) {
                     videoPath = vf.videoPath;
+                    // A view does not always carry it. Without it another app opens this
+                    // video as 0 frames until the video itself is found.
+                    if (!fc) fc = vf.frameCount || 0;
                     break;
                 }
             }
@@ -2291,9 +2326,8 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     writePlaneMetadata(sioSession.metadata.lucid, session);
     // Temporal Smoothing's last run, only while something is smoothed.
     writeSmoothingMetadata(sioSession.metadata.lucid, session);
-    // The ethogram (project-scoped, in every session) and this session's
-    // behavior bouts, only when there are any.
-    writeBehaviorMetadata(sioSession.metadata.lucid, session);
+    // Behavior labels go in as events (below); this is what only LUC3D reads.
+    writeBehaviorSlpMetadata(sioSession.metadata.lucid, session);
     session.cameras.forEach(function (cam, i) {
         sioSession.addVideo(sioVideos[i], sioCameras[i]);
     });
@@ -2467,6 +2501,9 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
         }
     }
 
+    var behaviorEvents = buildBehaviorEvents(SIO, [{
+        session: session, video: sioVideos[0] || null, videos: sioVideos, identities: sioIdentities, tracks: tracks,
+    }]);
     return new SIO.Labels({
         labeledFrames: labeledFrames,
         videos: sioVideos,
@@ -2475,6 +2512,8 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
         identities: sioIdentities,
         sessions: [sioSession],
         provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+        eventTypes: behaviorEvents.eventTypes,
+        events: behaviorEvents.events,
     });
 }
 
@@ -2746,11 +2785,13 @@ function _readColumnar(obj, fieldNames) {
  *
  * @param {File} file - The .slp file
  * @param {Function} [onProgress] - Optional progress callback
- * @param {{columnar?: boolean}} [opts] - `columnar: true` asks the worker for
+ * @param {{columnar?: boolean, formatOnly?: boolean}} [opts] - `columnar: true` asks the worker for
  *   the pose data as flat TRANSFERRED typed arrays (`data.columnar`, see
  *   `buildColumnarFrames` in loading/slp-import-worker.js) instead of the nested
  *   `data.frames` objects, which are expensive to structured-clone. Only callers
  *   that read `data.columnar` should ask for it; `data.frames` is then empty.
+ *   `formatOnly: true` stops after the format check and resolves empty: see
+ *   {@link checkSlpFileFormat}.
  * @returns {Promise<Object>} Raw parsed data from worker
  */
 export function parseSlpH5(file, onProgress, opts) {
@@ -2773,7 +2814,9 @@ export function parseSlpH5(file, onProgress, opts) {
                 resolve(msg.data);
             } else if (msg.type === 'error') {
                 worker.terminate();
-                reject(new Error(msg.message));
+                var workerErr = new Error(msg.message);
+                if (msg.name) workerErr.name = msg.name;
+                reject(workerErr);
             }
         };
 
@@ -2782,8 +2825,33 @@ export function parseSlpH5(file, onProgress, opts) {
             reject(new Error('SLP worker error: ' + (err.message || 'unknown')));
         };
 
-        worker.postMessage({ type: 'parse', file: file, columnar: !!(opts && opts.columnar) });
+        worker.postMessage({
+            type: 'parse', file: file,
+            columnar: !!(opts && opts.columnar),
+            formatOnly: !!(opts && opts.formatOnly),
+        });
     });
+}
+
+/**
+ * Refuse a `.slp` file too new to read WITHOUT reading the rest of it, for a
+ * loader that clears the open project before its read: the readers refuse such a
+ * file themselves, but by then that project would be gone for nothing. Costs one
+ * worker start and a metadata read, so the loaders that change nothing before
+ * they read don't use it.
+ *
+ * Any other failure resolves: it belongs to the real read, in that read's words.
+ *
+ * @param {File} file - The .slp file
+ * @returns {Promise<void>}
+ * @throws {Error} Named `UnsupportedSlpFormatError` (see loading/slp-format-check.js).
+ */
+export async function checkSlpFileFormat(file) {
+    try {
+        await parseSlpH5(file, null, { formatOnly: true });
+    } catch (err) {
+        if (isNewerSlpFormatError(err)) throw err;
+    }
 }
 
 /**
@@ -2922,6 +2990,9 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         }
     }
 
+    // --- behavior labels (sleap-io events), plain data for readBehaviorMetadata ---
+    var behaviorEvents = fileEventsOf(labels);
+
     // --- identities[] (file-level fallback; per-session lives in
     // sessions[].metadata.lucid.identities, which the importer prefers) ---
     var identities = (labels.identities || []).map(function (id) {
@@ -2938,6 +3009,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // The file's whole provenance dict (slp-provenance.js picks each
         // session's part).
         provenance: labels.provenance || null,
+        behaviorEvents: behaviorEvents,
     };
 }
 

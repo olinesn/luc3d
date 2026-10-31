@@ -38,7 +38,7 @@ import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
-    parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
+    parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO, checkSlpFileFormat,
     loadCalibrationFile,
 } from '../import-export/file-io.js';
 
@@ -47,6 +47,7 @@ import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-expor
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
 import { chooseCameraSlp } from './percam-slp-choice.js';
+import { isNewerSlpFormatError, slpReadErrorStatus } from './slp-format-check.js';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
@@ -105,6 +106,7 @@ import { readVisibilityMetadata } from '../import-export/visibility-metadata.js'
 import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js';
 import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
 import { readBehaviorMetadata, resetBehaviorState } from '../import-export/behavior-metadata.js';
+import { fileEventsOf, onlyVideoOf, sessionVideoIdxs } from '../import-export/behavior-events.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -1589,6 +1591,7 @@ export async function handleLoadMultiSession() {
         console.log('[multi-session] Found sessions:', sessionDirs.map(function (d) { return d.name; }));
 
         // Load each session — first gets full video init, rest defer decoders
+        var unreadSlps = [];
         for (var si = 0; si < sessionDirs.length; si++) {
             var sess = sessionDirs[si];
             showLoading('Loading session ' + (si + 1) + '/' + sessionDirs.length + ': ' + sess.name + '...');
@@ -1600,11 +1603,15 @@ export async function handleLoadMultiSession() {
 
             var sessionFiles = await enumerateDirectoryHandle(sess.handle, sess.name, null);
             console.log('[multi-session] Session', sess.name, '— files:', sessionFiles.length);
-            await handleLoadSessionFolderPerCamera(sessionFiles, si > 0);
+            var loadedSession = await handleLoadSessionFolderPerCamera(sessionFiles, si > 0);
+            if (loadedSession) unreadSlps = unreadSlps.concat(loadedSession.slpFailures);
         }
 
         hideLoading();
-        setStatus('Loaded ' + sessionDirs.length + ' sessions', 'success');
+        // Each session's own status named its unreadable files, but only until the
+        // next session's replaced it.
+        var sessionsStatus = 'Loaded ' + sessionDirs.length + ' sessions' + slpFailuresStatus(unreadSlps);
+        setStatus(sessionsStatus, unreadSlps.length > 0 ? 'error' : 'success');
 
         // Display first session's grid (it has live decoders from eager load)
         if (state.sessions.length > 1) {
@@ -1627,6 +1634,8 @@ export async function handleLoadMultiSession() {
         // modals, and the user answers whichever is on top.
         var noteCalibrations = function () {
             noteSessionCalibrationDivergence(state.sessions);
+            // Last, so the skeleton steps' own status can't replace it.
+            if (unreadSlps.length > 0) setStatus(sessionsStatus, 'error');
         };
 
         if (state.sessions.length > 1) {
@@ -2162,6 +2171,12 @@ export async function handleLoadSessionFolderSingleSlp() {
         try {
             slpData = await parseSlpViaSleapIO(slpFile, function (msg) { showLoading(msg); });
         } catch (typedErr) {
+            // Too new for this reader is too new for the raw worker as well.
+            if (isNewerSlpFormatError(typedErr)) {
+                hideLoading();
+                setStatus(typedErr.message, 'error');
+                return;
+            }
             console.warn('[single-slp] typed SLP read failed — falling back to raw h5wasm worker:', typedErr);
             try {
                 slpData = await parseSlpH5(slpFile, function (msg) { showLoading(msg); });
@@ -2307,7 +2322,9 @@ export async function handleLoadSessionFolderSingleSlp() {
         readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         // Behavior labels. Into an open project the file's ethogram is merged
         // by behavior name and its bouts remapped onto the project's ids.
-        readBehaviorMetadata(session, sessLucid);
+        readBehaviorMetadata(session, sessLucid, slpData.behaviorEvents,
+            slpData.sessions && slpData.sessions.length > 1 ? sessionVideoIdxs(slpData.sessions[0]) : null,
+            onlyVideoOf(slpData));
         var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
         if (planeConflict) {
             console.warn('[single-slp] not reading the plane state in ' + slpFile.name +
@@ -2807,9 +2824,13 @@ export function createOpenProgress(fileName) {
 
 export async function handleLoadProjectSlpLazy(slpFile) {
     try {
-        if (!(await ensureNo3dImportBlockingLoad())) { setStatus('Load cancelled', 'warning'); return; }
+        if (!(await ensureNo3dImportBlockingLoad())) { setStatus('Load cancelled', 'warning'); return false; }
         var openProgress = createOpenProgress(slpFile.name);
         openProgress('read');
+
+        // Everything below frees the open project first, so a file too new to read
+        // has to be refused before any of it, or refusing it costs that project.
+        await checkSlpFileFormat(slpFile);
 
         // Free the PREVIOUS project's memory BEFORE opening the new one. A large
         // lazy session holds ~1 GB in its loader + GBs of grouping/3D; opening a
@@ -2914,7 +2935,10 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // eager read in import-export/slp-import.js.
         readVisibilityMetadata(session, lucid);
         readSmoothingMetadata(session, lucid);   // Temporal Smoothing's last run
-        readBehaviorMetadata(session, lucid);    // ethogram + behavior bouts
+        // Ethogram + behavior bouts. Only this file's first session opens here.
+        readBehaviorMetadata(session, lucid, fileEventsOf(labels),
+            (labels.rawSessionsJson || []).length > 1 ? sessionVideoIdxs(labels.rawSessionsJson[0]) : null,
+            onlyVideoOf(labels));
         // Define Planes state — the lazy-reopen mirror of the eager read in
         // `import-export/slp-import.js`.
         readPlaneMetadata(session, lucid);
@@ -3024,7 +3048,8 @@ export async function handleLoadProjectSlpLazy(slpFile) {
     } catch (err) {
         console.error('[load-project-lazy] Error:', err);
         hideLoading();
-        setStatus('Lazy reopen error: ' + (err && err.message || err), 'error');
+        setStatus(slpReadErrorStatus('Lazy reopen error', err), 'error');
+        if (isNewerSlpFormatError(err)) return false;
     }
 }
 
@@ -3067,6 +3092,23 @@ export function addColumnarFramesToSession(session, camName, col, trackRemap) {
             fg.addInstance(camName, instance);
         }
     }
+}
+
+/**
+ * Status-line text for the annotation files a folder load could not read. The
+ * names alone don't say why, and the way past a file too new to read is the
+ * user's to take, so that reason goes first, once: a folder's files all come from
+ * the same tool, and the names can run past the end of the status bar.
+ *
+ * @param {Array<{camName:string, file:File, message:string, refused?:boolean}>} slpFailures
+ * @returns {string} Text to append, or `''` with no failures.
+ */
+function slpFailuresStatus(slpFailures) {
+    if (slpFailures.length === 0) return '';
+    var refused = slpFailures.find(function (f) { return f.refused; });
+    return (refused ? ' — ' + refused.message : '')
+        + ' — ' + slpFailures.length + ' annotation file(s) could not be read: '
+        + slpFailures.map(function (f) { return f.camName + ' (' + f.file.name + ')'; }).join(', ');
 }
 
 export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos) {
@@ -3469,6 +3511,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                             slpFailures.push({
                                 camName: job.camName, file: job.file,
                                 message: (e && e.message) || String(e),
+                                refused: isNewerSlpFormatError(e),
                             });
                             console.error('[session-folder] ' + job.camName
                                 + ': failed to parse "' + job.file.name + '":', e);
@@ -3529,8 +3572,16 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     return lazyLoader.open(job.camName, job.file).then(function (r) {
                         onAnnotationDone();
                         return r;
+                    }, function (e) {
+                        // Too new to read: a view and no data, and said so at the
+                        // end, as on the eager path. Any other failure stops here.
+                        if (!isNewerSlpFormatError(e)) throw e;
+                        console.error('[session-folder] ' + job.camName + ': ' + e.message);
+                        slpFailures.push({ camName: job.camName, file: job.file, message: e.message, refused: true });
+                        onAnnotationDone();
                     });
                 }));
+                if (lazyAreSlp && lazyLoader.labelsByCam.size === 0) lazyLoader = null;
             } catch (lazyErr) {
                 // Do NOT fall back to eager parseSlpH5 — a 100+ MB file would OOM
                 // the tab (the very thing lazy mode avoids). Surface the error.
@@ -4017,8 +4068,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         if (!calibFile) statusMsg += ' (no calibration — load separately via File > Load Calibration)';
         var statusKind = 'success';
         if (slpFailures.length > 0) {
-            statusMsg += ' — ' + slpFailures.length + ' annotation file(s) could not be read: '
-                + slpFailures.map(function (f) { return f.camName + ' (' + f.file.name + ')'; }).join(', ');
+            statusMsg += slpFailuresStatus(slpFailures);
             statusKind = 'error';
         }
         if (videoFailures.length > 0) {
@@ -4039,6 +4089,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         }
         var campyStatus = withCampyWarnings(statusMsg, statusKind, state.session && state.session.campyRecording);
         setStatus(campyStatus.message, campyStatus.kind);
+        return { slpFailures: slpFailures };
 
     } catch (err) {
         console.error('[session-folder] Error:', err);

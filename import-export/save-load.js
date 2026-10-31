@@ -689,6 +689,8 @@ async function buildSlpBytes(opts) {
     var allSkeletons = [];
     var allTracks = [];
     var allIdentities = [];
+    var allEventTypes = [];
+    var allEvents = [];
     var seenSkeletonNames = new Set();
     var seenTrackNames = new Set();
 
@@ -840,6 +842,8 @@ async function buildSlpBytes(opts) {
         }
         allIdentities = allIdentities.concat(sessLabels.identities || []);
         allSessions = allSessions.concat(sessLabels.sessions || []);
+        allEventTypes = allEventTypes.concat(sessLabels.eventTypes || []);
+        allEvents = allEvents.concat(sessLabels.events || []);
     }
 
     // Re-point every instance's track to the canonical (deduped) Track object
@@ -865,6 +869,11 @@ async function buildSlpBytes(opts) {
             }
         }
     }
+    // Events name their animals the same way: a track stays the canonical object.
+    allEvents.forEach(function (ev) {
+        if (ev.subject instanceof SIO.Track && canonicalTrackByName[ev.subject.name]) ev.subject = canonicalTrackByName[ev.subject.name];
+        if (ev.target instanceof SIO.Track && canonicalTrackByName[ev.target.name]) ev.target = canonicalTrackByName[ev.target.name];
+    });
 
     var labels = new SIO.Labels({
         labeledFrames: allLabeledFrames,
@@ -875,6 +884,9 @@ async function buildSlpBytes(opts) {
         sessions: allSessions,
         // Keeps the loaded files' provenance (slp-provenance.js).
         provenance: buildSaveProvenance(sessionsToExport),
+        // The catalog collapses to one entry per name when Labels is built.
+        eventTypes: allEventTypes,
+        events: allEvents,
     });
 
     // PR 5.2: export sleap-io.js's canonical bytes directly. The typed graph
@@ -1505,7 +1517,7 @@ export async function handleLoadProject(prePickedFile) {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
             setStatus('Load cancelled', 'warning');
-            return;
+            return false;
         }
         var file;
         if (prePickedFile) {
