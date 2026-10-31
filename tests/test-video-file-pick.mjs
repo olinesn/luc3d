@@ -157,6 +157,13 @@ console.log('\n8. matchVideoToCamera: directory beats stem beats referenced name
     check(matchVideoToCamera(bare('nothing.mp4'), ['back'], refs) === null,
         'and gives null when nothing matches');
     check(matchVideoToCamera(bare('x.mp4'), []) === null, 'no cameras gives null');
+
+    // A plain SLEAP file's cameras are named after its videos, so one name can
+    // sit inside another's.
+    check(matchVideoToCamera(bare('clip10.mp4'), ['clip1', 'clip10']) === 'clip10',
+        'the whole stem beats a camera name inside it, whatever the camera order');
+    check(matchVideoToCamera(bare('clip1.mp4'), ['clip1', 'clip10']) === 'clip1', 'and the shorter name still gets its own video');
+    check(matchVideoToCamera(f('sess/clip1/clip10.mp4'), ['clip10', 'clip1']) === 'clip1', 'the parent directory still comes first');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

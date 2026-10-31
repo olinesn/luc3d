@@ -12,8 +12,9 @@
  * reader and with Python, and both must report what the source holds.
  *
  *  A. Every layout, two saves (see `FILES`): frames in any order, an open session with
- *     no frame or no camera, a (video, frame) listed twice, every kind of thing a session
- *     can hold, the same as an old file holds it inline, a video two sessions share.
+ *     no frame, a (video, frame) listed twice, every kind of thing a session can hold,
+ *     identities on poses, the same as an old file holds it inline, a video two sessions
+ *     share. An open session with no camera at all goes the older way, which reads them all.
  *  B. The real route: File ▸ Open on a file over 200 MB.
  *  C. Edits on the open session: a corrected frame goes first in the file (every other
  *     frame's position moves), a deleted pose compacts the store, a deleted track
@@ -92,6 +93,8 @@ def read(path):
     except Exception as e:
         return {"error": type(e).__name__ + ": " + str(e)[:160]}
     poses = sorted(pose_row(lf.video.filename, lf.frame_idx, i) for lf in labels.labeled_frames for i in lf.instances)
+    pose_identities = sorted(lf.video.filename + "|" + str(lf.frame_idx) + "|" + num(i.points["xy"][0][0]) + "|" + i.identity.name
+                             for lf in labels.labeled_frames for i in lf.instances if getattr(i, "identity", None) is not None)
     sessions, groups, rich, details = [], [], [], []
     for si, s in enumerate(labels.sessions):
         cams = {}
@@ -134,6 +137,7 @@ def read(path):
         "videoShapes": {v.filename: list(v.backend_metadata.get("shape") or []) for v in labels.videos},
         "identities": [i.name for i in labels.identities],
         "identityOwners": sorted(sorted(v) for v in shared.values()),
+        "poseIdentities": pose_identities,
         "provenance": {k: v for k, v in labels.provenance.items() if k not in ("source", "exported_at", "sleap_version", "filename")},
         "sessions": sessions, "details": details, "poses": poses, "groups": sorted(groups), "rich": sorted(rich),
     }
@@ -261,6 +265,19 @@ def rich_parts():
 
 frames, videos, sessions, identities = rich_parts()
 save("rich.slp", frames, videos, sessions, identities=identities)
+
+# The same file with identities on poses too, an open session's and a closed one's. They
+# are matched by name, so a closed group on C must not end up on a second C.
+frames, videos, sessions, identities = rich_parts()
+by_name = {i.name: i for i in identities}
+for lf in frames:
+    if lf.video.filename == "camA.mp4" and lf.frame_idx == 0:
+        lf.instances[0].identity = by_name["A"]
+    if lf.video.filename == "camD.mp4" and lf.frame_idx == 1:
+        lf.instances[1].identity = by_name["A"]
+    if lf.video.filename == "camE.mp4" and lf.frame_idx == 20:
+        lf.instances[0].identity = by_name["C"]
+save("pose_identities.slp", frames, videos, sessions, identities=identities)
 
 # The same file the way a writer before /session_data left it: everything inline in sessions_json.
 frames, videos, sessions, identities = rich_parts()
@@ -491,6 +508,7 @@ function compare(what, got, want) {
     }
     if (want.identities && got.identities) check(eq(got.identities, want.identities), what + ': the identity list', got.identities);
     if (want.identityOwners && got.identityOwners) check(eq(got.identityOwners, want.identityOwners), what + ': sessions that shared an identity still do', got.identityOwners);
+    if (want.poseIdentities && got.poseIdentities) check(eq(got.poseIdentities, want.poseIdentities), what + ': identities on poses', diff(got.poseIdentities, want.poseIdentities));
     if (want.provenance && got.provenance) check(eq(got.provenance, want.provenance), what + ': provenance', got.provenance);
 }
 
@@ -499,7 +517,7 @@ function checkSave(what, saved, want) {
     return savedForPython(saved.bytes, what + ', Python', want);
 }
 
-const FILES = ['two_sessions', 'closed_first', 'first_empty', 'first_no_cameras', 'dup_rows', 'rich', 'legacy', 'shared_video'];
+const FILES = ['two_sessions', 'closed_first', 'first_empty', 'dup_rows', 'rich', 'pose_identities', 'legacy', 'shared_video'];
 
 /** What every save of `name` must hold, from Python's read of the source. */
 function expectedFor(source, extra) {
@@ -512,13 +530,14 @@ function expectedFor(source, extra) {
         firstCameras: source.details[0].cameras.map(c => [c.name, c.rvec, c.tvec, c.matrix, c.dist, c.size]),
         identities: source.identities,
         identityOwners: source.identityOwners,
+        poseIdentities: source.poseIdentities,
         closedVideoShapes: Object.fromEntries(source.sessions.slice(1).flatMap(s => Object.values(s)).map(name => [name, source.videoShapes[name]])),
     }, extra);
 }
 
 try {
     uv(PY_WRITE, [tmp]);
-    const sourcePaths = [...FILES, 'provenance', 'camF_alone', 'camG_alone'].map(n => path.join(tmp, n + '.slp'));
+    const sourcePaths = [...FILES, 'first_no_cameras', 'provenance', 'one_session', 'camF_alone', 'camG_alone'].map(n => path.join(tmp, n + '.slp'));
     const sources = {};
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
     for (const p of sourcePaths) sources[path.basename(p, '.slp')] = rawSources[p];
@@ -555,6 +574,26 @@ try {
             checkSave(what, saved, want);
             if (gen === 1) firstVideos = saved.read.videos;
             else check(eq(saved.read.videos, firstVideos), what + ': the video list did not move', [saved.read.videos, firstVideos]);
+            bytes = saved.bytes;
+        }
+    }
+
+    console.log('\nA2. An open session with no camera at all');
+    {
+        // Such a session says nothing about its videos, so the file goes the older way,
+        // which reads every session.
+        let bytes = readFile('first_no_cameras');
+        const src = sources.first_no_cameras;
+        for (let gen = 1; gen <= 2; gen++) {
+            const page = await open('lazy', bytes);
+            const shape = await page.evaluate(() => ({ lazy: !!window.__lucid.state.session.lazyLoader, sessions: window.__lucid.state.sessions.length }));
+            const saved = await saveAndRead(page);
+            check(!shape.lazy, `no camera, save ${gen}: opened in full`, shape);
+            check(eq(saved.read.poses, src.poses), `no camera, save ${gen}: every pose`, diff(saved.read.poses, src.poses));
+            const closedGroups = list => list.filter(g => /camC=/.test(g)).map(g => g.replace(/^s\d+\|/, ''));
+            check(eq(closedGroups(saved.read.groups), closedGroups(src.groups)), `no camera, save ${gen}: the other session's groups`, diff(closedGroups(saved.read.groups), closedGroups(src.groups)));
+            check(saved.read.sessions.some(s => s.camC === 'camC.mp4' && s.camD === 'camD.mp4'), `no camera, save ${gen}: the other session's cameras`, saved.read.sessions);
+            savedForPython(saved.bytes, `no camera, save ${gen}, Python`, { poses: src.poses });
             bytes = saved.bytes;
         }
     }

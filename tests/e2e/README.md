@@ -45,6 +45,13 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   frame — no group may keep its stale 3D, and the members must be placeholders
   again afterwards. (Fails against `moveVideosToSession` without the hydration:
   0/10 non-resident groups re-solved, all 10 kept their stale 3D.)
+- **`slp-failed-read.mjs`** — a read of a `.slp` that fails is an error, never a
+  project with data missing. Moves a real picked file away at a chosen request or
+  read (no fake readers; it starts its own server for that): every kind of read on
+  the vendored reader and the raw worker, every read in turn, File ▸ Open, a range
+  source, the h5wasm cold-read patch, a multi-session save. (Fails against the
+  unpatched reader: File ▸ Open said "SLP loaded" with every group and all the 3D
+  gone, and a Save wrote that.)
 - **`session-video-scoping.mjs`** — regression guard for the multi-session
   "second session shows both videos" bug. Verifies that loading a video into one
   session never leaks its view / camera / `videoFileIndices` into another
@@ -154,3 +161,12 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   its swap), `(none)` on a group and `(+) New Track` still work. Confirmed to
   fail on the eager build (43,387 options, ~228 ms per update, against 421 and
   ~7 ms); the behaviour checks pass on both, so they pin equivalence.
+- **`slp-embedded-images.mjs`** — a `.slp` with images inside it opens and shows
+  them. Every such file used to fail ("SLP load error", a BigInt from h5wasm), and
+  behind that error each image is checked exactly, by pixel value, per camera and
+  frame: images on the right camera with video groups out of list order, every way
+  they can be stored (variable-length and fixed-width rows, the JS writer's one run
+  of bytes, uncompressed pixels), several sessions, frames with no image, playing,
+  colour order. Save must never write over the file holding the images. Fixtures:
+  `tests/fixtures/slp-embedded/`. Confirmed to fail on the code before the fix, and
+  each fix on its own was undone to see this test notice.
