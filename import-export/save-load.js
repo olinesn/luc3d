@@ -15,6 +15,7 @@ import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
 } from '../pose/triangulation.js';
 import { OnDemandVideoDecoder, hasEmbeddedVideos, closeEmbeddedFrames } from '../loading/video.js';
+import { readBlobRange } from '../loading/cold-read-guard.js';
 import { createDemoSkeleton } from '../demo-data.js';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
@@ -1107,7 +1108,7 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     session.lazyLoader = null;
     session.frameGroups = new Map();
     session.instanceGroups = new Map();
-    session.lazyEvicted = true;
+    session.lazyEvicted = true;   // see `evictedSessionsRefusal`
     console.log('[save-slp] pass 1/2: committed ref graph for session', session.name || '(unnamed)', '- evicted its lazy loader');
     // See `encourageGC` — dereferencing doesn't force reclamation; nudge the
     // engine toward a real (mark-compact) collection before the next
@@ -1189,7 +1190,18 @@ export async function finalizeMultiSessionSave(handle, opts) {
  * `opts.keepLoaded`: see `beginMultiSessionSave`. File ▸ Save always passes it.
  */
 export async function saveAllSessionsStreaming(sessions, opts) {
-    var handle = beginMultiSessionSave({ keepLoaded: opts && opts.keepLoaded });
+    var keepLoaded = !!(opts && opts.keepLoaded);
+    // Pass 1 releases each session's data and pass 2 reads it back from these files,
+    // so one that has gone away must stop the save before anything is released: then
+    // nothing is lost, and the save works once the file is back. `keepLoaded` reads
+    // none of them and must not start to: a save in place leaves one unreadable.
+    if (!keepLoaded) {
+        for (var si = 0; si < sessions.length; si++) {
+            if (!sessions[si].lazyLoader) continue;   // the commit below says what is wrong
+            for (var source of sessions[si].lazyLoader.sourceFiles.values()) await readBlobRange(source, 0, 1);
+        }
+    }
+    var handle = beginMultiSessionSave({ keepLoaded: keepLoaded });
     var onProgress = (opts && opts.onProgress) || undefined;
     for (var i = 0; i < sessions.length; i++) await commitSessionForMultiSessionSave(handle, sessions[i], onProgress);
     return await finalizeMultiSessionSave(handle, opts);
