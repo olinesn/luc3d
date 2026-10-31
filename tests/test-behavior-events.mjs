@@ -14,10 +14,12 @@
  *   - an event on any camera of a session is the session's, and only that session's;
  *   - a frame-level event survives a load and save unchanged;
  *   - a file of separate videos keeps each video's events on that video;
+ *   - a video in no recording session keeps its events, on that video, through saves;
+ *   - with several sessions each event goes to one of them;
  *   - renamed elsewhere, a behavior keeps its detector.
  */
 
-import { buildBehaviorEvents, fileEventsOf, onlyVideoOf, sessionVideoIdxs } from '../import-export/behavior-events.js';
+import { buildBehaviorEvents, fileEventsOf, sessionEventScope, sessionVideoIdxs } from '../import-export/behavior-events.js';
 import { readBehaviorMetadata, writeBehaviorSlpMetadata, resetBehaviorState } from '../import-export/behavior-metadata.js';
 import { addBehavior, behaviors, behaviorByName, setBehaviorDetector, serializeEthogram } from '../pose/behavior-ethogram.js';
 import { labelRange, noteBehaviorFps, exportBoutRows, behaviorFps } from '../pose/behavior-labels.js';
@@ -42,7 +44,8 @@ class UserEvent extends BaseEvent { get isPredicted() { return false; } }
 class PredictedEvent extends BaseEvent { get isPredicted() { return true; } }
 class Identity { constructor(o) { Object.assign(this, { name: '', metadata: {} }, o); } }
 class Track { constructor(name) { this.name = name; } }
-const SIO = { EventType, UserEvent, PredictedEvent, Identity, Track };
+class Video { constructor(o) { Object.assign(this, { backendMetadata: {} }, o); } }
+const SIO = { EventType, UserEvent, PredictedEvent, Identity, Track, Video };
 
 /** What a file holds after a save: the plain form the readers get. */
 function asFile(eventTypes, events, videos) {
@@ -168,13 +171,18 @@ console.log('\n5. Sessions: any camera, only its own');
         new UserEvent({ type: rear, video: v[2], startFrame: 20, endFrame: 21, subject: a }),   // session 1
     ];
     const file = asFile([rear], events, v);
+    const sessions = [{ camcorder_to_video_idx_map: { 0: 0, 1: 1 } }, { camcorder_to_video_idx_map: { 0: 2, 1: 3 } }];
     const s0 = { name: 's0' }, s1 = { name: 's1' };
-    readBehaviorMetadata(s0, {}, file, sessionVideoIdxs({ camcorder_to_video_idx_map: { 0: 0, 1: 1 } }));
-    readBehaviorMetadata(s1, {}, file, sessionVideoIdxs({ camcorder_to_video_idx_map: { 0: 2, 1: 3 } }));
+    readBehaviorMetadata(s0, {}, file, sessionEventScope(sessions, 4, 0));
+    readBehaviorMetadata(s1, {}, file, sessionEventScope(sessions, 4, 1));
     check(eq(exportBoutRows(s0).map(r => r[3]), [1, 10]), 'an event on either camera is its session\'s');
     check(eq(exportBoutRows(s1).map(r => r[3]), [20]), 'and not the other session\'s');
     check(behaviors().length === 1, 'the catalog comes in once');
-    check(sessionVideoIdxs({}) === null && sessionVideoIdxs(null) === null, 'a session naming no videos reads every row');
+    check(sessionVideoIdxs({}) === null && sessionVideoIdxs(null) === null, 'a session may name no videos');
+    const namesNone = sessionEventScope([{}], 4, 0);
+    check(namesNone.videos.size === 4 && namesNone.keep.size === 0, 'and then it reads every row');
+    const besideOther = sessionEventScope([{}, sessions[1]], 4, 0);
+    check(eq([...besideOther.videos], [0, 1]) && besideOther.keep.size === 0, 'except another session\'s');
 }
 
 console.log('\n6. What labels cannot hold survives a save');
@@ -202,23 +210,143 @@ console.log('\n6b. A file of separate videos, which LUC3D opens as cameras');
 {
     resetBehaviorState();
     const rear = new EventType({ name: 'rear' });
-    const v = [{ n: 0 }, { n: 1 }, { n: 2 }];
+    const v = [new Video({ filename: 'one.mp4' }), new Video({ filename: 'two.mp4' }), new Video({ filename: 'three.mp4' })];
     const a = new Track('a');
     const events = [
         new UserEvent({ type: rear, video: v[0], startFrame: 1, endFrame: 2, subject: a, source: 'manual' }),
         new UserEvent({ type: rear, video: v[2], startFrame: 1, endFrame: 2, subject: a, source: 'manual' }),
         new UserEvent({ type: rear, video: v[2], startFrame: 50, endFrame: 60, subject: a, source: 'manual' }),
     ];
-    check(onlyVideoOf({ sessions: [], videos: v }) === 0, 'no session, several videos: only the first is labels');
-    check(onlyVideoOf({ sessions: [], videos: [v[0]] }) === null, 'one video: all of it');
-    check(onlyVideoOf({ sessions: [{}], videos: v }) === null, 'a session says which videos go together');
+    const scope = sessionEventScope([], 3, 0);
+    check(eq([...scope.videos], [0]) && eq([...scope.keep], [1, 2]), 'no session, several videos: only the first is labels');
+    check(sessionEventScope([], 1, 0).keep.size === 0, 'one video: all of it');
+    const named = sessionEventScope([{ camcorder_to_video_idx_map: { 0: 0, 1: 1, 2: 2 } }], 3, 0);
+    check(named.videos.size === 3 && named.keep.size === 0, 'a session says which videos go together');
     const s = { name: 's' };
-    const res = readBehaviorMetadata(s, null, asFile([rear], events, v), null, onlyVideoOf({ sessions: [], videos: v }));
+    const res = readBehaviorMetadata(s, null, asFile([rear], events, v), scope);
     check(res.kept === 1 && eq(exportBoutRows(s).map(r => r[3]), [1]), 'the first video\'s bouts are the labels');
     const out = buildBehaviorEvents(SIO, [{ session: s, video: v[0], videos: v, tracks: [a] }]);
     check(out.events.filter(e => e.video === v[0]).length === 1 && out.events.filter(e => e.video === v[2]).length === 2, 'saved, each bout is still on its own video');
     const oneCamera = buildBehaviorEvents(SIO, [{ session: s, video: v[0], tracks: [a] }]);
     check(oneCamera.events.length === 1, 'a one-camera export leaves the others out');
+    const noCameras = buildBehaviorEvents(SIO, [{ session: s, video: null, videos: [], tracks: [a] }]);
+    check(noCameras.events.filter(e => e.video && e.video.filename === 'three.mp4').length === 2, 'with no camera to go back to, its own video is written back');
+}
+
+console.log('\n6c. A video in no recording session');
+{
+    resetBehaviorState();
+    const rear = new EventType({ name: 'rear' });
+    const attack = new EventType({ name: 'attack', metadata: { directed: 'true' } });
+    const notRear = new EventType({ name: 'not rear', metadata: { negates: 'rear' } });
+    const stimulus = new EventType({ name: 'stimulus' });
+    const types = [attack, rear, notRear, stimulus];
+    // The other video comes first in the file, so its index is also a camera's on save.
+    const outside = new Video({ filename: 'outside.mp4', backendMetadata: { shape: [400, 64, 64, 1], fps: 30 } });
+    const a0 = new Video({ filename: 'a0.mp4' }), a1 = new Video({ filename: 'a1.mp4' });
+    const a = new Identity({ name: 'a' }), b = new Identity({ name: 'b' });
+    const events = [
+        new UserEvent({ type: rear, video: a0, startFrame: 10, endFrame: 19, subject: a, source: 'manual' }),
+        new UserEvent({ type: rear, video: a1, startFrame: 30, endFrame: 39, subject: a, source: 'manual' }),
+        new UserEvent({ type: attack, video: outside, startFrame: 300, endFrame: 301, subject: b, target: a, source: 'manual', name: 'first', metadata: { certainty: 'high' } }),
+        new UserEvent({ type: notRear, video: outside, startFrame: 310, endFrame: 311, subject: a, source: 'manual' }),
+        new PredictedEvent({ type: rear, video: outside, startFrame: 320, endFrame: 322, subject: a, score: 0.5, scores: Float32Array.from([0.25, 0.5, 0.75]), source: 'classifier' }),
+        new UserEvent({ type: stimulus, video: outside, startFrame: 330, endFrame: 335, source: 'daq', metadata: { hz: '20' } }),
+    ];
+    const rawSessions = [{ camcorder_to_video_idx_map: { 0: 1, 1: 2 } }];
+    const scope = sessionEventScope(rawSessions, 3, 0);
+    check(eq([...scope.videos], [1, 2]) && eq([...scope.keep], [0]) && !scope.cameras, 'the session reads its cameras and only keeps the other video');
+    const s = { name: 's' };
+    const res = readBehaviorMetadata(s, null, asFile(types, events, [outside, a0, a1]), scope);
+    check(res.kept === 2 && eq(exportBoutRows(s).map(r => r[3]), [10, 30]), 'the session shows only its own bouts');
+    check(predictedBouts(s).length === 0, 'and none of that video\'s predictions');
+    check(behaviorByName('attack').social, 'the type still comes into the ethogram, as what it is');
+
+    const cams = [new Video({ filename: 'camA.mp4' }), new Video({ filename: 'camB.mp4' })];
+    const saved = (session, videos) => buildBehaviorEvents(SIO, [{ session, video: videos[0], videos, identities: [a, b] }]);
+    const out = saved(s, cams);
+    const there = out.events.filter(e => !cams.includes(e.video));
+    check(out.events.length === 6 && out.events.filter(e => e.video === cams[0]).length === 2, 'saved: no event lost, the session\'s on its first camera');
+    check(there.length === 4 && new Set(there.map(e => e.video)).size === 1, 'the others on one video, none of them on a camera');
+    const madeVideo = there[0].video;
+    check(madeVideo.filename === 'outside.mp4' && eq(madeVideo.backendMetadata, outside.backendMetadata) && madeVideo.openBackend === false,
+        'that video is written back as the file described it');
+    const attackE = there.find(e => e.type.name === 'attack');
+    check(attackE.startFrame === 300 && attackE.endFrame === 301 && attackE.subject === b && attackE.target === a && attackE.source === 'manual' && attackE.name === 'first' && attackE.metadata.certainty === 'high',
+        'a bout: span, animals, source, name and metadata unchanged');
+    const predE = there.find(e => e.isPredicted);
+    check(predE.score === 0.5 && eq(Array.from(predE.scores), [0.25, 0.5, 0.75]) && predE.source === 'classifier', 'a prediction: score, framewise scores and source');
+    check(there.find(e => e.type.name === 'stimulus').subject === null, 'an event with no animal');
+    check(out.eventTypes.find(t => t.name === 'not rear').metadata.negates === 'rear', 'a "not" stays a "not", with no other bout to keep its type');
+    check(buildBehaviorEvents(SIO, [{ session: s, video: cams[0], identities: [a, b] }]).events.length === 2, 'a one-camera export leaves that video out');
+
+    // The save read back: the file now lists the video last, with the same result.
+    resetBehaviorState();
+    const again = { name: 'again' };
+    const file2 = asFile(out.eventTypes, out.events, [cams[0], cams[1], madeVideo]);
+    const res2 = readBehaviorMetadata(again, null, file2, sessionEventScope([{ camcorder_to_video_idx_map: { 0: 0, 1: 1 } }], 3, 0));
+    check(res2.kept === 2 && eq(exportBoutRows(again).map(r => r[3]), [10, 30]), 'reopened, the session shows the same bouts');
+    const out2 = saved(again, cams);
+    const key = e => [e.video.filename, e.type.name, e.startFrame, e.endFrame, e.subject && e.subject.name, e.target && e.target.name, e.isPredicted, e.source];
+    check(eq(out2.events.map(key), out.events.map(key)), 'and saves the same events on the same videos');
+    check(out2.eventTypes.find(t => t.name === 'not rear').metadata.negates === 'rear', 'a "not" still a "not"');
+
+    // A "not" with no animal is kept on the session's own video: the same catalog entry.
+    resetBehaviorState();
+    const alone = { name: 'alone' };
+    readBehaviorMetadata(alone, null, asFile([rear, notRear], [new UserEvent({ type: notRear, video: a0, startFrame: 5, endFrame: 6 })], [a0]));
+    const aloneOut = buildBehaviorEvents(SIO, [{ session: alone, video: a0, videos: [a0] }]);
+    check(aloneOut.events[0].video === a0 && aloneOut.eventTypes.find(t => t.name === 'not rear').metadata.negates === 'rear', 'a "not" no label can hold stays a "not" too');
+
+    // Images stored in the file do not come along: the source video goes back, and no dataset.
+    resetBehaviorState();
+    const embedded = new Video({ filename: 'labels.pkg.slp', hasEmbeddedImages: true, shape: [5, 64, 64, 1], sourceVideo: new Video({ filename: 'original.mp4' }),
+        backendMetadata: { dataset: 'video2/video', shape: [5, 64, 64, 1] } });
+    const em = { name: 'embedded' };
+    readBehaviorMetadata(em, null, asFile([rear], [new UserEvent({ type: rear, video: embedded, startFrame: 1, endFrame: 2, subject: a })], [a0, embedded]),
+        sessionEventScope([{ camcorder_to_video_idx_map: { 0: 0 } }], 2, 0));
+    const emOut = buildBehaviorEvents(SIO, [{ session: em, video: a0, videos: [a0], identities: [a] }]);
+    check(emOut.events[0].video.filename === 'original.mp4' && eq(emOut.events[0].video.backendMetadata, { shape: [5, 64, 64, 1] }), 'an embedded video goes back as its source, pointing at no images');
+}
+
+console.log('\n6d. Several sessions: each event goes to one of them');
+{
+    const rear = new EventType({ name: 'rear' });
+    const v = ['a0', 'a1', 'b0', 'b1', 'outside'].map(n => new Video({ filename: n + '.mp4' }));
+    const a = new Identity({ name: 'a' });
+    const bout = (video, start) => new UserEvent({ type: rear, video, startFrame: start, endFrame: start + 1, subject: a, source: 'manual' });
+    const events = [bout(v[0], 10), bout(v[1], 20), bout(v[2], 110), bout(v[3], 120), bout(v[4], 300), bout(null, 500)];
+    const rawSessions = [{ camcorder_to_video_idx_map: { 0: 0, 1: 1 } }, { camcorder_to_video_idx_map: { 0: 2, 1: 3 } }];
+    const file = asFile([rear], events, v);
+
+    resetBehaviorState();
+    const s0 = { name: 's0' }, s1 = { name: 's1' };
+    readBehaviorMetadata(s0, {}, file, sessionEventScope(rawSessions, 5, 0));
+    readBehaviorMetadata(s1, {}, file, sessionEventScope(rawSessions, 5, 1));
+    check(eq(exportBoutRows(s0).map(r => r[3]), [10, 20, 500]), 'the first session: its own, and the event with no video');
+    check(eq(exportBoutRows(s1).map(r => r[3]), [110, 120]), 'the second: only its own');
+    const camsOf = names => names.map(n => new Video({ filename: n }));
+    const c0 = camsOf(['a0.mp4', 'a1.mp4']), c1 = camsOf(['b0.mp4', 'b1.mp4']);
+    const out = buildBehaviorEvents(SIO, [
+        { session: s0, video: c0[0], videos: c0, identities: [a] },
+        { session: s1, video: c1[0], videos: c1, identities: [a] },
+    ]);
+    const starts = (name) => out.events.filter(e => e.video && e.video.filename === name).map(e => e.startFrame);
+    check(out.events.length === 6, 'saved, no event is lost or doubled');
+    check(eq(starts('a0.mp4'), [10, 20, 500]) && eq(starts('b0.mp4'), [110, 120]) && eq(starts('outside.mp4'), [300]), 'and each is where it belongs');
+
+    // A loader that opens only the first session: nothing else would keep the second's.
+    resetBehaviorState();
+    const only = { name: 'only' };
+    const scope = sessionEventScope(rawSessions, 5, 0, true);
+    check(eq([...scope.videos], [0, 1]) && eq([...scope.keep], [2, 3, 4]), 'a loader of one session keeps every other video');
+    readBehaviorMetadata(only, {}, file, scope);
+    check(eq(exportBoutRows(only).map(r => r[3]), [10, 20, 500]), 'and shows only its session\'s');
+    const c = camsOf(['a0.mp4', 'a1.mp4']);
+    const outOnly = buildBehaviorEvents(SIO, [{ session: only, video: c[0], videos: c, identities: [a] }]);
+    const onName = (name) => outOnly.events.filter(e => e.video && e.video.filename === name).map(e => e.startFrame);
+    check(outOnly.events.length === 6 && eq(onName('b0.mp4'), [110]) && eq(onName('b1.mp4'), [120]) && eq(onName('outside.mp4'), [300]),
+        'saved, the other session\'s bouts stay on their videos');
 }
 
 console.log('\n7. Renamed elsewhere');

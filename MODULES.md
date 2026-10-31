@@ -14264,20 +14264,29 @@ session's FIRST camera as `video`, the animal as `subject` by identity else trac
 `source`, `score`, metadata `note`). A "not" label is its own type (`not <name>`,
 metadata `negates`). Reading is by name; an event on any camera of a session is
 that session's. An event the labels cannot hold (no subject; social with no target)
-is kept per session (`setKeptEventRows`) and written back unchanged. DOM-free.
+is kept per session (`setKeptEventRows`) and written back unchanged. So is an event on
+a video that is not one of the session's cameras, and it stays on that video: a video
+in no recording session (the file's first session keeps it, and a save writes the video
+back from what the file said about it), another session's video when a loader opens
+only one session, another video of a file with no recording session. DOM-free.
 
-**Exports.** `buildBehaviorEvents(SIO, items)` → `{eventTypes, events}`,
-`fileEventsOf(labels)` → plain `{types, rows}` or null,
-`sessionVideoIdxs(rawSession)` → `Set<number>` or null, `onlyVideoOf(file)` → 0 or null,
-`eventsToBehaviorData(fileEvents, lucid, videoIdxs, onlyVideo)` → `{ethogram, labelRows, runs, kept}`
+**Exports.** `buildBehaviorEvents(SIO, items)` → `{eventTypes, events}` (an event on a
+video outside `items[].videos` brings it along: `new SIO.Labels` and `openSlpWriter`
+add it to the file's list),
+`fileEventsOf(labels)` → plain `{types, rows, videos}` or null,
+`sessionVideoIdxs(rawSession)` → `Set<number>` or null,
+`sessionEventScope(rawSessions, nVideos, idx, onlyThisSession?)` → `{videos, keep, cameras, noVideo}`
+(what one session reads and what it only keeps; each event goes to one session),
+`eventsToBehaviorData(fileEvents, lucid, scope?)` → `{ethogram, labelRows, runs, kept}`
 (ids are the file's), `setKeptEventRows(session, rows)`.
 
 **Imports.** `pose/behavior-ethogram.js`, `pose/behavior-labels.js`,
 `pose/behavior-predictions.js`. **Imported by** `import-export/behavior-metadata.js`,
-`import-export/file-io.js`, `import-export/slp-streaming-write.js`,
+`import-export/file-io.js`, `import-export/slp-import.js`, `import-export/slp-streaming-write.js`,
 `loading/session-loader.js`. **Tests.** `tests/test-behavior-events.mjs`, e2e
 `behavior-label-roundtrip` (with files sleap-app and Python wrote,
-`tests/fixtures/behavior-events/`), `behavior-cross-app` (the two real apps, both ways,
+`tests/fixtures/behavior-events/`), `behavior-events-outside-session` (the three loaders and
+both writers, on files with a video outside their sessions), `behavior-cross-app` (the two real apps, both ways,
 with Python reading the result; needs a sleap-app checkout, skips without one).
 
 ### import-export/behavior-metadata.js
@@ -14307,7 +14316,7 @@ merges its ethogram by name and remaps its bouts' and predictions' ids. The four
 
 **Exports.** `BEHAVIOR_METADATA_KEYS`, `writeBehaviorMetadata(lucid, session)`,
 `writeBehaviorSlpMetadata(lucid, session)`,
-`readBehaviorMetadata(session, lucid, fileEvents?, videoIdxs?, onlyVideo?)` → `{kept, dropped}` (also
+`readBehaviorMetadata(session, lucid, fileEvents?, scope?)` → `{kept, dropped}` (also
 `noteLabelsChanged`, so the cached label prints are redone),
 `resetBehaviorState()` (forget the ethogram, the trained classifiers with
 their row cache, and every session's states; before every load and on New Project).
