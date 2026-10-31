@@ -77,6 +77,61 @@ export function hasRealCalibration(session) {
     return false;
 }
 
+/** A video's file path as path segments; none when it has no usable name. */
+function videoPathSegments(video) {
+    var name = video && (video.sourceFilename
+        || (video.sourceVideo && video.sourceVideo.filename)
+        || (video.backendMetadata && video.backendMetadata.source_filename)
+        || video.filename);
+    if (Array.isArray(name)) name = name[0];   // an image sequence: its first image
+    if (!name || name === '.') return [];
+    return String(name).split(/[\/\\]/);
+}
+
+/**
+ * One camera name per video of a `.slp` with no recording session (a plain
+ * SLEAP file), in video order: the video's file stem, or `cam_<i>` for a video
+ * with no usable name.
+ *
+ * The names must differ. Everything per camera is keyed by name, so two videos
+ * on one name would show one video's poses in the other's view and save them
+ * on one video. Videos of one recording can share a stem (campy writes
+ * `<camera>/0.mp4` for every camera): those take their parent folder's name
+ * when that tells them apart, and whatever still collides takes `_2`, `_3`…
+ *
+ * @param {Array<Object|null>} videos - the reader's `Video`s, or the
+ *   `{filename, sourceFilename}` records of `parseSlpViaSleapIO`
+ * @returns {string[]}
+ */
+export function cameraNamesFromVideos(videos) {
+    var paths = videos.map(videoPathSegments);
+    var names = paths.map(function (segs, i) {
+        var stem = segs.length ? segs[segs.length - 1].replace(/\.[^.]+$/, '') : '';
+        return stem || ('cam_' + i);
+    });
+    var sameStem = new Map();
+    names.forEach(function (n, i) {
+        if (!sameStem.has(n)) sameStem.set(n, []);
+        sameStem.get(n).push(i);
+    });
+    sameStem.forEach(function (idxs) {
+        if (idxs.length < 2) return;
+        var dirs = idxs.map(function (i) {
+            return paths[i].length > 1 ? paths[i][paths[i].length - 2] : '';
+        });
+        if (dirs.every(Boolean) && new Set(dirs).size === dirs.length) {
+            idxs.forEach(function (i, k) { names[i] = dirs[k]; });
+        }
+    });
+    var used = new Set();
+    return names.map(function (n) {
+        var unique = n;
+        for (var k = 2; used.has(unique); k++) unique = n + '_' + k;
+        used.add(unique);
+        return unique;
+    });
+}
+
 /**
  * Every camera name the session's views, videos and 2D data refer to, in
  * order: views first (their on-screen order), then videos, then any 2D camera

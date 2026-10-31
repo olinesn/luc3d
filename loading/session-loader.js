@@ -28,7 +28,7 @@ import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
 } from '../pose/pose-data.js';
 import {
-    makePlaceholderCamera, hasRealCalibration, ensurePlaceholderCameras,
+    makePlaceholderCamera, hasRealCalibration, ensurePlaceholderCameras, cameraNamesFromVideos, cameraNamesInUse,
 } from '../pose/placeholder-cameras.js';
 
 import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js';
@@ -51,7 +51,7 @@ import { isNewerSlpFormatError, slpReadErrorStatus } from './slp-format-check.js
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups, handleLoadSlpFile } from '../import-export/slp-import.js';
 import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js';
 import {
     applyMovedGroupIdentities, lazyTrackSlotMap, reconcileSessionIdentities,
@@ -212,6 +212,23 @@ export async function handleLoadCalibration() {
                     }
                 }
             }
+        }
+
+        // 2D still under a name this calibration does not have, with no view to
+        // rename it through: a plain SLEAP file's cameras are named after their
+        // videos, attached or not. A save writes a camera's poses only under its name.
+        if (state.session) {
+            var camsWith2d = cameraNamesInUse(state.session);
+            var freeCameras = cameraNames.filter(function (n) { return camsWith2d.indexOf(n) < 0; });
+            camsWith2d.forEach(function (oldCam) {
+                if (cameraNames.indexOf(oldCam) >= 0) return;
+                if (state.views.some(function (v) { return v.name === oldCam; })) return;
+                var newCam = matchVideoToCamera({ name: oldCam + '.mp4' }, freeCameras);
+                if (!newCam) return;
+                console.log('[calibration] Renaming 2D camera "' + oldCam + '" -> "' + newCam + '"');
+                state.session.renameCameraInAllData(oldCam, newCam);
+                freeCameras.splice(freeCameras.indexOf(newCam), 1);
+            });
         }
 
         // Re-attach interaction handlers with updated view names
@@ -2262,16 +2279,9 @@ export async function handleLoadSessionFolderSingleSlp() {
         if (cameras.length === 0) {
             // No calibration — map video indices to names from SLP metadata for frame loading,
             // but do NOT create Camera objects. No camera assignments or 3D functionality.
-            for (var dvi = 0; dvi < Math.max(slpData.videos.length, 1); dvi++) {
-                var vMeta = slpData.videos[dvi];
-                var dName = vMeta ? (vMeta.sourceFilename || vMeta.filename) : null;
-                if (dName && dName !== '.') {
-                    dName = dName.replace(/\.[^.]+$/, '').split('/').pop().split('\\').pop();
-                } else {
-                    dName = 'cam_' + dvi;
-                }
+            cameraNamesFromVideos(slpData.videos.length > 0 ? slpData.videos : [null]).forEach(function (dName, dvi) {
                 videoIdxToCameraName[dvi] = dName;
-            }
+            });
         } else {
             // Map SLP video indices to calibration camera names
             if (slpData.sessions && slpData.sessions.length > 0) {
@@ -2771,6 +2781,11 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
  * A project `.slp` only references videos by path, so after the data comes up
  * the user is prompted to attach them (`attachVideosForLazyReopen`, skippable —
  * File → Load Videos still works later).
+ *
+ * A `.slp` with no recording session (a plain SLEAP file, routed here by size) gets
+ * a placeholder camera per video and no groups. Eager cannot hold a big one (a real
+ * 8-video file crashes the tab), but it does hold what this store cannot, so a file
+ * like that goes there (`openProjectSlp`'s `eagerReason`), with a warning.
  */
 // ---- The Open project card ----
 // Opening a large project used to show one changing line ("Reading frames",
@@ -2892,6 +2907,17 @@ export async function handleLoadProjectSlpLazy(slpFile) {
 
         var loader = new SioLazyLoader();
         var opened = await loader.openProjectSlp(slpFile, openProgress.readerStage, openProgress.bytes);
+        if (opened.eagerReason) {
+            var eagerReason = opened.eagerReason;
+            // Let this read's columns go before the eager path reads the file.
+            loader.close();
+            loader = opened = null;
+            if (await handleLoadSlpFile(slpFile)) {
+                setStatus('Opened ' + slpFile.name + ' in full, not on demand: ' + eagerReason
+                    + '. A file this large can run out of memory.', 'warning');
+            }
+            return;
+        }
         var labels = opened.labels;
         var typedSession = opened.typedSession;
 
@@ -2910,6 +2936,14 @@ export async function handleLoadProjectSlpLazy(slpFile) {
                     cd.translation || cd.tvec || [0, 0, 0],
                     cd.size || [640, 480]
                 ));
+            }
+        } else {
+            // No recording session (a plain SLEAP file): a camera per video,
+            // from the loader's video records.
+            for (var pCam of loader.videoIdByCam.keys()) {
+                var pShape = (loader.videos.get(pCam) || {}).shape;
+                cameras.push(pShape ? makePlaceholderCamera(pCam, Number(pShape[2]), Number(pShape[1]))
+                    : makePlaceholderCamera(pCam));
             }
         }
         // Placeholder cameras (a project saved with no calibration) name the
@@ -2981,6 +3015,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
             fileIdentities: identitiesFromFile ? labels.identities : null,
             identityOf: identityEdits ? identityEdits.identityOf : null,
         });
+        // With nothing grouped, only this says which tracks fill the frames that
+        // are not resident (the Tracks timeline; as the per-camera loader does).
+        if (session.instanceGroups.size === 0 && loader.trackOccupancy.size > 0) {
+            session.trackOccupancy = loader.trackOccupancy;
+        }
         // A LUC3D project that stored only the identities its groups do not
         // imply: rebuild the rest from the groups just restored.
         await readFrameIdentityMetadata(session, lucid, {
@@ -3033,11 +3072,19 @@ export async function handleLoadProjectSlpLazy(slpFile) {
             fitTimelineToData();
         }
 
-        // Land on the first grouped frame + render it (hydrates its 2D).
+        // Same as the eager load: predictions a toggle left off would silently not
+        // draw (a plain prediction file then looks empty).
+        var visPredEl = document.getElementById('visPredicted');
+        var predRows = labels._lazyDataStore && labels._lazyDataStore.predPointsData
+            && labels._lazyDataStore.predPointsData.x;
+        if (visPredEl && !visPredEl.checked && predRows && predRows.length > 0) visPredEl.checked = true;
+
+        // Land on the first grouped frame, else the first labeled one, + render
+        // it (hydrates its 2D).
         await openProgress('first');
         var gk = Array.from(session.instanceGroups.keys());
         gk.sort(function (a, b) { return a - b; });
-        var firstFrame = gk.length ? gk[0] : 0;
+        var firstFrame = gk.length ? gk[0] : Math.max(0, loader.firstLabeledFrame);
         state.currentFrame = firstFrame;
         await ensureLazyFrameData(firstFrame);
         // Reveal the reprojection-error section BEFORE drawing — every other
@@ -3075,6 +3122,14 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         } else {
             setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
                 + ' grouped frames, ' + loader.nFrames.toLocaleString('en-US') + ' frames. File → Load Videos to show images.', 'success');
+        }
+        if (!typedSession) {
+            // A plain SLEAP file: nothing was reopened, and nothing is grouped yet.
+            var plainStatus = withCampyWarnings('Opened ' + slpFile.name + ' — '
+                + session.cameras.length + (session.cameras.length === 1 ? ' video, ' : ' videos, ')
+                + loader.nFrames.toLocaleString('en-US') + (loader.nFrames === 1 ? ' frame' : ' frames')
+                + (videosAttached ? '' : '. File → Load Videos to show images.'), 'success', session.campyRecording);
+            setStatus(plainStatus.message, plainStatus.kind);
         }
     } catch (err) {
         console.error('[load-project-lazy] Error:', err);

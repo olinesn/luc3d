@@ -13,7 +13,7 @@ import {
 import {
     getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
-import { hasRealCalibration } from '../pose/placeholder-cameras.js';
+import { hasRealCalibration, cameraNamesFromVideos } from '../pose/placeholder-cameras.js';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
 } from './file-io.js';
@@ -561,6 +561,8 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  */
 export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
     opts = opts || {};
+    // A file with no recording session has nothing to restore.
+    if (!typedSession) return { restoredGroups: 0, restoredWith3d: 0 };
     var numNodes = nodeNames.length;
     var BATCH = opts.batch || 20000;
     var onProgress = opts.onProgress || function () {};
@@ -1116,17 +1118,11 @@ export async function handleLoadSlpFile(slpFile) {
 
         // Fallback: use video filenames as camera names
         if (cameras.length === 0) {
-            for (var dvi = 0; dvi < Math.max(slpData.videos.length, 1); dvi++) {
-                var vMeta = slpData.videos[dvi];
-                var dName = vMeta ? (vMeta.sourceFilename || vMeta.filename) : null;
-                if (dName && dName !== '.') {
-                    dName = dName.replace(/\.[^.]+$/, '').split('/').pop().split('\\').pop();
-                } else {
-                    dName = 'cam_' + dvi;
-                }
-                cameras.push(new Camera(dName, [[1,0,0],[0,1,0],[0,0,1]],
+            var dNames = cameraNamesFromVideos(slpData.videos.length > 0 ? slpData.videos : [null]);
+            for (var dvi = 0; dvi < dNames.length; dvi++) {
+                cameras.push(new Camera(dNames[dvi], [[1,0,0],[0,1,0],[0,0,1]],
                     [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
-                videoIdxToCameraName[dvi] = dName;
+                videoIdxToCameraName[dvi] = dNames[dvi];
             }
         }
 
@@ -1793,6 +1789,7 @@ export async function handleLoadSlpFile(slpFile) {
                 noteSessionCalibrationDivergence(state.sessions);
             });
         }
+        return true;   // opened: a failure above has set its own status
     } catch (err) {
         console.error('[load-slp] FATAL:', err);
         hideLoading();
@@ -1898,17 +1895,11 @@ export async function handleAddSlp() {
 
         // Fallback: use video filenames as camera names
         if (cameras.length === 0) {
-            for (var dvi = 0; dvi < Math.max(slpData.videos.length, 1); dvi++) {
-                var vMeta = slpData.videos[dvi];
-                var dName = vMeta ? (vMeta.sourceFilename || vMeta.filename) : null;
-                if (dName && dName !== '.') {
-                    dName = dName.replace(/\.[^.]+$/, '').split('/').pop().split('\\').pop();
-                } else {
-                    dName = 'cam_' + dvi;
-                }
-                cameras.push(new Camera(dName, [[1,0,0],[0,1,0],[0,0,1]],
+            var dNames = cameraNamesFromVideos(slpData.videos.length > 0 ? slpData.videos : [null]);
+            for (var dvi = 0; dvi < dNames.length; dvi++) {
+                cameras.push(new Camera(dNames[dvi], [[1,0,0],[0,1,0],[0,0,1]],
                     [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
-                videoIdxToCameraName[dvi] = dName;
+                videoIdxToCameraName[dvi] = dNames[dvi];
             }
         }
 

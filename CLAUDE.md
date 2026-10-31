@@ -121,8 +121,10 @@ On a lazy project `session.frameGroups` holds only hydrated frames. Playback evi
 - `session.instanceGroups` is never evicted. Members' 2D returns to the store when their frame leaves residency (`releaseFrameMembers2d`), but only when `member2dReleaseBlocker` allows it. Re-adopt by the member's current `_rawInstIndex`, never a cached row (store compaction renumbers released members).
 - **Never write the shared `lazyPlaceholderXY` buffer.** Every in-place writer on `Instance` must call `_ownXY()` first.
 - To read member 2D on a frame you do not hydrate, bracket the read with `hydrateFrameMembers2d`/`releaseFrameMembers2d` (as `frameCropGeometry` in `ui/image-embedder.js` does).
+- **A hydrated row keeps its occlusion** (`lazyRowInstance`, `pose/triangulation.js`): a save rewrites a camera-frame holding a user instance from the resident objects.
+- **A `.slp` with no recording session opens lazily too** (File ▸ Open routes by size alone): one placeholder camera per video (`cameraNamesFromVideos`, also what the eager paths name them with; names must differ). Eager crashes the tab on 8 real cameras (MODULES.md `loading/session-loader.js`), so size is never a reason to fall back. Only what the one store cannot hold is (`openProjectSlp`'s `eagerReason`). A later calibration renames through `Session.renameCameraInAllData`, which reaches the loader (`SioLazyLoader.renameCamera`); a save refuses poses left on a camera the session lacks.
 
-Tests: `test-lazy-residency.mjs`, e2e `lazy-playback-eviction`, `sequence-lazy-workflow`.
+Tests: `test-lazy-residency.mjs`, e2e `lazy-playback-eviction`, `sequence-lazy-workflow`, `lazy-open-plain-slp`.
 
 ## `.slp` files newer than LUC3D can read
 

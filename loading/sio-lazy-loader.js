@@ -33,6 +33,7 @@
 
 import { rekeyStoreRows } from '../import-export/detection-labels.js';
 import { unionTrackNames } from './track-union.js';
+import { cameraNamesFromVideos } from '../pose/placeholder-cameras.js';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -147,6 +148,11 @@ export class SioLazyLoader {
         // camName → native store video id (only set by openProjectSlp; the
         // per-camera open() path has one single-video store per camera).
         this.videoIdByCam = null;
+        // The lowest video frame with an instance (openProjectSlp only).
+        this.firstLabeledFrame = -1;
+        // [old, new] camera names, in order (`renameCamera`): what a fresh open of
+        // the same project file has to repeat (the multi-session save's pass 2).
+        this.cameraRenames = [];
         this.videos = new Map();
         this.trackOccupancy = new Map(); // left empty (see file header)
 
@@ -390,13 +396,19 @@ export class SioLazyLoader {
      * the streaming save's `refFor`) works unchanged. Returns the open `labels`
      * (with its lazy 2D store + typed `RecordingSession`) for the caller.
      *
+     * A file with no recording session (a plain SLEAP file) has no camera map, so
+     * it gets one camera per video (`cameraNamesFromVideos`), and every video's
+     * record, frames or not. What the store cannot hold comes back as `eagerReason`.
+     *
      * @param {File} file - the project `.slp`
      * @param {Function} [onProgress] - `(msg) => void`
      * @param {Function} [onReadBytes] - `(done, total) => (void|Promise)`: bytes
      *   read of the file's four big tables (frames, instances, points,
      *   pred_points), read in counted row slices — the vendored reader's
      *   `onReadBytes` (LUCID local patch, open progress). Awaited.
-     * @returns {Promise<{labels:Object, typedSession:Object, cameraNames:string[], nFrames:number}>}
+     * @returns {Promise<{labels:Object, typedSession:(Object|null), cameraNames:string[],
+     *   nFrames:number, eagerReason:(string|null)}>} `typedSession` is null with no
+     *   session. `eagerReason`: why this file has to open on the eager path.
      */
     async openProjectSlp(file, onProgress, onReadBytes) {
         var SIO = window.SleapIO;
@@ -467,6 +479,18 @@ export class SioLazyLoader {
                 if (vIdx != null) camToVid.set(camName, vIdx);
             }
         }
+        // A file with no recording session (a plain SLEAP file): one camera per
+        // video, named as the eager path names them. A video with no frames
+        // still needs its record: a save writes it back from there.
+        var plainFile = camToVid.size === 0 && !this.calibration;
+        if (plainFile) {
+            var plainNames = cameraNamesFromVideos(videosArr.length > 0 ? videosArr : [null]);
+            for (var pvi = 0; pvi < plainNames.length; pvi++) {
+                camToVid.set(plainNames[pvi], pvi);
+                var pv = videosArr[pvi];
+                this.videos.set(plainNames[pvi], pv ? { filename: pv.filename, shape: pv.shape } : null);
+            }
+        }
         var vidToCam = new Map();
         for (var cv of camToVid) vidToCam.set(cv[1], cv[0]);
         // Retain camera → NATIVE store video id (the values in the columnar
@@ -481,7 +505,10 @@ export class SioLazyLoader {
         var fd = (store && store.framesData) || {};
         var frameIdxCol = fd.frame_idx || [];
         var videoCol = fd.video || [];
+        var startCol = fd.instance_id_start || [];
+        var endCol = fd.instance_id_end || [];
         var maxFrameIdx = -1;
+        var repeatedFrames = 0;
         for (var r = 0; r < frameIdxCol.length; r++) {
             var vid = Number(videoCol[r]);
             var cam = vidToCam.get(vid);
@@ -495,8 +522,13 @@ export class SioLazyLoader {
                 this.videos.set(cam, vobj ? { filename: vobj.filename, shape: vobj.shape } : null);
             }
             var fi = Number(frameIdxCol[r]);
-            this.frameRowByCam.get(cam).set(fi, r);
+            var camRows = this.frameRowByCam.get(cam);
+            if (camRows.has(fi)) repeatedFrames++;
+            camRows.set(fi, r);
             if (fi > maxFrameIdx) maxFrameIdx = fi;
+            if (Number(endCol[r]) > Number(startCol[r]) && (this.firstLabeledFrame < 0 || fi < this.firstLabeledFrame)) {
+                this.firstLabeledFrame = fi;
+            }
         }
         this.nFrames = maxFrameIdx + 1;
 
@@ -516,12 +548,48 @@ export class SioLazyLoader {
             } catch (e) { /* occupancy is optional; ignore */ }
         }
 
+        // A file from another tool can hold what this one store cannot show or save:
+        // hydration reads the last row of a repeated frame, `appendStore` writes the
+        // first, and the header has one skeleton. The eager path keeps those poses,
+        // so name what sends the file there.
+        var eagerReason = null;
+        if (camToVid.size === 0) {
+            eagerReason = 'its recording session does not say which video each camera filmed';
+        } else if (plainFile) {
+            if (videosArr.some(function (v) { return v && v.hasEmbeddedImages; })) eagerReason = 'it holds images';
+            else if (repeatedFrames > 0) eagerReason = 'it lists the same video frame twice';
+            else if ((labels.skeletons || []).length !== 1) eagerReason = 'it does not have exactly one skeleton';
+        }
+
         return {
             labels: labels,
             typedSession: typedSession,
             cameraNames: Array.from(this.labelsByCam.keys()),
             nFrames: this.nFrames,
+            eagerReason: eagerReason,
         };
+    }
+
+    /**
+     * Rename a camera in every per-camera map, so that hydration and the save
+     * find it under its new name (`Session.renameCameraInAllData`, which a
+     * calibration loaded later goes through: a plain file's cameras are named
+     * after their videos). Map order is kept.
+     */
+    renameCamera(oldName, newName) {
+        if (oldName === newName || this.labelsByCam.has(newName)) return;
+        [
+            this.labelsByCam, this.sourceFiles, this.frameRowByCam, this.numNodesByCam, this.videos,
+            this.videoIdByCam, this.trackOccupancy, this._trackSourceByCam, this._skeletonByCam,
+        ].forEach(function (byCam) {
+            if (!byCam || !byCam.has(oldName)) return;
+            var entries = Array.from(byCam);
+            byCam.clear();
+            entries.forEach(function (e) { byCam.set(e[0] === oldName ? newName : e[0], e[1]); });
+        });
+        this.cameraRenames.push([oldName, newName]);
+        this.cache.clear();
+        this.cacheOrder = [];
     }
 
     /**
@@ -1410,5 +1478,6 @@ export class SioLazyLoader {
         this.cacheOrder = [];
         this.videos.clear();
         this.videoIdByCam = null;
+        this._projectLabels = null;
     }
 }

@@ -954,7 +954,7 @@ function restoreEditedStoreColumns(loader, kept) {
  * bytes, so this is cheap relative to the FIRST open — no Track All/
  * Triangulate All is redone, only the columnar store is reconstructed.
  */
-async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStore) {
+async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStore, cameraRenames) {
     var loader = new SioLazyLoader();
     if (wasSharedStore) {
         // Lazily-reopened single-file project: every camera's sourceFiles entry
@@ -962,8 +962,9 @@ async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStor
         // interleaved store is read once and `_sharedStore`/`videoIdByCam` are
         // restored — per-camera open() would re-read the whole project N times
         // and pass 2 would then append the shared store once per camera
-        // (duplicating every frame/track).
+        // (duplicating every frame/track). The file has the cameras' first names.
         await loader.openProjectSlp(sourceFileEntries[0][1]);
+        (cameraRenames || []).forEach(function (r) { loader.renameCamera(r[0], r[1]); });
         session.lazyLoader = loader;
         return loader;
     }
@@ -1026,6 +1027,7 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
         return session.cameras.some(function (c) { return c.name === vf.assignedCamera; });
     });
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
+    var cameraRenames = session.lazyLoader.cameraRenames;
     var wasSharedStore = !!session.lazyLoader._sharedStore;
     var refGraph = await buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx, onProgress);
     // A store edited in memory is not what pass 2 will read back from the
@@ -1033,7 +1035,7 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     var editedColumns = keepEditedStoreColumns(session.lazyLoader);
     handle.pending.push({
         session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore,
-        editedColumns: editedColumns,
+        editedColumns: editedColumns, cameraRenames: cameraRenames,
     });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
@@ -1081,7 +1083,7 @@ export async function finalizeMultiSessionSave(handle, opts) {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
             if (onProgress) await onProgress('frames', j, handle.pending.length, 'sessions');
-            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore);
+            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.cameraRenames);
             if (p.editedColumns) restoreEditedStoreColumns(p.session.lazyLoader, p.editedColumns);
             await streamSessionIntoWriter(writer, p.session, p.refGraph);
             p.session.lazyLoader.close();
@@ -1516,7 +1518,9 @@ export async function handleLoadProject(prePickedFile) {
             // reconstruct duplicate and OOMs the tab on real multi-camera
             // prediction sessions (e.g. a 108k-frame × 3-cam cage5 project). The
             // lazy path keeps 2D on-demand and rebuilds grouping with lightweight
-            // members; videos are attached afterward via File → Load Videos.
+            // members; videos are attached afterward via File → Load Videos. A
+            // plain SLEAP file with no session goes the same way, a camera per
+            // video; what the lazy store cannot hold comes back to the eager path.
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
