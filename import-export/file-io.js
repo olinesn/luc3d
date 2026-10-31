@@ -2988,6 +2988,15 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         return { name: id.name, color: id.color != null ? id.color : undefined, metadata: id.metadata };
     });
 
+    // --- suggestions[] (import-export/kept-suggestions.js). `group` as the file holds
+    // it: the reader's `.group` is a string. ---
+    var suggestions = (labels.suggestions || []).map(function (s) {
+        return {
+            videoIdx: labels.videos.indexOf(s.video), frameIdx: s.frameIdx,
+            group: s.metadata ? s.metadata.group : undefined,
+        };
+    });
+
     return {
         skeleton: skeleton,
         tracks: tracks,
@@ -2995,6 +3004,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         videos: videos,
         sessions: sessions,
         identities: identities,
+        suggestions: suggestions,
         // The file's whole provenance dict (slp-provenance.js picks each
         // session's part).
         provenance: labels.provenance || null,

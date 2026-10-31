@@ -43,6 +43,7 @@ import { fitTimelineToData } from '../ui/timeline-controller.js';
 import { slpHasEmbeddedImages } from './slp-import.js';
 import { handleLoadSlpFile } from './slp-import.js';
 import { outsideFramesForSave } from './outside-frames.js';
+import { suggestionsForSave } from './kept-suggestions.js';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
@@ -679,6 +680,7 @@ async function buildSlpBytes(opts) {
     var allIdentities = [];
     var seenSkeletonNames = new Set();
     var seenTrackNames = new Set();
+    var suggestionSessions = [];
 
     var sessionsToExport = sessionsToSave();
 
@@ -847,7 +849,14 @@ async function buildSlpBytes(opts) {
         }
         allIdentities = allIdentities.concat(sessLabels.identities || []);
         allSessions = allSessions.concat(sessLabels.sessions || []);
+        suggestionSessions.push({
+            session: sess, cameraVideos: sessLabels.videos, placedVideos: sessOutside ? sessOutside.placedVideos : null,
+        });
     }
+
+    // SLEAP's frames to label next, each on this header's video for it. A video only a
+    // suggestion names goes last.
+    var allSuggestions = suggestionsForSave(suggestionSessions, allVideos);
 
     // Re-point every instance's track to the canonical (deduped) Track object
     // for its NAME. buildSlpLabelsAllViews creates a fresh SIO.Track array per
@@ -878,6 +887,7 @@ async function buildSlpBytes(opts) {
         videos: allVideos,
         skeletons: allSkeletons,
         tracks: allTracks,
+        suggestions: allSuggestions,
         identities: allIdentities,
         sessions: allSessions,
         // Keeps the loaded files' provenance (slp-provenance.js).
