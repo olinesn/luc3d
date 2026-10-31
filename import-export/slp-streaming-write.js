@@ -154,6 +154,18 @@ function resolveVideoPath(cam, views, videoFiles, lazyVid) {
 }
 
 /**
+ * The names a store's tracks go in the file under. A rename or a new track in LUC3D changes
+ * only `session.tracks`, whose slots are the store's, so the store's own list would write
+ * the old names and leave the new ones out. A store with more tracks than the session
+ * does not line up with it, and keeps its own.
+ */
+function headerTrackNames(session, labels) {
+    var own = labels.tracks || [];
+    if (own.length > session.tracks.length) return own;
+    return session.tracks.map(function (name) { return { name: name }; });
+}
+
+/**
  * Create a fresh cross-session writer context. Shared by every
  * `buildSessionRefGraph`/`openProjectWriter` call in one save so every
  * session's frame refs stay file-global (see module docstring). Reused
@@ -350,12 +362,12 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         if (_sharedStore) {
             if (_sharedTrackBase < 0) {
                 _sharedTrackBase = ctx.allTracks.length;
-                var camTracksS = (labels.tracks || []);
+                var camTracksS = headerTrackNames(session, labels);
                 for (var tiS = 0; tiS < camTracksS.length; tiS++) ctx.allTracks.push(new SIO.Track(camTracksS[tiS].name));
             }
             trackBase = _sharedTrackBase;
         } else {
-            var camTracks = (labels.tracks || []);
+            var camTracks = headerTrackNames(session, labels);
             // Name-list signature ('|~|'-joined — a track/identity name
             // containing this exact 3-char sequence is not a realistic
             // concern): if this camera's track list is IDENTICAL (by name,

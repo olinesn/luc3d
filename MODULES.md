@@ -13417,6 +13417,37 @@ the v2 and v3 project-JSON shapes) — and the four readers —
 
 ---
 
+### import-export/file-edits.js
+
+**Purpose.** Seeing what another tool changed in a project file. LUC3D's copies of each
+session's tracks and identities in `metadata.lucid` hold only while they agree with the
+standard slots, which are all that sleap-app and Python edit. Compares the two on load
+and follows the file after an edit; a file nobody else edited reads exactly as written.
+No imports, so Node tests can load it.
+
+**Exports.**
+- `reconcileSessionTracks(privateNames, fileNames, usedFileIdx)` → `{ names, slotMap,
+  edited }`: a renamed track keeps its slot, a new one goes at the end, a deleted one
+  drops its slot (`slotMap`: each old slot's new position, null when none moved).
+- `lazyTrackSlotMap(privateNames, fileNames)` → the same `slotMap` for a list that is the
+  file's own, as a lazy project and the session-folder loader use.
+- `remapFrameIdentityTrackSlots(lucid, slotMap)` — moves `frameIdentityMap`'s serialized
+  keys to the new slots, in place, before they are read.
+- `typedSessionGroups(typedSession)` → every typed InstanceGroup, walkable more than once.
+- `reconcileSessionIdentities(privateList, groups)` → null when every group agrees, else
+  `{ identities, identityOf(typedGroup) }`, where the standard slot decides every group.
+- `applyMovedGroupIdentities(session, movedGroups)` — points `frameIdentityMap` at a
+  group's new identity, only for the groups another tool moved (any other entry may be a
+  single-view fix, which has no standard slot).
+
+**Depends on.** Nothing.
+
+**Used by.** `import-export/slp-import.js` (`handleLoadSlpFile`,
+`restoreGroupingAndUnlink`), `loading/session-loader.js` (`handleLoadProjectSlpLazy`,
+`handleLoadSessionFolderSingleSlp`).
+
+**Tests.** `tests/test-file-edits.mjs`, `tests/e2e/other-tool-edits.mjs`.
+
 ### import-export/frame-identity-metadata.js
 
 **Purpose.** How `Session.frameIdentityMap` is stored in a `.slp`'s
