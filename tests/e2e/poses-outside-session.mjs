@@ -496,6 +496,37 @@ try {
         // A group on the deleted track dissolves; mouse2's stay.
         checkSave('a deleted track', saved, { poses, groups: sources.first.groups.filter(g => /camA=11\d/.test(g)), sessions: sources.first.sessions });
     }
+    for (const addTrack of [false, true]) {
+        // The deleted track's name stays, past the session's list, for the outside rows.
+        // A rename and a new track change only the session's list, and a save lists them.
+        const page = await open('lazy', readFile('first'));
+        await page.evaluate(async (addTrack) => {
+            const ops = await import('/ui/track-identity-ops.js');
+            const tri = await import('/pose/triangulation.js');
+            const { state } = await import('/ui/app-state.js');
+            const s = state.session;
+            ops.deleteTrackAt(s, s.tracks.indexOf('mouse1'));
+            s.tracks[s.tracks.indexOf('mouse2')] = 'renamed';
+            if (!addTrack) return;
+            s.tracks.push('added');
+            await tri.ensureLazyFrameData(1);
+            const group = s.instanceGroups.get(1)[0];
+            const inst = group.instances.get('camA');
+            inst.setPoint(0, 999, 999);
+            inst.type = 'user';
+            inst.trackIdx = s.tracks.indexOf('added');
+            inst.modified = true;
+            group.markDirty();
+        }, addTrack);
+        const saved = await saveAndRead(page);
+        const poses = sources.first.poses.map(r => {
+            if (r.startsWith('outside.mp4|')) return r;
+            if (addTrack && r.startsWith('camA.mp4|1|P|mouse2|')) return 'camA.mp4|1|U|added|999.000,999.000;121.000,20.000|';
+            return r.replace('|P|mouse1|', '|P||').replace('|P|mouse2|', '|P|renamed|');
+        }).sort();
+        const tracks = addTrack ? ['renamed', 'only_outside', 'added', 'mouse1'] : ['renamed', 'only_outside', 'mouse1'];
+        checkSave(addTrack ? 'a deleted track, a rename and a new track' : 'a deleted track and a rename', saved, { poses, tracks });
+    }
     {
         // A track the outside rows do not use goes, one they use stays.
         const page = await open('lazy', readFile('last'));
@@ -676,10 +707,10 @@ try {
     }
 
     console.log('\nG. A per-camera folder whose files hold other videos');
-    const openFolder = async (route) => {
+    const openFolder = async (route, camA = readFile('camA_two_videos'), camB = readFile('camB_second_video')) => {
         const page = await newAppPage();
-        await putBytes(page, '__camA', readFile('camA_two_videos'));
-        await putBytes(page, '__camB', readFile('camB_second_video'));
+        await putBytes(page, '__camA', camA);
+        await putBytes(page, '__camB', camB);
         // The folder goes lazy on a file's size alone, and HDF5 ignores trailing bytes.
         const loading = page.evaluate(async (route) => {
             const loader = await import('/loading/session-loader.js');
@@ -764,6 +795,18 @@ try {
             .map(r => (r.startsWith('camA_second.mp4|') ? r : r.replace('|P|mouse1|', '|P||'))).sort();
         checkSave('per-camera, a deleted track', saved, { poses, sessions: [{ camA: 'camA.mp4', camB: 'camB.mp4' }] });
     }
+    {
+        // A later calibration renames a camera. Its video is still the second in its file.
+        const { page } = await openFolder('lazy');
+        await page.evaluate(async () => {
+            const { state } = await import('/ui/app-state.js');
+            state.session.renameCameraInAllData('camB', 'renamedB');
+            state.session.cameras.find(c => c.name === 'camB').name = 'renamedB';
+        });
+        const saved = await saveAndRead(page);
+        const poses = [...sources.camA_two_videos.poses, ...sources.camB_second_video.poses].sort();
+        checkSave('per-camera, a renamed camera', saved, { poses, sessions: [{ camA: 'camA.mp4', renamedB: 'camB.mp4' }] });
+    }
 
     console.log('\nH. A second skeleton, lazy');
     for (const name of ['skeleton_outside', 'skeleton_camera']) {
@@ -777,8 +820,8 @@ try {
     }
 
     console.log('\nI. A project mixing lazy and eager sessions, every lazy frame resident');
-    {
-        const page = await open('lazy', readFile('first'));
+    const openMixed = async (bytes) => {
+        const page = await open('lazy', bytes);
         await page.evaluate(async () => {
             const pd = await import('/pose/pose-data.js');
             const tri = await import('/pose/triangulation.js');
@@ -791,11 +834,111 @@ try {
             fg.addInstance('camE', new pd.Instance([[900, 10], [901, 20]], 0, 'user', 0));
             state.sessions.push(eager);
         });
-        const saved = await saveAndRead(page);
+        return page;
+    };
+    {
+        const saved = await saveAndRead(await openMixed(readFile('first')));
         const outside = sources.first.poses.filter(r => r.startsWith('outside.mp4|'));
         check(eq(saved.read.poses.filter(r => r.startsWith('outside.mp4|')), outside), 'the lazy store\'s other video keeps its poses', diff(saved.read.poses, outside));
         savedForPython(saved.bytes, 'mixed project, Python', { poses: saved.read.poses, groups: saved.read.groups });
     }
+
+    console.log('\nJ. Tracker scores and model identities on these poses');
+    const h5wasmUrl = `http://localhost:${PORT}/lib/h5wasm/h5wasm.iife.js`;
+    const labelsPage = await newAppPage();
+    // A model's output: what a detection carries, on every detection. Its first x says which.
+    const withLabels = async (name) => {
+        await putBytes(labelsPage, '__raw', readFile(name));
+        const b64 = await labelsPage.evaluate(async (h5wasmUrl) => {
+            const SIO = window.SleapIO;
+            const typed = await SIO.readSlpStreaming(new File([window.__raw], 'x.slp'), { openVideos: false, h5wasmUrl });
+            const identities = ['female', 'male'].map(n => new SIO.Identity({ name: n }));
+            typed.identities.push(...identities);
+            for (const lf of typed.labeledFrames) {
+                for (const inst of lf.instances) {
+                    const x = inst._xy[0];
+                    inst.trackingScore = x / 10000;
+                    inst.identity = identities[Math.floor(x / 10) % 2];
+                    inst.identityScore = x / 20000;
+                    inst.identityEmbedding = { vector: [x, x + 1] };
+                    inst.category = 'mouse';
+                    inst.categoryScore = x / 40000;
+                    inst.categoryEmbedding = { vector: [x + 2] };
+                }
+            }
+            const u = await SIO.saveSlpToBytes(typed);
+            let s = '';
+            for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768));
+            return btoa(s);
+        }, h5wasmUrl);
+        return Buffer.from(b64, 'base64');
+    };
+    const labelsIn = async (bytes) => {
+        await putBytes(labelsPage, '__raw', bytes);
+        return labelsPage.evaluate(async (h5wasmUrl) => {
+            const labels = await window.SleapIO.readSlpStreaming(new File([window.__raw], 'x.slp'), { openVideos: false, h5wasmUrl });
+            const n = v => (v == null ? '' : Number(v).toFixed(6));
+            const rows = [];
+            for (const lf of labels.labeledFrames) {
+                for (const i of lf.instances) {
+                    rows.push([lf.video.filename, lf.frameIdx, i._xy[0], n(i.trackingScore),
+                        i.identity ? i.identity.name : '', n(i.identityScore), i.identityEmbedding ? i.identityEmbedding.vector.join() : '',
+                        i.category || '', n(i.categoryScore), i.categoryEmbedding ? i.categoryEmbedding.vector.join() : ''].join('|'));
+                }
+            }
+            return { rows: rows.sort(), catalog: labels.identities.map(id => id.name).sort() };
+        }, h5wasmUrl);
+    };
+    const checkLabels = async (what, saved, want) => {
+        const got = await labelsIn(saved.bytes);
+        check(eq(got.rows, want.rows), what + ': every detection keeps what it carried', diff(got.rows, want.rows));
+        check(want.catalog.every(n => got.catalog.includes(n)), what + ': the identity catalog holds them', got.catalog);
+    };
+    for (const name of ['last', 'first', 'all_outside']) {
+        const labelled = await withLabels(name);
+        const want = await labelsIn(labelled);
+        check(want.rows.length === sources[name].poses.length && want.rows.every(r => /\|(female|male)\|/.test(r)), name + ': every detection has labels to keep');
+        for (const loader of Object.keys(LOADERS)) {
+            let bytes = labelled;
+            for (let gen = 1; gen <= 2; gen++) {
+                const saved = await saveAndRead(await open(loader, bytes));
+                const what = `${name}, ${loader}, save ${gen}`;
+                await checkLabels(what, saved, want);
+                savedForPython(saved.bytes, what + ', with labels, Python', { poses: sources[name].poses });
+                bytes = saved.bytes;
+            }
+        }
+    }
+    {
+        const labelled = await withLabels('first');
+        const want = await labelsIn(labelled);
+        const saved = await saveAndRead(await openMixed(labelled));
+        const outside = r => r.startsWith('outside.mp4|');
+        const got = await labelsIn(saved.bytes);
+        check(eq(got.rows.filter(outside), want.rows.filter(outside)), 'mixed project: the lazy store\'s other video keeps what it carried', diff(got.rows.filter(outside), want.rows.filter(outside)));
+        check(want.catalog.every(n => got.catalog.includes(n)), 'mixed project: the identity catalog holds them', got.catalog);
+    }
+    for (const route of ['eager', 'lazy']) {
+        // A camera file with identities takes the typed reader, even on the eager route.
+        const camA = await withLabels('camA_two_videos'), camB = await withLabels('camB_second_video');
+        const wantA = await labelsIn(camA), wantB = await labelsIn(camB);
+        const want = { rows: [...wantA.rows, ...wantB.rows].sort(), catalog: wantA.catalog };
+        const { page, status } = await openFolder(route, camA, camB);
+        check(/3 labeled frames on 1 video in no session are not shown/.test(status), route + ' per-camera, with labels: the status says what is not shown', status);
+        const shown = await page.evaluate(async () => {
+            const { state } = await import('/ui/app-state.js');
+            const tri = await import('/pose/triangulation.js');
+            await tri.ensureLazyFrameData(1);
+            const fg = state.session.frameGroups.get(1);
+            const xs = cam => [...fg.getInstances(cam), ...fg.getUnlinkedInstances(cam).map(u => u.instance)].map(i => i.getX(0));
+            return { camA: xs('camA'), camB: xs('camB') };
+        });
+        check(eq(shown, { camA: [101, 111], camB: [201, 211] }), route + ' per-camera, with labels: each camera shows its own video\'s poses', shown);
+        const saved = await saveAndRead(page);
+        await checkLabels(route + ' per-camera', saved, want);
+        savedForPython(saved.bytes, route + ' per-camera, with labels, Python', { poses: [...sources.camA_two_videos.poses, ...sources.camB_second_video.poses].sort() });
+    }
+    await labelsPage.close();
 
     console.log('\nPython reads every save:');
     const readBack = JSON.parse(uv(PY_READ, pythonWork.map(w => w.file)).trim().split('\n').pop());

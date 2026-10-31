@@ -26,6 +26,7 @@ import { markDirty, setStatus, showLoading, hideLoading } from '../import-export
 import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
+import { nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
          dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
@@ -1593,6 +1594,29 @@ function lazyInstanceTrackIdx(trackIdx) {
 }
 
 /**
+ * One store row of a lazy frame as an `Instance`, tagged `_rawInstIndex` (its
+ * position in the frame's raw instance list, i.e. its row offset within the lazy
+ * store's [start,end) range for this (camera, frame) — `refFor` in
+ * slp-streaming-write.js uses it to resolve the exact store row on save instead
+ * of guessing via trackIdx, which is ambiguous whenever a frame has more than one
+ * instance and the grouped one is trackless).
+ *
+ * Carries the row's occlusion, as every eager path does: a save rewrites a
+ * camera-frame holding a user instance from these objects, so a node the file
+ * has at a real position but not visible would otherwise come out visible.
+ */
+function lazyRowInstance(d, rowOffset) {
+    var inst = new Instance(d.points || [], lazyInstanceTrackIdx(d.trackIdx), d.type || 'predicted', d.score || 0);
+    inst._rawInstIndex = rowOffset;
+    if (d.occluded) {
+        inst.setOccludedFrom(d.occluded);
+        var nulled = nulledNodesFromOcclusion(d.points, d.occluded, inst.type);
+        if (nulled) inst.nulledNodes = nulled;
+    }
+    return inst;
+}
+
+/**
  * Hydrate ONLY `camNames` into the frame's existing FrameGroup.
  *
  * The rows are staged in a throwaway FrameGroup first so
@@ -1618,11 +1642,8 @@ async function hydrateLazyCameras(session, frameIdx, camNames) {
         var haveUl = fg.getUnlinkedInstances(camName);
         if (haveUl && haveUl.length > 0) continue;
         for (var ii = 0; ii < instances.length; ii++) {
-            var d = instances[ii];
-            if (!d) continue;   // a pose this session does not show
-            var inst = new Instance(d.points || [], lazyInstanceTrackIdx(d.trackIdx), d.type || 'predicted', d.score || 0);
-            inst._rawInstIndex = ii;   // see the note in ensureLazyFrameData
-            staged.addInstance(camName, inst);
+            if (!instances[ii]) continue;   // a pose this session does not show
+            staged.addInstance(camName, lazyRowInstance(instances[ii], ii));
             added++;
         }
     }
@@ -1666,22 +1687,8 @@ export async function ensureLazyFrameData(frameIdx) {
     var fg = new FrameGroup(frameIdx);
     for (var [camName, instances] of cameraData) {
         for (var ii = 0; ii < instances.length; ii++) {
-            var instData = instances[ii];
-            if (!instData) continue;   // a pose this session does not show
-            var inst = new Instance(
-                instData.points || [],
-                lazyInstanceTrackIdx(instData.trackIdx),
-                instData.type || 'predicted',
-                instData.score || 0
-            );
-            // `ii` is this instance's position in the frame's raw instance list,
-            // i.e. its row offset within the lazy store's [start,end) range for
-            // this (camera, frame) — see slp-streaming-write.js's `refFor`, which
-            // uses this to resolve the exact store row on save instead of
-            // guessing via trackIdx (ambiguous/wrong whenever a frame has more
-            // than one instance and the grouped one is trackless).
-            inst._rawInstIndex = ii;
-            fg.addInstance(camName, inst);
+            if (!instances[ii]) continue;   // a pose this session does not show
+            fg.addInstance(camName, lazyRowInstance(instances[ii], ii));
         }
     }
     session.addFrameGroup(fg);
@@ -1719,19 +1726,8 @@ export function buildLazyFrameGroupSync(frameIdx) {
     var fg = new FrameGroup(frameIdx);
     for (var [camName, instances] of cached) {
         for (var ii = 0; ii < instances.length; ii++) {
-            var instData = instances[ii];
-            if (!instData) continue;   // a pose this session does not show
-            var inst = new Instance(
-                instData.points || [],
-                lazyInstanceTrackIdx(instData.trackIdx),
-                instData.type || 'predicted',
-                instData.score || 0
-            );
-            // See the identical tag in ensureLazyFrameData above — this is
-            // the store row offset `refFor` (slp-streaming-write.js) needs to
-            // resolve this instance's exact raw row on save.
-            inst._rawInstIndex = ii;
-            fg.addInstance(camName, inst);
+            if (!instances[ii]) continue;   // a pose this session does not show
+            fg.addInstance(camName, lazyRowInstance(instances[ii], ii));
         }
     }
     session.addFrameGroup(fg);
@@ -1793,14 +1789,7 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
             var camData = batchResults[ci][bi];
             if (!camData || !camData.instances) continue;
             for (var ii = 0; ii < camData.instances.length; ii++) {
-                var instData = camData.instances[ii];
-                var inst = new Instance(
-                    instData.points || [], lazyInstanceTrackIdx(instData.trackIdx),
-                    instData.type || 'predicted', instData.score || 0
-                );
-                // See ensureLazyFrameData's identical tag above.
-                inst._rawInstIndex = ii;
-                fg.addInstance(cameraNames[ci], inst);
+                fg.addInstance(cameraNames[ci], lazyRowInstance(camData.instances[ii], ii));
             }
         }
         session.addFrameGroup(fg);
@@ -1970,7 +1959,7 @@ export function updateTimelineForFrame(frameIdx) {
  * `onProgress(completed, total)` is invoked per frame; pass it to drive a
  * progress bar. `method` (`'ba'|'dlt'`) governs every solve; omitted is DLT, so
  * callers name it (`tests/test-triangulation-method-propagation.mjs`) — the
- * modal passes Settings ▸ Default Triangulation.
+ * modal passes Settings ▸ Triangulation Wizard.
  *
  * Keeps only the 3D (`points3d`, `usedCameras`, `triangulationMethod`) and
  * the error stats, as both Triangulate All paths do (see
@@ -2079,6 +2068,26 @@ export function resolveTriangulationMethod(group) {
     return getDefaultTriangulationMethod() === 'ba' ? 'ba' : 'dlt';
 }
 
+// One shared string per distinct key: a project stores one reference per group.
+const _settingsKeys = new Map();
+
+/**
+ * Names the settings a solve reads besides its method and 2D input: the
+ * reprojection error threshold and the cameras included in tracking. Stored on a
+ * group when it is solved (`solveSettings`) and compared by `adoptPrior3d`.
+ *
+ * @param {Array<{name: string}>} cameras - the session's cameras
+ * @returns {string}
+ */
+export function triangulationSettingsKey(cameras) {
+    var key = (getTrackingThreshold('reprojErrorThreshold') || 0) + '|' +
+        JSON.stringify(cameras.filter(function (c) { return isCameraTracked(c.name); }).map(function (c) { return c.name; }));
+    var shared = _settingsKeys.get(key);
+    if (shared) return shared;
+    _settingsKeys.set(key, key);
+    return key;
+}
+
 /**
  * Find the group in `priorGroups` that is the SAME group as `group` — i.e. its
  * membership is identical, camera for camera, by Instance object identity.
@@ -2155,12 +2164,18 @@ export function findEquivalentPriorGroup(priorGroups, group) {
  * originally: a reopened project had 3D with an undefined method, so nothing could
  * ever be adopted and `ui/rendering.js`'s fill reported DLT's error for BA points.
  *
+ * The settings that feed the solve must also still be the ones it ran under
+ * (`settingsKey`, see `triangulationSettingsKey`), or a changed reprojection error
+ * threshold or camera choice would do nothing on a re-run. They are not saved, so
+ * 3D read from a file never matches and is re-solved.
+ *
  * @param {InstanceGroup} group
  * @param {InstanceGroup|null} prior
  * @param {'ba'|'dlt'} method - the method this operation is required to produce
+ * @param {string} settingsKey - `triangulationSettingsKey` for this run
  * @returns {boolean} true if 3D was adopted and `group` needs no triangulation
  */
-export function adoptPrior3d(group, prior, method) {
+export function adoptPrior3d(group, prior, method, settingsKey) {
     if (!group || !prior) return false;
     if (!someValidPoint3d(prior.points3d)) return false;
     // Only adopt a solution produced by the method being asked for. An undefined
@@ -2171,8 +2186,10 @@ export function adoptPrior3d(group, prior, method) {
     // Smoothed 3D (pose/temporal-smoothing.js) is not what the solve produces
     // either: re-triangulating is how a user undoes the pass.
     if (isPoints3dSmoothed(prior.points3d)) return false;
+    if (prior.solveSettings !== settingsKey) return false;
     group.points3d = prior.points3d;
     group.triangulationMethod = want;
+    group.solveSettings = settingsKey;
     if (prior.usedCameras && prior.usedCameras.size) group.usedCameras = prior.usedCameras;
     return true;
 }
@@ -2207,6 +2224,7 @@ export function reTriangulateGroup(instanceGroup) {
     var method = resolveTriangulationMethod(instanceGroup);
     var result = triangulateAndReproject(instanceGroup, groupCameras, { method: method });
     instanceGroup.triangulationMethod = result.method;
+    instanceGroup.solveSettings = triangulationSettingsKey(cameras);
 
     // Only update if we got valid results
     var validPts = someValidPoint3d(result.points3d);
@@ -2433,6 +2451,7 @@ export function triangulateCurrentFrame(method) {
 
             const result = triangulateAndReproject(group, groupCameras, { method: method });
             group.triangulationMethod = result.method;
+            group.solveSettings = triangulationSettingsKey(cameras);
 
             // Watch for a NaN-poisoned solve. An all-NaN triple is now just the
             // "missing" sentinel, so it can no longer stand in for corruption —
@@ -2618,7 +2637,7 @@ function _triangulateGroupStep(group, cameras, method) {
  * not on the solve — so a parallel solve (`pose/triangulation-pool.js`) can
  * apply its result after a lazy window has been released.
  *
- * @returns {{groupCameras: Array, usedCameras: Set<string>}|null}
+ * @returns {{groupCameras: Array, usedCameras: Set<string>, settingsKey: string}|null}
  */
 function _prepareGroupStep(group, cameras) {
     // Resolve camera name mismatches
@@ -2655,12 +2674,13 @@ function _prepareGroupStep(group, cameras) {
         var camInst = group.getInstance(groupCameras[ck].name);
         if (camInst && camInst.hasAnyPoint()) usedCameras.add(groupCameras[ck].name);
     }
-    return { groupCameras: groupCameras, usedCameras: usedCameras };
+    return { groupCameras: groupCameras, usedCameras: usedCameras, settingsKey: triangulationSettingsKey(cameras) };
 }
 
 /** Store a solve's result on the group (the tail of `_triangulateGroupStep`). */
 function _applyGroupStep(group, prep, result) {
     group.triangulationMethod = result.method;
+    group.solveSettings = prep.settingsKey;
     group.points3d = pooledPoints3d(result.points3d);   // one slab, not one ArrayBuffer per group
     group.usedCameras = prep.usedCameras;
 }
