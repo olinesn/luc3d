@@ -21,13 +21,20 @@
  * that runs after the range, with its options (`buildImageCheckFields`,
  * written through `updateTrackingThresholds`).
  *
- * Depends on: pose/tracker.js (the run itself), ui/app-state.js, save-load.js.
+ * Cancel gives keyboard focus back to the item that opened it, so the next Tab
+ * does not start over at the top of the page. Continue keeps only the place
+ * (`returnPlaceTo`): the run has started, and the keys go to the app, to look at
+ * its result.
+ *
+ * Depends on: pose/tracker.js (the run itself), ui/app-state.js, save-load.js,
+ * ui/toolbar-menu-keys.js.
  */
 
 import { state, getActiveSession } from './app-state.js';
 import { setStatus } from '../import-export/save-load.js';
 import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js';
 import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js';
+import { keyboardFocus, returnFocusTo, returnPlaceTo } from './toolbar-menu-keys.js';
 import {
     trackFrameRange, trackableFrameBounds,
     getTrackerNumAnimals, setTrackerNumAnimals,
@@ -92,6 +99,7 @@ export function showTrackRangeModal(opts) {
         return;
     }
 
+    var opener = keyboardFocus();
     var cur = Math.min(Math.max(state.currentFrame || 0, bounds.min), bounds.max);
     var defStart = cur;
     var defEnd = Math.min(bounds.max, cur + DEFAULT_RANGE_LENGTH - 1);
@@ -169,6 +177,7 @@ export function showTrackRangeModal(opts) {
     var summaryEl = modal.querySelector('#trackRangeSummary');
     var errorEl = modal.querySelector('#trackRangeError');
     var continueBtn = modal.querySelector('#trackRangeContinue');
+    var cancelBtn = modal.querySelector('#trackRangeCancel');
     var sliderStart = modal.querySelector('#trackRangeSliderStart');
     var sliderEnd = modal.querySelector('#trackRangeSliderEnd');
     var sliderFill = modal.querySelector('#trackRangeFill');
@@ -268,6 +277,11 @@ export function showTrackRangeModal(opts) {
         overlay.remove();
     }
 
+    function cancel() {
+        returnFocusTo(opener);
+        close();
+    }
+
     async function proceed() {
         var f = readForm();
         if (f.error) { refresh(); return; }
@@ -277,6 +291,7 @@ export function showTrackRangeModal(opts) {
         setTrackerNumAnimals(f.animals);
         updateNodeWeights(f.nodeWeights);
         updateTrackingThresholds(f.thresholds);
+        returnPlaceTo(opener);
         close();
         // trackFrameRange owns the loading overlay and reports its own outcome
         // through setStatus, exactly as the Track All button does.
@@ -290,9 +305,16 @@ export function showTrackRangeModal(opts) {
         if (res && res.ok && res.end != null && onTracked) onTracked(res.end);
     }
 
+    // Enter on Cancel is left to the button, and a held Enter's repeats are no
+    // answer: a keypress on the item that opened this would otherwise run through
+    // the dialog into a run, and so would one held on Cancel, which has given focus
+    // back to that item.
     function onKey(e) {
-        if (e.key === 'Escape') { e.preventDefault(); close(); }
-        else if (e.key === 'Enter') { e.preventDefault(); proceed(); }
+        if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+        else if (e.key === 'Enter' && e.target !== cancelBtn) {
+            e.preventDefault();
+            if (!e.repeat) proceed();
+        }
     }
     document.addEventListener('keydown', onKey);
 
@@ -307,11 +329,11 @@ export function showTrackRangeModal(opts) {
     });
     sliderStart.addEventListener('input', function () { onSliderInput('start'); });
     sliderEnd.addEventListener('input', function () { onSliderInput('end'); });
-    modal.querySelector('#trackRangeCancel').addEventListener('click', close);
+    cancelBtn.addEventListener('click', cancel);
     continueBtn.addEventListener('click', proceed);
     // Clicking the backdrop (not the dialog) dismisses, like the other modals.
     overlay.addEventListener('click', function (e) {
-        if (e.target === overlay) close();
+        if (e.target === overlay) cancel();
     });
 
     refresh();

@@ -2,9 +2,9 @@
 //
 // The menus themselves are pure CSS (`.tri-dropdown`, styles.css): hover or focus
 // inside opens one, and a closed one is `visibility: hidden`, so Tab walks into
-// the items of an open menu and skips those of a closed one. Two things CSS
-// cannot know are decided here: which input the user is on when two menus are
-// open at once, and Esc.
+// the items of an open menu and skips those of a closed one. What CSS cannot know
+// is decided here: which input the user is on when two menus are open at once,
+// Esc, and where a dialog opened from a menu gives focus back to.
 
 import { isTextEntryTarget } from './keyboard-target.js';
 
@@ -18,19 +18,64 @@ function underDialog(el, toolbar) {
     return !!top && !toolbar.contains(top);
 }
 
+// Close the menu `el` is in, at once, and hand the keys back to the app.
+function letGoOf(el) {
+    var dropdown = el.closest('.tri-dropdown');
+    if (dropdown) dropdown.classList.add('menu-dismissed');
+    el.blur();
+}
+
 /**
- * Give focus back to a control after a dialog that took it has closed. If the
- * control is a menu item, its menu closed with the focus gone, and an item in a
- * closed menu cannot take focus, so the menu is opened for that one call. From
- * then on the focus holds it open.
+ * The element keyboard focus is on, or null. A dialog about to take focus notes
+ * this, for `returnFocusTo` or `returnPlaceTo` as it closes. A pointer's focus is
+ * not noted: `installFocusRelease` lets go of it after the click, and coming back
+ * it would hold a menu open with the pointer long gone.
  *
- * @param {HTMLElement} el
+ * @returns {?Element}
+ */
+export function keyboardFocus() {
+    var el = document.activeElement;
+    return el && el.matches(':focus-visible') ? el : null;
+}
+
+/**
+ * Give focus back to the control a dialog noted (`keyboardFocus`), as the dialog
+ * closes without having started anything. Call it BEFORE removing the dialog: if a
+ * pointer closed it, focus is no longer the keyboard's, and nothing comes back.
+ *
+ * If the control is a menu item, its menu closed with the focus gone, and an item
+ * in a closed menu cannot take focus, so the menu is opened for that one call.
+ * From then on the focus holds it open.
+ *
+ * The selection moves with the focus for Firefox: once nothing has focus, it starts
+ * the next Tab from the selection, which Tab moves but a script's `focus()` does not.
+ * So without this, a blur from here on (Esc, `returnPlaceTo`) loses the place there.
+ *
+ * @param {?Element} el  null does nothing
  */
 export function returnFocusTo(el) {
+    if (!el || !keyboardFocus()) return;
     var dropdown = el.closest('.tri-dropdown');
     if (dropdown) dropdown.classList.add('open');
     el.focus();
     if (dropdown) dropdown.classList.remove('open');
+    window.getSelection().collapse(el, 0);
+}
+
+/**
+ * Keep the keyboard's place at the control a dialog noted, without focus on it, as
+ * the dialog's Continue starts what that control runs. Back on the control, the
+ * next Space or Enter, or an Enter held a moment too long, would start the run
+ * again on top of the one going. So the keys go to the app, as after Esc on a menu,
+ * and the next Tab carries on from the control (WebKit's starts over at the top of
+ * the page). Call it BEFORE removing the dialog, like `returnFocusTo`.
+ *
+ * @param {?Element} el  null does nothing
+ */
+export function returnPlaceTo(el) {
+    if (!el || !keyboardFocus()) return;
+    returnFocusTo(el);
+    letGoOf(el);
 }
 
 /**
@@ -65,10 +110,9 @@ export function wireToolbarMenuKeys() {
         if (e.key !== 'Escape' || !toolbar.contains(e.target) || isTextEntryTarget(e.target)) return;
         var dropdown = e.target.closest('.tri-dropdown');
         if (!dropdown || underDialog(e.target, toolbar)) return;
-        dropdown.classList.add('menu-dismissed');
         e.preventDefault();
         e.stopPropagation();
-        e.target.blur();
+        letGoOf(e.target);
     }, true);
     toolbar.addEventListener('pointermove', function () {
         toolbar.classList.remove('keyboard-nav');

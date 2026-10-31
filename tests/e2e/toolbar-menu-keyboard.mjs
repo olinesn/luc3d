@@ -443,6 +443,18 @@ try {
     await page.waitForTimeout(500);
     check(await onBody() && !(await menuOpen('trailsDropdown')),
         'a click on Custom… leaves no focus behind, so the menu closes when the pointer leaves');
+    // Opened from the keyboard, closed with the pointer: the user is on the pointer now.
+    await reset();
+    await focusOn('tbTrails');
+    await tabTo(custom);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !!document.getElementById('trailCustomModal'));
+    await page.waitForTimeout(600);
+    await page.click('#trailCustomCancel');
+    await page.mouse.move(700, 600);
+    await page.waitForTimeout(500);
+    check(await onBody() && !(await menuOpen('trailsDropdown')),
+        'and neither does Cancel clicked in a dialog the keyboard opened');
     await page.hover('#tbTrails');
     await page.waitForTimeout(200);
     await page.click('#trailsMenu [data-trail-sec="1"]');

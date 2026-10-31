@@ -61,7 +61,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 // The toolbar's Animals field, beside Track Frame / Track All.
 import { wireAnimalCountField } from './animal-count-field.js';
 import { wireReprojThresholdField } from './reproj-threshold-field.js';
-import { wireToolbarMenuKeys, returnFocusTo } from './toolbar-menu-keys.js';
+import { wireToolbarMenuKeys, keyboardFocus, returnFocusTo } from './toolbar-menu-keys.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -1172,8 +1172,7 @@ export function setupMenus() {
         if (document.getElementById('trailCustomModal')) return;
         // Keyboard focus comes back to the item that opened the dialog, or the
         // next Tab would start over at the top of the page. A pointer's was released.
-        var opener = document.activeElement;
-        var returnFocus = opener && opener.matches(':focus-visible') ? opener : null;
+        var opener = keyboardFocus();
         var rate = trailRate(state.fps);
         var overlay = document.createElement('div');
         overlay.className = 'multi-frame-modal-overlay';
@@ -1235,8 +1234,8 @@ export function setupMenus() {
         }
         function close() {
             document.removeEventListener('keydown', onKey, true);
+            returnFocusTo(opener);
             overlay.remove();
-            if (returnFocus) returnFocusTo(returnFocus);
         }
         function apply() {
             if (seconds == null) return;
