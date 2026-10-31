@@ -16,6 +16,9 @@
  *     session reopens with its own bouts and the same ethogram.
  *  3. A project with no ethogram and no bouts writes neither key, so untouched
  *     projects keep their bytes (`tests/e2e/save-golden-digest.mjs`).
+ *  Both writers also carry the detection settings and predictions (Phase 2):
+ *  a behavior's detector, the changed feature settings, and each session's
+ *  predicted bouts with their scores.
  *
  * Run: node tests/e2e/behavior-label-roundtrip.mjs   (spawns its own http.server; PORT= to move it)
  */
@@ -53,6 +56,7 @@ try {
         const meta = await import('/import-export/behavior-metadata.js');
         const eth = await import('/pose/behavior-ethogram.js');
         const L = await import('/pose/behavior-labels.js');
+        const P = await import('/pose/behavior-predictions.js');
         const { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } = pd;
         const SioLazyLoader = lazyMod.SioLazyLoader || lazyMod.default;
         const NODES = 4;
@@ -93,6 +97,8 @@ try {
             const groom = eth.addBehavior({ name: 'groom', key: 'g', group: 'posture' }).behavior;
             const chase = eth.addBehavior({ name: 'chase', key: 'c', social: true }).behavior;
             const bite = eth.addBehavior({ name: 'bite', key: 'b', kind: 'point', social: true }).behavior;
+            eth.setBehaviorDetector(rear.id, { conditions: [{ feature: 'n0 height · mean ±0.1 s', op: '>', value: 0.5 }], minDuration: 0.2 });
+            eth.setFeatureSettings({ nodeRoles: { head: 'n0', tailBase: 'n3' } });
             return { rear, groom, chase, bite };
         }
         function labelA(s, b) {
@@ -107,7 +113,14 @@ try {
         }
         function labelB(s, b) {
             L.labelRange(s, b.groom.id, 'mouseA', '', 0, 9, true);
+            P.setBehaviorRun(s, { behaviorId: b.chase.id, cfg: 'c', fps: 30, mode: '3d',
+                bouts: [{ animal: 'mouseB', target: 'mouseA', start: 3, end: 8, score: 0.66 }] });
         }
+        function predictA(s, b) {
+            P.setBehaviorRun(s, { behaviorId: b.rear.id, cfg: 'r', fps: 30, mode: '3d',
+                bouts: [{ animal: 'mouseA', target: '', start: 5, end: 9, score: 0.9 }, { animal: 'mouseB', target: '', start: 30, end: 33, score: 0.51 }] });
+        }
+        const predRows = (s) => P.predictedBouts(s).map(p => [p.behaviorId, p.animal, p.target, p.start, p.end, p.score]);
         async function reopen(bytes, filename) {
             const slpData = await fileio.parseSlpViaSleapIO(new File([bytes], filename), () => {});
             meta.resetBehaviorState();
@@ -122,10 +135,11 @@ try {
                     hasLabelsKey: Object.prototype.hasOwnProperty.call(lucid, 'behaviorLabels'),
                     fps: lucid.behaviorLabels ? lucid.behaviorLabels.fps : null,
                     rows: L.exportBoutRows(fresh),
+                    predictions: predRows(fresh),
                     otherKeys: ['sessionName', 'identities', 'skeleton', 'tracks'].every(k => Object.prototype.hasOwnProperty.call(lucid, k)),
                 });
             }
-            return { sessions: out, ethogram: eth.serializeEthogram() };
+            return { sessions: out, ethogram: eth.serializeEthogram(), features: eth.featureSettings() };
         }
 
         const res = {};
@@ -134,7 +148,9 @@ try {
             const b = defineEthogram();
             const s = buildSession(SPECS[0]);
             labelA(s, b);
+            predictA(s, b);
             res.expectedA = L.exportBoutRows(s);
+            res.expectedPredA = predRows(s);
             res.expectedEthogram = eth.serializeEthogram();
             res.stillRunning = L.isRunning(s, b.groom.id, 'mouseA', '');
             AS.state.sessions = [s]; AS.state.session = s; AS.state.activeSessionIdx = 0;
@@ -161,8 +177,10 @@ try {
             const b = defineEthogram();
             const sessions = SPECS.map(buildSession);
             labelA(sessions[0], b);
+            predictA(sessions[0], b);
             labelB(sessions[1], b);
             res.expectedStream = sessions.map(s => L.exportBoutRows(s));
+            res.expectedStreamPred = sessions.map(predRows);
             for (let i = 0; i < sessions.length; i++) {
                 const loader = new SioLazyLoader();
                 for (let ci = 0; ci < SPECS[i].cams.length; ci++) await loader.open(SPECS[i].cams[ci], await perCamFixture(SPECS[i], SPECS[i].cams[ci], ci));
@@ -195,6 +213,9 @@ try {
     check(e0.rows.some(r => r[5] === 0) && e0.rows.some(r => r[2] === 'mouseB') && e0.rows.some(r => r[6] === 'a') && e0.rows.some(r => r[7] === 'tall'),
         '"not" labels, targets, sources and notes are all in the file');
     check(e0.otherKeys, 'the other metadata.lucid keys are untouched');
+    check(eq(e0.predictions, rt.expectedPredA) && e0.predictions.length === 2, 'the predicted bouts and their scores read back (eager)');
+    check(rt.eager.ethogram.behaviors[0].detector && eq(rt.eager.features, { nodeRoles: { head: 'n0', tailBase: 'n3' } }),
+        'and so do the detector and the changed feature settings');
 
     console.log('\n-- 2. streaming writer --');
     if (rt.streamErr) {
@@ -203,6 +224,8 @@ try {
         check(rt.streaming.sessions.length === 2, `both sessions in the file (got ${rt.streaming.sessions.length})`);
         check(rt.streaming.sessions.every(s => s.hasEthogramKey), 'the ethogram is in every session');
         check(eq(rt.streaming.sessions.map(s => s.rows), rt.expectedStream), 'each session reopens with its own bouts');
+        check(eq(rt.streaming.sessions.map(s => s.predictions), rt.expectedStreamPred) && rt.expectedStreamPred[1].length === 1,
+            'and its own predicted bouts (streaming)');
     }
 
     console.log('\n-- 3. untouched project --');

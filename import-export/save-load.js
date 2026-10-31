@@ -368,7 +368,25 @@ async function ensureSleapIO() {
     return mod;
 }
 
+// No initializer: a hook registered while this module is still being
+// evaluated (an import cycle) must not be reset when its body runs.
+var _markDirtyHooks;
+
+/**
+ * Be told on every `markDirty` (an edit happened somewhere). Hooks run on
+ * every edit, so they must be cheap: behavior predictions use it only to
+ * note that the poses they read may have changed (ui/behavior-detect.js).
+ * @param {function(): void} fn
+ */
+export function onMarkDirty(fn) {
+    if (typeof fn === 'function') (_markDirtyHooks = _markDirtyHooks || []).push(fn);
+}
+
 export function markDirty() {
+    var hooks = _markDirtyHooks || [];
+    for (var i = 0; i < hooks.length; i++) {
+        try { hooks[i](); } catch (e) { console.error('[markDirty] hook failed', e); }
+    }
     // Per-session dirty (active-session memory model): the switch-away save
     // prompt and safe lazy-eviction key off THIS flag, so it must be set even
     // when the global flag is already true from another session.

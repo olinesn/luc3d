@@ -2556,12 +2556,17 @@ walked until the next run.
 (marks the 3D of every group on `frames`, null = all, that has a
 `triangulationMethod` and valid 3D, solved or kept by the run),
 `carryTriangulateMark(old, new)`, `hasTrackResult(session)`,
-`hasTriangulateResult(session)`.
+`hasTriangulateResult(session)`, `hasBehaviorResult(session, env)` (the
+behavior predictions stand: some predicted bout, none of it stale —
+`pose/behavior-predictions.js` `predictionsStand`; unlike Track and Triangulate
+it survives a reopen, since predictions are saved; `env` = `{fps, floorKey}`
+from ui/behavior-detect.js `detectionEnv`).
 
-**Imports.** `./pose-data.js` (`someValidPoint3d`). **Imported by**
+**Imports.** `./pose-data.js` (`someValidPoint3d`), `./behavior-predictions.js`
+(`predictionsStand`). **Imported by**
 `pose/triangulation.js`, `pose/tracker.js`, `ui/export-modals.js`,
 `ui/run-buttons.js`. **Tests.** `tests/test-run-state.mjs`,
-`tests/e2e/run-buttons-blue.mjs`.
+`tests/e2e/run-buttons-blue.mjs`, `tests/e2e/behavior-rules.mjs` §2, §4.
 
 ### pose/behavior-ethogram.js
 
@@ -2576,21 +2581,32 @@ social, cleared with it) = a pair with no actor and target (nose-to-nose
 sniffing), stored once per pair by `pose/behavior-labels.js`. Behaviors sharing a non-empty `group`
 are mutually exclusive for one animal. `key` is one lower-case letter (digits
 pick the animal in Label Behaviors mode). `BEHAVIOR_COLORS` is held to the
-palette test's §10. DOM-free.
+palette test's §10. A behavior may also carry a `detector` (Phase 2:
+`{conditions, minDuration, maxGap}`, normalized by `pose/behavior-rules.js`),
+and the ethogram carries the project's behavior FEATURE settings
+(`featureSettings`: `nodeRoles {head, tailBase}` and `exclude` by node name,
+`floor {source: 'origin'|'fit'|'plane', plane?}`), null until changed and only
+what differs from the defaults, so defaults are never written. DOM-free.
 
-**Exports.** `BEHAVIOR_KINDS`, `BEHAVIOR_COLORS`, `resetEthogram`,
-`behaviors`, `ethogramIsEmpty`, `behaviorById`, `behaviorByKey`,
+**Exports.** `BEHAVIOR_KINDS`, `BEHAVIOR_COLORS`, `resetEthogram` (also the
+feature settings), `behaviors`, `ethogramIsEmpty`, `behaviorById`, `behaviorByKey`,
 `behaviorByName`, `exclusivePeers`, `nextBehaviorColor`,
 `normalizeBehaviorKey`, `validateBehaviorFields`, `addBehavior`,
-`updateBehavior`, `removeBehavior`, `moveBehavior`, `serializeEthogram`
-(null when empty), `ingestEthogram(payload)` (into an empty ethogram keeps
+`updateBehavior`, `removeBehavior`, `moveBehavior`, `setBehaviorDetector(id, detector|null)`,
+`featureSettings`, `setFeatureSettings(partial|null)`, `serializeEthogram`
+(null when empty and the settings are default; writes `detector` and `features`
+only when set), `ingestEthogram(payload)` (into an empty ethogram keeps
 ids; into a non-empty one matches BY NAME and returns the file-id → project-id
-map for remapping bouts).
+map for remapping bouts; a known behavior without a detector takes the
+incoming one; feature settings come from the first payload while the project
+has none).
 
-**Imports.** None. **Imported by** `pose/behavior-labels.js`,
+**Imports.** `./behavior-rules.js` (`normalizeDetector`). **Imported by** `pose/behavior-labels.js`,
 `import-export/behavior-metadata.js`, `import-export/behavior-io.js`, every `ui/behavior-*.js`,
-`ui/ui-wiring.js` (Hot Keys help). **Tests.** `tests/test-behavior-labels.mjs`
-§1–2, `tests/test-behavior-metadata.mjs`, `tests/test-track-identity-palette.mjs` §10.
+`ui/ui-wiring.js` (Hot Keys help), `pose/behavior-predictions.js`, `ui/behavior-detect.js`,
+`ui/behavior-rules-modal.js`. **Tests.** `tests/test-behavior-labels.mjs`
+§1–2, `tests/test-behavior-metadata.mjs` (§5 detectors and settings),
+`tests/test-track-identity-palette.mjs` §10.
 
 ### pose/behavior-labels.js
 
@@ -2634,6 +2650,233 @@ save/load: `exportBoutRows`, `importBoutRows` (replaces; never notifies),
 `ui/behavior-*.js`, `ui/ui-wiring.js` (Rename Identity). **Tests.**
 `tests/test-behavior-labels.mjs`, `tests/test-behavior-io.mjs` §4, §10,
 `tests/e2e/behavior-labelling.mjs`.
+
+### pose/behavior-tensor.js
+
+**Purpose.** The poses the behavior features read, and the body and floor they
+are measured against. `collectBehaviorInput(session, {numFrames, mode, camera})`
+builds one NaN-filled `Float32Array` per animal (T × N × 3, ~32 MB per animal
+for 176k frames × 15 nodes, outside the V8 heap): 3D from
+`session.instanceGroups` (always resident, lazy projects too) keyed by
+`group.identityId` — an animal is an identity NAME, groups without one are
+skipped, a second group of one identity on a frame is counted (`skipped`), not
+used; or, with no identified 3D, ONE camera's 2D (`pick2dCamera`: the asked one,
+else the first with 2D): resident frames from memory (a group member takes its
+group's identity, an ungrouped one `getIdentityIdForUnlinkedInstance`), a lazy
+project's other frames from the store columns as `collectStore` does
+(`forEachInstanceRow` + `getIdentityIdForTrack`), nothing hydrated. Body:
+`guessNodeRoles` (head: nose/snout, else head; tail base: tail base / TTI, else
+the tail node nearest the head, else the node farthest from the head),
+`defaultExcludedNodes` (tail nodes past the base), `resolveBody(names, edges,
+settings)` (saved roles / exclusions by node NAME override the guesses; `paws`
+for head–paw band power), `bodyLengths` (median head–tail base distance, ≤ 50k
+sampled frames). Floor: `floorFrame(origin, up)` builds the horizontal axes from
+`up` alone (no feature may read them); `floorFromPlane(fit)` turns the normal
+toward the animals; `floorFromOrigin(frame)` (+Z up); `fitFloor(input, nodes,
+{cameraCenters, head, tailBase})` fits the animals' lower envelope — its tilt
+from the level BODIES (the smallest eigenvector of the head → tail base axes'
+second moments, when clearly smallest: `tiltFrom: 'body axes'`), else the
+points' least spread (PCA, which a small or tall cage can fool: 75° off on a
+SLAP home cage), a grid over the other two, per cell the 5th height percentile on
+each side, trimmed least-squares planes — and picks the floor side by the
+cameras (≥ 70% on one side), else the heights' skew (bodies rise from the floor),
+else the flatter envelope; all from data, so it moves with the world.
+`featureSpec(input, body, floor, fps)` is what the feature engine takes.
+Broken tracking: `brokenPoseFrames(input, body, bodyLength, fps)` →
+`{masks: Uint8Array[] (1 = skip), far, jumps, frames, total}` marks an
+animal-frame broken when a used node is more than `BROKEN_NODE_BL` (1.2) body
+lengths from the body's middle (per-axis median of the used nodes, at least
+half of them present), or when that middle jumps more than `BROKEN_STEP_BL`
+(0.5) BL and faster than `BROKEN_SPEED_BL_S` (20 BL/s) from the last frame that
+had one (not across a gap over 1 s); around a jump it skips every frame a
+central-difference speed could span across it, so no speed straddles it. The
+features skip masked frames (`sliceChunkData`'s `skip`). On four real
+recordings: 0.8–1.7% of tracked animal-frames, and most of the 100%-score
+locomotion bouts (tracking errors) go. `POSE_CHECK_VERSION` is in every run's
+config print. DOM-free.
+
+**Exports.** `guessNodeRoles`, `defaultExcludedNodes`, `resolveBody`,
+`hasIdentified3d`, `pick2dCamera`, `collectBehaviorInput`, `bodyLengths`,
+`POSE_CHECK_VERSION`, `BROKEN_NODE_BL`, `BROKEN_STEP_BL`, `BROKEN_SPEED_BL_S`,
+`brokenPoseFrames`, `floorFrame`, `floorFromPlane`, `floorFromOrigin`,
+`fitFloor`, `featureSpec`.
+
+**Imports.** `./pose-data.js` (`POINT3D_STRIDE`, `points3dNodeCount`),
+`./plane-fit.js` (`jacobiEigen`), `./behavior-features.js` (`halfFrames`,
+`SPEED_HALF_SECONDS`). **Imported by** `ui/behavior-detect.js`,
+`pose/behavior-predictions.js` (`resolveBody`, `POSE_CHECK_VERSION`). **Tests.**
+`tests/test-behavior-features.mjs` §5, §8, §9 (broken tracking), `tests/e2e/behavior-rules.mjs` §7 (2D).
+
+### pose/behavior-features.js
+
+**Purpose.** The behavior feature engine: per animal and per ordered actor →
+target pair, named numbers per frame ("Nose height · mean ±0.3 s",
+"head–tail base distance"). Pure and import-free (the worker runs it).
+Everything is measured in the FLOOR frame (`spec.floor`: origin, up, e1, e2)
+and only as heights, distances, angles and differences over time — never a
+horizontal coordinate or an absolute heading — so rotating and translating the
+world with its floor changes nothing. Lengths are divided by the animal's body
+length (BL), speeds are BL/s, angles degrees. Base animal features: node and
+centroid heights (3D), egocentric forward / left, every used node pair's
+distance, joint angles at two-edge joints, centroid / vertical / node speeds and
+turning speed (central differences over ±`SPEED_HALF_SECONDS`; centroid velocity
+= mean displacement of the nodes seen at both ends), elongation, missing nodes,
+nearest-animal distances. Pair features: centroid, head–head, head–tail base,
+min node distance, target bearing (|angle| from the actor's head, and sin/cos),
+relative heading, approach and tangential speed, target in view. Every base has
+mean / std / min / max over ±`WINDOW_SECONDS` (`windowStat`: prefix sums and
+monotonic deques, NaN-masked, O(T)); centroid and head speeds and head–paw
+distances also have `BANDS` power (`bandPower`: sliding DFT on the window's own
+bins, missing frames held, a band above fps/2 NaN so the catalog does not
+depend on fps). `computeFeatureChunk` computes only the REQUESTED features over
+a chunk padded by `featurePadFrames`, so chunks equal one pass and the frames ×
+features matrix is never built. In a social behavior a name may be relational,
+the actor's own, or the target's (`TARGET_PREFIX`, `resolveFeatureName`).
+`sliceChunkData(data, chunk, stride, skip)` copies a chunk's poses and blanks
+the frames `skip[a]` marks (broken tracking), so every feature reads them as
+missing.
+
+**Exports.** `FEATURE_SPEC_VERSION`, `WINDOW_SECONDS`, `WINDOW_STATS`, `BANDS`,
+`SPEED_HALF_SECONDS`, `BAND_HALF_SECONDS`, `VIEW_HALF_ANGLE`, `STAT_SEP`,
+`TARGET_PREFIX`, `halfFrames`, `windowLabel`, `bandLabel`, `featurePadFrames`,
+`featureCatalog`, `catalogFor` (cached), `windowStat`, `bandPower`,
+`computeFeatureChunk`, `planChunks`, `sliceChunkData`, `resolveFeatureName`,
+`featureNamesFor`.
+
+**Imports.** None. **Imported by** `pose/behavior-rules.js`,
+`pose/behavior-pool.js`, `pose/behavior-worker.js`, `ui/behavior-detect.js`,
+`ui/behavior-rules-modal.js`. **Tests.** `tests/test-behavior-features.mjs`
+(catalog, window stats vs brute force, band power, chunked = one pass,
+invariance under rotation + translation with an explicit and a fitted floor,
+NaN masking, meaning, skipped frames §9).
+
+### pose/behavior-postprocess.js
+
+**Purpose.** Per-frame scores to bouts, for every prediction source:
+`scoresToBouts(scores, {threshold, minFrames, maxGapFrames, point})` — detected
+runs (score ≥ threshold) joined across gaps of up to `maxGapFrames` (unscored
+frames count as gap) FIRST, then a joined bout is kept only when its DETECTED
+frames (not the gaps it bridged) number at least `minFrames`, so scattered
+one-frame detections never make a bout; a bout scores the mean of its finite
+frames; a point behavior keeps its peak frame.
+`secondsToFrames`. Pure, import-free (the worker loads it).
+
+**Imports.** None. **Imported by** `pose/behavior-rules.js`. **Tests.**
+`tests/test-behavior-rules.mjs` §3.
+
+### pose/behavior-rules.js
+
+**Purpose.** Rule detectors. A behavior's `detector` is AND-ed conditions on
+named features (`{feature, op: '>'|'<', value}`, at least / at most, threshold
+inclusive) plus `minDuration` and `maxGap` in seconds (`normalizeDetector`).
+`detectorProblems` says why one cannot run (unknown feature, a height in 2D, a
+pair feature on a non-social behavior). `DETECTOR_TEMPLATES` (rearing,
+immobile, locomotion, contact ↔, nose-to-nose ↔, anogenital approach →,
+following →; `{head}` and `{tailBase}` filled by `instantiateTemplate`, which names a missing role in words); their values come
+from four real recordings, as the comment above them explains: rearing 0.7 BL
+with the tail base below 0.45 BL (climbing is not rearing), immobile 0.1 BL/s (raise it for jittery tracking), nose-to-nose ≥ 0.1 s with
+0.2 s gaps joined, following also needs the two headed within 60°. Scores
+(`scoreConditions`): each condition σ(margin / scale), scale = 10% of the
+threshold with a floor per unit (`conditionScale`), the frame's score the
+lowest — but the decision is exact: every condition met ⇒ ≥ 0.5, else < 0.5,
+a missing feature ⇒ NaN. `planDetectors` resolves conditions against a catalog
+and lists the features to compute; `scoreDetectorsChunk` (a worker job)
+computes them and scores every animal (non-social) or ordered pair (social; a
+MUTUAL pair once, a < b, the better direction — `combineMutual`).
+`detectorBouts` applies the durations. The settings dialog's live numbers:
+`featureHistogram` (robust range, includes the threshold), `previewDetector`.
+Pure (the worker loads it).
+
+**Exports.** `RULE_OPS`, `conditionScale`, `normalizeDetector`,
+`detectorProblems`, `DETECTOR_TEMPLATES`, `instantiateTemplate`,
+`scoreConditions`, `detectorBouts`, `planDetectors`, `combineMutual`,
+`orderedPairs`, `scoreDetectorsChunk`, `catalogOf`, `featureHistogram`,
+`previewDetector`.
+
+**Imports.** `./behavior-features.js`, `./behavior-postprocess.js`.
+**Imported by** `pose/behavior-ethogram.js`, `pose/behavior-pool.js`,
+`pose/behavior-worker.js`, `ui/behavior-detect.js`, `ui/behavior-rules-modal.js`.
+**Tests.** `tests/test-behavior-rules.mjs`, `tests/e2e/behavior-rules.mjs`.
+
+### pose/behavior-predictions.js
+
+**Purpose.** Predicted behavior bouts per session (a `WeakMap`), shared by
+every source (rules now; classifiers, keypoint-MoSeq and discovery later):
+one RUN per behavior `{behaviorId, source: 'rule', cfg, fps, mode, camera,
+bouts: [{animal, target, start, end, score}], scores: Map<'animal\u0001target',
+Float32Array> (in memory only)}`, a mutual pair in name order. STALE when the
+settings changed — `runConfigPrint(behavior, session, {fps, mode, camera,
+floorKey})` = detector + resolved body (head, tail base, used nodes, on the
+session's skeleton) + the floor in effect + fps + 2D/3D + `POSE_CHECK_VERSION`
+(which frames count as broken tracking), compared with the run's `cfg` — or
+the poses changed: `predictionInputPrint` is an order-free
+sum/xor hash of every coordinate (to 1e-3) with its frame, identity and node
+(3D from groups; 2D from resident frames plus a lazy project's store rows, so
+residency changes nothing). Edits only `notePossibleInputChange` (cheap); the
+re-print (`checkPredictionInput[Async]`, sliced, cancelled by a newer edit) is
+the caller's to schedule. Label edits never make a rule run stale. Review
+status is read from the labels (`reviewStatus`: accepted / rejected / mixed /
+unreviewed); `reviewQueue` orders by uncertainty (|score − 0.5|), disagreement
+(share labelled "not") or time; `acceptPredictions` (present, source 'a') and
+`rejectPredictions` (absent, source 'm') are ONE `labelBouts` edit each — one
+undo step. Renames follow (`renamePredictedAnimal`); an identity swap changes
+the print, so the run goes stale. Saved bouts only (`exportPredictionRuns`,
+null when none; `importPredictionRuns` replaces, remaps ids, drops garbage).
+DOM-free.
+
+**Exports.** `onPredictionsChange`, `runConfigPrint`, `predictionInputPrint`,
+`predictionInputPrintAsync`, `setBehaviorRun`, `noteDetectionPass`,
+`clearBehaviorRuns`, `behaviorRuns`, `behaviorRunOf`, `hasPredictions`,
+`predictedBouts`, `predictionScoreAt`, `notePossibleInputChange`,
+`predictionCheckPending`, `checkPredictionInput`, `checkPredictionInputAsync`,
+`predictionStaleness(session, env)`, `isRunStale`, `predictionsStand`,
+`renamePredictedAnimal`, `reviewStatus`, `REVIEW_ORDERS`, `reviewQueue`,
+`acceptPredictions`, `rejectPredictions`, `exportPredictionRuns`,
+`importPredictionRuns`, `resetBehaviorPredictions`.
+
+**Imports.** `./behavior-ethogram.js`, `./behavior-labels.js`,
+`./behavior-tensor.js` (`resolveBody`, `POSE_CHECK_VERSION`), `./pose-data.js`. **Imported by**
+`import-export/behavior-metadata.js`, `pose/run-state.js`, `ui/behavior-detect.js`,
+`ui/behavior-panel.js`, `ui/behavior-timeline.js`, `ui/ui-wiring.js` (Rename
+Identity). **Tests.** `tests/test-behavior-rules.mjs` §6–7,
+`tests/test-behavior-metadata.mjs` §5, `tests/e2e/behavior-rules.mjs`,
+`tests/e2e/behavior-label-roundtrip.mjs`.
+
+### pose/behavior-pool.js
+
+**Purpose.** Run behavior chunk jobs (`{kind: 'scores'|'features', spec, chunk,
+data, plan?, extra?, request?}`) on a pool of module workers
+(`pose/behavior-worker.js`) — the `pose/triangulation-pool.js` pattern:
+`min(hardwareConcurrency − 1, 8)` workers, kept between runs and terminated
+after 30 s idle, one run owns the pool at a time (a concurrent one goes
+inline). `runBehaviorChunks(count, makeJob, onDone, {workload, onProgress,
+isCancelled, pause})`: a job's data is made only when a worker is free, at most
+one chunk per worker in flight, `onDone` in any order (each chunk owns its
+frames). Inline (same calls, `pause()` between chunks) without `Worker`, for
+small runs (`workload` < `MIN_WORKLOAD` animal-frames), or with
+`window.LUCID_BEHAVIOR_WORKER = 0` (kill switch); N > 0 forces N workers. A
+chunk a worker fails on, or a dead worker's, is redone inline. Worker URL: the
+literal `new URL('pose/behavior-worker.js', document.baseURI)` (stamp-version
+sees it).
+
+**Exports.** `MIN_WORKLOAD`, `runJob` (one job, on this thread),
+`runBehaviorChunks`.
+
+**Imports.** `./behavior-features.js`, `./behavior-rules.js`. **Imported by**
+`ui/behavior-detect.js`. **Tests.** `tests/e2e/behavior-rules.mjs` §1 (inline
+vs a forced 3-worker pool: identical per-frame scores), `tests/e2e/stamped-build.mjs`.
+
+### pose/behavior-worker.js
+
+**Purpose.** Module worker for `pose/behavior-pool.js`: one chunk's features
+(`computeFeatureChunk`) or detector scores (`scoreDetectorsChunk`), every typed
+array of the result transferred. Same pure code as the main thread; no bare
+imports in its graph. In `{type: 'job', id, kind, spec, chunk, data, plan?,
+extra?, request?}`; out `{type: 'done', id, result}` or `{type: 'error', id,
+message}`.
+
+**Imports.** `./behavior-features.js`, `./behavior-rules.js`. **Spawned by**
+`pose/behavior-pool.js`.
 
 ### pose/triangulation.js
 
@@ -6591,11 +6834,13 @@ Adding a button to the lock means adding its id to `PLANE_LOCKED_TOOLBAR_IDS`;
 if it opens a menu, its wrapper also needs `PLANE_LOCKED_DROPDOWN_IDS`, since a
 `.tri-dropdown` menu opens on hover and its items are `div`s, so `disabled` on
 the button reaches neither. Locked menus: Instance and Group (actions only).
-The Track / Triangulate / Smooth menus are NOT wrapper-locked:
+The Track / Triangulate / Smooth / Behavior menus are NOT wrapper-locked:
 they also hold settings that stay live in the mode (Method, Animals,
 Settings…), so they open, and each run item is a `<button>` in
 `PLANE_LOCKED_TOOLBAR_IDS` (a new run item there must be too; Smooth's
-Remove/Restore smoothing toggle, `tbSmoothToggle`, is one). A disabled
+Remove/Restore smoothing toggle, `tbSmoothToggle`, is one; Behavior's are
+`tbBehavior`, `tbBehaviorFrame`, `tbBehaviorAllFrames` — its Label Behaviors
+mode item stays live, since entering that mode leaves Defining Plane Mode). A disabled
 button still opens its menu on hover (`tests/e2e/plane-mode-toolbar-lock.mjs`
 §4b).
 
@@ -9656,7 +9901,7 @@ the no-data placeholder.
 
 ---
 
-**Behavior labels.** A synthetic "Behavior" row group (`BEHAVIOR_GROUP_NAME`) after the mode's rows, from the `behaviorRows` constructor option / `setBehaviorRowsProvider(fn)` (ui/behavior-timeline.js): rows tagged `_isBehavior`, hidden with their identity, drawn per segment color and lane (`_drawBehaviorSegments`), outside the per-camera row cap. `refreshBehaviorRows()` swaps their segments without walking frames (full `refreshTracks` only when which rows show changes). `onRangeSelect(start, end, {animal})` now also names the behavior row a Shift+drag began on (`_rowAtY`).
+**Behavior labels.** A synthetic "Behavior" row group (`BEHAVIOR_GROUP_NAME`) after the mode's rows, from the `behaviorRows` constructor option / `setBehaviorRowsProvider(fn)` (ui/behavior-timeline.js): rows tagged `_isBehavior`, hidden with their identity, drawn per segment color and lane (`_drawBehaviorSegments`; a segment's optional `band: [from, to]` draws it over that fraction of its lane's height — predicted bouts sit in a band under the labels), outside the per-camera row cap. `refreshBehaviorRows()` swaps their segments without walking frames (full `refreshTracks` only when which rows show changes). `onRangeSelect(start, end, {animal})` now also names the behavior row a Shift+drag began on (`_rowAtY`).
 
 ### ui/timeline-controller.js
 
@@ -10871,7 +11116,7 @@ so a hidden entity stays hidden under its new name.
 
 ---
 
-**Behavior labels.** Behavior labels: `setupMenus` calls `setupBehaviorUi({closeMenus, navigate})` (ui/behavior-panel.js); `updateSeekbarVisual` calls `updateBehaviorFrame`; Rename Identity calls `renameAnimal` next to `renameHiddenIdentity`; Propagate Tracks → IDs asks first on a labelled session (`confirmRetrackWithBehaviorLabels`); Hot Keys help appends this project's ethogram keys.
+**Behavior labels.** Behavior labels: `setupMenus` calls `setupBehaviorUi({closeMenus, navigate})` (ui/behavior-panel.js); `updateSeekbarVisual` calls `updateBehaviorFrame`; the toolbar's Behavior menu is a `wireActionMenu` (`behaviorDropdown`: the button / All frames → `detectAllFrames`, This frame → `detectThisFrame`, Settings… → `showBehaviorRulesModal`); Rename Identity calls `renameAnimal` and `renamePredictedAnimal` next to `renameHiddenIdentity`; Propagate Tracks → IDs asks first on a labelled session (`confirmRetrackWithBehaviorLabels`); Hot Keys help appends this project's ethogram keys.
 
 ### ui/viewport3d.js
 
@@ -11421,14 +11666,18 @@ Covered by `tests/e2e/temporal-smoothing-display.mjs` §E–H and
 **Purpose.** The toolbar's Track (`#tbTrackAll`) and Triangulate
 (`#tbTriangulateAll`) buttons are blue (`.active`) once that step has been run
 on the active session and while its result stands (`pose/run-state.js`), as
-Smooth is while smoothing is applied (`ui/smoothing-button.js`). Derived on
+Smooth is while smoothing is applied (`ui/smoothing-button.js`); Behavior
+(`#tbBehavior`) while its predictions stand (`hasBehaviorResult`). Derived on
 every overlay draw, so session switches and results that go away (re-tracking
-replaces Triangulate's 3D) need no bookkeeping.
+replaces Triangulate's 3D) need no bookkeeping. For Behavior it also schedules
+(once) the print of the poses that predictions read from a file are checked
+against (`ensurePredictionInputChecked`); it never walks the poses itself.
 
 **Exports.** `syncRunButtons()`. **Imports.** `./app-state.js` (`state`),
-`../pose/run-state.js` (`hasTrackResult`, `hasTriangulateResult`).
+`./behavior-detect.js` (`detectionEnv`, `ensurePredictionInputChecked`),
+`../pose/run-state.js` (`hasTrackResult`, `hasTriangulateResult`, `hasBehaviorResult`).
 **Imported by** `ui/rendering.js` (every `drawAllOverlays`). **Tests.**
-`tests/e2e/run-buttons-blue.mjs`.
+`tests/e2e/run-buttons-blue.mjs`, `tests/e2e/behavior-rules.mjs`.
 
 ### ui/section-state.js
 
@@ -11568,8 +11817,11 @@ video boxes (`behaviorBoxesAt`, the `behaviorBoxes` option of
 `drawFrameOverlays`: one item per behavior active on the frame — dashed while
 running — with the Tracking Wizard node mask of `ui/id-switch-highlight.js`;
 with `{live: true}` (the viewer, never an exported video) also the coding
-state: a light numbered box on the animal Label Behaviors mode labels, and the
-actor of a social behavior waiting for its target; on/off is browser-local
+state: a light numbered box on the animal Label Behaviors mode labels, the
+actor of a social behavior waiting for its target, and — while the playhead
+is in it — the predicted bout selected in the Predictions list
+(`setReviewFocus(session, bout|null)`), dashed, labelled "behavior? · animal ·
+score%"; on/off is browser-local
 `lucid.behaviorOnVideo`). `noteBehaviorMode(on)` is how the mode tells it.
 `codeBehavior` labels the armed or given range, else starts/stops a state or
 codes a point at the playhead; a social behavior takes its target from a
@@ -11578,7 +11830,7 @@ running bout of its own, else the only other animal, else asks.
 **Exports.** `behaviorUi`, `registerBehaviorRepaint`, `requestBehaviorRepaint`,
 `setBehaviorNavigator`, `goToBehaviorFrame`, `BOUT_LEAD_IN_SECONDS`,
 `openBehaviorTab`, `behaviorBoxesVisible`, `setBehaviorBoxesVisible`,
-`noteBehaviorMode`, `behaviorBoxesAt`, `pairGlyph` (" ↔ " for mutual, " → " otherwise), `sessionAnimals`, `animalColor`, `focalAnimal`,
+`noteBehaviorMode`, `setReviewFocus`, `behaviorBoxesAt`, `pairGlyph` (" ↔ " for mutual, " → " otherwise), `sessionAnimals`, `animalColor`, `focalAnimal`,
 `setFocalAnimal`, `selectedBehaviorId`, `selectBehavior`, `setRangeIn`,
 `setRangeOut`, `armRange`, `clearArmedRange`, `armedRange`, `codeBehavior`,
 `pickBehaviorTarget`, `cancelPendingTarget`, `clearBehaviorRange`,
@@ -11589,12 +11841,13 @@ running bout of its own, else the only other animal, else asks.
 `../import-export/save-load.js`. **Imported by**
 `ui/behavior-mode.js`, `ui/behavior-panel.js`, `ui/behavior-timeline.js`,
 `ui/behavior-ethogram-modal.js`, `ui/rendering.js`, `ui/overlay-export-modal.js`.
-**Tests.** `tests/e2e/behavior-labelling.mjs`.
+**Tests.** `tests/e2e/behavior-labelling.mjs`, `tests/e2e/behavior-rules.mjs` §3 (the review box).
 
 ### ui/behavior-mode.js
 
 **Purpose.** Label Behaviors mode. Enter/leave only via `toggleBehaviorMode`
-(Behavior menu, toolbar Behavior button, `Mod+Shift+L` = catalog
+(Behavior menu, the toolbar Behavior menu's Label Behaviors mode item
+`#tbBehaviorMode` — lit while on —, `Mod+Shift+L` = catalog
 `behaviorMode`); leaving closes running states at the playhead. Excludes
 Defining Plane Mode both ways. A capture-phase keydown listener (only while
 on, only outside text fields and dialogs) takes: behavior letters (Shift+letter
@@ -11625,11 +11878,21 @@ playhead with or without the mode, running states, armed range, target
 question, timeline behavior, Undo, Mark reviewed…, On video), Bouts
 (filterable list, capped at 500 rows; a click lands
 `BOUT_LEAD_IN_SECONDS` early; set start/end to the playhead, behavior,
-target, note, delete) and Summary (time budget, orphaned labels of a deleted
+target, note, delete), Predictions (the detectors' bouts to review: filters,
+order — most uncertain / most contradicted / time —, "To review only"; the
+selected bout is boxed on the video (`setReviewFocus`); Accept
+labels a bout present, source "a", Reject labels it "not", and on the
+selected bout either moves on to the next; Next ▸; Accept all in range… (the
+armed range, else every listed bout) asks first (`behaviorConfirm`) and is one
+undo step; a stale banner says why, with Detect again; the This frame readout,
+each condition against its threshold, "tracking broken here: skipped" when the
+frame is skipped for that animal) and Summary (time budget, orphaned labels of a deleted
 identity to reassign or delete). Skips rendering while hidden.
 `setupBehaviorUi` (from `setupMenus`) binds the menu (including Import Labels… /
-Export Labels…, `ui/behavior-io-modal.js`), toolbar, tab buttons and
-catalog handler and makes every label edit `markDirty()` and repaint. The
+Export Labels…, `ui/behavior-io-modal.js`, Detect Behaviors and Detection
+Settings…), the toolbar menu's Label Behaviors mode item, tab buttons and
+catalog handler, wires detection (`setupBehaviorDetection`), and makes every label edit `markDirty()` and repaint
+(predictions changes and the This frame readout repaint too, without marking dirty). The
 Summary's mean bout is `boutFrames / bouts`.
 `updateBehaviorFrame` (every frame, from `updateSeekbarVisual`) keeps the save
 cursor, grows running states, lights the buttons, and closes the running
@@ -11639,20 +11902,25 @@ states of a session just left (so `switchSession` needs no hook).
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-mode.js`,
 `./behavior-ethogram-modal.js`, `./behavior-io-modal.js`, `./behavior-timeline.js`,
+`./behavior-detect.js`, `./behavior-rules-modal.js`, `./behavior-confirm.js`,
+`./info-tip.js`, `./plane-definition.js` (`ICON_INFO`),
 `./panel-visibility.js`, `./section-state.js`, `./settings.js`,
 `./rendering.js`, `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
-`../import-export/save-load.js`. **Imported by** `ui/ui-wiring.js`,
-`ui/info-panel.js`. **Tests.** `tests/e2e/behavior-labelling.mjs` §4.
+`../pose/behavior-predictions.js`, `../import-export/save-load.js`. **Imported by** `ui/ui-wiring.js`,
+`ui/info-panel.js`. **Tests.** `tests/e2e/behavior-labelling.mjs` §4, `tests/e2e/behavior-rules.mjs` §2–4.
 
 ### ui/behavior-timeline.js
 
 **Purpose.** Behavior labels on the timeline. `behaviorTimelineRows` is the
 `Timeline` `behaviorRows` provider: one row per animal (plus orphaned names)
 in a synthetic "Behavior" group, showing the selected behavior or every
-behavior with bouts as stacked lanes (at most 5; a mutual bout on both
+behavior with bouts or predictions as stacked lanes (at most 5; a mutual bout on both
 animals' rows); present in the behavior's
 color, "not" as faint gray (`ABSENT_COLOR`), a running state growing to the
-playhead; null (no group at all) without an ethogram or bouts.
+playhead; PREDICTED bouts (pose/behavior-predictions.js) in a band under the
+lane's labels (`PREDICTION_BAND`; the labels then take `LABEL_BAND`), alpha
+following the bout's score in steps of 0.05, fainter while stale; null (no
+group at all) without an ethogram or bouts.
 `onTimelineRangeSelect` is the timeline's `onRangeSelect`: with an ethogram
 and animals, a menu above the selection labels the range for the animal whose
 row the drag began on (Shift-click = "not"), arms it as the `[` `]` range, or
@@ -11660,9 +11928,9 @@ clears it; otherwise it reports the range as before.
 
 **Exports.** `ABSENT_COLOR`, `behaviorTimelineRows`, `onTimelineRangeSelect`.
 
-**Imports.** `./app-state.js`, `./behavior-coding.js`,
-`../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
-`../import-export/save-load.js`. **Imported by** `pose/initialization.js`
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js`
+(`detectionEnv`), `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+`../pose/behavior-predictions.js`, `../import-export/save-load.js`. **Imported by** `pose/initialization.js`
 (`setupTimeline`), `ui/behavior-panel.js`. **Tests.**
 `tests/e2e/behavior-labelling.mjs` §1, §5.
 
@@ -11718,6 +11986,85 @@ fps, frame count, animals, video path).
 `../import-export/behavior-io.js`, `../import-export/save-load.js`,
 `../loading/cold-read-guard.js`. **Imported by** `ui/behavior-panel.js`.
 **Tests.** `tests/e2e/behavior-import-export.mjs`.
+
+### ui/behavior-detect.js
+
+**Purpose.** Running the behavior detectors on the active session.
+`buildBehaviorContext(session)` reads the poses (`collectBehaviorInput`),
+resolves the body (`resolveBody` on `featureSettings()`) and the floor
+(`resolveFloor`: the plane chosen as the floor, else the Set Origin frame — the
+default when one is set —, else `fitFloor` with the cameras' centers; a choice
+that cannot be honoured falls back to the fit and says so), builds the
+feature spec and marks the broken-tracking frames to skip (`ctx.broken` from
+`brokenPoseFrames`, recomputed by `refreshBehaviorContext`; every slice of
+poses here passes its masks); `cachedBehaviorContext` keeps the last one a
+minute, dropped by any edit (markDirty), another session or other settings /
+fps / floor.
+`detectAllFrames` (the toolbar button, Behavior ▸ Detect Behaviors): plans
+every behavior with a detector, runs `scoreDetectorsChunk` over 8,192-frame
+chunks on the pool behind a progress card, turns scores into bouts, stores one
+run per behavior (`setBehaviorRun`, `cfg` from `runConfigPrint`), prints the
+poses read (sliced) as the stale reference, marks dirty, and reports counts,
+the share of frames skipped as broken tracking, and what it skipped (unknown
+features, social with one animal). No detector → opens the settings.
+`detectThisFrame`: the detectors at the playhead only (a padded window,
+inline), a readout of each animal / pair, score and condition values, and
+`broken` when the frame is skipped for its animal(s) (`frameReadout`,
+`onFrameReadout`), writing nothing.
+`computeFeatureColumns(ctx, names)`: whole-session columns for the settings
+dialog, broken frames skipped too. `floorKey()` / `detectionEnv()`: the floor in effect and fps, what
+staleness is checked against. `setupBehaviorDetection` registers the markDirty
+hook: every edit notes the poses may have changed, and 600 ms after the edits
+stop a SLICED re-print runs between tasks (abandoned and rescheduled by a newer
+edit) — never on a draw. Measured: 180,000 frames × 5 animals × 15 nodes,
+every template: 1.9 s; This frame 8 ms on the cached context.
+
+**Exports.** `detectionFps`, `floorKey`, `detectionEnv`, `floorPlanes`,
+`resolveFloor`, `buildBehaviorContext`, `cachedBehaviorContext`,
+`refreshBehaviorContext`, `setDetectionSettingsOpener`, `detectAllFrames`,
+`frameReadout`, `onFrameReadout`, `detectThisFrame`, `computeFeatureColumns`,
+`combineMutual` (re-export), `setupBehaviorDetection`,
+`ensurePredictionInputChecked`.
+
+**Imports.** `./app-state.js`, `./loading-overlay.js`, `./plane-definition.js`
+(`planeModel`, `getPlanes`; call-time), `./origin-definition.js` (`originState`;
+call-time), `../pose/behavior-ethogram.js`, `../pose/behavior-tensor.js`,
+`../pose/behavior-features.js`, `../pose/behavior-rules.js`,
+`../pose/behavior-pool.js`, `../pose/behavior-predictions.js`,
+`../import-export/save-load.js` (`onMarkDirty`). No top-level side effects
+(registration happens in `setupBehaviorDetection`), so import cycles through
+save-load are safe. **Imported by** `ui/behavior-panel.js`,
+`ui/behavior-timeline.js`, `ui/behavior-rules-modal.js`, `ui/run-buttons.js`,
+`ui/ui-wiring.js`. **Tests.** `tests/e2e/behavior-rules.mjs`; timing
+`tests/e2e/_bench-behavior-detect.mjs`.
+
+### ui/behavior-rules-modal.js
+
+**Purpose.** Behavior ▸ Detection Settings… (and the toolbar Behavior menu's
+Settings…). Body: head and tail base (Auto = the guess, shown), excluded nodes,
+the body lengths, and, in 3D while the Tracking Wizard's reprojection error
+threshold is off, a tip to set one (about 25 px) before Triangulate All
+(`#bdReprojTip`; stray 3D points read as behavior); Floor: Automatic / the Set Origin frame / fitted / a plane
+with a usable fit, and what is in effect; Detectors: one card per behavior —
+conditions (feature name with a searchable datalist, above / below, value,
+unit), shortest bout, join gaps; for the focused condition the feature's
+histogram over every animal (or pair) with the threshold on it, and the bouts
+the whole detector gives, both live as the value is typed (columns computed on
+the pool, once per feature); Template… fills a detector, "Add a behavior from a
+template" adds the behavior too. Every change applies at once (like the
+ethogram editor), marks dirty and repaints (predictions turn stale); body /
+floor changes re-resolve the context and recompute the columns. Each section
+has an ⓘ (`setInfoTip`). Esc / Close leave; Detect now closes and runs; one
+scroller (the dialog).
+
+**Exports.** `showBehaviorRulesModal`.
+
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js`,
+`./info-tip.js`, `./loading-overlay.js`, `./plane-definition.js` (`ICON_INFO`),
+`./origin-definition.js`, `./settings.js` (`getTrackingThreshold`), `../pose/behavior-ethogram.js`,
+`../pose/behavior-features.js`, `../pose/behavior-rules.js`,
+`../import-export/save-load.js`. **Imported by** `ui/behavior-panel.js`,
+`ui/ui-wiring.js`. **Tests.** `tests/e2e/behavior-rules.mjs` §5.
 
 ### ui/behavior-confirm.js
 
@@ -13477,10 +13824,15 @@ Blender (both files put the tracked corner at (0, 0, 300)).
 **Purpose.** Behavior labels in the project file, under `metadata.lucid`, each
 key only when non-empty (an untouched project's bytes are unchanged):
 `ethogram` (project-scoped, the same payload in every session, read from the
-first one ingested — later sessions map onto it by name) and `behaviorLabels`
-(`{v:1, fps?, bouts:[[behaviorId, animal, target, start, end, present, source, note]]}`).
-Reading REPLACES the session's bouts; a session file added to an open project
-merges its ethogram by name and remaps its bouts' ids. The fourth
+first one ingested — later sessions map onto it by name; carries each
+behavior's `detector` and the project's feature settings `features`, each only
+once set), `behaviorLabels`
+(`{v:1, fps?, bouts:[[behaviorId, animal, target, start, end, present, source, note]]}`)
+and `behaviorPredictions` (`{v:1, runs:[{behavior, source, cfg, mode, camera?,
+fps?, bouts:[[animal, target, start, end, score]]}]}`, only runs with bouts;
+pose/behavior-predictions.js).
+Reading REPLACES the session's bouts and predictions; a session file added to an open project
+merges its ethogram by name and remaps its bouts' and predictions' ids. The fourth
 `metadata.lucid` writer module (with visibility, smoothing and plane). DOM-free.
 
 **Exports.** `BEHAVIOR_METADATA_KEYS`, `writeBehaviorMetadata(lucid, session)`,
@@ -13488,7 +13840,8 @@ merges its ethogram by name and remaps its bouts' ids. The fourth
 `resetBehaviorState()` (forget the ethogram; before every load and on New
 Project).
 
-**Imports.** `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`.
+**Imports.** `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+`../pose/behavior-predictions.js`.
 **Imported by** the writers `import-export/file-io.js`
 (`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
 (`buildSessionRefGraph`), `import-export/save-load.js` (project JSON v2/v3
@@ -13496,7 +13849,8 @@ and `_restoreProjectV2`), and the readers `import-export/slp-import.js`
 (`handleLoadSlpFile`), `loading/session-loader.js`
 (`handleLoadSessionFolderSingleSlp`, `handleLoadProjectSlpLazy`), plus
 `pose/initialization.js` (sample session reset). **Tests.**
-`tests/test-behavior-metadata.mjs`, `tests/e2e/behavior-label-roundtrip.mjs`.
+`tests/test-behavior-metadata.mjs`, `tests/e2e/behavior-label-roundtrip.mjs`
+(both writers, predictions included), `tests/e2e/behavior-rules.mjs` §6.
 
 ### import-export/behavior-io.js
 
@@ -14082,7 +14436,10 @@ loading-overlay/status-text UI helpers.
   hold two copies of the file in memory), and `quickSave` awaits it. Covered by
   `tests/e2e/save-progress-card.mjs`.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
-  is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
+  is used by the 3D-import reset), `markDirty`, `onMarkDirty(fn)` (a cheap hook
+  run on every `markDirty`; ui/behavior-detect.js notes there that the poses
+  behavior predictions read may have changed; the hook list has no initializer,
+  so a hook registered during an import cycle survives), `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
   large `.slp` — over 200 MB, `LARGE_SLP_BYTES` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the

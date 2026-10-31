@@ -8227,3 +8227,215 @@ div.track-summary-steps { padding-left: 0; }
 .behavior-io-modal [hidden] {
   display: none !important;
 }
+
+/* Behavior ▸ Detection Settings… (ui/behavior-rules-modal.js; one scroller: the modal itself) */
+.multi-frame-modal.behavior-rules-modal {
+  max-width: 760px;
+  width: min(760px, 94vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  --bd-hist-on: #5fb3f9;
+  --bd-hist-off: #555c66;
+}
+.behavior-rules-modal .info-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.behavior-rules-modal .info-section > summary h3 {
+  margin: 0;
+}
+/* The modal's generic button look would turn these into large boxes. */
+.behavior-rules-modal button.plane-section-info {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+}
+.behavior-rules-modal .panel-btn {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+.bd-note {
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.bd-warn {
+  color: var(--warning-color);
+}
+.bd-roles,
+.bd-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.bd-row input[type="number"] {
+  width: 56px;
+}
+.bd-exclude {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.bd-label {
+  color: var(--text-secondary);
+}
+.bd-node.is-role {
+  color: var(--text-muted);
+}
+.bd-floor {
+  font-size: 12px;
+}
+.bd-floor select {
+  max-width: 100%;
+}
+.bd-card {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+}
+.bd-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.bd-card-head .panel-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+}
+.bd-spacer {
+  flex: 1 1 auto;
+}
+.bd-conds {
+  width: 100%;
+  margin: 6px 0 2px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.bd-conds td {
+  padding: 2px 3px;
+}
+.bd-conds tr.is-focus td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.bd-feat-cell {
+  width: 100%;
+}
+.bd-conds input[data-f="feature"] {
+  width: 100%;
+  min-width: 220px;
+  box-sizing: border-box;
+}
+.bd-conds input[data-f="feature"].is-invalid {
+  border-color: var(--warning-color);
+}
+.bd-conds input[data-f="value"] {
+  width: 70px;
+}
+.bd-unit {
+  min-width: 34px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.behavior-rules-modal button.bd-x {
+  padding: 0 5px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.behavior-rules-modal button.bd-x:hover {
+  color: var(--text-primary);
+}
+.bd-hist {
+  margin: 6px 0 2px;
+}
+.bd-hist-canvas {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  height: 78px;
+}
+.bd-hist-caption,
+.bd-live {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.bd-live {
+  margin-top: 2px;
+  color: var(--text-primary);
+}
+
+/* Behavior tab ▸ Predictions */
+.behavior-stale {
+  margin: 6px 0;
+  padding: 4px 6px;
+  border-left: 3px solid var(--warning-color);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.behavior-stale .panel-btn {
+  padding: 1px 6px;
+  font-size: 11px;
+}
+.behavior-review-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.behavior-pred-score {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.behavior-pred.is-accepted .behavior-bout-name,
+.behavior-pred.is-rejected .behavior-bout-name {
+  color: var(--text-muted);
+}
+.behavior-readout {
+  margin: 8px 0 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color);
+  font-size: 12px;
+}
+.behavior-readout-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+}
+.behavior-readout-head .panel-btn {
+  padding: 0 6px;
+  font-size: 11px;
+}
+.behavior-readout-row {
+  margin: 3px 0;
+  color: var(--text-secondary);
+}
+.behavior-readout-row.is-on {
+  color: var(--text-primary);
+}
+.behavior-readout-conds {
+  margin-left: 18px;
+  font-size: 11px;
+}
+.behavior-readout-conds .is-ok {
+  color: #4cc878;
+}
+.behavior-readout-conds .is-no {
+  color: var(--text-muted);
+}

@@ -15,7 +15,17 @@
 //                   the `.slp`, so exports need to know what seconds meant).
 //     { v: 1, fps?, bouts: [[behaviorId, animal, target, start, end, present, source, note], …] }
 //
-// A project nobody labelled behaviors in writes neither key, so its bytes are
+//   behaviorPredictions  per session: each behavior's last detection run, its
+//                   bouts and their scores (per-frame scores stay in memory),
+//                   with a print of the detector and settings that made it, so
+//                   a reopened project can tell they no longer match
+//                   (pose/behavior-predictions.js).
+//     { v: 1, runs: [{ behavior, source: 'rule', cfg, mode, camera?, fps?,
+//                      bouts: [[animal, target, start, end, score], …] }] }
+//
+// The ethogram carries the detectors (`behaviors[].detector`) and the feature
+// settings (`features`), each only once set (pose/behavior-ethogram.js).
+// A project nobody labelled behaviors in writes none of these keys, so its bytes are
 // unchanged (tests/e2e/save-golden-digest.mjs). A running state (Label
 // Behaviors mode) is saved as ending at the playhead without being stopped.
 //
@@ -26,13 +36,14 @@
 //
 // DOM-free: Node tests import it directly.
 //
-// Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js
+// Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js, pose/behavior-predictions.js
 
 import { serializeEthogram, ingestEthogram, resetEthogram } from '../pose/behavior-ethogram.js';
 import { exportBoutRows, importBoutRows, behaviorFps, noteBehaviorFps } from '../pose/behavior-labels.js';
+import { exportPredictionRuns, importPredictionRuns } from '../pose/behavior-predictions.js';
 
 /** Every `metadata.lucid` key this module may write. */
-export var BEHAVIOR_METADATA_KEYS = ['ethogram', 'behaviorLabels'];
+export var BEHAVIOR_METADATA_KEYS = ['ethogram', 'behaviorLabels', 'behaviorPredictions'];
 
 /**
  * Write the ethogram and the session's bouts into `lucid`, each only when it
@@ -44,6 +55,8 @@ export function writeBehaviorMetadata(lucid, session) {
     if (!lucid) return;
     var eth = serializeEthogram();
     if (eth) lucid.ethogram = eth;
+    var preds = exportPredictionRuns(session);
+    if (preds) lucid.behaviorPredictions = preds;
     var rows = exportBoutRows(session);
     if (!rows.length) return;
     var out = { v: 1, bouts: rows };
@@ -62,6 +75,11 @@ export function writeBehaviorMetadata(lucid, session) {
 export function readBehaviorMetadata(session, lucid) {
     if (!session || !lucid || typeof lucid !== 'object') return { kept: 0, dropped: 0 };
     var idMap = lucid.ethogram ? ingestEthogram(lucid.ethogram) : new Map();
+    var pr = importPredictionRuns(session, lucid.behaviorPredictions, idMap);
+    if (pr.dropped) {
+        console.warn('[behavior] ' + pr.dropped + ' saved predicted bout' + (pr.dropped === 1 ? '' : 's') +
+            ' in session "' + (session.name || '') + '" named no known behavior or were malformed, and were skipped');
+    }
     var bl = lucid.behaviorLabels;
     if (!bl || typeof bl !== 'object' || bl.v !== 1 || !Array.isArray(bl.bouts)) return { kept: 0, dropped: 0 };
     var res = importBoutRows(session, bl.bouts, idMap);

@@ -10,6 +10,9 @@
 //             the whole range instead of starting / stopping at the playhead
 //   pending   a social behavior waiting for its target (a digit or a click on
 //             the animal picks it; Esc cancels)
+//   review    the predicted bout selected in the Predictions list
+//             (ui/behavior-panel.js), boxed on the video while the playhead is
+//             in it, so the animal it names is plain to see
 //
 // Every edit goes through pose/behavior-labels.js, whose change listener
 // (set up in ui/behavior-panel.js) marks the project dirty and repaints.
@@ -28,7 +31,7 @@ import {
 import { setStatus } from '../import-export/save-load.js';
 import { idSwitchBoxNodeMask } from './id-switch-highlight.js';
 
-var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null, mode: false };
+var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null, mode: false, review: null };
 
 /** The coding state (read-only for callers; use the setters). */
 export function behaviorUi() {
@@ -113,6 +116,22 @@ export function setBehaviorBoxesVisible(on) {
     requestBehaviorRepaint({ labels: true });
 }
 
+/**
+ * The predicted bout being reviewed (the Predictions list's selection), or
+ * null: `{behaviorId, animal, target, start, end, score}`. The viewer boxes
+ * its animals, dashed and marked "?", while the playhead is in it.
+ */
+export function setReviewFocus(session, bout) {
+    var next = session && bout ? { session: session, behaviorId: bout.behaviorId, animal: bout.animal, target: bout.target || '',
+                                   start: bout.start, end: bout.end, score: bout.score } : null;
+    var cur = ui.review;
+    if (!next && !cur) return;
+    if (next && cur && cur.session === next.session && cur.behaviorId === next.behaviorId && cur.animal === next.animal &&
+        cur.target === next.target && cur.start === next.start && cur.end === next.end) return;
+    ui.review = next;
+    requestBehaviorRepaint({ ui: true });
+}
+
 /** Label Behaviors mode tells the boxes whether it is on (ui/behavior-mode.js). */
 export function noteBehaviorMode(on) {
     ui.mode = !!on;
@@ -124,8 +143,10 @@ export function noteBehaviorMode(on) {
  * be drawn: one item per behavior an animal (with its target) is doing there —
  * dashed while it is still being coded. With `opts.live` (the viewer, never an
  * exported video) also the coding state: in Label Behaviors mode a light box
- * with its number on the animal the keys label, and while a social behavior
- * waits for its target a dashed box on the animal that will be its actor.
+ * with its number on the animal the keys label, while a social behavior
+ * waits for its target a dashed box on the animal that will be its actor, and
+ * a dashed "behavior?" box (with its score) on the predicted bout being
+ * reviewed, while the playhead is in it.
  * @param {{live?: boolean}} [opts]
  * @returns {{items: Array<{animals:string[], color:string, dashed:boolean, light?:boolean, parts:Array}>, nodeMask: ?boolean[]}|null}
  */
@@ -152,6 +173,14 @@ export function behaviorBoxesAt(session, frame, opts) {
     if (pb) {
         items.push({ animals: [p.animal], color: pb.color, dashed: true,
                      parts: [[pb.name, pb.color], [' · ', '#ffffff'], who(p.animal), [pairGlyph(pb) + '? (press 1–9)', '#ffffff']] });
+    }
+    var r = live ? ui.review : null;
+    var rb = r && r.session === session && frame >= r.start && frame <= r.end ? behaviorById(r.behaviorId) : null;
+    if (rb) {
+        var rp = [[rb.name + '?', rb.color], [' · ', '#ffffff'], who(r.animal)];
+        if (r.target) rp.push([pairGlyph(rb), '#ffffff'], who(r.target));
+        if (Number.isFinite(r.score)) rp.push([' · ' + Math.round(100 * r.score) + '%', '#ffffff']);
+        items.push({ animals: r.target ? [r.animal, r.target] : [r.animal], color: rb.color, dashed: true, review: true, parts: rp });
     }
     if (!items.length) return null;
     return { items: items, nodeMask: idSwitchBoxNodeMask(session.skeleton && session.skeleton.nodes) };
