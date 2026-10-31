@@ -16,7 +16,8 @@
  *     save twice, reopen lazily and eagerly, save again.
  *  B. A file whose cameras and videos have the project's names and whose nodes are in
  *     another order, added on top of another add.
- *  C. Files with less: no tracks, no frame on any camera, a second skeleton, an analysis .h5.
+ *  C. Other files: no tracks, no frame on any camera, a second skeleton, an analysis .h5, a
+ *     file with images inside; and a large plain file as the project.
  *  D. Edits on added poses: delete, correct, delete a track, group by hand.
  *  E. Track All: the status's promise that it groups them, and a sweep's window release.
  *  F. A project opened from per-camera files.
@@ -101,18 +102,24 @@ def read(path):
                 p3 = "" if ig.instance_3d is None else ",".join(num(v) for v in np.asarray(ig.instance_3d.points)[0][:3])
                 groups.append("|".join(["s" + str(si), str(f)] + members + [p3]))
     camera_poses = []
+    model_labels = {}
     for lf in labels.labeled_frames:
         cam = camera_of.get(id(lf.video))
-        if cam is None:
-            continue
         for i in lf.instances:
+            if i.identity is not None or i.category is not None:
+                model_labels[(cam or lf.video.filename) + "|" + str(lf.frame_idx) + "|" + num(i.points["xy"][0][0])] = "|".join([
+                    (i.identity.name + "=" + num(i.identity_score)) if i.identity is not None else "",
+                    (i.category.name + "=" + num(i.category_score)) if i.category is not None else "",
+                ])
+            if cam is None:
+                continue
             camera_poses.append(pose_row(cam, lf.frame_idx, i))
             if isinstance(i, sio.PredictedInstance):
                 ts = i.tracking_score
                 tracking[cam + "|" + str(lf.frame_idx)] = None if ts is None or ts != ts else round(float(ts), 3)
     return {
         "error": None, "videos": [v.filename for v in labels.videos], "tracks": [t.name for t in labels.tracks],
-        "skeletons": [[n.name for n in sk.nodes] for sk in labels.skeletons], "tvecs": tvecs, "tracking": tracking,
+        "skeletons": [[n.name for n in sk.nodes] for sk in labels.skeletons], "tvecs": tvecs, "tracking": tracking, "modelLabels": model_labels,
         "sessions": sessions, "poses": poses, "cameraPoses": sorted(camera_poses), "groups": sorted(groups),
     }
 `;
@@ -129,6 +136,7 @@ from sleap_io.model.camera import Instance3D
 import h5py, shutil
 
 out = sys.argv[1]
+minimal_pkg = sys.argv[2]
 N = ${NFRAMES}
 ADDED_FRAMES = ${JSON.stringify(ADDED_FRAMES)}
 sk = sio.Skeleton(nodes=["nose", "tail"], edges=[("nose", "tail")])
@@ -183,6 +191,7 @@ fa, fb = frames_on(a, 10000, 6), frames_on(b, 20000, 6)
 save("project_small.slp", fa + fb, [a, b], [session([("camA", a, fa), ("camB", b, fb)])])
 
 # ---- The main file: two cameras, a video neither has, every kind of pose.
+FEMALE, MOUSE = sio.Identity(name="female"), sio.Category(name="mouse")
 def added_frames(v, base):
     out_frames = []
     for f in ADDED_FRAMES:
@@ -193,15 +202,22 @@ def added_frames(v, base):
         if f == 0:
             first.points["visible"][1] = False   # placed but not visible
         if f == 1:
-            second = sio.Instance.from_numpy(np.array([[base + f + 2, 11.0], [np.nan, np.nan]]), skeleton=sk, track=T9)   # a hand label, a node with no place
+            # A hand label: one node placed but not visible, one with no place.
+            second = sio.Instance.from_numpy(np.array([[base + f + 2, 11.0], [np.nan, np.nan]]), skeleton=sk, track=T9)
+            second.points["visible"][0] = False
         if f == 2:
             first.track = None
+        if f == 500:
+            # What a model says about a detection, which a save must not lose.
+            first.identity, first.identity_score = FEMALE, 0.75
+            first.category, first.category_score = MOUSE, 0.5
         out_frames.append(sio.LabeledFrame(video=v, frame_idx=f, instances=[first, second]))
     return out_frames
 
 cx, cy, o = video("camX.mp4"), video("camY.mp4"), video("added_outside.mp4")
 s = session([("camX", cx, []), ("camY", cy, [])], groups=False, tvec_base=70.0)
-save("added.slp", frames_on(o, 50000, 3, (T1, T3)) + added_frames(cx, 30000) + added_frames(cy, 40000), [o, cx, cy], [s], tracks=(T1, T3, T9))
+sio.Labels(labeled_frames=frames_on(o, 50000, 3, (T1, T3)) + added_frames(cx, 30000) + added_frames(cy, 40000), videos=[o, cx, cy], skeletons=[sk], tracks=[T1, T3, T9],
+           sessions=[s], identities=[FEMALE]).save(os.path.join(out, "added.slp"), embed=False)
 
 # ---- Other files.
 # A file newer than this LUC3D reads: only its format_id says so.
@@ -244,6 +260,18 @@ with h5py.File(os.path.join(out, "h5cam.analysis.h5"), "w") as h:
     h["node_names"] = [b"nose", b"tail"]
     h["track_names"] = [b"mouse1", b"h5_only"]
     h["instance_scores"] = np.array([[0.9, 0.9, 0.9], [0.7, 0.7, 0.7]])
+
+# A large plain file: no session at all, so one placeholder camera per video.
+a0, a1 = video("a0.mp4"), video("a1.mp4")
+save("project_no_session.slp", frames_on(a0, 10000, 6) + frames_on(a1, 20000, 6), [a0, a1])
+# A project a file with images inside can be added to: the same nodes.
+pkg_nodes = [n.name for n in sio.load_slp(minimal_pkg, open_videos=False).skeletons[0].nodes]
+sk_pkg = sio.Skeleton(nodes=pkg_nodes, edges=[(pkg_nodes[0], pkg_nodes[1])], name="pkg")
+m = video("camM.mp4")
+sio.Labels(labeled_frames=[sio.LabeledFrame(video=m, frame_idx=f, instances=[
+    sio.PredictedInstance.from_numpy(np.array([[73000.0 + f + 10.0 * k, 10.0] for k in range(len(pkg_nodes))]), skeleton=sk_pkg, track=T1, score=0.9,
+                                     point_scores=np.full(len(pkg_nodes), 0.8))]) for f in range(3)],
+           videos=[m], skeletons=[sk_pkg], tracks=[T1], sessions=[session([("camM", m, [])], groups=False)]).save(os.path.join(out, "project_for_pkg.slp"), embed=False)
 
 # Per-camera files, for section F.
 for name, base in (("camA", 10000), ("camB", 20000)):
@@ -543,10 +571,11 @@ function compare(what, got, want) {
     if (want.tvecs) check(Object.entries(want.tvecs).every(([c, t]) => got.tvecs[c] === t), what + ': added cameras keep their calibration', got.tvecs);
     if (want.tracking) check(Object.entries(want.tracking).every(([k, t]) => got.tracking[k] === t), what + ': a row\'s tracking score comes along', got.tracking);
     if (want.skeletons) check(eq(got.skeletons, want.skeletons), what + ': skeletons', got.skeletons);
+    if (want.modelLabels) check(eq(sortedKeys(got.modelLabels || {}), sortedKeys(want.modelLabels)), what + ': what a model says about a detection', got.modelLabels);
 }
 
 function checkSave(what, saved, want) {
-    compare(what + ', app reader', saved.read, Object.assign({}, want, { tvecs: undefined, tracking: undefined, skeletons: undefined }));
+    compare(what + ', app reader', saved.read, Object.assign({}, want, { tvecs: undefined, tracking: undefined, skeletons: undefined, modelLabels: undefined }));
     savedForPython(saved.bytes, what + ', Python', want);
 }
 
@@ -560,12 +589,14 @@ const rowsOn = (rows, videos) => rows.filter(r => videos.includes(r.slice(0, r.i
 const merged = (...lists) => [].concat(...lists).sort();
 
 try {
-    uv(PY_WRITE, [tmp]);
-    const NAMES = ['project', 'project_plain', 'project_small', 'added', 'added_same', 'added_plain', 'added_all_outside', 'added_sk2', 'added_small', 'camA_alone', 'camB_alone', 'camC_alone', 'camD_alone', 'project_3d', 'added_3d'];
+    const minimalPkg = path.join(repoRoot, 'tests', 'fixtures', 'slp-embedded', 'minimal_instance.pkg.slp');
+    uv(PY_WRITE, [tmp, minimalPkg]);
+    const NAMES = ['project', 'project_plain', 'project_small', 'project_no_session', 'project_for_pkg', 'added', 'added_same', 'added_plain', 'added_all_outside', 'added_sk2', 'added_small', 'camA_alone', 'camB_alone', 'camC_alone', 'camD_alone', 'project_3d', 'added_3d'];
     const sourcePaths = NAMES.map(n => path.join(tmp, n + '.slp'));
-    const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
+    const rawSources = JSON.parse(uv(PY_READ, sourcePaths.concat(minimalPkg)).trim().split('\n').pop());
     const sources = {};
     for (const p of sourcePaths) sources[path.basename(p, '.slp')] = rawSources[p];
+    sources.minimal_pkg = rawSources[minimalPkg];
     const readFile = n => fs.readFileSync(path.join(tmp, n + '.slp'));
     const fileOf = n => path.join(tmp, n);
 
@@ -578,6 +609,10 @@ try {
     check(sources.added.poses.some(r => r.includes('~')), 'added.slp has a node placed but not visible');
     check(sources.added.poses.some(r => r.includes('|U|')), 'added.slp has a hand label');
     check(sources.added.poses.some(r => r.includes('|P||')), 'added.slp has a pose with no track');
+    check(sources.added.poses.some(r => /\|U\|[^|]*\|[^|]*~;-\|/.test(r)), 'added.slp has a hand label with a hidden node and an empty one');
+    const modelLabels = sources.added.modelLabels;
+    check(eq(Object.keys(modelLabels).sort(), ['camX|500|30500.000', 'camY|500|40500.000']) && modelLabels['camX|500|30500.000'] === 'female=0.750|mouse=0.500',
+        'added.slp has what a model says about a detection on each camera', modelLabels);
 
     console.log('\nA. The whole path');
     for (const name of wants('A') ? ['project', 'project_plain'] : []) {
@@ -629,6 +664,7 @@ try {
             tvecs: { camX: 70, camY: 71 },
             tracking: { 'camX|500': 0.25, 'camY|2100': 0.25 },
             skeletons: [['nose', 'tail']],
+            modelLabels,
         };
         const save1 = await saveAndRead(page);
         checkSave(name + ', save 1', save1, want);
@@ -753,6 +789,53 @@ try {
         const saved = await saveAndRead(page);
         checkSave('an analysis .h5', saved, want);
         checkSave('an analysis .h5, save 2', await saveAndRead(page), want);
+        await page.close();
+    }
+
+    if (wants('C')) {
+        // A plain file over 200 MB opens on this route too: one placeholder camera per video.
+        const page = await open('lazy', readFile('project_no_session'));
+        const before = await page.evaluate(async () => (await import('/ui/app-state.js')).state.session.cameras.map(c => c.name));
+        check(eq(before, ['a0', 'a1']), 'a plain file opens with a camera per video', before);
+        await addSlp(page, fileOf('added.slp'));
+        const want = {
+            poses: merged(sources.project_no_session.poses, sources.added.poses),
+            cameraPoses: merged(onCameras(sources.project_no_session.poses, { 'a0.mp4': 'a0', 'a1.mp4': 'a1' }), onCameras(sources.added.poses, ADDED_CAMS)),
+            sessions: [{ a0: 'a0.mp4', a1: 'a1.mp4', camX: 'camX.mp4', camY: 'camY.mp4' }],
+            modelLabels,
+        };
+        checkSave('a plain file, save 1', await saveAndRead(page), want);
+        const save2 = await saveAndRead(page);
+        checkSave('a plain file, save 2', save2, want);
+        await page.close();
+        const again = await open('lazy', save2.bytes);
+        checkSave('a plain file, reopened', await saveAndRead(again), want);
+        await again.close();
+    }
+    if (wants('C')) {
+        // A file with images inside: its images show, its poses go on the camera its
+        // video becomes, and a save writes no images, so that video becomes its source.
+        const page = await open('lazy', readFile('project_for_pkg'));
+        const beforeRows = await storeRows(page);
+        await addSlp(page, minimalPkg);
+        check(sameRows(beforeRows, await storeRows(page, beforeRows.out)), 'no store row moved');
+        const added = await page.evaluate(async () => {
+            const { state } = await import('/ui/app-state.js');
+            const s = state.session;
+            const cam = s.cameras[s.cameras.length - 1].name;
+            const view = state.views.find(v => v.name === cam);
+            return { cam, frames: view && view.decoder ? view.decoder.samples.length : 0, status: (document.getElementById('statusText') || {}).textContent };
+        });
+        check(added.cam !== 'camM' && added.frames > 0, 'its view shows its images', added);
+        const pkgPoses = sources.minimal_pkg.poses.map(r => added.cam + r.slice(r.indexOf('|')));
+        const saved = await saveAndRead(page);
+        const want = {
+            cameraPoses: merged(onCameras(sources.project_for_pkg.poses, { 'camM.mp4': 'camM' }), pkgPoses),
+        };
+        check(eq(saved.read.cameraPoses, want.cameraPoses), 'every pose is on its camera, app reader', diff(saved.read.cameraPoses, want.cameraPoses));
+        savedForPython(saved.bytes, 'a file with images inside, Python', { poses: saved.read.poses, cameraPoses: want.cameraPoses });
+        const second = await saveAndRead(page);
+        savedForPython(second.bytes, 'a file with images inside, save 2, Python', { poses: saved.read.poses, cameraPoses: want.cameraPoses });
         await page.close();
     }
 

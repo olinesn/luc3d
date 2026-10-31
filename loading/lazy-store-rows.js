@@ -165,6 +165,40 @@ function countBlockRows(source, block) {
 }
 
 /**
+ * What a file's detections carry outside the columns, keyed by instance row: a model's
+ * identity and category with their scores, and embeddings (import-export/detection-labels.js,
+ * which is how a save keeps them). They follow their rows into `store`, and an identity or
+ * category goes in its catalog by name, as the save finds it.
+ */
+function carryRowLabels(store, source, newRowOf) {
+    function carry(field, rewrite) {
+        var held = source[field];
+        if (!held || !held.size) return;
+        for (var [row, value] of held) {
+            var now = row >= 0 && row < newRowOf.length ? newRowOf[row] : -1;
+            var carried = now >= 0 ? (rewrite ? rewrite(value) : value) : null;
+            if (!carried) continue;
+            if (!store[field]) store[field] = new Map();
+            store[field].set(now, carried);
+        }
+    }
+    function linkInto(catalog, sameEntry) {
+        return function (link) {
+            var entry = (source[catalog] || [])[link[0]];
+            if (entry === undefined) return null;
+            if (!store[catalog]) store[catalog] = [];
+            var at = store[catalog].findIndex(function (have) { return sameEntry(have, entry); });
+            if (at < 0) at = store[catalog].push(entry) - 1;
+            return [at, link[1]];
+        };
+    }
+    carry('_instanceIdentityLinks', linkInto('identities', function (a, b) { return a.name === b.name; }));
+    carry('_instanceEmbeddings');
+    carry('_instanceCategoryLinks', linkInto('categoryCatalog', function (a, b) { return a === b; }));
+    carry('_instanceCategoryEmbeddings');
+}
+
+/**
  * Allocate room in `store` for `blocks`' rows. Changes nothing, so a failure here leaves
  * the project as it was.
  *
@@ -304,6 +338,8 @@ export function commitStoreRows(plan, source, rules) {
         var fp = I.from_predicted[k];
         I.from_predicted[k] = fp >= 0 && fp < newRowOf.length && newRowOf[fp] >= 0 ? newRowOf[fp] : -1;
     }
+
+    carryRowLabels(plan.store, source, newRowOf);
 
     installTable(plan.frames);
     installTable(plan.instances);

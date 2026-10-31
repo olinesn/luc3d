@@ -226,7 +226,53 @@ console.log('F. A free video id');
     check(firstFreeVideoId(store) === 21, 'past a negative frame\'s', firstFreeVideoId(store));
 }
 
-console.log('G. An eagerly parsed file');
+console.log('G. What detections carry outside the columns');
+{
+    const store = projectStore();
+    const female = { name: 'female', metadata: { strain: 'a' } };
+    store.identities = [female];
+    store.categoryCatalog = ['mouse'];
+    store._instanceIdentityLinks = new Map([[0, [0, 0.1]]]);
+    const source = fileStore();
+    const male = { name: 'male' };
+    source.identities = [{ name: 'female' }, male];
+    source.categoryCatalog = ['rat', 'mouse'];
+    source._instanceIdentityLinks = new Map([[0, [0, 0.25]], [4, [1, 0.5]], [2, [9, 0.9]]]);
+    source._instanceEmbeddings = new Map([[3, { vector: [1, 2] }]]);
+    source._instanceCategoryLinks = new Map([[0, [0, 0.75]], [4, [1, 0.8]]]);
+    source._instanceCategoryEmbeddings = new Map([[4, { vector: [3] }]]);
+    const blocks = sourceRowsByVideo(source);
+    blocks.forEach((b, i) => { b.id = i + 1; });
+    commitStoreRows(allocateStoreRows(store, blocks, source), source, { trackMap: Int32Array.from([0, 1]), skeletons: [{ id: 0, order: null }] });
+    // New rows: file row 0 -> 2, 1 -> 3, 3 -> 4 (a repeat of its frame), 4 -> 5, 2 -> 6.
+    const links = store._instanceIdentityLinks;
+    check(eq(links.get(0), [0, 0.1]), 'a row already there keeps its label', links.get(0));
+    check(eq(links.get(2), [0, 0.25]), 'an identity the store has is found by name', links.get(2));
+    check(eq(links.get(5), [1, 0.5]) && store.identities[1] === male, 'one it lacks joins its list, with what it holds', links.get(5));
+    check(store.identities[0] === female, 'and the store\'s own stays as it was');
+    check(!links.has(6), 'a link to no identity is not carried, as a reader ignores it');
+    check(store._instanceEmbeddings.get(4).vector[1] === 2, 'an embedding follows its row');
+    check(eq(store._instanceCategoryLinks.get(2), [1, 0.75]) && store.categoryCatalog[1] === 'rat', 'a category joins its list', store.categoryCatalog);
+    check(eq(store._instanceCategoryLinks.get(5), [0, 0.8]), 'and is found by value', store._instanceCategoryLinks.get(5));
+    check(store._instanceCategoryEmbeddings.get(5).vector[0] === 3, 'a category embedding follows its row');
+
+    // Only the rows this store takes: a file split between stores splits its labels.
+    const other = { videos: [], skeletons: [], tracks: [], formatId: 1.4, framesData: {}, instancesData: {}, pointsData: {}, predPointsData: {} };
+    const fresh = fileStore();
+    fresh.identities = [{ name: 'female' }];
+    fresh._instanceIdentityLinks = new Map([[0, [0, 0.25]], [2, [0, 0.5]]]);
+    const split = sourceRowsByVideo(fresh);
+    split[0].id = 0;
+    commitStoreRows(allocateStoreRows(other, [split[0]], fresh), fresh, { trackMap: Int32Array.from([0, 1]), skeletons: [{ id: 0, order: null }] });
+    check(other._instanceIdentityLinks.size === 1 && other._instanceIdentityLinks.has(0), 'a row another store takes leaves its label behind', [...other._instanceIdentityLinks.keys()]);
+
+    // A file with none adds nothing to a store with none.
+    const plain = projectStore();
+    commitStoreRows(allocateStoreRows(plain, sourceRowsByVideo(fileStore()).map((b, i) => Object.assign(b, { id: i + 1 })), fileStore()), fileStore(), { trackMap: Int32Array.from([0, 1]), skeletons: [{ id: 0, order: null }] });
+    check(plain._instanceIdentityLinks === undefined && plain.identities === undefined, 'a file with no labels adds none');
+}
+
+console.log('H. An eagerly parsed file');
 {
     const slpData = {
         skeleton: { nodes: ['nose', 'tail'] },
