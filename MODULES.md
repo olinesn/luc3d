@@ -4490,6 +4490,9 @@ Calibration and `envSkeleton` remain per-session.
   pickers set `trailSeconds`.
   `state.frameWorkers` — the workers reading embedded images from the open `.slp`,
   stopped by `closeEmbeddedFrames` (`loading/video.js`).
+  `state.embeddedImagesLeftOut` — how many videos with images in the opened `.slp` no
+  session holds. A save leaves them out, so that file is not the save target
+  (`ui/ui-wiring.js`); set by `handleLoadSlpFile`, cleared by `closeEmbeddedFrames`.
   `state.trailShade` — the node-trail shade, a `TRAIL_SHADES` key
   (`ui/overlays.js`), starting at `DEFAULT_TRAIL_SHADE` ('dark'); `ui/ui-wiring.js`
   replaces it at startup with the one remembered in `localStorage`.
@@ -11204,9 +11207,10 @@ are `tests/e2e/contrast-slider-roundtrip.mjs` and
 
 ### ui/ui-wiring.js
 
-**A file with embedded images is never the save target** (`hasEmbeddedVideos` clears
-the handle after the load): a save writes no images, so it would destroy them, and the
-next Save asks where to save instead.
+**A file with images no session holds is not the save target** (`state.embeddedImagesLeftOut`
+clears the handle after the load): a save leaves them out, so it would destroy them, and
+the next Save asks where to save instead. Any other file with embedded images is the save
+target like any `.slp`: a save keeps them (`import-export/slp-image-save.js`).
 
 **Purpose.** Top-level UI wiring. Builds the menu bar, transport controls,
 keyboard handlers, visibility tab, view-mode (grid/single) switching,
@@ -14152,8 +14156,10 @@ whatever `channel_order` says (sleap-io.js swaps BGR here; Python is the referen
 
 **Key exports.**
 - `SLPPackageReader` — class. Methods: `open(url)` (range-request
-  streaming), `openFile(h5File)`, `close`, `getVideos`,
+  streaming), `openFile(h5File)`, `close`, `getVideos` (also the file's own list entry
+  and source video JSON per video, for a save to say again),
   `getVideoInfo(videoKey)`, `getFrame(videoKey, embeddedIdx)`,
+  `rawDataset(videoKey)` (the dataset itself, for a copy of uncompressed pixels),
   `findEmbeddedIndex(videoKey, displayFrame)`,
   `findClosestFrame(videoKey, displayFrame)`,
   `hasFrame(videoKey, displayFrame)`, `getFrameRange(videoKey)`.
@@ -14165,13 +14171,88 @@ whatever `channel_order` says (sleap-io.js swaps BGR here; Python is the referen
 **Imports from project modules.** None (uses h5wasm passed in via
 options bag), so the main thread and Node tests can load it too.
 
-**Imported by.** `loading/frame-worker.js`, `import-export/slp-import.js`
-(`embeddedVideoForEntry`).
+**Imported by.** `loading/frame-worker.js`, `loading/slp-image-save-worker.js`,
+`import-export/slp-import.js` (`embeddedVideoForEntry`).
 
 **User-facing features.** Backs frame extraction for `.slp` files with embedded
 images, loaded over the network or from disk.
 
 Tests: `tests/test-slp-package-reader.mjs`, `tests/e2e/slp-embedded-images.mjs`.
+
+---
+
+### loading/slp-image-copy.js
+
+**Purpose.** Copies one embedded video into a `.slp` being saved, a frame at a time, from
+any layout `SLPPackageReader` reads. Encoded images come out as int8 rows, frames x longest
+image, which is Python's default and what every reader takes (the bundled JS writer's one
+run of bytes does not open in Python). The chunks are about 1/32 of an image and are written
+only as far as each image goes, so a row costs about what its image does, and the longest
+need not be known first. Uncompressed pixels keep their shape and type, gzip level 1, a chunk
+a frame. Writes `frame_numbers` and `source_video` (attribute, or dataset past 64 KB) as
+Python does, and says `format`, `channel_order` and the frame size. Rules: `CLAUDE.md`.
+
+**Key exports.**
+- `copyEmbeddedVideo(dest, reader, key, index, onRow)` — copy to `/video<index>`. A frame
+  that cannot be read throws, flagged `sourceRead`.
+- `rowChunkBytes(imageBytes)` — the chunk width for a video's rows.
+
+**Imports from project modules.** None (h5wasm objects passed in), so Node tests run it.
+
+**Imported by.** `loading/slp-image-save-worker.js`.
+
+Tests: `tests/test-slp-image-copy.mjs`, `tests/e2e/slp-embedded-images.mjs` §8.
+
+---
+
+### loading/slp-scratch-file.js
+
+**Purpose.** Where a `.slp` with images is put together before it is saved. HDF5 needs to
+read and write anywhere in a file, which a user's file does not allow until the save is done.
+On disk where the browser allows (OPFS through a sync handle, mounted as one Emscripten file,
+modelled on WORKERFS), otherwise in h5wasm's memory file system. A save with too little
+storage for it goes in memory; above `MEMORY_SCRATCH_LIMIT` it is refused, since past 4 GB
+each MEMFS write copies the whole file. Any write that does not return a real count is a
+failed write (`writeFailure`): at the quota Chromium returns -8 as an unsigned number without
+throwing, and HDF5 then loops forever. The next save sweeps up files a crash left, by age,
+since another tab's save may be running.
+
+**Key exports.**
+- `openScratchFile(FS, {name, expectedBytes, kind})` — resolves to `{kind, path, writeFailure,
+  size(), put(bytes), read(position, length), flush(), release(), remove()}`. `kind` 'disk' or
+  'memory' insists (tests).
+- `scratchFileName(now)`, `SCRATCH_PREFIX`, `MEMORY_SCRATCH_LIMIT`.
+
+**Imports from project modules.** None.
+
+**Imported by.** `loading/slp-image-save-worker.js`, `import-export/slp-image-save.js`
+(`scratchFileName`).
+
+Tests: `tests/test-slp-image-copy.mjs`, `tests/e2e/slp-embedded-images.mjs` §8.
+
+---
+
+### loading/slp-image-save-worker.js
+
+**Purpose.** Worker that puts a project's embedded images into the `.slp` being saved. It
+opens every file holding images itself (WORKERFS, through h5wasm's cold-read guard), so no
+image ever reaches the main thread, and the app stays responsive. Short-lived, one per save:
+ending it frees everything a large save needed. Reads back what it wrote before anything is
+sent on: the labels, every video's frame count, each video's first and last images.
+
+**Message protocol.**
+- IN: `{type: 'start', labels, sources, videos: [{index, sourceIdx, key}], scratchName,
+  expectedBytes, scratch}`.
+- OUT: `{type: 'progress', done, total}`, then `{type: 'copied', size, scratch}`.
+- IN/OUT: `{type: 'read', position, length}` / `{type: 'bytes', bytes}`;
+  `{type: 'release'}` / `{type: 'released'}` (the main thread reads a disk file from there);
+  `{type: 'finish'}` / `{type: 'finished'}` (the scratch file is gone).
+- OUT: `{type: 'error', error}` at any point, after removing the scratch file.
+
+**Imports from project modules.** `./slp-package-reader.js`, `./slp-image-copy.js`,
+`./slp-scratch-file.js`, `../lib/h5wasm/hdf5_hl.js`.
+
+**Imported by.** Spawned from `import-export/slp-image-save.js`.
 
 ---
 
@@ -14724,9 +14805,10 @@ How it behaves:
   labeled ones) past its last image, and shows a frame that fails to read as none.
   An encoded image stored BGR is swapped per frame, except a grey one; uncompressed
   pixels are drawn as stored (`rawPixelsBitmap`).
-- `hasEmbeddedVideos(state)` — whether any of the project's videos is embedded in
-  its `.slp`, which is what tells a save it writes no images (`import-export/save-load.js`).
-- `closeEmbeddedFrames(state)` — close those decoders and stop `state.frameWorkers`.
+  `videoInfo`, `sourceFile`: what a save needs to copy its images. `readFrom(worker,
+  videoInfo, sourceFile)`: read the same images from another file, which a save has just
+  written them to.
+- `closeEmbeddedFrames(state)` — close a project's embedded decoders and stop `state.frameWorkers`.
   They are not in the decoder pool, and a worker's listener keeps each decoder and
   its frames alive, so every loader that replaces the project calls it.
 - `VideoController` — class. Selected methods: `seekToFrame` (a seek that finishes
@@ -15780,6 +15862,10 @@ the constraint). The vendored writer's `writeSessions` therefore keeps its
 (`// LUCID local patch` markers `luc3d #185`, `#190`, `#191`; documented in
 `CLAUDE.md`, guarded by `tests/e2e/save-session-3d-typed-sink.mjs`).
 
+**Embedded images.** `opts.beforeWriting(ctx, [{session, refGraph}])` runs once the videos
+are known and before anything is written, which is where `buildSlpBytes` makes the list
+entries of a project with embedded images name where they will be.
+
 **Multi-session two-pass split.** `SIO.openSlpWriter`
 serializes `sessions_json`/`identities_json` (+ the SLP 2.8 columnar `/session_data`
 group holding 3D points + grouping) **synchronously at open time** (not
@@ -15955,6 +16041,40 @@ same reason).
 
 **Behavior labels.** `buildSessionRefGraph` calls `writeBehaviorMetadata`, the streaming mirror of the eager writer.
 
+---
+
+### import-export/slp-image-save.js
+
+**Purpose.** Save keeps a project's embedded images, on the main-thread side. Every save
+path writes labels and a video list; for a video whose images are embedded, its list entry
+is made to name the group they will be in (the source file's own entry otherwise, source
+video included), then a worker adds them (`loading/slp-image-save-worker.js`) and the
+finished file is sent on. A project with no embedded images never comes here.
+
+**Key exports.**
+- `anyEmbeddedVideo(videoFiles)`.
+- `noteEmbeddedVideos(sioSession, videoFiles, plan)` — adds `{video, decoder}` per embedded
+  video of a session, by that session's own video files.
+- `adoptEmbeddedVideos(SIO, plan, allVideos)` — with the final video list: each entry's
+  `index`, and its `SIO.Video` says where the images will be. Before anything is written.
+- `addImagesToSlp(labelsBytes, plan, {sink, onProgress, scratch})` — resolves to null with a
+  sink, else a Blob. A chunk sent to a sink can be a Blob: slices of the file on disk, which
+  the browser copies across itself. `buildSlpBytes` passes `globalThis.__lucidSaveScratch`
+  as `scratch` ('disk' or 'memory'), for tests to insist on one.
+
+**Imports from project modules.** `../loading/video.js` (`EmbeddedVideoDecoder`),
+`../loading/slp-scratch-file.js` (`scratchFileName`). Spawns
+`../loading/slp-image-save-worker.js` via `new Worker(new URL(...))`.
+
+**Imported by.** `import-export/save-load.js`.
+
+**User-facing features.** File ▸ Save and Save As of a `.pkg.slp`; the "Copying images" step
+of the Save card.
+
+Tests: `tests/e2e/slp-embedded-images.mjs` §8.
+
+---
+
 ### import-export/save-load.js
 
 **Purpose.** Project lifecycle — newProject, save paths (quickSave,
@@ -15962,11 +16082,15 @@ saveAs, saveProjectSlp, saveProject), load dispatcher
 (`handleLoadProject`), session-frame serialization helpers, the
 loading-overlay/status-text UI helpers.
 
-**Embedded images.** A save writes poses and video names, not images, so a save of a
-project with images embedded in its `.slp` has the labels only, and its status says so
-(`embeddedImagesSaveNote`). `handleLoadProject` keeps a large file with embedded images
-off the lazy route (`slpHasEmbeddedImages`): they are what makes it large, and only the
-eager path shows them.
+**Embedded images.** A project with images embedded in its `.slp` saves them too: each path
+in `buildSlpBytes` writes the labels to bytes rather than the sink, and `addImagesToSlp`
+(`./slp-image-save.js`) adds the images and sends the file on, to the sink or as a Blob for a
+download. `quickSave` then has the project read them from the file just saved
+(`readImagesFromSaved`), which may have replaced the one they were read from, and on any
+failure aborts the writable, leaving the file as it was. The status says what is left out of
+a file when images in the opened file are in no session (`imagesLeftOutNote`).
+`handleLoadProject` keeps a large file with embedded images off the lazy route
+(`slpHasEmbeddedImages`): they are what makes it large, and only the eager path shows them.
 
 **Key exports.**
 - **The Save progress card.** `quickSave`/`saveAs` and `saveProjectSlp` (the
@@ -16239,6 +16363,9 @@ for external videos. `session.lastFrame` starts on the first labeled frame with 
 image, else the first image (`embeddedFrameToOpenOn`), which is where the load opens
 and `switchSession` first goes: frame 0, or the first labeled frame, can leave every
 view empty. `handleAddSlp` does the same for the file it adds. Rules: `CLAUDE.md`.
+Each decoder keeps the File its images are in, which a save copies them from.
+`readImagesFromSavedFile(file, plan)` moves them to the file a save has just written, one
+worker for all of it. `state.embeddedImagesLeftOut` counts videos with images no session holds.
 
 **Camera names, for a file with no sessions,** come from each video's source file
 (`makeCameraNamesUnique`), its list position added when two have the same one: every

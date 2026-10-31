@@ -47,6 +47,7 @@ export const state = {
     trailShade: DEFAULT_TRAIL_SHADE, // node-trail color vs the track's: a TRAIL_SHADES key (ui/overlays.js). Set via Tracks menu / Trails button; remembered in localStorage.
     decoderPool: [],            // Persistent OnDemandVideoDecoder instances, reused across session switches
     frameWorkers: [],           // Workers reading embedded images from the open .slp (closeEmbeddedFrames)
+    embeddedImagesLeftOut: 0,   // Videos with images in the opened .slp that no session holds: a save leaves them out, so that file is not the save target
     slpFileHandle: null,        // FileSystemFileHandle for quick save
     isDirty: false,             // true when unsaved annotation changes exist
     isSaving: false,            // true while save is in progress

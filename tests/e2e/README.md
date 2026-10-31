@@ -167,6 +167,11 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   frame: images on the right camera with video groups out of list order, every way
   they can be stored (variable-length and fixed-width rows, the JS writer's one run
   of bytes, uncompressed pixels), several sessions, frames with no image, playing,
-  colour order. Save must never write over the file holding the images. Fixtures:
+  colour order. Section 8: Save keeps the images, on real file handles, over the opened
+  file (whose File stops reading), with several sessions, every layout, two files merged,
+  Save As, a save that fails, a download and the streaming writer; Python sleap-io 0.9.5
+  reads the results when `uv` is there (`compare_saved.py`). Fixtures:
   `tests/fixtures/slp-embedded/`. Confirmed to fail on the code before the fix, and
   each fix on its own was undone to see this test notice.
+- **`_real-embedded-save.mjs`** (not part of the suite: needs a real package) — saves it over
+  itself twice, in a profile on disk, and reports time and the browser's memory.

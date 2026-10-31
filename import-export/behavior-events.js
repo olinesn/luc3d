@@ -203,8 +203,9 @@ export function buildBehaviorEvents(SIO, items) {
 
 /**
  * What a save needs to write one of a file's videos back: what the file said about it.
- * A save writes no images, so an embedded video goes back as its source, with no
- * `dataset` to point at images the new file does not hold.
+ * A save copies the images of a session's cameras only (`slp-image-save.js`), so an
+ * embedded video outside them goes back as its source, with no `dataset` to point at
+ * images the new file does not hold.
  */
 function fileVideoRecord(v) {
     var embedded = !!v.hasEmbeddedImages, source = v.sourceVideo || null;
