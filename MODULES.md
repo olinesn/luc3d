@@ -1002,15 +1002,24 @@ calibration is loaded.
   video to the camera named after it; returns the names added. **Does nothing
   to a session with a real calibration**: a stand-in at the world origin would
   join triangulation and corrupt the 3D.
+- `cameraNamesFromVideos(videos)` — one camera name per video of a `.slp` with no
+  recording session, in video order: the file stem (of the source video, when
+  there is one), or `cam_<i>`. Takes the reader's `Video`s or
+  `parseSlpViaSleapIO`'s records, so every loader names a file's cameras alike.
+  **Names always differ**, because everything per camera is keyed by name: two
+  videos on one name would show and save one's poses on the other. One stem on
+  several videos (campy writes `<camera>/0.mp4`) takes the parent folders when
+  those tell them apart, and whatever still collides takes `_2`, `_3`…
 - `PLACEHOLDER_FOCAL`, `PLACEHOLDER_DEFAULT_SIZE`.
 
 **Imports from project modules.** `./pose-data.js` (`Camera`). DOM-free and
 state-free (callers pass the session's views and videos), so it loads under Node.
 
 **Imported by.** `loading/session-loader.js` (per-camera and single-SLP folder
-loaders; `handleLoadProjectSlpLazy`'s 3D gate), `import-export/save-load.js`
+loaders; `handleLoadProjectSlpLazy`'s 3D gate), `loading/sio-lazy-loader.js`
+(`openProjectSlp`'s names for a file with no session), `import-export/save-load.js`
 (`buildSlpBytes`, for every session before writing), `import-export/slp-import.js`
-(`handleLoadSlpFile`'s 3D gate), `pose/calibration-compare.js` (placeholder-only
+(`handleLoadSlpFile`'s 3D gate and names), `pose/calibration-compare.js` (placeholder-only
 sessions are not compared), `pose/tracker.js` and `ui/track-range-modal.js`
 (tracking needs a real calibration).
 
@@ -1688,7 +1697,9 @@ session graph that holds them.
   - Repair (`deduplicateFrameIdentities`, `scrubOrphanInstances`,
     `_promoteIfMixed`), skeleton propagation
     (`propagateNodeAdded`/`propagateNodeRemoved`), camera-rename
-    (`renameCameraInAllData`).
+    (`renameCameraInAllData`: resident frames, groups, and a lazy project's
+    loader, `SioLazyLoader.renameCamera`, or its other frames and its save would
+    still be under the old name).
 
   **Skeleton propagation re-shapes the 2D, the `nulledNodes` sets and the 3D
   together**, because all three are indexed by the same node index and anything
@@ -3040,15 +3051,23 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   (every instance rendered twice, or a blank view). The folder loader no longer
   produces a mixed session at all (see `loading/session-loader.js`); this is the
   independent half, covered by `tests/e2e/percam-mixed-lazy-eager.mjs`.
-  **`_rawInstIndex` tagging.** All three lazy-materialization sites
-  (`ensureLazyFrameData`, `buildLazyFrameGroupSync`, and the worker-batch
-  branch of `batchLoadLazyFrames`) tag every constructed `Instance` with
+  **`_rawInstIndex` tagging.** All lazy-materialization sites
+  (`ensureLazyFrameData`, `hydrateLazyCameras`, `buildLazyFrameGroupSync`, and the
+  worker-batch branch of `batchLoadLazyFrames`) build each `Instance` with
+  `lazyRowInstance(row, ii)`, which tags
   `inst._rawInstIndex = ii` — its position within the frame's raw instance list,
   which equals its exact row offset in the lazy store's
   `[instance_id_start, instance_id_end)` range for that (camera, frame).
   `import-export/slp-streaming-write.js`'s `refFor` reads this on save instead of
   guessing the row via `trackIdx` (which attached the wrong animal's 2D). Test:
   `tests/e2e/save-multiinstance-ref-integrity.mjs`.
+  **A hydrated instance keeps its row's occlusion**, as on the eager paths
+  (`setOccludedFrom`; `nulledNodes` too for a user instance): a save rewrites a
+  camera-frame holding a user instance from these objects, so a node at a real
+  position but not visible came out visible. Only saves read it, so tracking and
+  3D do not move; a real prediction file has none (0 of 8.1M nodes on a real
+  camera, 5 of 45,000 hand-labelled ones in a real package). Test:
+  `tests/e2e/lazy-open-plain-slp.mjs`.
   **`finalizeLazyFrameGroup`** splits a freshly-(re)materialized lazy
   FrameGroup's raw instances into "already grouped" vs "unlinked", matching a raw
   instance to an existing group's member by `_rawInstIndex`. It checks
@@ -11990,8 +12009,10 @@ this decision is pure and worth pinning in Node.
   group key. Order-preserving, non-mutating, and a file whose key is null is
   never dropped.
 - `matchVideoToCamera(file, cameraNames, refBaseByCam)` — the camera a video
-  belongs to, by parent directory, then the camera name ANYWHERE in the stem,
-  then the filename the project references for that camera. Case-insensitive;
+  belongs to, by parent directory, then the camera name as the whole stem, then
+  ANYWHERE in the stem (cameras named after videos can sit inside each other:
+  `clip10.mp4` is camera `clip10`, not `clip1`), then the filename the project
+  references for that camera. Case-insensitive;
   null when nothing matches. Used both to assign a camera and, in the same load,
   as the group key above — matching twice with two rules is how a video gets
   dropped for one camera and bound to another.
@@ -12336,6 +12357,31 @@ the file has a `frameIdentityMap`/`trackIdentityMap`, `stampFrameIdentitiesFromG
 derives the per-detection map the Identity timeline reads. LUC3D projects take
 neither step (`tests/e2e/lazy-reopen-group-identities.mjs`).
 
+**A `.slp` with no recording session goes this way too** (a plain SLEAP prediction
+file: File ▸ Open routes by size alone): a placeholder camera per video
+(`openProjectSlp`'s `videoIdByCam`), no groups, the Tracks timeline from the
+loader's `trackOccupancy`, landing on the first labeled frame. It does not fall
+back to the eager path for being large, because that is what cannot hold it.
+Real 5-mouse files (JS heap peak, which counts the store's typed columns):
+
+| File | Eager | Lazy |
+|---|---|---|
+| 1 video, 234 MB, 8.1M points | 1.56 GB | 0.39 GB |
+| 3 videos, 327 MB, 24M points | 4.13 GB | 1.09 GB |
+| 8 videos, 857 MB, 63.3M points | tab crashes | 2.83 GB; Save 2.91 GB |
+
+Only a file the one store cannot hold does (`opened.eagerReason`: images in the
+file, one video frame listed twice, not exactly one skeleton, a session with a
+calibration linking no camera to a video). The loader is closed first, and the
+final status says the file opened in full and why.
+`tests/e2e/lazy-open-plain-slp.mjs`.
+
+**`handleLoadCalibration` renames 2D too, with or without a video.** A plain file's
+cameras are named after its videos, so a calibration's are usually different. A
+video's view renames its camera as before; any 2D left under a name the calibration
+does not have is renamed by `matchVideoToCamera`, onto a camera with no 2D yet. A
+name that matches nothing stays, and a save refuses (`buildSessionRefGraph`).
+
 **`handleLoadMultiSession` ends with a calibration cross-check.** The tail calls
 `noteSessionCalibrationDivergence(state.sessions)` LAST, once every session is
 in, and queued behind the skeleton prompt (as its `onDone`) so two modals never
@@ -12438,10 +12484,21 @@ synchronous.
   true` so the streaming re-save appends the store ONCE, retains `videoIdByCam`
   (camName → NATIVE store video id) for the re-save's video-id remap, computes
   each camera's `trackOccupancy` at load, and returns `{labels, typedSession,
-  cameraNames, nFrames}` for `reconstructInstanceGroupsFromSessionLazy`.
+  cameraNames, nFrames, eagerReason}` for `reconstructInstanceGroupsFromSessionLazy`.
+  A file with no recording session (`typedSession` null, or a session with no
+  calibration) has no camera map: it gets one camera per video
+  (`cameraNamesFromVideos`) and a `videos` record for each, frames or not, since
+  a save writes the header from those. `eagerReason` names what the store cannot
+  hold, for `handleLoadProjectSlpLazy` to send to the eager path; `appendStore`
+  keeps only the first row of a repeated (video, frame), hydration only the last.
+  `firstLabeledFrame`: the lowest frame with an instance.
+- `renameCamera(oldName, newName)` — every per-camera map, keeping its order; no-op
+  when `newName` is already a camera. `Session.renameCameraInAllData` calls it.
+  `cameraRenames` lists them in order, for the multi-session save's pass 2, which
+  reads the project file again (`reopenSessionLazyLoader`) and repeats them.
 - `getFrame` / `getFrameSync` — typed instances → `{trackIdx (-1 = none, as in
   the store; hydration maps it to `null`), score, type, points, occluded}`,
-  LRU-cached. `prefetch`, `close` (also clears `videoIdByCam`).
+  LRU-cached. `prefetch`, `close` (also clears `videoIdByCam` and `_projectLabels`).
 - Fields `nFrames`, `skeleton`, `trackNames`, `videos`, `trackOccupancy`,
   `videoIdByCam` (`null` on the per-camera path), `isSync = true` (so
   `batchLoadLazyFrames` takes its worker-free path), and `sourceFiles` (camName →
@@ -13813,7 +13870,9 @@ session's resident/total) rather than truncate silently. Covered by
   `exportSlpMultiSession`, `exportCameraSlpStreaming` (above). For a **lazy session** these route a plain
   per-camera export through `lazyCameraExportBytes` → `saveSlpToBytes` on the
   camera's already-lazy `Labels` (all frames, memory-bounded) instead of the
-  eager `buildSlpLabels*`. The multi-view project save uses the streaming
+  eager `buildSlpLabels*`. **Not for a shared store** (`openProjectSlp`): its one
+  `Labels` holds every camera, so each camera's file would hold them all; those go
+  through `exportCameraSlpStreaming`. The multi-view project save uses the streaming
   writer via `slp-streaming-write.js` (see `save-load.js` / `buildSlpBytes`).
   The fast path is gated on `instanceFilterAllowsLazyFastPath(instanceFilter)`,
   NOT a literal `!instanceFilter`: every export-modal call site
@@ -14032,6 +14091,11 @@ pieces make this correct for arbitrary inputs:
   video column is copied; `appendStore`'s own `buildVideoIdMap` remap is a
   no-op for external-video files, so the remapped ids written ARE final
   (`videos: []` keeps that passthrough inert). Identity maps skip the copy.
+- `buildSessionRefGraph` **refuses** a shared store with poses on a camera
+  `session.cameras` does not have (a calibration that names none of a plain
+  file's videos): the header lists only the session's cameras, so those rows
+  would point at no video or at another camera's, and with no camera left no pose
+  would be written at all, over the file they came from.
 
 **Video fallback for video-less reopened sessions.** `resolveVideoPath(cam,
 views, videoFiles, lazyVid)` and the `buildSessionRefGraph` camera loop fall
@@ -14305,7 +14369,10 @@ the status bar at the bottom.
 
 **Purpose.** SLP/H5 project import + 3D-points-overlay import. Three
 workflows: load fresh SLP (replaces state), additive merge SLP into
-current session, overlay reprojected points3d from H5.
+current session, overlay reprojected points3d from H5. A file with no session
+gets a camera per video, named by `cameraNamesFromVideos`
+(`pose/placeholder-cameras.js`), which the lazy route and the single-SLP folder
+loader share. `reconstructInstanceGroupsFromSessionLazy` takes a null session.
 
 **campy recordings.** When the video prompt's folder is a campy recording
 (session.json), `handleLoadSlpFile` puts it on the session

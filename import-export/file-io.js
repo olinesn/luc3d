@@ -1453,6 +1453,9 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder, nodeSc
 async function lazyCameraExportBytes(SIO, session, cameraName) {
     var loader = session && session.lazyLoader;
     if (!loader || !loader.labelsByCam || typeof loader.labelsByCam.get !== 'function') return null;
+    // One store shared by every camera (`openProjectSlp`): re-emitting it would
+    // put all of them, and all their videos, in this one camera's file.
+    if (loader._sharedStore) return null;
     // Safety guard: this path re-emits the RAW columnar store verbatim — it
     // has no notion of a live, manually-corrected Instance object sitting in
     // a resident FrameGroup. If any resident frame carries a user-type

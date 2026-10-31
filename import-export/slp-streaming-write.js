@@ -212,6 +212,18 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     // exactly ONCE (not once per camera) or the re-save duplicates them.
     var _sharedStore = !!loader._sharedStore;
     var _sharedTrackBase = -1;
+    // The store goes into the file whole, under the header's videos, which are
+    // this session's cameras. Poses on any other camera would point at no video,
+    // or at another camera's; with none in the session, none would be written.
+    if (_sharedStore) {
+        var _noCamera = Array.from(loader.labelsByCam.keys()).filter(function (name) {
+            return !session.cameras.some(function (c) { return c.name === name; });
+        });
+        if (_noCamera.length > 0) {
+            throw new Error('poses on ' + _noCamera.join(', ') + ' belong to no camera of this session\'s calibration, ' +
+                'so they would be lost. Load a calibration that names those cameras.');
+        }
+    }
 
     // MEMORY (#134 follow-up): "Track All" materializes EVERY frame into
     // `frameGroups` (the cross-view tracker is sequential), so a

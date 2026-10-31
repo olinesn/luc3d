@@ -3433,6 +3433,11 @@ export class Session {
                 }
             }
         }
+
+        // A lazy project's other frames are under this name in its loader.
+        if (this.lazyLoader && typeof this.lazyLoader.renameCamera === 'function') {
+            this.lazyLoader.renameCamera(oldName, newName);
+        }
     }
 
     /**
