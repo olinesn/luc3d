@@ -45,7 +45,7 @@ import {
 import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
 import {
     groupsAcrossSkeletonsRefusal, keepOtherSkeletonFrames, keepOutsideFrames, keepOutsideColumnarFrames,
-    keptOutsideCounts, noteVideoReaders, outsideFramesNote, ownVideoOfColumnar, sessionSkeletonEntry,
+    keptOutsideCounts, noteVideoReaders, outsideFramesNote, outsideGroupCount, ownVideoOfColumnar, sessionSkeletonEntry,
 } from '../import-export/outside-frames.js';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
@@ -2978,6 +2978,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
             onCount: function (done, total) { return openProgress('groups', done, total); },
             fileIdentities: identitiesFromFile ? labels.identities : null,
         });
+        if (session.outsideGroups) loader.refreshProjectOccupancy();
         // A LUC3D project that stored only the identities its groups do not
         // imply: rebuild the rest from the groups just restored.
         await readFrameIdentityMetadata(session, lucid, {
@@ -3064,7 +3065,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
         updateInfoPanel();
         // This loader opens a file's first session only; the store holds every frame.
-        var lazyOutsideNote = outsideFramesNote(loader.outsideFrameCounts(), (labels.sessions || []).length);
+        var lazyCounts = loader.outsideFrameCounts();
+        lazyCounts.groups = outsideGroupCount(session);
+        var lazyOutsideNote = outsideFramesNote(lazyCounts, (labels.sessions || []).length);
         if (videosAttached) {
             var lazyStatus = withCampyWarnings('Reopened ' + slpFile.name + ' — '
                 + session.instanceGroups.size.toLocaleString('en-US')

@@ -1840,6 +1840,13 @@ export class Session {
          * @type {{videos: Array, tracks: string[], frames: Array<{video: number, frameIdx: number, instances: Instance[]}>, otherSkeletonFrames: Array<{video: number, frameIdx: number, instances: Object[]}>}|null}
          */
         this.outsideFrames = null;
+        /**
+         * Lazy sessions only: frame index -> the file's groups that link a pose this
+         * session does not show (`keepGroupAside`, `import-export/outside-frames.js`).
+         * Not shown, and written back as they were. Null when there are none.
+         * @type {Map<number, Array<{members: Map<string, {row: number, offset: number}>, instance3d: Object, identity: Object, score: number, metadata: Object}>>|null}
+         */
+        this.outsideGroups = null;
     }
 
     addIdentity(name, color) {
@@ -3448,6 +3455,51 @@ export class Session {
         if (this.outsideFrames) {
             for (const video of this.outsideFrames.videos) {
                 if (video.camera === oldName) video.camera = newName;
+            }
+        }
+        if (this.outsideGroups) {
+            for (const groups of this.outsideGroups.values()) {
+                for (const group of groups) {
+                    if (!group.members.has(oldName)) continue;
+                    group.members.set(newName, group.members.get(oldName));
+                    group.members.delete(oldName);
+                }
+            }
+        }
+    }
+
+    /**
+     * A delete compacts a lazy store, so a pose left in the same camera-frame moves
+     * down in it. `outsideGroups` names its poses by that position, as `_rawInstIndex`
+     * does for a shown one (`ui/custom-delete-ops.js` `deleteTargetsFromStore`).
+     *
+     * @param {Map<string, Map<number, Set<number>>>} killByCam - camera -> frame -> the
+     *   deleted rows' positions before the delete
+     */
+    shiftOutsideGroupMembers(killByCam) {
+        const loader = this.lazyLoader;
+        if (!this.outsideGroups || !loader || !loader.frameRowByCam) return;
+        const killsByRow = new Map();     // camera -> store frame row -> positions
+        for (const [cam, perFrame] of killByCam) {
+            const rowMap = loader.frameRowByCam.get(cam);
+            if (!rowMap) continue;
+            const rows = new Map();
+            for (const [frameIdx, kills] of perFrame) {
+                const row = rowMap.get(frameIdx);
+                if (row !== undefined) rows.set(row, kills);
+            }
+            killsByRow.set(cam, rows);
+        }
+        for (const groups of this.outsideGroups.values()) {
+            for (const group of groups) {
+                for (const [cam, member] of group.members) {
+                    const camRows = killsByRow.get(cam);
+                    const kills = camRows ? camRows.get(member.row) : null;
+                    if (!kills) continue;
+                    let shift = 0;
+                    for (const k of kills) if (k < member.offset) shift++;
+                    member.offset -= shift;
+                }
             }
         }
     }

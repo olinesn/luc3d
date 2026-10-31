@@ -666,9 +666,10 @@ the new calibration lands exactly where it landed under the old one. That
 invariant is the whole safety argument, and it is what both test files assert
 first. Move the points without the cameras (or vice versa) and every
 reprojection error in the project silently explodes. So the set is not
-negotiable: `InstanceGroup.points3d` across every session it is handed, the
-plane node pool, each plane's stored fit, and every camera. 2D data is
-invariant and is not touched.
+negotiable: `InstanceGroup.points3d` across every session it is handed, the 3D of
+any group kept aside (`session.outsideGroups`, not shown but in the same world, and
+not in the dialog's tally), the plane node pool, each plane's stored fit, and every
+camera. 2D data is invariant and is not touched.
 
 **The `sessions` argument is the SUBSET the user chose** — no function here
 takes a "which sessions" flag, so there is no partial code path to drift. A
@@ -1533,6 +1534,11 @@ session graph that holds them.
     skeleton on any video, are the reader's own sleap-io.js instances and no edit
     touches them, but `renameCameraInAllData` carries `videos[].camera` along. A save
     writes both back (`import-export/outside-frames.js`).
+  - **`outsideGroups`** — lazy sessions only: frame -> the file's groups linking a pose
+    the session does not show (`keepGroupAside`; null when none). Not in
+    `instanceGroups`, so nothing shows or edits them. `renameCameraInAllData` carries
+    their cameras along; `shiftOutsideGroupMembers(killByCam)` keeps their positions
+    right after a delete.
   - **`predictedNodeScore(cameraName, frameIdx, inst, k)`** is the one answer to
     "what did the model score this node?" — the node tooltip and the streaming
     writer's overlay both ask it. NaN unless `inst` is `'predicted'` (an edit
@@ -3053,7 +3059,10 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   branch of `batchLoadLazyFrames`) tag every constructed `Instance` with
   `inst._rawInstIndex = ii` — its position within the frame's raw instance list,
   which equals its exact row offset in the lazy store's
-  `[instance_id_start, instance_id_end)` range for that (camera, frame).
+  `[instance_id_start, instance_id_end)` range for that (camera, frame). A pose the
+  session does not show is a `null` in that list, and is skipped without moving the
+  poses after it; `finalizeLazyFrameGroup` matches members by this tag, not by index
+  in what was built.
   `import-export/slp-streaming-write.js`'s `refFor` reads this on save instead of
   guessing the row via `trackIdx` (which attached the wrong animal's 2D). Test:
   `tests/e2e/save-multiinstance-ref-integrity.mjs`.
@@ -3247,6 +3256,10 @@ the row's 2D the next time the frame is hydrated. Rules:
 `releaseFrameMembers2d`), `ui/sessions-panes.js` (those two plus
 `dropGroupDerivedReprojections`), `ui/rendering.js` (`dropDerivedReprojections`),
 `import-export/slp-import.js` (`dropGroupDerivedReprojections`).
+
+**A pose the session does not show** (`describeStoreFrame`'s `hidden`, `nHidden`) has a
+position in the frame and no instance, resident or re-hydrated. So a frame holding one
+still evicts, and an instance claiming such a position is a `'row'` blocker.
 
 **Coverage.** `tests/test-lazy-residency.mjs` (every blocker against an untouched
 twin, windows, cap, holds, the reprojection drop, a simulated playback, and the
@@ -4026,6 +4039,9 @@ errorRows, firstError, touchedFrames}`) plus the two target builders it is fed b
 `ui/interaction.js` and `ui/ui-wiring.js`, `unlinkedTarget(frameIdx, ul)` and
 `groupMemberTargets(frameIdx, group, camNames?)`.
 
+`deleteTargetsFromStore` also calls `session.shiftOutsideGroupMembers`, when the session
+has it: a group kept aside names its poses by position too.
+
 **Every delete of a store-backed instance goes through `deleteTargetsFromStore`,
 not only this dialog** — also the Delete key / Edit ▸ Delete Instance / the
 toolbar's "- Instance" (`InteractionManager._deleteSelected`) and the group
@@ -4134,6 +4150,9 @@ prediction is raw tracker output and does not count; **Instances** counts user
 instances in that camera; **Triangulated** counts frames with at least one
 `InstanceGroup` carrying `points3d`, in any camera (including a frame with 3D
 but no 2D `FrameGroup`).
+
+A pose the session does not show counts for nothing: `forEachInstanceRow` skips it, and
+the walk clears the scratch type at its position.
 
 **Why it is not a walk of `session.frameGroups`.** On a lazy project that map is
 the resident window, so a walk reports a plausible, tiny number. A count is
@@ -12068,6 +12087,29 @@ and left other cameras with out-of-range or misnamed track indices.
 (`LazyFrameLoader`, all six metadata orders), `tests/e2e/percam-track-union.mjs`
 (the real folder loader, lazy in all six open orders plus eager).
 
+### loading/poses-not-shown.js
+
+**Purpose.** Which poses of a lazy store the session does not show. LUC3D shows one
+skeleton per session and `Instance` stores 2D by node index, so a pose on another
+skeleton is never read by position, and a group linking one goes aside whole with all
+its poses (`keepGroupAside`, `import-export/outside-frames.js`). Import-free, because
+`SioLazyLoader` and the Node tests loading it need no more than this.
+
+**Key exports.**
+- `notShownRows(store)` — the flag column (`instancesData.lucid_not_shown`, one entry per
+  instance row), or null when every pose is shown. **Any new reader of a store's rows
+  must check it.** A column because `deleteInstanceRows` compacts every column of
+  `instancesData` and the multi-session save keeps them together, so the flags move with
+  their rows. The writers read named columns only, so it never reaches a file.
+- `markRowNotShown(store, instanceRow)` — flag one row; creates the column.
+- `shownSkeletonEntry(entries, record, onSessionVideos)` — the skeleton a session shows:
+  the one its `metadata.lucid.skeleton` names (by nodes and edges, else nodes; a project
+  can hold sessions on different skeletons), else the first with a pose on its videos,
+  else the first. Both routes use it.
+
+**Imported by.** `loading/sio-lazy-loader.js`, `import-export/outside-frames.js`,
+`tests/test-lazy-residency.mjs`, `tests/test-frame-counters.mjs`.
+
 ### loading/session-loader.js
 
 **Purpose.** Orchestrator for every session-loading workflow — empty
@@ -12445,7 +12487,9 @@ synchronous.
   nothing depends on which parallel open resolves first; returns THIS camera's
   own track names. A camera is one video: a file with frames on more is read as the
   first it lists with frames (`_ownVideoByCam`; the others' rows stay in the store,
-  out of the row map, and a save keeps them on their own videos).
+  out of the row map, and a save keeps them on their own videos). A file on more than
+  one skeleton shows one (`_chooseShownSkeleton`, below). Cameras whose files are on
+  different skeletons are not reconciled: CLAUDE.md "Not fixed either".
 - `openProjectSlp(file, onProgress, onReadBytes)` — `onReadBytes(done, total)`
   (optional, awaited) counts the bytes read of the four big tables, which the
   vendored reader then reads in row slices (LUCID local patch, open progress);
@@ -12456,11 +12500,27 @@ synchronous.
   (camName → NATIVE store video id) for the re-save's video-id remap, computes
   each camera's `trackOccupancy` at load, and returns `{labels, typedSession,
   cameraNames, nFrames}` for `reconstructInstanceGroupsFromSessionLazy`.
-- `outsideFrameCounts()` — `{frames, videos}` in the store that belong to no camera
-  of this session, for the load's status. `forEachOutsideRow(visit)` walks those rows
-  (row-map walks do not see them). `remapTracksFromIdentity` keeps those rows'
-  track names (`_keepOutsideRowTracks`): names the new list lacks go after it in
-  `store.tracks`, and `_tracksPastSession` keeps them out of the timeline's count.
+- `_chooseShownSkeleton(labels, record, isSessionVideo)` — the rule of the eager reader
+  (`parseSlpViaSleapIO`): a duplicate by `Skeleton.matches` with `requireSameOrder` is
+  the same skeleton, an unused one is never first, and `shownSkeletonEntry` picks. Flags
+  every row on another (`loading/poses-not-shown.js`) and records the ids;
+  `otherSkeletonIds(labels)` returns them (null when it shows them all). A file with one
+  pays nothing.
+- **A pose not shown:** `getFrame`/`getFrameSync` leave a `null` at its position, so entry
+  `k` is always position `k` in the file's frame (`Instance._rawInstIndex`).
+  `forEachInstanceRow` does not visit it and gives the rest their true `offsetInFrame`.
+  `describeStoreFrame` reports it (`hidden`, `nHidden`). `_computeSparseOccupancy` leaves
+  it out, `deleteInstanceRows` never offers it, and `remapTracksFromIdentity` keeps its
+  track name (`_keepOutsideRowTracks`). `posesNotShownAt(camName, frameIdx)` gives a
+  writer replacing a camera-frame fresh sleap-io.js instances of them.
+  `isPoseNotShown(row, offset)` and `setPoseNotShown(row, offset)` are for the load's
+  group pass (`keepGroupAside`), on a project's shared store.
+- `outsideFrameCounts()` — `{frames, videos}` in the store that belong to no camera of
+  this session, plus `{cameraPoses, cameraSkeletons}` on a camera's video and another
+  skeleton, for the load's status. `forEachOutsideRow(visit)` walks the first kind
+  (row-map walks do not see them). `remapTracksFromIdentity` keeps those rows' track names
+  (`_keepOutsideRowTracks`): names the new list lacks go after it in `store.tracks`, and
+  `_tracksPastSession` keeps them out of the timeline's count.
 - `getFrame` / `getFrameSync` — typed instances → `{trackIdx (-1 = none, as in
   the store; hydration maps it to `null`), score, type, points, occluded}`,
   LRU-cached. `prefetch`, `close` (also clears `videoIdByCam`).
@@ -13687,9 +13747,9 @@ incl. `planeMetadataConflict`).
 **Purpose.** Poses a `.slp` holds that LUC3D does not show, kept by every save: those
 on a video no recording session names, each on its own video, and those on a skeleton
 their session does not show, each on its own skeleton with its own nodes, on any video.
-The lazy path keeps both in its store (`buildSessionRefGraph`, though see CLAUDE.md for
-what it still reads by position); this module holds them for the eager path, on
-`session.outsideFrames`, and has the rules both share.
+The lazy path keeps both in its store (`buildSessionRefGraph`) and flags the second kind
+so nothing reads it by position (`loading/poses-not-shown.js`); this module holds them
+for the eager path, on `session.outsideFrames`, and has the rules both share.
 
 **Key exports.**
 - `headerVideoForOutsideFrames(SIO, video, id)` — the `SIO.Video` a header lists for
@@ -13698,16 +13758,19 @@ what it still reads by position); this module holds them for the eager path, on
   id `videos_json` does not hold, as older LUC3D saves left it).
 - `fileSkeletons(slpData)` — `slpData.skeletons`, filled in for a reader's result that
   lists none (one skeleton; an analysis `.h5`).
-- `sessionSkeletonEntry(slpData, sessionIdx)` — the entry a file's session shows: the
-  one its `metadata.lucid.skeleton` names (by nodes and edges, else nodes; a project
-  can hold sessions on different skeletons), else the first with a pose on its videos,
-  else the first.
+- `sessionSkeletonEntry(slpData, sessionIdx)` — the entry a file's session shows, by
+  `shownSkeletonEntry` (`loading/poses-not-shown.js`, where the lazy reader uses it too).
 - `groupsAcrossSkeletonsRefusal(slpData, nSessions)` — the status sentence when a load
   must refuse, else null: a group links a pose on a skeleton its session does not show.
   A session with no typed session has groups going by position in the file's frame, so
   any such group refuses in a file with more than one skeleton. Called before the load
   touches anything; the loader then resolves `false`, so the file does not become the
-  save target.
+  save target. The eager route only: the lazy route keeps such a group whole.
+- `groupLinksPoseNotShown(typedIG, loader)`, `keepGroupAside(session, frameIdx, typedIG,
+  loader)`, `outsideGroupCount(session)` — lazy load: a group of the file with a member
+  on a skeleton the session does not show goes on `session.outsideGroups`, every pose in
+  it flagged not shown, its 3D, identity, score and metadata kept for the save. Each
+  member is held as `{row, offset}`: its store frame row and its position in that frame.
 - `keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap)` — eager load;
   adds to what `session.outsideFrames.frames` already holds. It reads `slpData.frames`,
   which must be on `session`'s skeleton.
@@ -13724,13 +13787,17 @@ what it still reads by position); this module holds them for the eager path, on
   labeledFrames}`, only what `labels` (this session's `buildSlpLabelsAllViews` result)
   lacks, or null. A kept pose on a camera's video goes into the frame `labels` already
   has there, because a lazy reopen's save keeps only the first row of each video and
-  frame. `new SIO.Labels` lists a kept pose's skeleton by itself.
+  frame. `new SIO.Labels` lists a kept pose's skeleton by itself. A lazy session on this
+  writer (a mixed project) has its poses not shown read from the store and its kept
+  groups rebuilt on them (`lazyOutsideFramesForSave`).
 - `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(sessions)` — the
-  sentences for a load's final status: what is on no session's video, and what on a
-  camera's video is not shown for being on another skeleton.
+  sentences for a load's final status: what is on no session's video, what on a
+  camera's video is not shown for being on another skeleton, and how many groups went
+  aside with such a pose.
 
-**Imports from project modules.** `../pose/pose-data.js` (`Instance`), `./file-io.js`
-(`makePooledSioInstances`).
+**Imports from project modules.** `../pose/pose-data.js` (`Instance`, `pooledPoints3d`),
+`./file-io.js` (`makePooledSioInstances`), `../loading/poses-not-shown.js`
+(`shownSkeletonEntry`).
 
 **Imported by.** `import-export/slp-import.js`, `import-export/save-load.js`,
 `import-export/slp-streaming-write.js`, `loading/session-loader.js`.
@@ -14064,8 +14131,20 @@ each holding only one session's data at a time:
   uses is covered. Without that, its rows point past the end of the list (Python's
   `load_slp` raises IndexError) or at a camera's index, where first write wins. A
   camera's own file with frames on other videos gets the same (`nativeToHeader`).
-  `skeletonPairsFor` does the same for skeletons: rows on one but the session's find
-  it in the header (`_appendWithHeaderSkeletons`).
+  `skeletonPairsFor` does the same for skeletons: rows on one the session does not show
+  find it in the header (`_appendWithHeaderSkeletons`), and every other row, a
+  duplicate's included, goes on the session's. Same name, nodes, edges and symmetries:
+  one entry.
+  **Poses not shown in an overlay:** an overlay replaces a store's whole camera-frame, so
+  it carries them (`addPosesNotShown`, from `SioLazyLoader.posesNotShownAt`), after the
+  shown ones. `appendFrames` resolves a pose's skeleton and track by object in the
+  header's lists, and a miss files it under skeleton 0 or trackless, so both are
+  re-pointed. A `from_predicted` link keeps working inside the frame, also to a prediction
+  still shown; to one since corrected, it goes.
+  **Groups kept aside** (`session.outsideGroups`): written back from their `{row, offset}`
+  members (`refForKeptMember`, through the overlay's `byOffset` when one moved them), with
+  their own 3D, score and metadata. `headerIdentityFor` puts their identity in this save's
+  list.
   **Non-shared-store track dedup:** for separate per-camera prediction files
   (session-folder load, `loader._sharedStore` false), each camera's
   `labels.tracks` is appended onto `ctx.allTracks` under a growing

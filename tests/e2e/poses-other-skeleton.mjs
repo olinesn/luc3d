@@ -22,6 +22,12 @@
  *  G. A group linking a pose on another skeleton: the load refuses, nothing changes.
  *  H. A LUC3D project whose sessions are on different skeletons: each shows its own.
  *  I. A project mixing lazy and eager sessions.
+ *  J. The lazy route with nothing edited, two saves each: what it shows and what it
+ *     writes, a hand-labeled kept pose among them.
+ *  K. The lazy route, edits: a correction beside a kept pose, eviction, a delete and a
+ *     track edit beside one, Track All, what it counts, a per-camera file, a project of
+ *     two lazy sessions.
+ *  L. The lazy route, a group linking such a pose: kept whole, nothing refused.
  *
  * Needs `uv` for Python (skipped without it).
  *
@@ -99,7 +105,7 @@ def read(path):
                                         "from=" + (row_of.get(id(source), "?") if source is not None else ""),
                                         "identity=" + (i.identity.name if i.identity is not None else "")]))
     keys = [(lf.video.filename, lf.frame_idx) for lf in labels.labeled_frames]
-    sessions, groups = [], []
+    sessions, groups, group_detail = [], [], []
     for si, s in enumerate(labels.sessions):
         cams = {}
         for c in s.camera_group.cameras:
@@ -112,11 +118,13 @@ def read(path):
                 members = sorted(c.name + "=" + num(i.points["xy"][0][0]) + "/" + (i.skeleton.name or "skeleton") for c, i in ig.instance_by_camera.items())
                 p3 = "" if ig.instance_3d is None else ",".join(num(v) for v in np.asarray(ig.instance_3d.points)[0][:3])
                 groups.append("|".join(["s" + str(si), str(f)] + members + [p3]))
+                every3d = "" if ig.instance_3d is None else ",".join(num(v) for v in np.asarray(ig.instance_3d.points).ravel())
+                group_detail.append("|".join(["s" + str(si), str(f)] + members + [every3d, "score=" + num(ig.score if ig.score is not None else float("nan")), "identity=" + (ig.identity.name if ig.identity is not None else "")]))
     return {
         "error": None, "videos": [v.filename for v in labels.videos], "tracks": sorted(t.name for t in labels.tracks),
         "skeletons": [[s.name or "skeleton", s.node_names, sorted(list(e) for e in s.edge_names), sorted(sorted(p) for p in s.symmetry_names)] for s in labels.skeletons],
         "identities": [i.name for i in labels.identities],
-        "sessions": sessions, "poses": sorted(poses), "detail": sorted(detail), "groups": sorted(groups),
+        "sessions": sessions, "poses": sorted(poses), "detail": sorted(detail), "groups": sorted(groups), "groupDetail": sorted(group_detail),
         "repeatedFrames": len(keys) - len(set(keys)),
     }
 `;
@@ -258,6 +266,61 @@ fa = [sio.LabeledFrame(video=a, frame_idx=f, instances=mine[f]) for f in range(3
 fb = [sio.LabeledFrame(video=b, frame_idx=f, instances=theirs[f]) for f in range(3)]
 save("skeleton_group", fa + fb, [a, b], [sk, sk2], [session([("camA", a), ("camB", b)], [[(fa[f], mine[f]) for f in range(3)], [(fb[f], theirs[f]) for f in range(3)]])])
 
+# A group across skeletons with free poses beside it, its member after the free pose on one
+# camera and before it on the other: a correction beside it moves what the group points at.
+a, b = video("camA.mp4"), video("camB.mp4")
+fa, fb, ga, gb = [], [], [], []
+for f in range(3):
+    mine, theirs = on_sk(100, f, 0, T1), on_sk2(200, f)
+    la = sio.LabeledFrame(video=a, frame_idx=f, instances=[on_sk(150, f, 1, T2), mine])
+    lb = sio.LabeledFrame(video=b, frame_idx=f, instances=[theirs, on_sk(250, f, 1, T2)])
+    fa.append(la); fb.append(lb); ga.append((la, [mine])); gb.append((lb, [theirs]))
+save("skeleton_group_beside", fa + fb, [a, b], [sk, sk2], [session([("camA", a), ("camB", b)], [ga, gb])])
+
+# Groups on each skeleton on one frame: mice and rats. A rat group has its own 3D, a score
+# and an identity.
+a, b = video("camA.mp4"), video("camB.mp4")
+alpha = sio.Identity(name="alpha")
+s_two = session([("camA", a), ("camB", b)])
+cam_a, cam_b = s_two.camera_group.cameras
+fa, fb = [], []
+for f in range(3):
+    mouse_a, mouse_b = on_sk(100, f, 0, T1), on_sk(200, f, 0, T1)
+    rat_a, rat_b = on_sk2(600, f, t=T2), on_sk2(700, f, t=T2)
+    la = sio.LabeledFrame(video=a, frame_idx=f, instances=[rat_a, mouse_a])
+    lb = sio.LabeledFrame(video=b, frame_idx=f, instances=[mouse_b, rat_b])
+    fa.append(la); fb.append(lb)
+    s_two.frame_groups[f] = sio.FrameGroup(frame_idx=f, labeled_frame_by_camera={cam_a: la, cam_b: lb}, instance_groups=[
+        sio.InstanceGroup(instance_by_camera={cam_a: mouse_a, cam_b: mouse_b}, score=0.5,
+                          instance_3d=Instance3D(points=np.array([[1.0 + f, 2.0, 3.0], [4.0, 5.0, 6.0]]), skeleton=sk)),
+        sio.InstanceGroup(instance_by_camera={cam_a: rat_a, cam_b: rat_b}, score=0.25, identity=alpha,
+                          instance_3d=Instance3D(points=np.array([[7.0 + f, 8.0, 9.0], [10.0, 11.0, 12.0], [13.0, 14.0, 15.0]]), skeleton=sk2)),
+    ])
+save("skeleton_group_other", fa + fb, [a, b], [sk, sk2], [s_two], identities=[alpha])
+
+# A hand-labeled pose on the second skeleton made from a prediction the session shows.
+a, b = video("camA.mp4"), video("camB.mp4")
+fa = frames_on(a, 100)
+from_shown = sio.Instance.from_numpy(np.array([[820.0, 10.0], [821.0, 11.0], [822.0, 12.0]]), skeleton=sk2)
+from_shown.from_predicted = fa[1].instances[0]
+fa[1].instances.append(from_shown)
+save("skeleton_links", fa + frames_on(b, 200), [a, b], [sk, sk2], [session([("camA", a), ("camB", b)])])
+
+# The second skeleton first in the list and in use: the session shows the first with a pose.
+a, b = video("camA.mp4"), video("camB.mp4")
+save("skeleton_order", frames_on(a, 100) + frames_on_sk2(b, 200), [a, b], [sk2, sk], [session([("camA", a), ("camB", b)])])
+
+# skeleton_mixed on other cameras, for a project of two lazy sessions.
+c, d = video("camC.mp4"), video("camD.mp4")
+fc, fd, gc, gd = [], [], [], []
+for f in range(3):
+    mine_c = [on_sk(300, f, i, t) for i, t in enumerate((T1, T2))]
+    mine_d = [on_sk(400, f, i, t) for i, t in enumerate((T1, T2))]
+    lc = sio.LabeledFrame(video=c, frame_idx=f, instances=[on_sk2(650, f)] + mine_c)
+    ld = sio.LabeledFrame(video=d, frame_idx=f, instances=mine_d + [on_sk2(750, f)])
+    fc.append(lc); fd.append(ld); gc.append((lc, mine_c)); gd.append((ld, mine_d))
+save("skeleton_mixed_cd", fc + fd, [c, d], [sk, sk2], [session([("camC", c), ("camD", d)], [gc, gd])])
+
 # skeleton_mixed with its groups the way older files hold them, as positions in a frame's
 # instance list (the raw worker reads only these): what they point at moves once the
 # other skeleton's poses are set aside.
@@ -307,7 +370,7 @@ const browser = await chromium.launch();
 // `page.evaluate` has no timeout, so a step waiting on a click nobody makes would sit
 // silent for good. Closing the browser fails that step.
 const stallGuard = setTimeout(() => {
-    console.log('\nStuck: no check for 5 minutes');
+    console.log('\nStuck: nothing done for 5 minutes');
     browser.close();
 }, 5 * 60 * 1000);
 stallGuard.unref();
@@ -355,7 +418,8 @@ const LOADERS = {
 /** Answer the video prompts a load puts up, until `window.__done` is set. Patient: a loaded machine is slow, and the stall guard catches a real hang. */
 async function settle(page, what) {
     let done = false;
-    for (let i = 0; i < 2000 && !done; i++) {
+    // Long enough for a loaded machine: the stall guard is what catches a real hang.
+    for (let i = 0; i < 6000 && !done; i++) {
         const s = await page.evaluate(() => {
             const b = [...document.querySelectorAll('button')].find(x => x.offsetParent && /^(Skip|Later|Cancel|Not now)$/i.test((x.textContent || '').trim()));
             if (b) { b.click(); return { done: false }; }
@@ -373,6 +437,7 @@ async function open(loader, bytes, page) {
     await putBytes(page, '__file', bytes);
     await LOADERS[loader](page, bytes);
     await settle(page, loader + ' load');
+    stallGuard.refresh();
     return page;
 }
 
@@ -391,17 +456,27 @@ async function save(page) {
         return btoa(s);
     });
     await page.close();
+    stallGuard.refresh();
     return Buffer.from(b64, 'base64');
 }
 
 const statusOf = page => page.evaluate(() => (document.getElementById('statusText') || {}).textContent || '');
 
 let savedSeq = 0;
-const pythonWork = [];   // [{ file, what, want }] checked together: one Python run reads every save
+const pythonWork = [];   // [{ file, what, want }] checked together (`readSavesBack`)
 function savedForPython(bytes, what, want) {
     const file = path.join(tmp, 'saved-' + (++savedSeq) + '.slp');
     fs.writeFileSync(file, bytes);
     pythonWork.push({ file, what, want });
+}
+
+/** One Python run reads every save made since the last, at the end of each section. */
+function readSavesBack() {
+    if (pythonWork.length === 0) return;
+    console.log('Python reads these saves:');
+    const readBack = JSON.parse(uv(PY_READ, pythonWork.map(w => w.file)).trim().split('\n').pop());
+    for (const w of pythonWork) compare(w.what, readBack[w.file], w.want);
+    pythonWork.length = 0;
 }
 
 /**
@@ -410,16 +485,22 @@ function savedForPython(bytes, what, want) {
  */
 function compare(what, got, want) {
     if (got.error) { check(false, what + ': opens', got.error); return; }
-    const gotPoses = want.onVideo ? got.poses.filter(r => r.startsWith(want.onVideo + '|')) : got.poses;
+    let gotPoses = want.onVideo ? got.poses.filter(r => r.startsWith(want.onVideo + '|')) : got.poses;
+    if (want.onSkeleton) gotPoses = gotPoses.filter(r => r.split('|')[4] === want.onSkeleton);
     check(eq(gotPoses, want.poses), what + ': every pose on its own skeleton, nodes and video', diff(gotPoses, want.poses));
     check(got.repeatedFrames === 0, what + ': one row per video and frame', got.repeatedFrames);
     if (want.detail) check(eq(got.detail, want.detail), what + ': what a kept pose also carries', diff(got.detail || [], want.detail));
     if (want.groups) check(eq(got.groups, want.groups), what + ': groups point at the right poses', diff(got.groups || [], want.groups));
+    if (want.groupDetail) {
+        const kept = (got.groupDetail || []).filter(r => r.includes('/other'));
+        check(eq(kept, want.groupDetail), what + ': a kept group\'s 3D, score and identity', diff(kept, want.groupDetail));
+    }
     if (want.sessions) check(eq(got.sessions, want.sessions), what + ': cameras and their videos', got.sessions);
     if (want.videos) check(eq(got.videos, want.videos), what + ': video list', got.videos);
     if (want.tracks) check(eq(got.tracks, want.tracks), what + ': track list', got.tracks);
     if (want.skeletons) check(eq(got.skeletons, want.skeletons), what + ': skeleton list', got.skeletons);
     if (want.identities) check(eq(got.identities, want.identities), what + ': identity list', got.identities);
+    if (want.also) want.also(got);
 }
 
 /** The app's own view of the open project, session by session. */
@@ -439,6 +520,41 @@ const shownInApp = page => page.evaluate(async () => {
     });
 });
 
+/** Hydrate every frame of the lazy session, as a scrub through the project would. */
+const hydrateAll = page => page.evaluate(async () => {
+    const tri = await import('/pose/triangulation.js');
+    const { state } = await import('/ui/app-state.js');
+    for (let f = 0; f < state.session.lazyLoader.nFrames; f++) await tri.ensureLazyFrameData(f);
+});
+
+/** A correction by hand on the pose of `cam` whose first node's x is `x`. Sets the first node to (999, 999). */
+const correctPose = (page, frame, cam, x) => page.evaluate(async ([frame, cam, x]) => {
+    const tri = await import('/pose/triangulation.js');
+    const { state } = await import('/ui/app-state.js');
+    await tri.ensureLazyFrameData(frame);
+    const fg = state.session.frameGroups.get(frame);
+    const inst = [...fg.getInstances(cam), ...fg.getUnlinkedInstances(cam).map(u => u.instance)].find(i => i.getX(0) === x);
+    if (!inst) throw new Error('no pose of ' + cam + ' at x=' + x + ' on frame ' + frame);
+    inst.setPoint(0, 999, 999);
+    inst.type = 'user';
+    inst.modified = true;
+}, [frame, cam, x]);
+
+/** The table of poses once `correctPose` has run on a pose on the session's skeleton. */
+const afterCorrection = (rows, video, frame, x) => rows.map(r => {
+    const c = r.split('|');
+    if (c[0] !== video || c[1] !== String(frame) || !c[5].startsWith('nose=' + x.toFixed(3) + ',')) return r;
+    c[2] = 'U';
+    c[5] = 'nose=999.000,999.000;' + c[5].split(';')[1];
+    c[6] = '';
+    return c.join('|');
+}).sort();
+
+// The stream writer writes no pose's identity link, on any skeleton.
+const withoutIdentity = rows => rows.map(r => r.replace(/identity=.*$/, 'identity='));
+// A group with a pose on the second skeleton, as `compare` reads them.
+const keptGroupDetail = source => source.groupDetail.filter(r => r.includes('/other'));
+
 // What a save lists, from the source's list: the session's first, then the kept ones.
 const FIXTURES = {
     skeleton_outside: { note: /3 labeled frames on 1 video in no session are not shown; saving keeps them/, videos: ['camA.mp4', 'camB.mp4', 'outside.mp4'] },
@@ -452,12 +568,36 @@ const FIXTURES = {
 
 try {
     uv(PY_WRITE, [tmp]);
-    const NAMES = [...Object.keys(FIXTURES), 'skeleton_mixed', 'skeleton_twin', 'skeleton_stale', 'skeleton_two_sessions', 'one_skeleton', 'skeleton_group', 'camA_two_skeletons', 'camB_alone'];
+    const NAMES = [...Object.keys(FIXTURES), 'skeleton_mixed', 'skeleton_twin', 'skeleton_stale', 'skeleton_two_sessions', 'one_skeleton', 'skeleton_group', 'camA_two_skeletons', 'camB_alone',
+        'skeleton_group_beside', 'skeleton_group_other', 'skeleton_links', 'skeleton_order', 'skeleton_mixed_cd'];
     const sourcePaths = NAMES.map(n => path.join(tmp, n + '.slp'));
     const sources = {};
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
     for (const p of sourcePaths) sources[path.basename(p, '.slp')] = rawSources[p];
     const readFile = n => fs.readFileSync(path.join(tmp, n + '.slp'));
+    const openFolder = async (route) => {
+        const page = await newAppPage();
+        await putBytes(page, '__camA', readFile('camA_two_skeletons'));
+        await putBytes(page, '__camB', readFile('camB_alone'));
+        // The folder goes lazy on a file's size alone, and HDF5 ignores trailing bytes.
+        const loading = page.evaluate(async (route) => {
+            const loader = await import('/loading/session-loader.js');
+            const tri = await import('/pose/triangulation.js');
+            const pad = route === 'lazy' ? [new Uint8Array(tri.LAZY_SLP_THRESHOLD + (1 << 20))] : [];
+            const mkFile = (bytes, rel) => {
+                const f = new File([bytes].concat(pad), rel.split('/').pop());
+                Object.defineProperty(f, 'webkitRelativePath', { value: rel });
+                return f;
+            };
+            await loader.handleLoadSessionFolderPerCamera([
+                mkFile(window.__camA, 'root/camA/camA.slp'), mkFile(window.__camB, 'root/camB/camB.slp'),
+            ], true);
+            return (document.getElementById('statusText') || {}).textContent;
+        }, route);
+        // These folders hold no videos, so the load waits on the Missing Video Files popup.
+        await page.getByRole('button', { name: 'Continue', exact: true }).click();
+        return { page, status: await loading };
+    };
 
     console.log('Sources, as Python reads them:');
     check(sources.skeleton_camera.poses.some(r => r.includes('|other|a=200.000,10.000;b=205.000,20.000;c=210.000,30.000|')), 'skeleton_camera.slp holds poses on the second skeleton');
@@ -577,6 +717,7 @@ try {
         });
     }
 
+    readSavesBack();
     console.log('\nB. Poses of both skeletons on one camera frame, groups on the session\'s');
     for (const loader of ['eager', 'folder']) {
         let bytes = readFile('skeleton_mixed');
@@ -595,10 +736,9 @@ try {
         }
     }
 
+    readSavesBack();
     console.log('\nC. From one route to the other');
-    // Not skeleton_kinds: its hand-labeled pose on the second skeleton makes a lazy save
-    // rewrite that resident frame by position, whoever wrote the file (not fixed yet).
-    for (const name of ['skeleton_outside', 'skeleton_camera', 'skeleton_mixed', 'skeleton_three']) {
+    for (const name of ['skeleton_outside', 'skeleton_camera', 'skeleton_kinds', 'skeleton_mixed', 'skeleton_three']) {
         const source = sources[name];
         const lazyOfEager = await save(await open('lazy', await save(await open('eager', readFile(name)))));
         savedForPython(lazyOfEager, `${name}: eager save, then lazy save`, { poses: source.poses, groups: source.groups, skeletons: source.skeletons });
@@ -606,6 +746,7 @@ try {
         savedForPython(eagerOfLazy, `${name}: lazy save, then eager save`, { poses: source.poses, groups: source.groups, skeletons: source.skeletons });
     }
 
+    readSavesBack();
     console.log('\nD. Edits around a kept pose');
     {
         // Remove a node of the session's skeleton: the kept poses are on another.
@@ -723,6 +864,7 @@ try {
         savedForPython(bytes, 'a frame with only kept poses left', { poses, groups, detail: sources.skeleton_mixed.detail });
     }
 
+    readSavesBack();
     console.log('\nE. File ▸ Add SLP');
     {
         const page = await open('eager', readFile('one_skeleton'));
@@ -752,30 +894,8 @@ try {
         savedForPython(bytes, 'Add SLP, kept on an added camera', { poses: [...sources.one_skeleton.poses, ...renamed].sort(), skeletons: sources.skeleton_mixed.skeletons });
     }
 
+    readSavesBack();
     console.log('\nF. A per-camera folder, through the raw worker');
-    const openFolder = async (route) => {
-        const page = await newAppPage();
-        await putBytes(page, '__camA', readFile('camA_two_skeletons'));
-        await putBytes(page, '__camB', readFile('camB_alone'));
-        // The folder goes lazy on a file's size alone, and HDF5 ignores trailing bytes.
-        const loading = page.evaluate(async (route) => {
-            const loader = await import('/loading/session-loader.js');
-            const tri = await import('/pose/triangulation.js');
-            const pad = route === 'lazy' ? [new Uint8Array(tri.LAZY_SLP_THRESHOLD + (1 << 20))] : [];
-            const mkFile = (bytes, rel) => {
-                const f = new File([bytes].concat(pad), rel.split('/').pop());
-                Object.defineProperty(f, 'webkitRelativePath', { value: rel });
-                return f;
-            };
-            await loader.handleLoadSessionFolderPerCamera([
-                mkFile(window.__camA, 'root/camA/camA.slp'), mkFile(window.__camB, 'root/camB/camB.slp'),
-            ], true);
-            return (document.getElementById('statusText') || {}).textContent;
-        }, route);
-        // These folders hold no videos, so the load waits on the Missing Video Files popup.
-        await page.getByRole('button', { name: 'Continue', exact: true }).click();
-        return { page, status: await loading };
-    };
     {
         const poses = [...sources.camA_two_skeletons.poses, ...sources.camB_alone.poses].sort();
         const { page, status } = await openFolder('eager');
@@ -795,6 +915,7 @@ try {
         savedForPython(await save(page), 'per-camera, lazy', { poses, detail: sources.camA_two_skeletons.detail, sessions: [{ camA: 'camA.mp4', camB: 'camB.mp4' }] });
     }
 
+    readSavesBack();
     console.log('\nG. A group linking a pose on another skeleton: the load refuses');
     {
         // Nothing open: nothing opens, and the status says why.
@@ -888,6 +1009,7 @@ try {
         savedForPython(bytes, 'lazy route, a group across skeletons', { poses: sources.skeleton_group.poses, groups: sources.skeleton_group.groups, skeletons: sources.skeleton_group.skeletons });
     }
 
+    readSavesBack();
     console.log('\nH. A LUC3D project whose sessions are on different skeletons');
     for (const [label, nameA, nameB, nodesB, edgesB] of [
         ['same name', 'skeleton', 'skeleton', ['a', 'b', 'c'], [[0, 1]]],
@@ -946,6 +1068,7 @@ try {
         savedForPython(second, label + ', save 2', { poses: expected, groups });
     }
 
+    readSavesBack();
     console.log('\nI. A project mixing lazy and eager sessions');
     {
         const page = await open('lazy', readFile('skeleton_outside'));
@@ -965,10 +1088,542 @@ try {
         const outside = sources.skeleton_outside.poses.filter(r => r.startsWith('outside.mp4|'));
         savedForPython(await save(page), 'mixed project', { onVideo: 'outside.mp4', poses: outside, detail: sources.skeleton_outside.detail });
     }
+    for (const [name, onlyKept] of [['skeleton_mixed', false], ['skeleton_kinds', false], ['skeleton_group_other', true]]) {
+        // The eager writer takes a lazy camera's poses it shows from what is resident, and the ones it does not from the store.
+        const page = await open('lazy', readFile(name));
+        await hydrateAll(page);
+        await page.evaluate(async () => {
+            const pd = await import('/pose/pose-data.js');
+            const { state } = await import('/ui/app-state.js');
+            const cam = new pd.Camera('camE', [[500, 0, 32], [0, 500, 32], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [64, 64]);
+            const eager = new pd.Session([cam], state.session.skeleton, ['mouse1'], 'eager');
+            const fg = new pd.FrameGroup(0);
+            eager.addFrameGroup(fg);
+            fg.addInstance('camE', new pd.Instance([[900, 10], [901, 20]], 0, 'user', 0));
+            state.sessions.push(eager);
+        });
+        const source = sources[name];
+        const kept = source.poses.filter(r => r.split('|')[4] === 'other');
+        const what = `${name}, mixed project`;
+        savedForPython(await save(page), what, {
+            onSkeleton: 'other', poses: kept, detail: source.detail,
+            groups: onlyKept ? source.groups : undefined, groupDetail: onlyKept ? keptGroupDetail(source) : undefined,
+        });
+    }
 
-    console.log('\nPython reads every save:');
-    const readBack = JSON.parse(uv(PY_READ, pythonWork.map(w => w.file)).trim().split('\n').pop());
-    for (const w of pythonWork) compare(w.what, readBack[w.file], w.want);
+    {
+        // Every kept pose joins a frame the writer already has, on a track the session has lost.
+        const source = sources.skeleton_camera;
+        const page = await open('lazy', readFile('skeleton_camera'));
+        await page.evaluate(async () => {
+            const ops = await import('/ui/track-identity-ops.js');
+            const { state } = await import('/ui/app-state.js');
+            ops.deleteTrackAt(state.session, state.session.tracks.indexOf('mouse1'));
+        });
+        await hydrateAll(page);
+        await page.evaluate(async () => {
+            const pd = await import('/pose/pose-data.js');
+            const { state } = await import('/ui/app-state.js');
+            const s = state.session;
+            // A hand label on every kept pose's camera-frame, so the frame is the writer's already.
+            for (const f of [0, 1, 2]) s.frameGroups.get(f).addUnlinkedInstance('camB', new pd.UnlinkedInstance(new pd.Instance([[5 + f, 6], [7, 8]], null, 'user', 0), 'camB'));
+            const cam = new pd.Camera('camE', [[500, 0, 32], [0, 500, 32], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [64, 64]);
+            const eager = new pd.Session([cam], s.skeleton, ['mouse2'], 'eager');
+            const fg = new pd.FrameGroup(0);
+            eager.addFrameGroup(fg);
+            fg.addInstance('camE', new pd.Instance([[900, 10], [901, 20]], 0, 'user', 0));
+            state.sessions.push(eager);
+        });
+        savedForPython(await save(page), 'mixed project, kept poses in frames it has, a lost track', {
+            onSkeleton: 'other', poses: source.poses.filter(r => r.split('|')[4] === 'other'), detail: source.detail, tracks: ['mouse1', 'mouse2'],
+        });
+    }
+
+    readSavesBack();
+    console.log('\nJ. The lazy route with nothing edited, two saves each');
+    for (const name of [...Object.keys(FIXTURES).filter(n => n !== 'skeleton_no_session'), 'skeleton_mixed', 'one_skeleton']) {
+        // Nothing edited, every frame resident: what a save writes does not depend on what was shown.
+        let bytes = readFile(name);
+        const source = sources[name];
+        for (let gen = 1; gen <= 2; gen++) {
+            const what = `${name}, lazy, save ${gen}`;
+            const page = await open('lazy', bytes);
+            const status = await statusOf(page);
+            if (FIXTURES[name]) check(FIXTURES[name].note.test(status), what + ': the status says what is not shown', status);
+            else if (name === 'one_skeleton') check(!/not shown/.test(status), what + ': nothing to say', status);
+            else check(/6 poses on a camera's video are on another skeleton \("other"\) and are not shown/.test(status), what + ': the status counts them', status);
+            await hydrateAll(page);
+            const shown = await shownInApp(page);
+            const nodeCounts = new Set(Object.values(shown[0].cams).flat().map(r => r[1]));
+            check(nodeCounts.size <= 1 && (nodeCounts.size === 0 || nodeCounts.has(2)), what + ': every pose shown has the session\'s nodes', [...nodeCounts]);
+            check(eq(shown[0].nodes, ['nose', 'tail']), what + ': the session shows its skeleton', shown[0].nodes);
+            bytes = await save(page);
+            savedForPython(bytes, what, {
+                poses: source.poses, detail: withoutIdentity(source.detail), groups: source.groups, tracks: source.tracks,
+                skeletons: source.skeletons, identities: source.identities, videos: FIXTURES[name] ? FIXTURES[name].videos : undefined,
+            });
+        }
+    }
+    {
+        // What a pose's row in the file says about the poses around it.
+        const page = await open('lazy', readFile('skeleton_mixed'));
+        await hydrateAll(page);
+        const r = await page.evaluate(async () => {
+            const { state } = await import('/ui/app-state.js');
+            const s = state.session;
+            const fg = s.frameGroups.get(1);
+            const raws = cam => fg.getInstances(cam).map(i => i._rawInstIndex).sort();
+            const inst = fg.getInstances('camA').find(i => i._rawInstIndex === 2);
+            const members = s.instanceGroups.get(1).map(g => [g.instances.get('camA')._rawInstIndex, g.instances.get('camA').getX(0)]);
+            return {
+                rawsA: raws('camA'), rawsB: raws('camB'), members,
+                nodeScore: s.predictedNodeScore('camA', 1, inst, 0),
+                desc: (({ count, nHidden, hidden }) => ({ count, nHidden, hidden: Array.from(hidden) }))(s.lazyLoader.describeStoreFrame('camA', 1)),
+                tracks: s.tracks.slice(),
+            };
+        });
+        check(eq(r.rawsA, [1, 2]) && eq(r.rawsB, [0, 1]), 'a pose keeps its position in the file\'s frame, with one not shown before it', [r.rawsA, r.rawsB]);
+        check(eq(r.members, [[1, 101], [2, 111]]), 'a group member reads the row it points at', r.members);
+        check(Math.abs(r.nodeScore - 0.6) < 1e-6, 'a node\'s score comes from that pose\'s row', r.nodeScore);
+        check(eq(r.desc, { count: 3, nHidden: 1, hidden: [1, 0, 0] }), 'describeStoreFrame says which position hydration skips', r.desc);
+        await page.close();
+    }
+    {
+        // Each of these on its own skeleton, however the session chose: the same as the eager route.
+        for (const name of ['skeleton_stale', 'skeleton_twin', 'skeleton_order']) {
+            const eagerPage = await open('eager', readFile(name));
+            const eagerShown = await shownInApp(eagerPage);
+            await eagerPage.close();
+            let bytes = readFile(name);
+            for (let gen = 1; gen <= 2; gen++) {
+                const what = `${name}, lazy, save ${gen}`;
+                const page = await open('lazy', bytes);
+                await hydrateAll(page);
+                const shown = await shownInApp(page);
+                check(eq(shown[0].nodes, eagerShown[0].nodes), what + ': shows the skeleton the eager route shows', [shown[0].nodes, eagerShown[0].nodes]);
+                check(eq(shown[0].cams, eagerShown[0].cams), what + ': the same poses', [shown[0].cams, eagerShown[0].cams]);
+                bytes = await save(page);
+                if (name === 'skeleton_stale') {
+                    savedForPython(bytes, what, { poses: sources.skeleton_stale.poses, skeletons: [sources.skeleton_stale.skeletons[1]] });
+                } else if (name === 'skeleton_twin') {
+                    // A duplicate is the same skeleton, written on the session's.
+                    savedForPython(bytes, what, { poses: sources.skeleton_twin.poses.map(r => r.replace('|twin|', '|skeleton|')).sort(), skeletons: [sources.skeleton_twin.skeletons[0]] });
+                } else {
+                    savedForPython(bytes, what, { poses: sources.skeleton_order.poses, skeletons: sources.skeleton_order.skeletons });
+                }
+            }
+        }
+    }
+    {
+        // The first session of a file with two: the second's cameras are outside it.
+        let bytes = readFile('skeleton_two_sessions');
+        for (let gen = 1; gen <= 2; gen++) {
+            const page = await open('lazy', bytes);
+            await hydrateAll(page);
+            bytes = await save(page);
+            savedForPython(bytes, `two sessions, lazy, save ${gen}`, { poses: sources.skeleton_two_sessions.poses, skeletons: sources.skeleton_two_sessions.skeletons });
+        }
+    }
+
+    readSavesBack();
+    console.log('\nK. The lazy route, edits beside a kept pose');
+    // A correction beside a kept pose: [file, video, frame, the pose's x].
+    for (const [name, video, frame, x] of [
+        ['skeleton_mixed', 'camA.mp4', 1, 101],     // grouped, the kept pose BEFORE it in the frame
+        ['skeleton_mixed', 'camB.mp4', 1, 201],     // grouped, the kept pose after it
+        ['skeleton_kinds', 'camB.mp4', 1, 201],     // two kept poses, one hand-labeled from the other, with a node with no position
+        ['skeleton_three', 'camB.mp4', 0, 200],     // two other skeletons
+        ['skeleton_links', 'camA.mp4', 1, 111],     // a kept pose made from a prediction left beside it
+    ]) {
+        const source = sources[name];
+        const cam = video.replace('.mp4', '');
+        const what = `${name}, a correction on ${cam} frame ${frame}`;
+        const poses = afterCorrection(source.poses, video, frame, x);
+        const groups = source.groups.map(g => g.replace(`s0|${frame}|${cam}=${x.toFixed(3)}`, `s0|${frame}|${cam}=999.000`).replace(new RegExp(`(s0\\|${frame}\\|.*)${cam}=${x.toFixed(3)}`), `$1${cam}=999.000`)).sort();
+        const page = await open('lazy', readFile(name));
+        await correctPose(page, frame, cam, x);
+        const first = await save(page);
+        const want = { poses, groups, detail: withoutIdentity(source.detail), tracks: source.tracks, skeletons: source.skeletons };
+        savedForPython(first, what + ', save 1', want);
+        // Reopened, the hand label makes an overlay again, with nothing edited.
+        const page2 = await open('lazy', first);
+        await hydrateAll(page2);
+        const second = await save(page2);
+        savedForPython(second, what + ', save 2', want);
+        // The eager route rebuilds a pose it shows, so a kept pose's link to one goes (CLAUDE.md).
+        const eagerDetail = withoutIdentity(source.detail).map(r => (name === 'skeleton_links' ? r.replace(/from=.*\|identity=/, 'from=|identity=') : r));
+        savedForPython(await save(await open('eager', second)), what + ', then eager', { poses, groups, detail: eagerDetail, skeletons: source.skeletons });
+    }
+    {
+        // Corrected, the prediction a kept pose came from is gone from the file: the link goes with it, and nothing else.
+        const source = sources.skeleton_links;
+        const page = await open('lazy', readFile('skeleton_links'));
+        await correctPose(page, 1, 'camA', 101);
+        const want = source.detail.map(r => r.replace(/from=.*\|identity=/, 'from=|identity='));
+        savedForPython(await save(page), 'skeleton_links, its source corrected', { poses: afterCorrection(source.poses, 'camA.mp4', 1, 101), detail: want });
+    }
+    {
+        // Eviction: a frame holding a kept pose goes, and comes back the same.
+        const page = await open('lazy', readFile('skeleton_mixed'));
+        await hydrateAll(page);
+        const r = await page.evaluate(async () => {
+            const tri = await import('/pose/triangulation.js');
+            const R = await import('/pose/lazy-residency.js');
+            const { state } = await import('/ui/app-state.js');
+            const s = state.session;
+            const snapshot = () => [0, 1, 2].map(f => {
+                const fg = s.frameGroups.get(f);
+                return ['camA', 'camB'].map(c => [
+                    fg.getInstances(c).map(i => [i._rawInstIndex, i.getX(0), i.numNodes]),
+                    fg.getUnlinkedInstances(c).map(u => [u.instance._rawInstIndex, u.instance.getX(0)]),
+                ]);
+            });
+            const blockers = [0, 1, 2].map(f => R.frameEvictionBlocker(s, f, s.frameGroups.get(f)));
+            const before = snapshot();
+            const pass = R.evictLazyFrameGroups(s, { anchors: [1000000], ahead: 0, behind: 0 });
+            const released = s.instanceGroups.get(1).every(g => [...g.instances.values()].every(m => m._lazy2d));
+            s.lazyLoader.cache.clear();
+            s.lazyLoader.cacheOrder = [];
+            for (const f of [0, 1, 2]) await tri.ensureLazyFrameData(f);
+            return { blockers, evicted: pass.evicted, blocked: pass.blocked, released, before, after: snapshot() };
+        });
+        check(eq(r.blockers, [null, null, null]), 'a frame holding a kept pose can be rebuilt from the store', r.blockers);
+        check(r.evicted === 3 && eq(r.blocked, {}), 'so eviction drops it', r);
+        check(r.released, 'and its group members give their 2D back');
+        check(eq(r.before, r.after), 'it comes back the same', r);
+        savedForPython(await save(page), 'skeleton_mixed, after eviction', { poses: sources.skeleton_mixed.poses, groups: sources.skeleton_mixed.groups, detail: sources.skeleton_mixed.detail });
+    }
+    {
+        // A delete compacts the store around a kept pose, and the rows after it move.
+        const source = sources.skeleton_mixed;
+        const page = await open('lazy', readFile('skeleton_mixed'));
+        await page.evaluate(async () => {
+            const tri = await import('/pose/triangulation.js');
+            const ops = await import('/ui/custom-delete-ops.js');
+            const { state } = await import('/ui/app-state.js');
+            const s = state.session;
+            await tri.ensureLazyFrameData(1);
+            const found = ops.collectDeletionTargets(s, {
+                type: 'all', grouping: 'any', view: 'camA', trackMode: 'specific', trackIdx: s.tracks.indexOf('mouse1'),
+                identityMode: 'any', identityId: null, frameScope: 'currentFrame',
+            }, { currentFrame: 1 });
+            ops.executeDeletion(s, found.targets);
+        });
+        const poses = source.poses.filter(r => !r.startsWith('camA.mp4|1|P|mouse1|skeleton|'));
+        // Two cameras: a group left with one member dissolves. The rows after the deleted one moved.
+        const groups = source.groups.filter(g => !g.startsWith('s0|1|camA=101.000'));
+        let bytes = await save(page);
+        const want = { poses, groups, detail: source.detail, tracks: source.tracks };
+        savedForPython(bytes, 'a delete beside a kept pose, save 1', want);
+        bytes = await save(await open('lazy', bytes));
+        savedForPython(bytes, 'a delete beside a kept pose, save 2', want);
+    }
+    {
+        // Delete every pose the session shows: the kept ones stay, in every frame.
+        const source = sources.skeleton_mixed;
+        const page = await open('lazy', readFile('skeleton_mixed'));
+        await page.evaluate(async () => {
+            const ops = await import('/ui/custom-delete-ops.js');
+            const { state } = await import('/ui/app-state.js');
+            const found = ops.collectDeletionTargets(state.session, {
+                type: 'all', grouping: 'any', view: null, trackMode: 'any', trackIdx: null,
+                identityMode: 'any', identityId: null, frameScope: 'currentSession',
+            }, { currentFrame: 0 });
+            window.__count = found.count;
+            ops.executeDeletion(state.session, found.targets);
+        });
+        check(await page.evaluate(() => window.__count) === 12, 'a session-wide delete offers only the poses shown', await page.evaluate(() => window.__count));
+        savedForPython(await save(page), 'every shown pose deleted', { poses: source.poses.filter(r => r.split('|')[4] === 'other'), detail: source.detail, groups: [] });
+    }
+    {
+        // Delete a track from the session: a kept pose keeps its name.
+        const source = sources.skeleton_camera;
+        const page = await open('lazy', readFile('skeleton_camera'));
+        await page.evaluate(async () => {
+            const ops = await import('/ui/track-identity-ops.js');
+            const { state } = await import('/ui/app-state.js');
+            ops.deleteTrackAt(state.session, state.session.tracks.indexOf('mouse1'));
+        });
+        const poses = source.poses.map(r => (r.includes('|other|') ? r : r.replace('|P|mouse1|', '|P||'))).sort();
+        savedForPython(await save(page), 'a deleted track, lazy', { poses, detail: source.detail, tracks: ['mouse1', 'mouse2'] });
+    }
+    {
+        // A new hand-labeled pose on a camera-frame holding only kept poses: the overlay has both.
+        const source = sources.skeleton_camera;
+        const page = await open('lazy', readFile('skeleton_camera'));
+        await page.evaluate(async () => {
+            const tri = await import('/pose/triangulation.js');
+            const pd = await import('/pose/pose-data.js');
+            const { state } = await import('/ui/app-state.js');
+            await tri.ensureLazyFrameData(1);
+            const inst = new pd.Instance([[5, 6], [7, 8]], null, 'user', 0);
+            state.session.frameGroups.get(1).addUnlinkedInstance('camB', new pd.UnlinkedInstance(inst, 'camB'));
+        });
+        const poses = [...source.poses, 'camB.mp4|1|U||skeleton|nose=5.000,6.000;tail=7.000,8.000|'].sort();
+        const first = await save(page);
+        savedForPython(first, 'a new pose beside kept ones, save 1', { poses, detail: source.detail });
+        const page2 = await open('lazy', first);
+        await hydrateAll(page2);
+        savedForPython(await save(page2), 'a new pose beside kept ones, save 2', { poses, detail: source.detail });
+    }
+    {
+        // Rename a node of the session: only the session's poses take it.
+        const source = sources.skeleton_reversed;
+        const page = await open('lazy', readFile('skeleton_reversed'));
+        await page.evaluate(async () => {
+            const { state } = await import('/ui/app-state.js');
+            state.session.skeleton.nodes[0] = 'snout';
+        });
+        const poses = source.poses.map(r => (r.includes('|reversed|') ? r : r.replace('nose=', 'snout='))).sort();
+        savedForPython(await save(page), 'a renamed node, lazy', { poses, detail: source.detail });
+    }
+    {
+        // Track All and Triangulate All rebuild the groups around the holes kept poses leave.
+        const source = sources.skeleton_mixed;
+        const page = await open('lazy', readFile('skeleton_mixed'));
+        const res = await page.evaluate(async () => {
+            const tk = await import('/pose/tracker.js');
+            const tri = await import('/pose/triangulation.js');
+            const settings = await import('/ui/settings.js');
+            const { state } = await import('/ui/app-state.js');
+            tk.setTrackerNumAnimals(2);
+            const prev = settings.getTrackingThresholds();
+            settings.setTrackingThresholds(Object.assign({}, prev, { autoSwitchCheck: 0, autoImageSwitchCheck: 0 }));
+            try {
+                await tk.trackAll();
+                await tri.triangulateAllFrames('dlt');
+            } finally {
+                settings.setTrackingThresholds(prev);
+            }
+            let groups = 0;
+            for (const list of state.session.instanceGroups.values()) groups += list.length;
+            return { groups, nodes: state.session.skeleton.nodes };
+        });
+        check(res.groups > 0, 'Track All, lazy: it makes groups', res);
+        const kept = source.poses.filter(r => r.split('|')[4] === 'other');
+        const shownCoords = rows => rows.filter(r => r.split('|')[4] !== 'other').map(r => { const c = r.split('|'); return [c[0], c[1], c[5]].join('|'); }).sort();
+        const also = what => got => {
+            check(eq(shownCoords(got.poses), shownCoords(source.poses)), what + ': the poses shown keep their values', diff(shownCoords(got.poses), shownCoords(source.poses)));
+            check(got.groups.length > 0 && got.groups.every(g => !g.includes('/other')), what + ': no group links a kept pose', got.groups);
+            const atX = new Set(got.poses.map(r => { const c = r.split('|'); return c[0].replace('.mp4', '') + '|' + c[1] + '|' + c[5].split(',')[0].split('=')[1]; }));
+            const pointsAtReal = got.groups.every(g => {
+                const c = g.split('|');
+                return c.slice(2, -1).every(m => { const [cam, rest] = m.split('='); return atX.has(cam + '|' + c[1] + '|' + rest.split('/')[0]); });
+            });
+            check(pointsAtReal, what + ': each group member is the pose it points at', got.groups);
+        };
+        const first = await save(page);
+        savedForPython(first, 'Track All, lazy, save 1', { onSkeleton: 'other', poses: kept, detail: source.detail, skeletons: source.skeletons, also: also('Track All, lazy, save 1') });
+        const page2 = await open('lazy', first);
+        await hydrateAll(page2);
+        savedForPython(await save(page2), 'Track All, lazy, save 2', { onSkeleton: 'other', poses: kept, detail: source.detail, skeletons: source.skeletons, also: also('Track All, lazy, save 2') });
+    }
+    {
+        // What the app counts leaves them out.
+        const page = await open('lazy', readFile('skeleton_kinds'));
+        await hydrateAll(page);
+        const r = await page.evaluate(async () => {
+            const { state } = await import('/ui/app-state.js');
+            const { countSkeletonEditImpact } = await import('/pose/skeleton-edit-impact.js');
+            const { computeLazyCameraBaseline } = await import('/ui/frame-counters.js');
+            const s = state.session;
+            const rows = [];
+            s.lazyLoader.forEachInstanceRow((cam, f, trk, info) => { if (cam === 'camB' && f === 1) rows.push([info.offsetInFrame, info.type]); });
+            const occ = s.trackOccupancy || s.lazyLoader.trackOccupancy;
+            const onlyKept = s.tracks.indexOf('only_kept');
+            const base = computeLazyCameraBaseline(s, 'camB');
+            return {
+                rows, impact: countSkeletonEditImpact([s]).instances,
+                occupied: Array.from(s.lazyLoader.trackOccupancy.get('camB').segments.keys()).includes(onlyKept),
+                users: base.usersTotal, labeled: base.labeledTotal, hasOcc: !!occ,
+            };
+        });
+        check(eq(r.rows, [[0, 'predicted'], [1, 'predicted']]), 'a whole-project walk does not visit them', r.rows);
+        check(r.impact === 12, 'the skeleton dialog counts only the poses shown', r.impact);
+        check(r.occupied === false, 'the timeline shows no track only kept poses use', r.occupied);
+        // Counted, it would make its frame labeled; ungrouped predictions do not.
+        check(r.users === 0 && r.labeled === 0, 'the status bar does not count a kept hand-labeled pose', r);
+        await page.close();
+    }
+    {
+        // A per-camera file with poses on two skeletons, the camera's own video and another.
+        const poses = [...sources.camA_two_skeletons.poses, ...sources.camB_alone.poses].sort();
+        const { page, status } = await openFolder('lazy');
+        check(/1 pose on a camera's video is on another skeleton \("other"\) and is not shown; saving keeps it on that skeleton/.test(status), 'per-camera, lazy: the status says what is on another skeleton', status);
+        check(/3 labeled frames on 1 video in no session are not shown/.test(status), 'per-camera, lazy: and what is on another video', status);
+        await hydrateAll(page);
+        const shown = await shownInApp(page);
+        check(shown[0].cams.camA.every(r => r[1] === 2 && r[2] < 200), 'per-camera, lazy: a camera shows only the session\'s poses', shown[0].cams.camA);
+        await correctPose(page, 0, 'camA', 100);
+        const want = { poses: afterCorrection(poses, 'camA.mp4', 0, 100), detail: withoutIdentity(sources.camA_two_skeletons.detail), skeletons: sources.camA_two_skeletons.skeletons };
+        const first = await save(page);
+        savedForPython(first, 'per-camera, lazy, a correction, save 1', want);
+        savedForPython(await save(await open('lazy', first)), 'per-camera, lazy, a correction, save 2', want);
+    }
+    {
+        // A project of two lazy sessions: pass 2 reads the files again, so an overlay has to carry what it read in pass 1.
+        const page = await open('lazy', readFile('skeleton_mixed'));
+        await putBytes(page, '__second', readFile('skeleton_mixed_cd'));
+        await page.evaluate(async () => {
+            const { SioLazyLoader } = await import('/loading/sio-lazy-loader.js');
+            const pd = await import('/pose/pose-data.js');
+            const imp = await import('/import-export/slp-import.js');
+            const { state } = await import('/ui/app-state.js');
+            const loader = new SioLazyLoader();
+            const opened = await loader.openProjectSlp(new File([window.__second], 'second.slp'));
+            const cams = Object.values(loader.calibration).filter(c => c && c.name).map(c => new pd.Camera(c.name, c.matrix, c.distortions, c.rotation, c.translation, c.size));
+            const s = new pd.Session(cams, new pd.Skeleton(loader.skeleton.name, loader.skeleton.nodes, loader.skeleton.edges), loader.trackNames.slice(), 'second');
+            s.lazyLoader = loader;
+            await imp.reconstructInstanceGroupsFromSessionLazy(s, opened.typedSession, loader, loader.skeleton.nodes, {});
+            state.sessions.push(s);
+        });
+        await correctPose(page, 1, 'camA', 101);
+        await page.evaluate(async () => {
+            // The other session is corrected too, with no view of it on screen.
+            const tri = await import('/pose/triangulation.js');
+            const { state } = await import('/ui/app-state.js');
+            const first = state.session;
+            state.session = state.sessions[1];
+            await tri.ensureLazyFrameData(2);
+            const g = state.session.instanceGroups.get(2)[1];
+            const inst = g.instances.get('camD');
+            inst.setPoint(0, 888, 888);
+            inst.type = 'user';
+            inst.modified = true;
+            state.session = first;
+        });
+        const a = sources.skeleton_mixed, c = sources.skeleton_mixed_cd;
+        const poses = [...afterCorrection(a.poses, 'camA.mp4', 1, 101), ...c.poses.map(r => {
+            const f = r.split('|');
+            if (f[0] !== 'camD.mp4' || f[1] !== '2' || !f[5].startsWith('nose=412.000,')) return r;
+            f[2] = 'U';
+            f[5] = 'nose=888.000,888.000;' + f[5].split(';')[1];
+            f[6] = '';
+            return f.join('|');
+        })].sort();
+        const groups = [
+            ...a.groups.map(g => g.replace('s0|1|camA=101.000', 's0|1|camA=999.000')),
+            ...c.groups.map(g => g.replace(/^s0\|/, 's1|')).map(g => (g.startsWith('s1|2|') ? g.replace('camD=412.000', 'camD=888.000') : g)),
+        ].sort();
+        savedForPython(await save(page), 'two lazy sessions, a correction in each', {
+            poses, groups, detail: withoutIdentity([...a.detail, ...c.detail].sort()), skeletons: a.skeletons,
+            sessions: [...a.sessions, ...c.sessions], videos: ['camA.mp4', 'camB.mp4', 'camC.mp4', 'camD.mp4'],
+        });
+    }
+
+    readSavesBack();
+    console.log('\nL. The lazy route, a group linking a pose on another skeleton');
+    for (const [name, groupCount, poseCount] of [['skeleton_group', 3, 3], ['skeleton_group_beside', 3, 3], ['skeleton_group_other', 3, 6]]) {
+        let bytes = readFile(name);
+        const source = sources[name];
+        for (let gen = 1; gen <= 2; gen++) {
+            const what = `${name}, lazy, save ${gen}`;
+            const page = await open('lazy', bytes);
+            const status = await statusOf(page);
+            check(!/Not opened/.test(status), what + ': opens', status);
+            check(new RegExp(`${groupCount} groups with poses on another skeleton are not shown, nor are the poses they link; saving keeps them`).test(status), what + ': the status says so', status);
+            check(new RegExp(`${poseCount} poses on a camera's video are on another skeleton`).test(status), what + ': and counts the poses', status);
+            await hydrateAll(page);
+            const held = await page.evaluate(async () => {
+                const { state } = await import('/ui/app-state.js');
+                const s = state.session;
+                const rows = [];
+                for (let f = 0; f < 3; f++) {
+                    for (const cam of ['camA', 'camB']) {
+                        const fg = s.frameGroups.get(f);
+                        rows.push([...fg.getInstances(cam), ...fg.getUnlinkedInstances(cam).map(u => u.instance)].map(i => i.getX(0)));
+                    }
+                }
+                let groups = 0, nodes3d = new Set();
+                for (const list of s.instanceGroups.values()) for (const g of list) { groups++; nodes3d.add(g.points3d ? g.points3d.length / 3 : 0); }
+                const onTimeline = {};
+                for (const [cam, occ] of s.lazyLoader.trackOccupancy) onTimeline[cam] = [...occ.segments.keys()].map(t => s.tracks[t]).sort();
+                return { rows, groups, nodes3d: [...nodes3d], onTimeline, kept: s.outsideGroups ? [...s.outsideGroups.values()].flat().length : 0 };
+            });
+            check(held.kept === 3, what + ': the groups are held aside', held.kept);
+            if (name === 'skeleton_group_beside') check(eq(held.onTimeline, { camA: ['mouse2'], camB: ['mouse2'] }), what + ': the timeline shows only the free poses\' track', held.onTimeline);
+            if (name === 'skeleton_group') {
+                check(held.groups === 0 && held.rows.every(r => r.length === 0), what + ': none of their poses is shown', held);
+            } else if (name === 'skeleton_group_beside') {
+                check(held.groups === 0 && eq(held.rows, [[160], [260], [161], [261], [162], [262]]), what + ': only the free poses are shown', held);
+            } else {
+                check(held.groups === 3 && eq(held.nodes3d, [2]) && eq(held.rows, [[100], [200], [101], [201], [102], [202]]), what + ': the session keeps its own groups and poses', held);
+            }
+            bytes = await save(page);
+            savedForPython(bytes, what, { poses: source.poses, groups: source.groups, groupDetail: keptGroupDetail(source), detail: withoutIdentity(source.detail), skeletons: source.skeletons });
+        }
+    }
+    {
+        // A correction beside a group's member moves it in the file: the group follows.
+        const source = sources.skeleton_group_beside;
+        const page = await open('lazy', readFile('skeleton_group_beside'));
+        await correctPose(page, 1, 'camA', 161);
+        await correctPose(page, 1, 'camB', 261);
+        const poses = afterCorrection(afterCorrection(source.poses, 'camA.mp4', 1, 161), 'camB.mp4', 1, 261);
+        const want = { poses, groups: source.groups, groupDetail: keptGroupDetail(source), detail: source.detail };
+        const first = await save(page);
+        savedForPython(first, 'a correction beside a kept group, save 1', want);
+        const page2 = await open('lazy', first);
+        await hydrateAll(page2);
+        savedForPython(await save(page2), 'a correction beside a kept group, save 2', want);
+    }
+    {
+        // A delete before a group's member moves it too.
+        const source = sources.skeleton_group_beside;
+        const page = await open('lazy', readFile('skeleton_group_beside'));
+        await page.evaluate(async () => {
+            const tri = await import('/pose/triangulation.js');
+            const ops = await import('/ui/custom-delete-ops.js');
+            const { state } = await import('/ui/app-state.js');
+            await tri.ensureLazyFrameData(1);
+            const found = ops.collectDeletionTargets(state.session, {
+                type: 'all', grouping: 'any', view: 'camA', trackMode: 'any', trackIdx: null,
+                identityMode: 'any', identityId: null, frameScope: 'currentFrame',
+            }, { currentFrame: 1 });
+            window.__count = found.count;
+            ops.executeDeletion(state.session, found.targets);
+        });
+        check(await page.evaluate(() => window.__count) === 1, 'a delete offers only the free pose', await page.evaluate(() => window.__count));
+        const want = { poses: source.poses.filter(r => !r.startsWith('camA.mp4|1|P|mouse2|')), groups: source.groups, groupDetail: keptGroupDetail(source) };
+        const first = await save(page);
+        savedForPython(first, 'a delete beside a kept group, save 1', want);
+        savedForPython(await save(await open('lazy', first)), 'a delete beside a kept group, save 2', want);
+    }
+    {
+        // Groups on the session's skeleton beside kept ones: an edit and a track edit, then two saves.
+        const source = sources.skeleton_group_other;
+        const page = await open('lazy', readFile('skeleton_group_other'));
+        await correctPose(page, 2, 'camA', 102);
+        const poses = afterCorrection(source.poses, 'camA.mp4', 2, 102);
+        const groups = source.groups.map(g => g.replace('s0|2|camA=102.000', 's0|2|camA=999.000')).sort();
+        const first = await save(page);
+        const want = { poses, groups, groupDetail: keptGroupDetail(source), detail: source.detail, skeletons: source.skeletons };
+        savedForPython(first, 'skeleton_group_other, a correction, save 1', want);
+        const page2 = await open('lazy', first);
+        await hydrateAll(page2);
+        savedForPython(await save(page2), 'skeleton_group_other, a correction, save 2', want);
+    }
+    {
+        // Set as New Calibration: the world moves, and a kept group's 3D is in it.
+        const source = sources.skeleton_group_other;
+        const page = await open('lazy', readFile('skeleton_group_other'));
+        await page.evaluate(async () => {
+            const rebase = await import('/pose/origin-rebase.js');
+            const { state } = await import('/ui/app-state.js');
+            const frame = { R: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], origin: [-100, -200, -300], translation: [100, 200, 300] };
+            const plan = await rebase.planOriginRebase([state.session], null, frame);
+            rebase.applyOriginRebase(plan);
+        });
+        const moved = keptGroupDetail(source).map(r => {
+            const c = r.split('|');
+            const i = c.findIndex(x => /^-?\d+\.\d+(,-?\d+\.\d+){5,}$/.test(x));
+            c[i] = c[i].split(',').map((v, k) => (Number(v) + [100, 200, 300][k % 3]).toFixed(3)).join(',');
+            return c.join('|');
+        }).sort();
+        savedForPython(await save(page), 'a kept group, Set as New Calibration', { poses: source.poses, groupDetail: moved });
+    }
+
+    readSavesBack();
 } finally {
     await browser.close();
     server.kill();

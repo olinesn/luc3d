@@ -1518,7 +1518,9 @@ function finalizeLazyFrameGroup(session, fg, frameIdx) {
         var mm2 = memberByCamIdx.get(cn2);
         var grouped = [];
         for (var bi = 0; bi < built.length; bi++) {
-            var member = mm2 ? mm2.get(bi) : undefined;
+            // Not `bi`: a pose the session does not show has no entry here, and the
+            // poses after it keep their positions in the file's frame.
+            var member = mm2 ? mm2.get(built[bi]._rawInstIndex) : undefined;
             if (member) {
                 if (member._lazy2d) {
                     // Hydrate the member's 2D from the store instance at this row.
@@ -1617,6 +1619,7 @@ async function hydrateLazyCameras(session, frameIdx, camNames) {
         if (haveUl && haveUl.length > 0) continue;
         for (var ii = 0; ii < instances.length; ii++) {
             var d = instances[ii];
+            if (!d) continue;   // a pose this session does not show
             var inst = new Instance(d.points || [], lazyInstanceTrackIdx(d.trackIdx), d.type || 'predicted', d.score || 0);
             inst._rawInstIndex = ii;   // see the note in ensureLazyFrameData
             staged.addInstance(camName, inst);
@@ -1664,6 +1667,7 @@ export async function ensureLazyFrameData(frameIdx) {
     for (var [camName, instances] of cameraData) {
         for (var ii = 0; ii < instances.length; ii++) {
             var instData = instances[ii];
+            if (!instData) continue;   // a pose this session does not show
             var inst = new Instance(
                 instData.points || [],
                 lazyInstanceTrackIdx(instData.trackIdx),
@@ -1716,6 +1720,7 @@ export function buildLazyFrameGroupSync(frameIdx) {
     for (var [camName, instances] of cached) {
         for (var ii = 0; ii < instances.length; ii++) {
             var instData = instances[ii];
+            if (!instData) continue;   // a pose this session does not show
             var inst = new Instance(
                 instData.points || [],
                 lazyInstanceTrackIdx(instData.trackIdx),

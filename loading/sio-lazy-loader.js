@@ -32,6 +32,7 @@
  */
 
 import { unionTrackNames } from './track-union.js';
+import { markRowNotShown, notShownRows, shownSkeletonEntry } from './poses-not-shown.js';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -154,6 +155,9 @@ export class SioLazyLoader {
         // video no camera names use (`_keepOutsideRowTracks`); `trackNames` stops
         // before them.
         this._tracksPastSession = new Map();
+        // labels -> the store skeleton ids whose poses this session does not show;
+        // absent when it shows them all (`_chooseShownSkeleton`).
+        this._otherSkeletonIds = new Map();
         this.videos = new Map();
         this.trackOccupancy = new Map(); // left empty (see file header)
 
@@ -217,19 +221,6 @@ export class SioLazyLoader {
         // frame. Replaces the old manual reach-in into `labels._lazyFrameList.cache`.
         try { labels.frameCacheLimit = this.internalFrameCacheLimit; } catch (e) { /* older bundle */ }
 
-        var skel = labels.skeletons && labels.skeletons[0];
-        this._skeletonByCam.set(cameraName, skel ? {
-            name: skel.name || 'skeleton',
-            nodes: skel.nodeNames,
-            edges: skel.edgeIndices,
-        } : null);
-        this.skeleton = null;
-        var skelCams = Array.from(this._skeletonByCam.keys()).sort();
-        for (var sci = 0; sci < skelCams.length && !this.skeleton; sci++) {
-            this.skeleton = this._skeletonByCam.get(skelCams[sci]);
-        }
-        this.numNodesByCam.set(cameraName, skel ? skel.nodeNames.length : 0);
-
         // Build videoFrameIdx -> store-row map from the columnar frame_idx column,
         // so the app's video frame number resolves to the correct lazy-frame row
         // even if the labeled frames are sparse (unlabeled video frames map to
@@ -249,6 +240,20 @@ export class SioLazyLoader {
             else if (rowVideo !== ownVideo) otherVideos = true;
         }
         if (videoCol.length > 0 && (otherVideos || ownVideo !== 0)) this._ownVideoByCam.set(cameraName, ownVideo);
+        var ownRawSess = (labels.rawSessionsJson && labels.rawSessionsJson[0]) || null;
+        var skel = this._chooseShownSkeleton(labels, ownRawSess && ownRawSess.metadata && ownRawSess.metadata.lucid && ownRawSess.metadata.lucid.skeleton,
+            function (v) { return v === ownVideo; });
+        this._skeletonByCam.set(cameraName, skel ? {
+            name: skel.name || 'skeleton',
+            nodes: skel.nodeNames,
+            edges: skel.edgeIndices,
+        } : null);
+        this.skeleton = null;
+        var skelCams = Array.from(this._skeletonByCam.keys()).sort();
+        for (var sci = 0; sci < skelCams.length && !this.skeleton; sci++) {
+            this.skeleton = this._skeletonByCam.get(skelCams[sci]);
+        }
+        this.numNodesByCam.set(cameraName, skel ? skel.nodeNames.length : 0);
         var rowMap = new Map();
         var maxFrameIdx = -1;
         for (var r = 0; r < frameIdxCol.length; r++) {
@@ -397,6 +402,65 @@ export class SioLazyLoader {
     }
 
     /**
+     * The one skeleton this session shows of a file's, and flag the rows on the others
+     * so nothing reads them by position (loading/poses-not-shown.js). The rule is the
+     * eager reader's (`parseSlpViaSleapIO`): a duplicate by `Skeleton.matches` with
+     * `requireSameOrder` is the same skeleton, because its points line up; an unused
+     * skeleton is never first. A file with one pays for nothing here.
+     *
+     * @param {Object} labels - lazy sleap-io.js Labels
+     * @param {Object|null|undefined} record - its session's `metadata.lucid.skeleton`
+     * @param {(videoId: number) => boolean} isSessionVideo
+     * @returns {Object|null} the sleap-io.js skeleton shown
+     */
+    _chooseShownSkeleton(labels, record, isSessionVideo) {
+        var skeletons = labels.skeletons || [];
+        if (skeletons.length <= 1) return skeletons[0] || null;
+        var entries = [];
+        var entryOfId = skeletons.map(function (s) {
+            var entry = entries.find(function (e) { return s.matches(e.typed, { requireSameOrder: true }); });
+            if (!entry) {
+                entry = { nodes: s.nodeNames, edges: s.edgeIndices, typed: s, hasPose: false, onSessionVideos: false };
+                entries.push(entry);
+            }
+            return entry;
+        });
+        var store = labels._lazyDataStore;
+        var fd = (store && store.framesData) || {};
+        var skeletonCol = store && store.instancesData && store.instancesData.skeleton;
+        if (entries.length === 1 || !skeletonCol || !fd.video) return skeletons[0];
+        // `materializeFrame` reads an id past the end as skeleton 0.
+        var idOf = function (j) { var id = Number(skeletonCol[j]); return skeletons[id] ? id : 0; };
+        for (var r = 0; r < fd.video.length; r++) {
+            var onSession = isSessionVideo(Number(fd.video[r]));
+            for (var j = Number(fd.instance_id_start[r]) || 0, end = Number(fd.instance_id_end[r]) || 0; j < end; j++) {
+                var entry = entryOfId[idOf(j)];
+                entry.hasPose = true;
+                if (onSession) entry.onSessionVideos = true;
+            }
+        }
+        var firstWithPose = entries.findIndex(function (e) { return e.hasPose; });
+        if (firstWithPose > 0) entries.unshift(entries.splice(firstWithPose, 1)[0]);
+        var shown = shownSkeletonEntry(entries, record, function (e) { return e.onSessionVideos; });
+
+        var otherIds = new Set();
+        entryOfId.forEach(function (e, id) { if (e !== shown) otherIds.add(id); });
+        this._otherSkeletonIds.set(labels, otherIds);
+        for (var row = 0, n = skeletonCol.length; row < n; row++) {
+            if (otherIds.has(idOf(row))) markRowNotShown(store, row);
+        }
+        return shown.typed;
+    }
+
+    /**
+     * The store skeleton ids of `labels` whose poses this session does not show.
+     * @returns {Set<number>|null} null when it shows them all
+     */
+    otherSkeletonIds(labels) {
+        return this._otherSkeletonIds.get(labels) || null;
+    }
+
+    /**
      * Open a SINGLE multi-camera project `.slp` lazily (the "Load Project" reopen
      * path) — as opposed to `open()`, which handles one per-camera prediction
      * `.slp` at a time. A LUCID project `.slp` interleaves every camera's video +
@@ -447,13 +511,6 @@ export class SioLazyLoader {
         this._sharedStore = true;
         try { labels.frameCacheLimit = this.internalFrameCacheLimit; } catch (e) { /* older bundle */ }
 
-        var skel = labels.skeletons && labels.skeletons[0];
-        if (skel) {
-            this.skeleton = { name: skel.name || 'skeleton', nodes: skel.nodeNames, edges: skel.edgeIndices };
-            this.trackNames = (labels.tracks || []).map(function (t) { return t.name; });
-        }
-        var numNodes = skel ? skel.nodeNames.length : 0;
-
         // Embedded calibration (raw dict + camcorder→video map), same as open().
         var rawSess = (labels.rawSessionsJson && labels.rawSessionsJson[0]) || null;
         if (!this.calibration && rawSess && rawSess.calibration) {
@@ -500,6 +557,14 @@ export class SioLazyLoader {
         // project .slp from Python sleap-io) — see `streamSessionIntoWriter`.
         this.videoIdByCam = camToVid;
 
+        var skel = this._chooseShownSkeleton(labels, rawSess && rawSess.metadata && rawSess.metadata.lucid && rawSess.metadata.lucid.skeleton,
+            function (v) { return vidToCam.size === 0 || vidToCam.has(v); });
+        if (skel) {
+            this.skeleton = { name: skel.name || 'skeleton', nodes: skel.nodeNames, edges: skel.edgeIndices };
+            this.trackNames = (labels.tracks || []).map(function (t) { return t.name; });
+        }
+        var numNodes = skel ? skel.nodeNames.length : 0;
+
         // Split the interleaved store into per-camera videoFrameIdx→storeRow maps.
         var store = labels._lazyDataStore;
         var fd = (store && store.framesData) || {};
@@ -524,21 +589,7 @@ export class SioLazyLoader {
         }
         this.nFrames = maxFrameIdx + 1;
 
-        // Sparse per-track occupancy for the timeline's presence bars — same
-        // as open()'s per-camera call, but every camera here shares ONE
-        // interleaved store, so each needs its OWN rowMap passed to scope the
-        // scan to just its rows (see _computeSparseOccupancy's doc). Missing
-        // entirely until now: reopening an already-saved project via
-        // openProjectSlp left the Tracks Timeline with no occupancy data at
-        // all for any camera, unlike the per-camera open() path. Best-effort,
-        // never blocks the load.
-        for (var occCamName of this.labelsByCam.keys()) {
-            try {
-                var occRowMap = this.frameRowByCam.get(occCamName);
-                var occ = this._computeSparseOccupancy(labels, this.nFrames, occRowMap);
-                if (occ) this.trackOccupancy.set(occCamName, occ);
-            } catch (e) { /* occupancy is optional; ignore */ }
-        }
+        this.refreshProjectOccupancy();
 
         return {
             labels: labels,
@@ -546,6 +597,28 @@ export class SioLazyLoader {
             cameraNames: Array.from(this.labelsByCam.keys()),
             nFrames: this.nFrames,
         };
+    }
+
+    /**
+     * Sparse per-track occupancy for the timeline's presence bars — same as
+     * open()'s per-camera call, but every camera here shares ONE interleaved store,
+     * so each needs its OWN rowMap passed to scope the scan to just its rows (see
+     * _computeSparseOccupancy's doc). Missing entirely until now: reopening an
+     * already-saved project via openProjectSlp left the Tracks Timeline with no
+     * occupancy data at all for any camera, unlike the per-camera open() path.
+     * Best-effort, never blocks the load. The load runs it again once a group kept
+     * aside has flagged more poses as not shown.
+     */
+    refreshProjectOccupancy() {
+        var labels = this._projectLabels;
+        for (var occCamName of this.labelsByCam.keys()) {
+            try {
+                var occRowMap = this.frameRowByCam.get(occCamName);
+                var occ = this._computeSparseOccupancy(labels, this.nFrames, occRowMap);
+                if (occ) this.trackOccupancy.set(occCamName, occ);
+                else this.trackOccupancy.delete(occCamName);
+            } catch (e) { /* occupancy is optional; ignore */ }
+        }
     }
 
     /**
@@ -579,6 +652,7 @@ export class SioLazyLoader {
         var startCol = fd.instance_id_start || [];
         var endCol = fd.instance_id_end || [];
         var trackCol = idn.track || [];
+        var notShown = notShownRows(store);
         // Tracks only rows on a video no camera names use are not the session's.
         var nTracks = (labels.tracks || []).length - (this._tracksPastSession.get(labels) || 0);
         // Row source: either every row in the table (single-camera store) or
@@ -621,6 +695,7 @@ export class SioLazyLoader {
             var s = Number(startCol[r]) || 0;
             var e = Number(endCol[r]) || 0;
             for (var j = s; j < e; j++) {
+                if (notShown && notShown[j]) continue;
                 var trk = Number(trackCol[j]);
                 if (!(trk >= 0)) continue;
                 var o = open.get(trk);
@@ -652,7 +727,12 @@ export class SioLazyLoader {
         return { sparse: true, nTracks: nTracks, nFrames: nFrames, segments: segments, counts: counts };
     }
 
-    /** Materialize one camera's instances for a video frame index (synchronous). */
+    /**
+     * Materialize one camera's instances for a video frame index (synchronous). Entry
+     * `k` is the pose at position `k` in the file's frame, the row an
+     * `Instance._rawInstIndex` of `k` names; a pose the session does not show leaves a
+     * `null` there, so the poses after it keep their positions.
+     */
     _extractCamFrame(cameraName, videoFrameIdx) {
         var labels = this.labelsByCam.get(cameraName);
         if (!labels) return [];
@@ -664,9 +744,12 @@ export class SioLazyLoader {
         var PredictedInstance = window.SleapIO && window.SleapIO.PredictedInstance;
         var typedTracks = labels.tracks || [];
         var numNodes = this.numNodesByCam.get(cameraName) || (this.skeleton ? this.skeleton.nodes.length : 0);
+        var store = labels._lazyDataStore;
+        var notShown = notShownRows(store);
+        var iStart = notShown ? Number(store.framesData.instance_id_start[row]) || 0 : 0;
         var out = [];
         for (var i = 0; i < lf.instances.length; i++) {
-            out.push(adaptTypedInstance(lf.instances[i], typedTracks, numNodes, PredictedInstance));
+            out.push(notShown && notShown[iStart + i] ? null : adaptTypedInstance(lf.instances[i], typedTracks, numNodes, PredictedInstance));
         }
         return out;
     }
@@ -761,7 +844,8 @@ export class SioLazyLoader {
      * in the WHOLE project, straight from each camera's columnar store
      * (`labels._lazyDataStore.framesData`/`.instancesData`) — no frame or
      * instance object materialization, independent of what's currently
-     * resident/cached. Used by project-wide identity/track propagation
+     * resident/cached. A pose the session does not show is not visited, and the
+     * poses after it keep their true `offsetInFrame`. Used by project-wide identity/track propagation
      * (`Session.propagateTracksToIdentities`, pose/pose-data.js) so it isn't
      * limited to whatever's in `session.frameGroups` (a lazy session's small
      * resident window).
@@ -792,10 +876,12 @@ export class SioLazyLoader {
             if (!store || !rowMap) continue;
             var fd = store.framesData || {};
             var idn = store.instancesData || {};
+            var notShown = notShownRows(store);
             var visitFrame = function (frameIdx, frameRow) {
                 var iStart = Number(fd.instance_id_start ? fd.instance_id_start[frameRow] : 0) || 0;
                 var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[frameRow] : 0) || 0;
                 for (var j = iStart; j < iEnd; j++) {
+                    if (notShown && notShown[j]) continue;
                     var trk = idn.track ? Number(idn.track[j]) : -1;
                     if (!Number.isFinite(trk)) trk = -1;
                     visitFn(camName, frameIdx, trk, {
@@ -829,10 +915,13 @@ export class SioLazyLoader {
      *   - `trackIdx[k]`: the session track index, or -1 for trackless. A track
      *     id with no `Track` behind it is trackless there too.
      *   - `predicted[k]`: 1 unless `instance_type` is 0 (a user instance).
+     *   - `hidden[k]`: 1 for a pose the session does not show, which hydration
+     *     skips; `hidden` is null when there is none, and `nHidden` counts them.
      *
      * @param {string} camName
      * @param {number} frameIdx - video frame index
-     * @returns {{count: number, trackIdx: Int32Array, predicted: Uint8Array}|null}
+     * @returns {{count: number, trackIdx: Int32Array, predicted: Uint8Array,
+     *   hidden: (Uint8Array|null), nHidden: number}|null}
      *   null when this loader does not back `camName` at all (the caller must
      *   then treat that camera's data as NOT rebuildable). A camera with no row
      *   for this frame reports `count: 0`.
@@ -843,7 +932,7 @@ export class SioLazyLoader {
         var store = labels && labels._lazyDataStore;
         if (!store || !rowMap) return null;
         var row = rowMap.get(frameIdx);
-        if (row === undefined) return { count: 0, trackIdx: new Int32Array(0), predicted: new Uint8Array(0) };
+        if (row === undefined) return { count: 0, trackIdx: new Int32Array(0), predicted: new Uint8Array(0), hidden: null, nHidden: 0 };
         var fd = store.framesData || {};
         var idn = store.instancesData || {};
         var iStart = Number(fd.instance_id_start ? fd.instance_id_start[row] : 0) || 0;
@@ -859,8 +948,15 @@ export class SioLazyLoader {
         var sameList = storeTracks === labelTracks;
         var trackIdx = new Int32Array(n);
         var predicted = new Uint8Array(n);
+        var notShown = notShownRows(store);
+        var hidden = null, nHidden = 0;
         for (var k = 0; k < n; k++) {
             var j = iStart + k;
+            if (notShown && notShown[j]) {
+                if (!hidden) hidden = new Uint8Array(n);
+                hidden[k] = 1;
+                nHidden++;
+            }
             // Same defaults as `materializeFrame`: an absent track is -1, an
             // absent type is 0 (a user instance).
             var rawTrack = idn.track ? idn.track[j] : undefined;
@@ -870,7 +966,7 @@ export class SioLazyLoader {
             var rawType = idn.instance_type ? idn.instance_type[j] : undefined;
             predicted[k] = Number(rawType == null ? 0 : rawType) === 0 ? 0 : 1;
         }
-        return { count: n, trackIdx: trackIdx, predicted: predicted };
+        return { count: n, trackIdx: trackIdx, predicted: predicted, hidden: hidden, nHidden: nHidden };
     }
 
     /**
@@ -1011,6 +1107,7 @@ export class SioLazyLoader {
             var fd = store.framesData || {};
             var idn = store.instancesData || {};
             if (!idn.track) continue;
+            var notShown = notShownRows(store);
             // Per-camera diagnostic counters (see the note above this method) —
             // logged after this camera's loop so a scan of the console
             // immediately shows whether coverage suspiciously drops to ~0 for
@@ -1022,6 +1119,7 @@ export class SioLazyLoader {
                 var iStart = Number(fd.instance_id_start ? fd.instance_id_start[frameRow] : 0) || 0;
                 var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[frameRow] : 0) || 0;
                 for (var j = iStart; j < iEnd; j++) {
+                    if (notShown && notShown[j]) continue;   // `_keepOutsideRowTracks` has these
                     camRowsVisited++;
                     // Isolated per-row: one malformed row/frame must not abort
                     // the remap for every frame after it (see the diagnostic
@@ -1109,11 +1207,11 @@ export class SioLazyLoader {
     }
 
     /**
-     * The store rows on a video no camera names keep their track NAME when
-     * `remapTracksFromIdentity` replaces the store's track list: the session's
-     * track edits are not about them, and `appendStore` writes them with
-     * whatever their id then indexes — another track's name, or (past the end of
-     * the shorter list) a file Python cannot open.
+     * The store rows on a video no camera names, and the poses the session does not
+     * show on any video, keep their track NAME when `remapTracksFromIdentity` replaces
+     * the store's track list: the session's track edits are not about them, and
+     * `appendStore` writes them with whatever their id then indexes — another track's
+     * name, or (past the end of the shorter list) a file Python cannot open.
      *
      * Rewrites those rows' track ids for the new list, in place, so it must run
      * BEFORE the list is rebuilt.
@@ -1130,13 +1228,16 @@ export class SioLazyLoader {
         var startCol = (store.framesData || {}).instance_id_start;
         var endCol = (store.framesData || {}).instance_id_end;
         var trackCol = (store.instancesData || {}).track;
-        if (!owned || !videoCol || !startCol || !endCol || !trackCol) return kept;
+        var notShown = notShownRows(store);
+        if ((!owned && !notShown) || !videoCol || !startCol || !endCol || !trackCol) return kept;
         var oldTracks = store.tracks || [];
         var names = newTrackNames.map(String);
         var slotByOld = new Map();
         for (var r = 0; r < videoCol.length; r++) {
-            if (owned.has(Number(videoCol[r]))) continue;
+            var onCamera = !owned || owned.has(Number(videoCol[r]));
+            if (onCamera && !notShown) continue;
             for (var j = Number(startCol[r]) || 0, end = Number(endCol[r]) || 0; j < end; j++) {
+                if (onCamera && !notShown[j]) continue;
                 var old = Number(trackCol[j]);
                 if (!(old >= 0)) continue;
                 var slot = slotByOld.get(old);
@@ -1171,13 +1272,14 @@ export class SioLazyLoader {
 
     /**
      * How many labeled frames in the opened files, on how many videos, belong to
-     * no camera of this session. They are not shown, and a save keeps them
+     * no camera of this session, and how many poses on a camera's video are on a
+     * skeleton it does not show. They are not shown, and a save keeps them
      * (import-export/outside-frames.js).
      *
-     * @returns {{frames: number, videos: number}}
+     * @returns {{frames: number, videos: number, cameraPoses: number, cameraSkeletons: string[]}}
      */
     outsideFrameCounts() {
-        var counts = { frames: 0, videos: 0 };
+        var counts = { frames: 0, videos: 0, cameraPoses: 0, cameraSkeletons: [] };
         var idsByStore = new Map();
         this.forEachOutsideRow(function (store, row, id) {
             counts.frames++;
@@ -1185,7 +1287,75 @@ export class SioLazyLoader {
             idsByStore.get(store).add(id);
         });
         for (var ids of idsByStore.values()) counts.videos += ids.size;
+        for (var camName of this.labelsByCam.keys()) {
+            var labels = this.labelsByCam.get(camName);
+            var otherIds = this._otherSkeletonIds.get(labels);
+            if (!otherIds) continue;
+            var skeletons = labels._lazyDataStore.skeletons || [];
+            var skeletonCol = labels._lazyDataStore.instancesData.skeleton;
+            var fd = labels._lazyDataStore.framesData;
+            for (var row of this.frameRowByCam.get(camName).values()) {
+                for (var j = Number(fd.instance_id_start[row]) || 0, end = Number(fd.instance_id_end[row]) || 0; j < end; j++) {
+                    var id = Number(skeletonCol[j]);
+                    if (!otherIds.has(skeletons[id] ? id : 0)) continue;
+                    counts.cameraPoses++;
+                    var name = skeletons[id] && skeletons[id].name;
+                    if (name && counts.cameraSkeletons.indexOf(name) < 0) counts.cameraSkeletons.push(name);
+                }
+            }
+        }
         return counts;
+    }
+
+    /**
+     * The poses of one camera-frame the session does not show, as fresh sleap-io.js
+     * instances (a caller may re-point their skeleton and track) with everything the
+     * store holds on them. For a writer that replaces the whole camera-frame.
+     *
+     * @param {string} camName
+     * @param {number} frameIdx - video frame index
+     * @returns {Array<{offset: number, instanceRow: number, inst: Object, frameInstances: Object[]}>}
+     *   `offset` is the pose's position in the file's frame (what a group refers to it
+     *   by); `frameInstances` is that frame's whole list, by position
+     */
+    posesNotShownAt(camName, frameIdx) {
+        var labels = this.labelsByCam.get(camName);
+        var store = labels && labels._lazyDataStore;
+        var notShown = notShownRows(store);
+        var rowMap = this.frameRowByCam.get(camName);
+        var row = notShown && rowMap ? rowMap.get(frameIdx) : undefined;
+        if (row === undefined) return [];
+        var iStart = Number(store.framesData.instance_id_start[row]) || 0;
+        var iEnd = Number(store.framesData.instance_id_end[row]) || 0;
+        var rows = [];
+        for (var j = iStart; j < iEnd; j++) if (notShown[j]) rows.push(j);
+        if (rows.length === 0) return [];
+        var lf = store.materializeFrame(row);
+        // Only a video the file does not list has no frame; a save must not drop these.
+        if (!lf) throw new Error('Save: frame ' + frameIdx + ' of camera "' + camName + '" could not be read back. Nothing was written.');
+        return rows.map(function (instanceRow) {
+            return { offset: instanceRow - iStart, instanceRow: instanceRow, inst: lf.instances[instanceRow - iStart], frameInstances: lf.instances };
+        });
+    }
+
+    /**
+     * Is this position of one store frame row a pose the session does not show?
+     * `row` is a labeled frame's index in the file, as a group's refs name it.
+     */
+    isPoseNotShown(row, offset) {
+        var store = this._projectLabels && this._projectLabels._lazyDataStore;
+        var notShown = notShownRows(store);
+        if (!notShown) return false;
+        return notShown[(Number(store.framesData.instance_id_start[row]) || 0) + offset] === 1;
+    }
+
+    /**
+     * Stop showing this position of one store frame row: its group is kept aside
+     * (`keepGroupAside`, import-export/outside-frames.js).
+     */
+    setPoseNotShown(row, offset) {
+        var store = this._projectLabels && this._projectLabels._lazyDataStore;
+        if (store) markRowNotShown(store, (Number(store.framesData.instance_id_start[row]) || 0) + offset);
     }
 
     /**
@@ -1334,6 +1504,7 @@ export class SioLazyLoader {
             var frameCol = fd.frame_id || fd.video;
             var nFrameRows = (frameCol && typeof frameCol.length === 'number') ? frameCol.length : 0;
             if (!nInst || !nFrameRows || !fd.instance_id_start || !fd.instance_id_end) continue;
+            var notShown = notShownRows(store);
 
             // ---- 1. Mark rows, per camera, into ONE store-global flag array.
             // A Uint8Array rather than a Set: a whole-project predicted delete
@@ -1367,6 +1538,7 @@ export class SioLazyLoader {
                     if (iStart < 0) iStart = 0;
                     if (iEnd > nInst) iEnd = nInst;
                     for (var j = iStart; j < iEnd; j++) {
+                        if (notShown && notShown[j]) continue;
                         // Isolated per row: one malformed row must not abort the
                         // delete for every frame after it, which would leave the
                         // project half-deleted while the GUI showed success.
@@ -1542,6 +1714,7 @@ export class SioLazyLoader {
         this._skeletonByCam.clear();
         this._ownVideoByCam.clear();
         this._tracksPastSession.clear();
+        this._otherSkeletonIds.clear();
         this._storeEditedInMemory = false;
         this.cache.clear();
         this.cacheOrder = [];

@@ -66,6 +66,7 @@ const { batchLoadLazyFrames } = await imp('pose/triangulation.js');
 const { SioLazyLoader } = await imp('loading/sio-lazy-loader.js');
 const { Session, Skeleton, Camera, Instance, InstanceGroup } = await imp('pose/pose-data.js');
 const FC = await imp('ui/frame-counters.js');
+const { markRowNotShown } = await imp('loading/poses-not-shown.js');
 
 const CAMS = ['c0', 'c1', 'c2'];
 const NODES = 2;
@@ -228,6 +229,29 @@ group('forEachInstanceRow(visit, {camera, start, end}) narrows the walk');
     for (let f = 10; f < 25; f++) { const t = rowsFor('c0', f); if (t && t.length) wantFrames.push(f); }
     eqCounts(frames, wantFrames, 'every c0 frame with rows in the range');
     ok([...offsets.values()].every(o => o.every((v, i) => v === i)), 'offsets 0..n-1 per frame');
+}
+
+// ---------------------------------------------------------------------------
+group('a pose the session does not show counts for nothing, whatever the frame before it held');
+for (const cam of CAMS) {
+    // The second row of every frame with two: a hole between rows, where the reused
+    // scratch array still holds the previous frame's type.
+    const hideSecondRows = (s) => {
+        for (const labels of s.lazyLoader.labelsByCam.values()) {
+            const store = labels._lazyDataStore, fd = store.framesData;
+            for (let r = 0; r < fd.instance_id_start.length; r++) {
+                if (fd.instance_id_end[r] - fd.instance_id_start[r] >= 2) markRowNotShown(store, fd.instance_id_start[r] + 1);
+            }
+        }
+    };
+    const build = () => { const s = makeSession(); hideSecondRows(s); return s; };
+    const truth = await oracle(build, cam);
+    const plain = await oracle(makeSession, cam);
+    ok(truth.instances < plain.instances, 'precondition: hiding rows changes the count on ' + cam);
+    const s = build();
+    const baseline = FC.computeFrameCounterBaseline(s, cam);
+    const c = FC.countFrameCounters(s, cam, baseline);
+    eqCounts({ labeled: c.labeled, instances: c.instances }, { labeled: truth.labeled, instances: truth.instances }, 'the store baseline matches hydration on ' + cam);
 }
 
 // ---------------------------------------------------------------------------
