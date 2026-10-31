@@ -970,6 +970,13 @@ export class Instance {
         this._ps = other ? other._ps : -1;
     }
 
+    /** Take over what the file said about this detection (import-export/detection-labels.js). */
+    adoptFileLabelsFrom(other) {
+        if (!other) return;
+        if (other.trackingScore) this.trackingScore = other.trackingScore;
+        if (other.fileLabels) this.fileLabels = other.fileLabels;
+    }
+
     /** Does this instance carry the model's per-node scores? @returns {boolean} */
     hasPointScores() { return this._ps >= 0; }
 
@@ -1073,6 +1080,11 @@ export class Instance {
         }
     }
 }
+
+// What the file said about a detection, carried through a save unread and unused
+// (import-export/detection-labels.js). Defaults here, so one with none costs nothing.
+Instance.prototype.trackingScore = 0;
+Instance.prototype.fileLabels = null;
 
 
 // --------------------------------------------------------------------------
@@ -1484,6 +1496,23 @@ export class FrameGroup {
 
 var _identityIdCounter = 0;
 
+// Who else must follow when two identities are exchanged over a range
+// (`Session.swapIdentitiesInRange`: an ID-switch fix or its undo, an identity
+// reassignment that swaps to the end of the timeline). Behavior labels are
+// keyed by identity name, so pose/behavior-labels.js registers here to move
+// them with the poses. A hook rather than an import keeps this module
+// import-free.
+var _identitySwapHooks = [];
+
+/**
+ * Be called after `Session.swapIdentitiesInRange` exchanged two identities:
+ * `fn(session, nameA, nameB, startFrame, endFrame)` (endFrame may be Infinity).
+ * @param {Function} fn
+ */
+export function onIdentitySwap(fn) {
+    if (typeof fn === 'function' && _identitySwapHooks.indexOf(fn) < 0) _identitySwapHooks.push(fn);
+}
+
 // Identity N takes entry N, so a project with N animals uses the first N.
 // The first 7 are the original neon set. Entries 7-19 were chosen one at a
 // time, each as far as possible (CIEDE2000) from every entry before it, so the
@@ -1572,6 +1601,14 @@ export class InstanceGroup {
          * @type {'ba'|'dlt'|undefined}
          */
         this.triangulationMethod = undefined;
+        /**
+         * The solve settings `points3d` was produced under
+         * (`triangulationSettingsKey`, pose/triangulation.js): `adoptPrior3d` only
+         * reuses 3D solved under the settings in force now. In memory only, so 3D
+         * read from a file has none and is re-solved rather than trusted.
+         * @type {string|undefined}
+         */
+        this.solveSettings = undefined;
         /**
          * @type {Map<string, Instance>} camera name -> reprojected instance.
          * Starts as the shared read-only `NO_REPROJECTED_INSTANCES`; write
@@ -3024,6 +3061,16 @@ export class Session {
             }
             if (touched) frames++;
         }
+        // Whatever else is keyed by these identities' names (behavior labels)
+        // is exchanged on the same frames.
+        if (_identitySwapHooks.length) {
+            var idA = this.getIdentity(identityA), idB = this.getIdentity(identityB);
+            if (idA && idB) {
+                for (var hi = 0; hi < _identitySwapHooks.length; hi++) {
+                    _identitySwapHooks[hi](this, idA.name, idB.name, startFrame, endFrame);
+                }
+            }
+        }
         return { entries: entries, groups: groups, frames: frames };
     }
 
@@ -3396,6 +3443,11 @@ export class Session {
     renameCameraInAllData(oldName, newName) {
         if (oldName === newName) return;
 
+        if (this.fileVideos && this.fileVideos.has(oldName)) {
+            this.fileVideos.set(newName, this.fileVideos.get(oldName));
+            this.fileVideos.delete(oldName);
+        }
+
         // Rename in all FrameGroups
         for (const fg of this.frameGroups.values()) {
             // Rename in fg.instances (Map<string, Instance[]>)
@@ -3432,6 +3484,11 @@ export class Session {
                     group.instances.set(newName, inst);
                 }
             }
+        }
+
+        // A lazy project's other frames are under this name in its loader.
+        if (this.lazyLoader && typeof this.lazyLoader.renameCamera === 'function') {
+            this.lazyLoader.renameCamera(oldName, newName);
         }
     }
 

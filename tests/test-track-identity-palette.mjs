@@ -293,6 +293,27 @@ console.log('\n9. A saved old default is upgraded on load; any other color is ke
     check(new Id(7, 'id_7').color === IDENTITY_COLORS[7], 'no color: the current default');
 }
 
+console.log('\n10. Behavior colors (pose/behavior-ethogram.js) tell behaviors apart and read on a pill');
+{
+    // A behavior color outlines the box around the animals doing it on the
+    // video, colors its label and fills its bars on the timeline. Each
+    // behavior has its own color, never an animal's, so the rule is only that
+    // they stay apart from each other and light enough to read on dark video.
+    const be = await import(pathToFileURL(path.resolve('pose/behavior-ethogram.js')).href);
+    const B = be.BEHAVIOR_COLORS;
+    const MIN_BETWEEN_BEHAVIORS = 12;
+    let worst = { d: Infinity };
+    for (let i = 0; i < B.length; i++) for (let j = i + 1; j < B.length; j++) {
+        const d = dE(B[i], B[j]);
+        if (d < worst.d) worst = { d, a: B[i], b: B[j] };
+    }
+    check(worst.d >= MIN_BETWEEN_BEHAVIORS,
+        `every pair of behavior colors >= ${MIN_BETWEEN_BEHAVIORS} apart (closest ${worst.a} / ${worst.b}: ${worst.d.toFixed(1)})`);
+    const dark = B.filter(h => hexToLab(h)[0] < 60);
+    check(dark.length === 0, `every behavior color is L* >= 60, light enough to read on dark video (${dark.join(', ') || 'none darker'})`);
+    check(new Set(B.map(h => h.toLowerCase())).size === B.length, 'no color is listed twice');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 console.log(failed === 0 ? 'PASS' : 'FAIL');
 process.exit(failed === 0 ? 0 : 1);
