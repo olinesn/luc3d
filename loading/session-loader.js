@@ -58,6 +58,7 @@ import {
     remapFrameIdentityTrackSlots, typedSessionGroups,
 } from '../import-export/file-edits.js';
 import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js';
+import { adoptIdentityMetadata } from '../import-export/detection-labels.js';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
 } from './video-file-pick.js';
@@ -2354,6 +2355,8 @@ export async function handleLoadSessionFolderSingleSlp() {
                 var inst = new Instance(instData.points, resolvedTrackIdx, instData.type || 'user', instData.score || 0);
                 if (instData.occluded) inst.setOccludedFrom(instData.occluded);
                 if (instData.pointScores) inst.setPointScores(instData.pointScores);
+                if (instData.trackingScore) inst.trackingScore = instData.trackingScore;
+                if (instData.fileLabels) inst.fileLabels = instData.fileLabels;
                 // Restore the occlusion flag for an unlinked user label (its
                 // occluded node was saved finite-xy + not-visible; the
                 // nulledNodes flag itself isn't persisted for ungrouped
@@ -2964,6 +2967,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // Define Planes state — the lazy-reopen mirror of the eager read in
         // `import-export/slp-import.js`.
         readPlaneMetadata(session, lucid);
+        adoptIdentityMetadata(session.identities, labels.identities);
 
         session.lazyLoader = loader;
         session._lazyReopened = true;
@@ -3116,6 +3120,7 @@ export function addColumnarFramesToSession(session, camName, col, trackRemap) {
                 trackIdx, instType, col.score[i] || 1.0);
             instance.setOccludedFrom(col.occluded.subarray(i * nn, (i + 1) * nn));
             if (col.pointScore && instType === 'predicted') instance.setPointScores(col.pointScore, i * nn);
+            if (col.trackingScore && col.trackingScore[i]) instance.trackingScore = col.trackingScore[i];
             fg.addInstance(camName, instance);
         }
     }
@@ -3530,7 +3535,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     file: choice.file,
                     // Columnar: flat transferred typed arrays, consumed by the
                     // build loop below — not ~1.6M structured-cloned [x, y] arrays.
-                    promise: parseSlpH5(choice.file, null, { columnar: true }).catch((function (job) {
+                    promise: parseSlpH5(choice.file, null, { columnar: true }).then((function (file) {
+                        // Identities and categories on detections: only the typed reader has them.
+                        return function (r) { return r && r.hasDetectionLabels ? parseSlpViaSleapIO(file) : r; };
+                    })(choice.file)).catch((function (job) {
                         return function (e) {
                             // Record instead of discarding: a `null` here used to
                             // `continue` past the camera, leaving that view empty
@@ -3692,6 +3700,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                             var instance = new Instance(inst.points || [], trackIdx, instType, inst.score || 1.0);
                             if (inst.occluded) instance.setOccludedFrom(inst.occluded);
                             if (inst.pointScores) instance.setPointScores(inst.pointScores);
+                            if (inst.trackingScore) instance.trackingScore = inst.trackingScore;
+                            if (inst.fileLabels) instance.fileLabels = inst.fileLabels;
                             fg.addInstance(camName, instance);
                         }
                     }

@@ -970,6 +970,13 @@ export class Instance {
         this._ps = other ? other._ps : -1;
     }
 
+    /** Take over what the file said about this detection (import-export/detection-labels.js). */
+    adoptFileLabelsFrom(other) {
+        if (!other) return;
+        if (other.trackingScore) this.trackingScore = other.trackingScore;
+        if (other.fileLabels) this.fileLabels = other.fileLabels;
+    }
+
     /** Does this instance carry the model's per-node scores? @returns {boolean} */
     hasPointScores() { return this._ps >= 0; }
 
@@ -1073,6 +1080,11 @@ export class Instance {
         }
     }
 }
+
+// What the file said about a detection, carried through a save unread and unused
+// (import-export/detection-labels.js). Defaults here, so one with none costs nothing.
+Instance.prototype.trackingScore = 0;
+Instance.prototype.fileLabels = null;
 
 
 // --------------------------------------------------------------------------

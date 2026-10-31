@@ -42,6 +42,7 @@ import {
 import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js';
 import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
+import { adoptIdentityMetadata, adoptTypedLabels } from './detection-labels.js';
 import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
 import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js';
 import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js';
@@ -242,6 +243,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                             // The group dict has no per-node scores; the raw
                             // row it replaces does.
                             inst.adoptPointScoresFrom(_dupCamInsts[_dpi]);
+                            inst.adoptFileLabelsFrom(_dupCamInsts[_dpi]);
                             _dupCamInsts.splice(_dpi, 1);
                             break;
                         }
@@ -457,6 +459,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 if (instMeta.nulledNodes) {
                     inst.nulledNodes = new Set(instMeta.nulledNodes);
                 }
+                adoptTypedLabels(inst, typedInst);
 
                 // Remove the matching pass-1 raw-SLP duplicate for this
                 // frame/cam (same rationale as reconstructInstanceGroupsFromDicts).
@@ -853,6 +856,8 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
             }
         }
     }
+
+    adoptIdentityMetadata(session.identities, slpData.identities);
 
     // Move non-grouped instances into unlinkedInstances so they are
     // interactive (clickable/draggable). Instances in fg.instances that are NOT
@@ -1259,6 +1264,8 @@ export async function handleLoadSlpFile(slpFile) {
                 );
                 if (instData.occluded) inst.setOccludedFrom(instData.occluded);
                 if (instData.pointScores) inst.setPointScores(instData.pointScores);
+                if (instData.trackingScore) inst.trackingScore = instData.trackingScore;
+                if (instData.fileLabels) inst.fileLabels = instData.fileLabels;
                 // Rebuild the occlusion flag for a user label whose occluded
                 // node was saved as finite-xy + not-visible. Grouped instances
                 // get their explicit nulledNodes back from metadata below (and
