@@ -53,6 +53,10 @@ import { isNewerSlpFormatError, slpReadErrorStatus } from './slp-format-check.js
 // recomputeUploadedCameras); only invoked inside a function body.
 import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js';
 import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js';
+import {
+    applyMovedGroupIdentities, lazyTrackSlotMap, reconcileSessionIdentities,
+    remapFrameIdentityTrackSlots, typedSessionGroups,
+} from '../import-export/file-edits.js';
 import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
@@ -2320,6 +2324,10 @@ export async function handleLoadSessionFolderSingleSlp() {
         // (`planeMetadataConflict`), where it would land on the wrong nodes.
         var sessLucid = (slpData.sessions && slpData.sessions[0] && slpData.sessions[0].metadata
             && slpData.sessions[0].metadata.lucid) || {};
+        // This session's tracks are the file's own: keys written against LUC3D's copy may
+        // need to follow another tool's edits (file-edits.js).
+        var folderTrackSlots = sessLucid.tracks ? lazyTrackSlotMap(sessLucid.tracks, tracks) : null;
+        if (folderTrackSlots) remapFrameIdentityTrackSlots(sessLucid, folderTrackSlots);
         var startsProject = state.sessions.length === 0;
         if (startsProject) resetPlaneState();
         readVisibilityMetadata(session, sessLucid);
@@ -2910,6 +2918,10 @@ export async function handleLoadProjectSlpLazy(slpFile) {
 
         var lucid = ((labels.rawSessionsJson || [])[0] || {}).metadata;
         lucid = (lucid && lucid.lucid) || {};
+        // This project's tracks are the file's own, so another tool's edits already
+        // show. Only the keys written against LUC3D's copy may need to follow them.
+        var trackSlots = lucid.tracks ? lazyTrackSlotMap(lucid.tracks, tracks) : null;
+        if (trackSlots) remapFrameIdentityTrackSlots(lucid, trackSlots);
         var sessName = lucid.sessionName || slpFile.name.replace(/\.slp$/i, '');
         var session = new Session(cameras, skeleton, tracks, sessName);
         // The file's provenance (e.g. campy-live-export's records), written back on save.
@@ -2930,6 +2942,19 @@ export async function handleLoadProjectSlpLazy(slpFile) {
             });
             identitiesFromFile = true;
         }
+        // Another tool's edits to the identities (file-edits.js), as on the eager path.
+        var identityEdits = null;
+        var rawSessionForIds = (labels.rawSessionsJson || [])[0] || {};
+        if (typedSession && typedSession.frameGroups && lucid.identities && lucid.identities.length
+            && !(rawSessionForIds.frame_group_dicts && rawSessionForIds.frame_group_dicts.length)) {
+            identityEdits = reconcileSessionIdentities(lucid.identities, typedSessionGroups(typedSession));
+        }
+        if (identityEdits) {
+            console.log('[load-slp] identities edited outside LUC3D; following the file');
+            session.identities = identityEdits.identities.map(function (id, i) {
+                return new Identity(i, id.name || ('id_' + i), id.color || null);
+            });
+        }
         if (lucid.frameIdentityMap) session.ingestFrameIdentityEntries(lucid.frameIdentityMap);
         if (lucid.trustTracks != null) session.trustTracks = lucid.trustTracks;
         // Session-scoped Visibility-panel state — the lazy-reopen mirror of the
@@ -2947,15 +2972,17 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         var nodeNames = skeleton.nodes.map(function (n) { return typeof n === 'string' ? n : (n.name || ''); });
         var nGroupFrames = typedSession && typedSession.frameGroups ? typedSession.frameGroups.size : 0;
         if (nGroupFrames > 0) await openProgress('groups', 0, nGroupFrames);
-        await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, {
+        var lazyRecon = await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, {
             onCount: function (done, total) { return openProgress('groups', done, total); },
             fileIdentities: identitiesFromFile ? labels.identities : null,
+            identityOf: identityEdits ? identityEdits.identityOf : null,
         });
         // A LUC3D project that stored only the identities its groups do not
         // imply: rebuild the rest from the groups just restored.
         await readFrameIdentityMetadata(session, lucid, {
             onCount: function (done, total) { return openProgress('identities', done, total); },
         });
+        if (lazyRecon.movedGroups.length) applyMovedGroupIdentities(session, lazyRecon.movedGroups);
         // Group-only identities → the per-detection map the Identity timeline
         // and colour-by-identity read (LUC3D projects bring their own map).
         if (identitiesFromFile && !lucid.frameIdentityMap && !lucid.trackIdentityMap) {

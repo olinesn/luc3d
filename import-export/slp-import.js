@@ -46,6 +46,10 @@ import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-tr
 import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js';
 import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js';
 import {
+    applyMovedGroupIdentities, reconcileSessionIdentities, reconcileSessionTracks,
+    remapFrameIdentityTrackSlots, typedSessionGroups,
+} from './file-edits.js';
+import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
 } from './save-load.js';
 
@@ -314,13 +318,16 @@ function fileIdentityIndex(fileIdentities) {
  *   written by another tool (campy-live-export), never a LUC3D project — lets a
  *   group with neither take its canonical `identity_idx` (`typedIG.identity`), as
  *   `reconstructInstanceGroupsFromSessionLazy` does.
+ *   Exception: `opts.identityOf`, when another tool edited the groups' identities
+ *   (`reconcileSessionIdentities`), decides every group; the groups it moves to a
+ *   different animal come back in `movedGroups`.
  *
  * @param {Session} session - LUCID session whose frameGroups hold pass-1 raw instances
  * @param {Object} typedSession - sleap-io.js RecordingSession (with frameGroups Map)
  * @param {Object|null} rawSession - the verbatim sessions_json dict (legacy identity fallback)
  * @param {string[]} nodeNames - skeleton node names (point-array length)
- * @param {{onProgress?:(msg:string)=>void, batch?:number, fileIdentities?:Array}} [opts]
- * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
+ * @param {{onProgress?:(msg:string)=>void, batch?:number, fileIdentities?:Array, identityOf?:function(Object):number}} [opts]
+ * @returns {Promise<{restoredGroups:number, restoredWith3d:number, movedGroups:Array}>}
  */
 export async function reconstructInstanceGroupsFromSession(session, typedSession, rawSession, nodeNames, opts) {
     opts = opts || {};
@@ -328,6 +335,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
     var BATCH = opts.batch || 20000;
     var onProgress = opts.onProgress || function () {};
     var restoredGroups = 0, restoredWith3d = 0;
+    var movedGroups = [];
     var fileIdentityIdx = fileIdentityIndex(opts.fileIdentities);
     // For deriving type/trackIdx/score from resolved typed instances when slim
     // metadata (#134) omits them.
@@ -375,7 +383,9 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             // Per-session identity: prefer metadata.lucid.identityId (5.2+),
             // else the legacy raw dict's identity_idx (both per-session).
             var identityId = -1;
-            if (igLucid.identityId != null) {
+            if (opts.identityOf) {
+                identityId = opts.identityOf(typedIG);
+            } else if (igLucid.identityId != null) {
                 identityId = igLucid.identityId;
             } else {
                 var rawIG = rawFg && rawFg.instance_groups && rawFg.instance_groups[igi];
@@ -484,6 +494,9 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 adoptSmoothingSource(session, fgFrameIdx, group, i3d);
             }
 
+            if (opts.identityOf && identityId !== (igLucid.identityId != null ? igLucid.identityId : -1)) {
+                movedGroups.push([fgFrameIdx, group]);
+            }
             groups.push(group);
             restoredGroups++;
         }
@@ -500,7 +513,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             + 'some 2D poses/tracks may be misattributed between animals (#158). If this fires on a freshly-saved '
             + 'file, the write-side fix in slp-streaming-write.js did not fully resolve the issue.');
     }
-    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d, refCollisions: _refCollisions };
+    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d, refCollisions: _refCollisions, movedGroups: movedGroups };
 }
 
 /**
@@ -533,13 +546,15 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  * LUC3D: a group without `identityId` then takes its canonical `identity_idx`
  * (`typedIG.identity`) instead. Never pass it for a LUC3D project, whose
  * per-session identity list does not match the file-level catalog's order.
+ * `opts.identityOf`, when another tool edited the groups' identities, decides every
+ * group instead; the groups it moves to a different animal come back in `movedGroups`.
  *
  * @param {Session} session - target session (identities/tracks already set)
  * @param {Object} typedSession - sleap-io.js RecordingSession (mutated: frameGroups drained)
  * @param {SioLazyLoader} loader - the open project loader (for `_rawInstIndex` refs)
  * @param {string[]} nodeNames - skeleton node names
- * @param {{onProgress?:(msg:string)=>void, batch?:number, yieldMs?:number, fileIdentities?:Array}} [opts]
- * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
+ * @param {{onProgress?:(msg:string)=>void, batch?:number, yieldMs?:number, fileIdentities?:Array, identityOf?:function(Object):number}} [opts]
+ * @returns {Promise<{restoredGroups:number, restoredWith3d:number, movedGroups:Array}>}
  */
 export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
     opts = opts || {};
@@ -549,6 +564,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
     var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
     var PredI = _SIO && _SIO.PredictedInstance;
     var restoredGroups = 0, restoredWith3d = 0;
+    var movedGroups = [];
     var fileIdentityIdx = fileIdentityIndex(opts.fileIdentities);
     // Time-based yielding: materializing 108k frames + building ~1.25M member
     // Instances is ~tens of seconds of work; yield every ~40ms so the tab stays
@@ -575,7 +591,8 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
             var instanceMetaMap = igLucid.instanceMeta || {};
 
             var identityId = -1;
-            if (igLucid.identityId != null) identityId = igLucid.identityId;
+            if (opts.identityOf) identityId = opts.identityOf(typedIG);
+            else if (igLucid.identityId != null) identityId = igLucid.identityId;
             else if (fileIdentityIdx && typedIG.identity && fileIdentityIdx.has(typedIG.identity)) {
                 identityId = fileIdentityIdx.get(typedIG.identity);
             }
@@ -651,6 +668,9 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 adoptSmoothingSource(session, fgFrameIdx, group, i3d);
             }
 
+            if (opts.identityOf && identityId !== (igLucid.identityId != null ? igLucid.identityId : -1)) {
+                movedGroups.push([fgFrameIdx, group]);
+            }
             groups.push(group);
             restoredGroups++;
         }
@@ -666,7 +686,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
         }
     }
     if (opts.onCount) await opts.onCount(fgKeys.length, fgKeys.length);
-    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
+    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d, movedGroups: movedGroups };
 }
 
 // `stampFrameIdentitiesFromGroups` moved to ./frame-identity-metadata.js, beside
@@ -729,6 +749,21 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
     var hasSessionData = hasTypedSession
         || !!(_sessData2 && _sessData2.frame_group_dicts && _sessData2.frame_group_dicts.length > 0);
 
+    // Another tool's edits to the identities (file-edits.js). Only on the columnar
+    // layout: an older file's `identity_idx` was per session, so it can look edited.
+    var identityEdits = null;
+    if (hasTypedSession && perSessionIdentities && perSessionIdentities.length > 0
+        && !(_sessData2.frame_group_dicts && _sessData2.frame_group_dicts.length > 0)) {
+        identityEdits = reconcileSessionIdentities(perSessionIdentities,
+            typedSessionGroups(_sessData2._typedSession));
+    }
+    if (identityEdits) {
+        console.log('[load-slp] identities edited outside LUC3D; following the file, session', slpSessIdx);
+        session.identities = identityEdits.identities.map(function (idData, idx) {
+            return new Identity(idx, idData.name || ('id_' + idx), idData.color || null);
+        });
+    }
+
     if (hasSessionData) {
         // === Reconstruct InstanceGroups from sessions_json ===
         var sessData2 = slpData.sessions[slpSessIdx];
@@ -766,6 +801,7 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
                 session, sessData2._typedSession, sessData2, nodeNames, {
                     onProgress: onProgress,
                     fileIdentities: identitiesFromFile ? (sessData2._typedIdentities || null) : null,
+                    identityOf: identityEdits ? identityEdits.identityOf : null,
                 });
         } else {
             _recon = await reconstructInstanceGroupsFromDicts(
@@ -778,6 +814,9 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
         // rebuild the rest from the groups just restored.
         if (await readFrameIdentityMetadata(session, lucidMeta, { onProgress: onProgress })) {
             console.log('[load-slp] rebuilt', session.frameIdentityMap.size, 'per-frame identities from instance groups');
+        }
+        if (_recon.movedGroups && _recon.movedGroups.length) {
+            applyMovedGroupIdentities(session, _recon.movedGroups);
         }
 
         // A file with the identities only on its groups (no LUC3D identity
@@ -1127,6 +1166,25 @@ export async function handleLoadSlpFile(slpFile) {
         var sessVideoIndices = new Set();
         for (var svk in videoIdxToCameraName) {
             sessVideoIndices.add(parseInt(svk));
+        }
+
+        // Another tool's edits to the tracks (file-edits.js): its names are the file's,
+        // and the session's list must know them or its detections read as trackless.
+        if (hasPerSessionTracks) {
+            var usedFileTracks = new Set();
+            for (var ufi = 0; ufi < totalFrames; ufi++) {
+                var ufd = slpData.frames[ufi];
+                if (sessVideoIndices.size > 0 && !sessVideoIndices.has(ufd.videoIdx)) continue;
+                for (var uii = 0; uii < ufd.instances.length; uii++) {
+                    usedFileTracks.add(ufd.instances[uii].trackIdx);
+                }
+            }
+            var trackEdits = reconcileSessionTracks(sessTracks, slpData.tracks, usedFileTracks);
+            if (trackEdits.edited) {
+                console.log('[load-slp] tracks edited outside LUC3D; following the file, session', slpSessIdx);
+                sessTracks = trackEdits.names.length ? trackEdits.names : ['track_0'];
+                if (trackEdits.slotMap) remapFrameIdentityTrackSlots(earlyMeta.lucid, trackEdits.slotMap);
+            }
         }
 
         // Ensure enough track slots for instances in this session. Only for
