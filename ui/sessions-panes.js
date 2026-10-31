@@ -42,7 +42,7 @@ import {
     fitCanvasesToCells,
     updateTotalFrames,
 } from '../loading/session-loader.js';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel, closeEmbeddedFrames } from '../loading/video.js';
 import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
@@ -1118,7 +1118,7 @@ export function populateViewStrip() {
 
             // Render first frame directly from decoder to thumbnail
             if (view.decoder) {
-                view.decoder.getFrame(0).then(function (frame) {
+                view.decoder.getFrame(view.decoder.firstFrame || 0).then(function (frame) {
                     if (frame && thumbCanvas) {
                         var ctx = thumbCanvas.getContext('2d');
                         ctx.drawImage(frame, 0, 0, thumbCanvas.width, thumbCanvas.height);
@@ -1704,6 +1704,7 @@ export function removeSession(idx) {
         state.activeSessionIdx = 0;
         state.triangulationResults = new Map();
         state.views = [];
+        closeEmbeddedFrames(state);
         state.videoFiles = [];
         state.keypoints3d = null;
         state.lastUserPoints = new Map();
@@ -1797,7 +1798,9 @@ export function removeSession(idx) {
         var rmVi = 0;
         for (var nvi = 0; nvi < state.session.videoFileIndices.length; nvi++) {
             var vf = state.videoFiles[state.session.videoFileIndices[nvi]];
-            if (vf && vf.file && rmVi < state.decoderPool.length) {
+            if (vf && !vf.file && vf.decoder) {
+                createViewForVideoFile(vf);   // embedded in the .slp: its own decoder
+            } else if (vf && vf.file && rmVi < state.decoderPool.length) {
                 vf.decoder = state.decoderPool[rmVi];
                 rmVi++;
                 createViewForVideoFile(vf);
@@ -1972,10 +1975,13 @@ export async function switchSession(newIdx) {
         videoController.stopPlayback();
     }
 
-    // Null out old session's decoder references (decoders stay in pool)
+    // Null out old session's decoder references (decoders stay in pool). A video
+    // embedded in the .slp has no file to reopen and its decoder is not pooled,
+    // so it keeps it, without its decoded frames.
     for (var ovi = 0; ovi < oldSession.videoFileIndices.length; ovi++) {
         var oldVf = state.videoFiles[oldSession.videoFileIndices[ovi]];
-        if (oldVf) oldVf.decoder = null;
+        if (oldVf && oldVf.file) oldVf.decoder = null;
+        else if (oldVf && oldVf.decoder && oldVf.decoder.releaseFrames) oldVf.decoder.releaseFrames();
     }
 
     // Switch active session
@@ -2140,9 +2146,11 @@ export async function switchSession(newIdx) {
     rebuildVideoController();
 
     var targetFrame = newSession.lastFrame || 0;
+    // Before the refresh, which seeks to the current frame: at the old session's
+    // frame number, that seek can finish last and leave the wrong picture up.
+    state.currentFrame = targetFrame;
     fitCanvasesToCells();
     refreshPaneInteractions();
-    state.currentFrame = targetFrame;
     // Keep the showLoading('Loading videos…') overlay up until the first
     // frame has actually painted (seekToFrame resolves after each pane's
     // decoder has decoded the target frame AND drawImage'd it). This
@@ -2301,7 +2309,7 @@ function updateViewStripThumbnail(view, thumbCanvas) {
     if (!thumbCanvas) return;
     // Prefer decoding first frame directly from decoder
     if (view.decoder) {
-        view.decoder.getFrame(0).then(function (frame) {
+        view.decoder.getFrame(view.decoder.firstFrame || 0).then(function (frame) {
             if (frame) {
                 var ctx = thumbCanvas.getContext('2d');
                 ctx.drawImage(frame, 0, 0, thumbCanvas.width, thumbCanvas.height);

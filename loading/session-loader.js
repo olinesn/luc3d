@@ -31,7 +31,7 @@ import {
     makePlaceholderCamera, hasRealCalibration, ensurePlaceholderCameras, cameraNamesFromVideos, cameraNamesInUse,
 } from '../pose/placeholder-cameras.js';
 
-import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js';
+import { OnDemandVideoDecoder, VideoController, releaseViewsFrames, closeEmbeddedFrames } from './video.js';
 import { videoLoadFailureText } from './video-codec-diagnosis.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
@@ -2896,6 +2896,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         state.sessions = [];
         state.session = null;
         state.views = [];
+        closeEmbeddedFrames(state);
         state.videoFiles = [];
         state.triangulationResults = new Map();
         // Plane state is project-scoped and lives on a module singleton, so
