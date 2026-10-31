@@ -19,6 +19,7 @@ import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPoints
 // module's graph.
 import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
+import { guardH5Status } from '../loading/h5-status-guard.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { identityCatalogFinder, typedFileLabels, writeFileLabels } from './detection-labels.js';
 import { writePlaneMetadata } from './plane-metadata.js';
@@ -890,7 +891,7 @@ async function initH5wasm() {
             new Promise(function(_, reject) {
                 setTimeout(function() { reject(new Error('h5wasm init timed out (15s)')); }, 15000);
             })
-        ]);
+        ]).then(function() { guardH5Status(h5wasm); });
     }
     await _h5wasmReady;
     return h5wasm;

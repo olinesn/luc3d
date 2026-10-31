@@ -25,6 +25,14 @@ and dist/iife/h5wasm.js here; re-verify every reader (points3d R/W, analysis-H5,
 embedded-frame extraction, SLP) since 0.10.x changed some APIs (e.g. removed
 `create_compound_dataset`). Then RE-APPLY the local patch below.
 
+NOT PATCHED HERE, BUT WRAPPED: these builds drop HDF5's status, so every instance is
+guarded from outside (`guardH5Status`: lib/sleap-io's `LUCID local patch (failed status)`,
+loading/h5-status-guard.js). The guards replace `Module.get_dataset_data`,
+`get_attribute_data`, `reclaim_vlen_memory`, `reclaim_vlen_memory_count`, the write calls,
+`FS.write` and `File.prototype.close`. On a bump check those names, and that HDF5's automatic
+error printing still goes to fd 2 and still stays quiet on a healthy save
+(tests/e2e/slp-failed-write.mjs §0).
+
 LOCAL PATCH (cold-read), in hdf5_util.js AND h5wasm.iife.js:
   WORKERFS's `stream_ops.read` reads a File one slice at a time with
   FileReaderSync. In a folder synced by Google Drive for desktop on macOS (File
@@ -57,3 +65,13 @@ LOCAL PATCH (cold-read), in hdf5_util.js AND h5wasm.iife.js:
   `tests/test-workerfs-cold-read.mjs` asserts both, exercises both builds, and
   fails on the unpatched files. Note `git diff` shows hdf5_util.js as binary
   (embedded wasm); the IIFE carries the same block in readable form.
+
+LOCAL PATCH (full heap), in hdf5_util.js AND h5wasm.iife.js:
+  embind's std::string `toWireType` doesn't check its `_malloc`. With h5wasm's heap
+  full (2 GiB at most) it took address 0, and wrote the string's length and bytes from
+  there, over HDF5's static data from byte 1024 on, with no error. Later calls of that
+  module then failed in any way, such as "memory access out of bounds" in `new File`,
+  or could have gone on with damaged tables. Now it throws `Out of memory in h5wasm`.
+  Grep `LUCID local patch (full heap)`: one line in each file. The UTF-16 string type
+  beside it has the same gap, and nothing in h5wasm passes one.
+  Test: tests/e2e/slp-failed-write.mjs §1.

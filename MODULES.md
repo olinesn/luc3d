@@ -12077,6 +12077,8 @@ sessions, and stays open as long as the project does (`state.frameWorkers`,
 
 **Imports from project modules.**
 - `./slp-package-reader.js` — `SLPPackageReader`.
+- `./h5-status-guard.js` — `guardH5Status`: a damaged chunk of the frames is answered as
+  no frame (`{type: 'frame', error}`), not what was in memory.
 - `../lib/h5wasm/hdf5_hl.js` (vendored h5wasm ESM).
 
 **Imported by.** Spawned via `new Worker(new URL('../loading/frame-worker.js',
@@ -12955,6 +12957,12 @@ Init wraps `FS.read` once to keep the first thing a read throws in `failedRead`,
 `throwIfFailedRead` turns the whole parse into that error, right before `parseSlp`,
 `parseAnalysisH5` and `openH5Lazy` post their result. A lazy read after the open is
 served from memory, so it reads nothing. Covered by `tests/e2e/slp-failed-read.mjs` §5.
+A read HDF5 says it gave up on (a damaged compressed chunk) goes the same way:
+`guardH5Status` (`loading/h5-status-guard.js`) makes it throw, and tells `failedRead`, since
+those same try/catches would take it for a table the file doesn't have. HDF5 isn't stopped
+by that one, but the parse would still be missing what it couldn't read. These errors go out
+without a stack (`parseErrorText`), for the status bar. Covered by
+`tests/e2e/slp-damaged-chunk.mjs` §6.
 
 **Fast compound reads (`readCompoundColumnsFast`).** SLEAP-written `.slp` files
 store `frames` / `instances` / `points` / `pred_points` as HDF5 **compound**
@@ -12997,8 +13005,8 @@ worker alike. A recovery logs `[h5wasm WORKERFS] bytes … were read again`.
 `tests/test-workerfs-cold-read.mjs` runs this worker in Node over a File with
 injected holes.
 
-**Imports from project modules.** None (only the vendored
-`../lib/h5wasm/hdf5_hl.js`).
+**Imports from project modules.** `./slp-format-check.js`,
+`./h5-status-guard.js` (and the vendored `../lib/h5wasm/hdf5_hl.js`).
 
 **Imported by.** Spawned via
 `new Worker(new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI), {type: 'module'})`
@@ -13061,6 +13069,39 @@ options bag), so the main thread and Node tests can load it too.
 images, loaded over the network or from disk.
 
 Tests: `tests/test-slp-package-reader.mjs`, `tests/e2e/slp-embedded-images.mjs`.
+
+---
+
+### loading/h5-status-guard.js
+
+**Purpose.** Makes the h5wasm instances in LUC3D's own code throw when HDF5 says a
+call failed. h5wasm's C++ returns HDF5's status and its JS drops it, so a read HDF5 gave
+up on (a damaged gzip chunk, a zero page the `cold-read` patch can't repair) hands back
+what was in the buffer, and a write it couldn't finish looks done. The same rule as the
+`LUCID local patch (failed status)` in lib/sleap-io, for the instances outside the bundle;
+see CLAUDE.md. Keep the three copies in lockstep.
+
+**The rule.** Reads (`get_dataset_data`, `get_attribute_data`) throw on a negative status,
+naming the table, with `err.failedRead`, and a reclaim of that unfilled buffer is skipped
+(both `reclaim_vlen_memory` and `reclaim_vlen_memory_count`), since h5wasm would free
+garbage. Writes (`WRITE_CALLS`, and `File.close` unless opened `'r'`) throw on a negative
+status or if HDF5 printed an error during the call (`FS.write` to fd 2): what
+`create_dataset` and `create_attribute` return is their last cleanup's status, and
+`set_dataset_data`'s leaves out the H5Dclose that writes its cached chunks. A build without
+`Module` or `File` is left alone.
+
+**Key exports.**
+- `guardH5Status(h5, onFailedRead)` — call once, after `h5.ready`. `onFailedRead(err)`
+  hears of each failed read, for a caller whose reads are try/caught for "absent".
+
+**Imports from project modules.** None, so workers and Node tests can load it.
+
+**Imported by.** `loading/slp-import-worker.js`, `loading/frame-worker.js`,
+`import-export/file-io.js` (`initH5wasm`).
+
+**User-facing features.** Nothing while files are healthy. Tests:
+`tests/test-h5-status-guard.mjs` (the three copies on the same cases),
+`tests/e2e/slp-damaged-chunk.mjs`, `tests/e2e/slp-failed-write.mjs`.
 
 ---
 
@@ -14342,7 +14383,9 @@ session's resident/total) rather than truncate silently. Covered by
   (`labels.provenance`; the raw worker returns it too), for
   `import-export/slp-provenance.js`.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
-  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`. `buildReprojH5`
+  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`. These use `window.h5wasm`
+  through the private `initH5wasm`, which guards it once (`loading/h5-status-guard.js`):
+  a damaged table or a failed write rejects. `buildReprojH5`
   (Save Reprojections) projects a group's stored 3D into each camera when it has
   no `reprojections` — they are derived, kept only for frames that have been
   shown, and Triangulate All stores none; skipping such groups would leave every
@@ -14356,6 +14399,7 @@ session's resident/total) rather than truncate silently. Covered by
   per candidate).
 
 **Imports from project modules.**
+- `../loading/h5-status-guard.js` — `guardH5Status`, on `window.h5wasm` (`initH5wasm`).
 - `../pose/pose-data.js` — `Camera`, `Skeleton`, `Instance`, `Identity`,
   `toBoxedPoints3d`, `getPoint3d`, `points3dNodeCount`.
 - `./slp-merge.js` — `validateSkeletonCompatibility`.
@@ -14634,10 +14678,11 @@ eager path shows them.
   `window.confirm(...)` warns the user and offers to cancel in favor of
   per-camera export ("Export SLEAP File Per Session"/"By Cam"). Declining throws
   `SaveCancelledError`, which `quickSave`/`saveProjectSlp` report as "Save
-  cancelled" (not "Save failed") — `quickSave` additionally calls
-  `writable.abort()` on the already-open `FileSystemWritableFileStream`
-  instead of `close()`, so a cancelled save doesn't overwrite the destination
-  file with zero bytes. Bypass via `opts.skipSizeWarning` on `buildSlpBytes`.
+  cancelled" (not "Save failed"). On a cancelled or failed save `quickSave`
+  calls `writable.abort()` on the already-open `FileSystemWritableFileStream`
+  instead of `close()`, so the destination file isn't overwritten with zero bytes
+  and a disk that filled up isn't left full of the swap file
+  (`tests/e2e/slp-failed-write.mjs` §4). Bypass via `opts.skipSizeWarning` on `buildSlpBytes`.
   Covered by `tests/test-save-load-lazy-risk.js`.
 - **`saveAllSessionsStreaming(sessions)`** / **`beginMultiSessionSave()`** +
   **`commitSessionForMultiSessionSave(handle, session)`** +

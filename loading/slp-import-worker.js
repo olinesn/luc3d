@@ -23,6 +23,7 @@
 
 import * as h5wasm from '../lib/h5wasm/hdf5_hl.js';   // local vendored 0.10.3 ESM
 import { checkSlpFormatAttrs, isNewerSlpFormatError } from './slp-format-check.js';
+import { guardH5Status } from './h5-status-guard.js';
 
 var h5wasmReady = false;
 var FS = null;
@@ -50,7 +51,7 @@ var lazyNFrames = 0;
 var lazyTransposed = false;
 var lazyTrackOccupancy = null; // optional, full array (small: nFrames * nTracks bytes)
 var lazyTracksVal = null;      // full decompressed tracks TypedArray (loaded once, fast indexing)
-var failedRead = null;         // the first read of the file that threw (see the init below)
+var failedRead = null;         // the first read of the file that failed (see the init below)
 
 // Initialize h5wasm, then drain any queued messages
 (async function () {
@@ -74,6 +75,11 @@ var failedRead = null;         // the first read of the file that threw (see the
                 throw e;
             }
         };
+        // The same for a read HDF5 says it gave up on (a damaged compressed chunk):
+        // nothing else reports that, and the try/catches below would take the error
+        // for a table the file doesn't have. HDF5 isn't stopped by this one, but the
+        // parse would still be missing what it couldn't read.
+        guardH5Status(h5wasm, function (e) { failedRead = failedRead || e; });
         h5wasmReady = true;
         progress('h5wasm initialized');
 
@@ -118,6 +124,13 @@ function progress(msg) {
 
 function throwIfFailedRead() {
     if (failedRead) throw failedRead;
+}
+
+/** What to tell the user about a failed parse, as it stands or with where it came from. */
+function parseErrorText(err) {
+    var errMsg = (err.message || String(err));
+    if (err.stack && !err.failedRead) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
+    return errMsg;
 }
 
 async function parseSlp(file) {
@@ -558,9 +571,7 @@ async function parseSlp(file) {
             postMessage({ type: 'error', message: err.message, name: err.name });
             return;
         }
-        var errMsg = (err.message || String(err));
-        if (err.stack) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
-        postMessage({ type: 'error', message: errMsg });
+        postMessage({ type: 'error', message: parseErrorText(err) });
     }
 }
 
@@ -820,9 +831,7 @@ function parseAnalysisH5(f, filename) {
     } catch (err) {
         try { f.close(); } catch (e) { }
         try { FS.unmount('/work'); } catch (e) { }
-        var errMsg = (err.message || String(err));
-        if (err.stack) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
-        postMessage({ type: 'error', message: errMsg });
+        postMessage({ type: 'error', message: parseErrorText(err) });
     }
 }
 
@@ -970,9 +979,7 @@ function openH5Lazy(file) {
 
     } catch (err) {
         closeLazy();
-        var errMsg = (err.message || String(err));
-        if (err.stack) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
-        postMessage({ type: 'error', message: errMsg });
+        postMessage({ type: 'error', message: parseErrorText(err) });
     }
 }
 

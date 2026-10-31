@@ -7,6 +7,7 @@
 
 import * as h5wasm from '../lib/h5wasm/hdf5_hl.js';   // local vendored 0.10.3 ESM
 import { SLPPackageReader } from './slp-package-reader.js';
+import { guardH5Status } from './h5-status-guard.js';
 
 let h5wasmReady = false;
 let reader = null;
@@ -15,6 +16,9 @@ let reader = null;
 (async () => {
     try {
         await h5wasm.ready;
+        // A damaged chunk of the frames is an error here, not what was in memory (and on a
+        // table of frames, h5wasm freeing pointers from a buffer that was never filled).
+        guardH5Status(h5wasm);
         h5wasmReady = true;
         reader = new SLPPackageReader({ FS: h5wasm.FS, h5wasm: h5wasm });
         postMessage({ type: 'ready' });
