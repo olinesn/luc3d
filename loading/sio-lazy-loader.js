@@ -32,6 +32,7 @@
  */
 
 import { unionTrackNames } from './track-union.js';
+import { rekeyStoreRows } from '../import-export/detection-labels.js';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -1330,6 +1331,8 @@ export class SioLazyLoader {
                     fpCol[k] = kill[fp] ? -1 : survBefore[fp];
                 }
             }
+            // Identities, categories, embeddings and annotation links are keyed by row too.
+            rekeyStoreRows(store, kill, survBefore);
 
             // ---- 5. Re-range EVERY frame row of this store (not just this
             // camera's): on a shared store the rows of all cameras interleave in

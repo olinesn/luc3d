@@ -19,6 +19,7 @@ import { createDemoSkeleton } from '../demo-data.js';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
 } from './file-io.js';
+import { STORE_ROW_KEYED_FIELDS } from './detection-labels.js';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
@@ -889,14 +890,22 @@ async function buildSlpBytes(opts) {
  * the largest part of a store — are still evicted with the loader. A shared
  * project store (`openProjectSlp`) maps every camera to the same two objects.
  *
- * @returns {Map<string, {framesData: Object, instancesData: Object}>|null}
+ * What else a store keys by instance row (`STORE_ROW_KEYED_FIELDS`) goes along, as it was
+ * compacted with them.
+ *
+ * @returns {Map<string, {framesData: Object, instancesData: Object, rowKeyed: Object}>|null}
  */
 function keepEditedStoreColumns(loader) {
     if (!loader || !loader._storeEditedInMemory) return null;
     var kept = new Map();
     for (var camName of loader.labelsByCam.keys()) {
         var store = loader.labelsByCam.get(camName)._lazyDataStore;
-        if (store) kept.set(camName, { framesData: store.framesData, instancesData: store.instancesData });
+        if (!store) continue;
+        var rowKeyed = {};
+        for (var f = 0; f < STORE_ROW_KEYED_FIELDS.length; f++) {
+            rowKeyed[STORE_ROW_KEYED_FIELDS[f]] = store[STORE_ROW_KEYED_FIELDS[f]];
+        }
+        kept.set(camName, { framesData: store.framesData, instancesData: store.instancesData, rowKeyed: rowKeyed });
     }
     return kept;
 }
@@ -934,6 +943,7 @@ function restoreEditedStoreColumns(loader, kept) {
         }
         store.framesData = cols.framesData;
         store.instancesData = cols.instancesData;
+        Object.assign(store, cols.rowKeyed);
     }
 }
 

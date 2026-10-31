@@ -13467,6 +13467,36 @@ instance), so it sits outside the slp-import / session-loader import graph.
 
 ---
 
+### import-export/detection-labels.js
+
+**Purpose.** What a file says about a detection that LUC3D has no use for and must not
+lose: a tracker's score, and from a model an identity and category with their scores and
+embeddings. A save rebuilds every detection from LUC3D's model, so without this they are
+wiped. Read on the way in, written back on the way out; nothing in LUC3D acts on them.
+No imports, so Node tests can load it.
+
+**Exports.**
+- `typedFileLabels(typed)` → what a typed detection carries, or null.
+- `adoptTypedLabels(inst, typed)` — keeps a typed detection's labels on the LUC3D Instance.
+- `adoptIdentityMetadata(identities, catalog)` — the file's identity metadata for a
+  session's identities, by name (LUC3D's own list stores only names and colours).
+- `identityCatalogFinder(SIO, sioIdentities)` → finds a detection's identity in a save's
+  catalog by name, adding it if the session's list lacks it.
+- `writeFileLabels(sioInst, inst, findIdentity)` — writes them onto the saved detection.
+- `storeRowLabels(store, row)` → what a lazy store holds for one row, for a camera-frame
+  a user edit rewrites.
+- `STORE_ROW_KEYED_FIELDS`, `rekeyStoreRows(store, kill, survBefore)` — what a store keys
+  by instance row (labels, annotation links), moved after rows are deleted.
+
+**Depends on.** Nothing. `Instance.trackingScore` and `Instance.fileLabels` default on
+the prototype (`pose/pose-data.js`), so a detection with none costs nothing. A lazy
+project's stay in its store; its writer reads them there (patch `(detection labels)`).
+
+**Used by.** `import-export/file-io.js`, `import-export/slp-import.js`,
+`import-export/slp-streaming-write.js`, `loading/session-loader.js`.
+
+**Tests.** `tests/test-detection-labels.mjs`, `tests/e2e/save-keeps-detection-labels.mjs`.
+
 ### import-export/smoothing-metadata.js
 
 **Purpose.** Temporal Smoothing's state in the project file, so a reopened

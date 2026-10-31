@@ -20,6 +20,7 @@ import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPoints
 import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
+import { identityCatalogFinder, typedFileLabels, writeFileLabels } from './detection-labels.js';
 import { writePlaneMetadata } from './plane-metadata.js';
 import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js';
 
@@ -2192,11 +2193,12 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     if (session.identities && session.identities.length > 0) {
         for (var iid = 0; iid < session.identities.length; iid++) {
             var lucidId = session.identities[iid];
-            var sioId = new SIO.Identity({ name: lucidId.name, color: lucidId.color });
+            var sioId = new SIO.Identity({ name: lucidId.name, color: lucidId.color, metadata: lucidId.metadata });
             sioIdentities.push(sioId);
             lucidIdToSioId.set(lucidId.id, sioId);
         }
     }
+    var findDetectionIdentity = identityCatalogFinder(SIO, sioIdentities);
 
     // 4. Build sleap-io Cameras and Videos — one per camera
     var sioCameras = [];
@@ -2322,6 +2324,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
             // = undefined leaking into SIO.Instance for trackless instances.
             var track = (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
             var sioInst = newSioInstance(inst, track);
+            writeFileLabels(sioInst, inst, findDetectionIdentity);
             lucidToSio.set(inst, sioInst);
             return sioInst;
         }
@@ -2951,7 +2954,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
     // --- identities[] (file-level fallback; per-session lives in
     // sessions[].metadata.lucid.identities, which the importer prefers) ---
     var identities = (labels.identities || []).map(function (id) {
-        return { name: id.name, color: id.color != null ? id.color : undefined };
+        return { name: id.name, color: id.color != null ? id.color : undefined, metadata: id.metadata };
     });
 
     return {
@@ -3012,6 +3015,8 @@ function _typedInstanceToSlpData(inst, typedTracks, numNodes, PredictedInstance)
         points: points,
         occluded: occluded,
         pointScores: isPred && inst._score ? inst._score : null,
+        trackingScore: inst.trackingScore || 0,
+        fileLabels: typedFileLabels(inst),
     };
 }
 
