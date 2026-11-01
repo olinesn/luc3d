@@ -27,6 +27,8 @@
  * animals show its first N entries, so the closest pair among them must stay
  * wide as N grows, and a project saved with an old default gets the new one.
  *
+ * §10–11 hold the behavior and state (keypoint-MoSeq syllable) colors.
+ *
  * Both modules are import-free, so they load directly under Node.
  */
 import { pathToFileURL } from 'url';
@@ -312,6 +314,30 @@ console.log('\n10. Behavior colors (pose/behavior-ethogram.js) tell behaviors ap
     const dark = B.filter(h => hexToLab(h)[0] < 60);
     check(dark.length === 0, `every behavior color is L* >= 60, light enough to read on dark video (${dark.join(', ') || 'none darker'})`);
     check(new Set(B.map(h => h.toLowerCase())).size === B.length, 'no color is listed twice');
+}
+
+console.log('\n11. State colors (pose/behavior-states.js) tell neighbouring syllables apart on the timeline');
+{
+    // A States row on the timeline paints each run of keypoint-MoSeq syllables
+    // in its state's color; neighbouring runs are different syllables, so every
+    // pair of colors must stay apart, every one apart from the shared gray of
+    // the syllables past the palette, and light enough on the dark timeline.
+    const st = await import(pathToFileURL(path.resolve('pose/behavior-states.js')).href);
+    const C = st.STATE_COLORS, GRAY = st.OTHER_STATE_COLOR, BG = '#1e1e1e';
+    const MIN_BETWEEN_STATES = 14, MIN_FROM_GRAY = 14, MIN_LIGHTNESS_STATE = 55;
+    let worst = { d: Infinity };
+    for (let i = 0; i < C.length; i++) for (let j = i + 1; j < C.length; j++) {
+        const d = dE(C[i], C[j]);
+        if (d < worst.d) worst = { d, a: C[i], b: C[j] };
+    }
+    check(C.length >= 20, `at least 20 state colors (${C.length})`);
+    check(worst.d >= MIN_BETWEEN_STATES,
+        `every pair of state colors >= ${MIN_BETWEEN_STATES} apart (closest ${worst.a} / ${worst.b}: ${worst.d.toFixed(1)})`);
+    const nearGray = C.map(h => [h, dE(h, GRAY)]).sort((a, b) => a[1] - b[1])[0];
+    check(nearGray[1] >= MIN_FROM_GRAY, `every state color >= ${MIN_FROM_GRAY} from the shared gray ${GRAY} (closest ${nearGray[0]}: ${nearGray[1].toFixed(1)})`);
+    const dark = C.filter(h => hexToLab(h)[0] < MIN_LIGHTNESS_STATE);
+    check(dark.length === 0, `every state color is L* >= ${MIN_LIGHTNESS_STATE} on the ${BG} timeline (${dark.join(', ') || 'none darker'})`);
+    check(new Set(C.map(h => h.toLowerCase())).size === C.length && C.every(h => /^#[0-9a-f]{6}$/.test(h)), 'no color twice; every one #rrggbb');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

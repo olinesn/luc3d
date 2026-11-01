@@ -24,6 +24,9 @@
  *     from 2D detections or reprojections; dashed while still being coded or
  *     waiting for a target; in Label Behaviors mode a light numbered box on the
  *     animal the keys label (viewer only); "On video" turns them off.
+ *  8. Mutual behaviors: made in the editor, started from one animal and
+ *     stopped from the other, stored once per pair, listed and drawn for both,
+ *     labelled "↔".
  *
  * Run: node tests/e2e/behavior-labelling.mjs   (spawns its own http.server; PORT= to move it)
  */
@@ -291,6 +294,50 @@ try {
     check(JSON.stringify(boxes.focal) === '[{"animals":["id_2"],"text":"3 · id_2"}]',
         `in the mode, the animal the keys label gets a light box with its number (${JSON.stringify(boxes.focal)})`);
     check(!boxes.focalInExport && !boxes.focalAfterExit, 'not in exported videos, and gone once the mode is left');
+
+    console.log('\n-- 8. mutual behaviors (no actor and target) --');
+    await page.click('#behaviorEthogramBtn');
+    await page.click('#behaviorEdAdd');
+    await page.keyboard.type('sniff');                              // focus starts in the new name field
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('s');
+    await page.keyboard.press('Tab');
+    const sid = await page.evaluate(async () => (await import('/pose/behavior-ethogram.js')).behaviorByName('sniff').id);
+    await page.selectOption(`#behaviorEdRows tr[data-id="${sid}"] [data-f="socialKind"]`, 'mutual');
+    const sb = await page.evaluate(async (id) => { const b = (await import('/pose/behavior-ethogram.js')).behaviorById(id); return [b.key, b.social, b.mutual]; }, sid);
+    check(eq(sb, ['s', true, true]), `the editor makes a behavior mutual (${JSON.stringify(sb)})`);
+    await page.keyboard.press('Escape');
+    await page.mouse.click(300, 300);
+    await page.keyboard.press('Meta+Shift+L');
+    await goTo(1700);
+    await page.keyboard.press('3');                                 // id_2
+    await page.keyboard.press('s');                                 // asks for the partner…
+    await page.keyboard.press('1');                                 // …Alice
+    await goTo(1720);
+    await page.keyboard.press('1');                                 // now Alice
+    await page.keyboard.press('s');                                 // stops it from her side, no question
+    await page.keyboard.press('Escape');
+    check(eq(await bouts({ behaviorId: sid }), [[sid, 'Alice', 'id_2', 1700, 1720, true]]),
+        'started from id_2 and stopped from Alice: one bout for the pair');
+    await page.waitForTimeout(150);
+    const mu = await page.evaluate(async (id) => {
+        const L = await import('/pose/behavior-labels.js'); const C = await import('/ui/behavior-coding.js');
+        const AS = await import('/ui/app-state.js'); const s = AS.state.session;
+        const sel = await import('/ui/behavior-coding.js'); sel.selectBehavior(id);
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const onRow = n => AS.timeline._trackSegments.find(r => r._isBehavior && r.trackName === n).segments.some(g => g.start === 1700 && g.end === 1720);
+        const spec = C.behaviorBoxesAt(s, 1710);
+        const out = {
+            lists: [L.listBouts(s, { animal: 'Alice', behaviorId: id }).length, L.listBouts(s, { animal: 'id_2', behaviorId: id }).length],
+            rows: [onRow('Alice'), onRow('id_2'), onRow('id_1')],
+            label: spec.items.filter(i => i.animals.join() === 'Alice,id_2').map(i => i.parts.map(p => p[0]).join('')),
+        };
+        sel.selectBehavior(null);
+        return out;
+    }, sid);
+    check(eq(mu.lists, [1, 1]), 'it is listed for both animals');
+    check(eq(mu.rows, [true, true, false]), `and drawn on both animals' timeline rows, not others' (${JSON.stringify(mu.rows)})`);
+    check(eq(mu.label, ['sniff · Alice ↔ id_2']), `its video box reads "↔" (${JSON.stringify(mu.label)})`);
 
     check(errs.length === 0, `no page errors (${errs.join(' | ').slice(0, 300)})`);
     console.log(fails === 0 ? '\nPASS' : `\nFAIL — ${fails} check(s)`);

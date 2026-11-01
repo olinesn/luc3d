@@ -115,6 +115,7 @@ import { readVisibilityMetadata } from '../import-export/visibility-metadata.js'
 import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js';
 import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
 import { readBehaviorMetadata, resetBehaviorState } from '../import-export/behavior-metadata.js';
+import { fileEventsOf, sessionEventScope } from '../import-export/behavior-events.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2344,7 +2345,8 @@ export async function handleLoadSessionFolderSingleSlp() {
         readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         // Behavior labels. Into an open project the file's ethogram is merged
         // by behavior name and its bouts remapped onto the project's ids.
-        readBehaviorMetadata(session, sessLucid);
+        readBehaviorMetadata(session, sessLucid, slpData.behaviorEvents,
+            sessionEventScope(slpData.sessions, slpData.videos.length, 0, true));
         var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
         if (planeConflict) {
             console.warn('[single-slp] not reading the plane state in ' + slpFile.name +
@@ -2943,6 +2945,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
         var labels = opened.labels;
         var typedSession = opened.typedSession;
+        // What `sessionEventScope` reads of each of the file's sessions: the reader keeps
+        // only the first from here on.
+        var fileSessionMaps = (labels.rawSessionsJson || []).map(function (s) {
+            return s && { camcorder_to_video_idx_map: s.camcorder_to_video_idx_map, calibration: s.calibration };
+        });
         // This loader opens a file's first session. The others go into columns now,
         // before the first one's groups are built, so their object graphs are not
         // resident on top of those: a save writes them back whole.
@@ -3027,7 +3034,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // eager read in import-export/slp-import.js.
         readVisibilityMetadata(session, lucid);
         readSmoothingMetadata(session, lucid);   // Temporal Smoothing's last run
-        readBehaviorMetadata(session, lucid);    // ethogram + behavior bouts
+        // Ethogram + behavior bouts. Only this file's first session opens here.
+        readBehaviorMetadata(session, lucid, fileEventsOf(labels),
+            sessionEventScope(fileSessionMaps, (labels.videos || []).length, 0, true));
         // Define Planes state — the lazy-reopen mirror of the eager read in
         // `import-export/slp-import.js`.
         readPlaneMetadata(session, lucid);
