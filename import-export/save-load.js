@@ -42,6 +42,7 @@ import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js
 import { fitTimelineToData } from '../ui/timeline-controller.js';
 import { slpHasEmbeddedImages } from './slp-import.js';
 import { handleLoadSlpFile } from './slp-import.js';
+import { outsideFramesForSave } from './outside-frames.js';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
@@ -873,10 +874,12 @@ async function buildSlpBytes(opts) {
         });
 
         var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
+        // Poses on a video no session names go back on their own video.
+        var sessOutside = outsideFramesForSave(sess, sessLabels.skeletons[0], sessLabels.identities);
 
         // Merge into combined Labels
-        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
-        allVideos = allVideos.concat(sessLabels.videos || []);
+        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFrames : []);
+        allVideos = allVideos.concat(sessLabels.videos || [], sessOutside ? sessOutside.videos : []);
         for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
             var skel = sessLabels.skeletons[sk];
             if (!seenSkeletonNames.has(skel.name)) {
@@ -884,8 +887,9 @@ async function buildSlpBytes(opts) {
                 seenSkeletonNames.add(skel.name);
             }
         }
-        for (var ti = 0; ti < (sessLabels.tracks || []).length; ti++) {
-            var trk = sessLabels.tracks[ti];
+        var sessAllTracks = (sessLabels.tracks || []).concat(sessOutside ? sessOutside.tracks : []);
+        for (var ti = 0; ti < sessAllTracks.length; ti++) {
+            var trk = sessAllTracks[ti];
             if (!seenTrackNames.has(trk.name)) {
                 allTracks.push(trk);
                 seenTrackNames.add(trk.name);
@@ -1123,6 +1127,11 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
     var cameraRenames = session.lazyLoader.cameraRenames;
     var wasSharedStore = !!session.lazyLoader._sharedStore;
+    // A project file with no frame on any of this session's cameras has no
+    // per-camera entry, and pass 2 still has to read its frames back.
+    if (wasSharedStore && sourceFiles.length === 0 && session.lazyLoader._projectFile) {
+        sourceFiles = [['', session.lazyLoader._projectFile]];
+    }
     // A store edited in memory is not what pass 2 will read back from the
     // files: keep its frame + instance columns (`keepEditedStoreColumns`).
     var editedColumns = keepEditedStoreColumns(session.lazyLoader);
