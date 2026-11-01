@@ -65,7 +65,8 @@ import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { identityCatalogFinder, storeRowLabels, writeFileLabels } from './detection-labels.js';
 import { writePlaneMetadata } from './plane-metadata.js';
 import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js';
-import { writeBehaviorMetadata } from './behavior-metadata.js';
+import { writeBehaviorSlpMetadata } from './behavior-metadata.js';
+import { buildBehaviorEvents } from './behavior-events.js';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -200,6 +201,7 @@ export function createProjectWriterContext() {
         // `skeletonByName` dedup above already guards against for skeletons.
         trackBaseByNameSig: new Map(),
         allIdentities: [],         // SIO.Identity[], concatenated across sessions
+        behaviorItems: [],         // per session, for its behavior events (`openProjectWriter`)
     };
 }
 
@@ -467,8 +469,14 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     writePlaneMetadata(sioSession.metadata.lucid, session);
     // Temporal Smoothing's last run, only while something is smoothed.
     writeSmoothingMetadata(sioSession.metadata.lucid, session);
-    // Ethogram + this session's behavior bouts (same helper as the eager writer).
-    writeBehaviorMetadata(sioSession.metadata.lucid, session);
+    // Behavior labels go in as events (`openProjectWriter`); this is what only LUC3D
+    // reads (same helper as the eager writer).
+    writeBehaviorSlpMetadata(sioSession.metadata.lucid, session);
+    ctx.behaviorItems.push({
+        session: session, video: sessionVideoIndices.length ? ctx.allVideos[sessionVideoIndices[0]] : null,
+        videos: sessionVideoIndices.map(function (vi) { return ctx.allVideos[vi]; }),
+        identities: Array.from(lucidIdToSioId.values()),
+    });
     for (var av = 0; av < sioCameras.length; av++) sioSession.addVideo(ctx.allVideos[sessionVideoIndices[av]], sioCameras[av]);
 
     var camByName = new Map();
@@ -761,6 +769,15 @@ export async function openProjectWriter(ctx, allSioSessions, provenance) {
     if (!SIO || typeof SIO.openSlpWriter !== 'function') {
         throw new Error('sleap-io.js streaming writer (openSlpWriter) not available');
     }
+    // Every session's events, now that the catalogs are final. An animal that is not
+    // an identity of its session is looked up among all the tracks, by name.
+    ctx.behaviorItems.forEach(function (item) { item.tracks = ctx.allTracks; });
+    var behaviorEvents = buildBehaviorEvents(SIO, ctx.behaviorItems);
+    ctx.behaviorItems.forEach(function (item) {
+        item.identities.forEach(function (id) {
+            if (ctx.allIdentities.indexOf(id) < 0) ctx.allIdentities.push(id);
+        });
+    });
     return await SIO.openSlpWriter({
         skeletons: ctx.allSkeletons,
         videos: ctx.allVideos,
@@ -768,6 +785,8 @@ export async function openProjectWriter(ctx, allSioSessions, provenance) {
         identities: ctx.allIdentities,
         sessions: allSioSessions,
         provenance: provenance || { source: 'lucid', exported_at: new Date().toISOString() },
+        eventTypes: behaviorEvents.eventTypes,
+        events: behaviorEvents.events,
     });
 }
 
