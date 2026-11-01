@@ -25,7 +25,7 @@
 // through, so playback and proofreading work as usual. Outside the mode the
 // Behavior tab's buttons and the timeline's Shift+drag menu still label.
 //
-// Depends on: ui/app-state.js, ui/behavior-coding.js, ui/keyboard-target.js,
+// Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-detect.js, ui/keyboard-target.js,
 //             ui/plane-definition.js, pose/behavior-ethogram.js,
 //             pose/behavior-labels.js, import-export/save-load.js
 
@@ -33,8 +33,9 @@ import { state } from './app-state.js';
 import {
     behaviorUi, codeBehavior, pickBehaviorTarget, cancelPendingTarget, setFocalAnimal, sessionAnimals, noteBehaviorMode,
     focalAnimal, setRangeIn, setRangeOut, clearArmedRange, armedRange, adjacentBout, goToBehaviorFrame,
-    openBehaviorTab, requestBehaviorRepaint, registerBehaviorRepaint,
+    openBehaviorTab, requestBehaviorRepaint, registerBehaviorRepaint, pairGlyph,
 } from './behavior-coding.js';
+import { detectionFps } from './behavior-detect.js';
 import { shouldIgnoreShortcut } from './keyboard-target.js';
 import { isPlaneModeActive, exitPlaneMode } from './plane-definition.js';
 import { behaviorByKey, behaviorById, behaviors } from '../pose/behavior-ethogram.js';
@@ -161,8 +162,7 @@ function onKey(e) {
 // ----------------------------------------------------------------------------
 
 function fmtSeconds(frames) {
-    var fps = state.fps > 0 ? state.fps : 30;
-    return (frames / fps).toFixed(1) + ' s';
+    return (frames / detectionFps()).toFixed(1) + ' s';
 }
 
 function renderBar() {
@@ -180,7 +180,7 @@ function renderBar() {
     runningStates(session).forEach(function (r) {
         var b = behaviorById(r.behaviorId);
         if (!b) return;
-        parts.push('● ' + b.name + ' · ' + r.animal + (r.target ? ' → ' + r.target : '') + ' ' +
+        parts.push('● ' + b.name + ' · ' + r.animal + (r.target ? pairGlyph(b) + r.target : '') + ' ' +
             fmtSeconds(Math.max(0, state.currentFrame - r.start + 1)));
     });
     if (ui.rangeIn != null) {

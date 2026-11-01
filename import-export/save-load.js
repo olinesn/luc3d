@@ -375,7 +375,25 @@ async function ensureSleapIO() {
     return mod;
 }
 
+// No initializer: a hook registered while this module is still being
+// evaluated (an import cycle) must not be reset when its body runs.
+var _markDirtyHooks;
+
+/**
+ * Be told on every `markDirty` (an edit happened somewhere). Hooks run on
+ * every edit, so they must be cheap: behavior predictions use it only to
+ * note that the poses they read may have changed (ui/behavior-detect.js).
+ * @param {function(): void} fn
+ */
+export function onMarkDirty(fn) {
+    if (typeof fn === 'function') (_markDirtyHooks = _markDirtyHooks || []).push(fn);
+}
+
 export function markDirty() {
+    var hooks = _markDirtyHooks || [];
+    for (var i = 0; i < hooks.length; i++) {
+        try { hooks[i](); } catch (e) { console.error('[markDirty] hook failed', e); }
+    }
     // Per-session dirty (active-session memory model): the switch-away save
     // prompt and safe lazy-eviction key off THIS flag, so it must be set even
     // when the global flag is already true from another session.
@@ -678,6 +696,8 @@ async function buildSlpBytes(opts) {
     var allSkeletons = [];
     var allTracks = [];
     var allIdentities = [];
+    var allEventTypes = [];
+    var allEvents = [];
     var seenSkeletonNames = new Set();
     var seenTrackNames = new Set();
     var suggestionSessions = [];
@@ -849,6 +869,8 @@ async function buildSlpBytes(opts) {
         }
         allIdentities = allIdentities.concat(sessLabels.identities || []);
         allSessions = allSessions.concat(sessLabels.sessions || []);
+        allEventTypes = allEventTypes.concat(sessLabels.eventTypes || []);
+        allEvents = allEvents.concat(sessLabels.events || []);
         suggestionSessions.push({
             session: sess, cameraVideos: sessLabels.videos, placedVideos: sessOutside ? sessOutside.placedVideos : null,
         });
@@ -881,6 +903,11 @@ async function buildSlpBytes(opts) {
             }
         }
     }
+    // Events name their animals the same way: a track stays the canonical object.
+    allEvents.forEach(function (ev) {
+        if (ev.subject instanceof SIO.Track && canonicalTrackByName[ev.subject.name]) ev.subject = canonicalTrackByName[ev.subject.name];
+        if (ev.target instanceof SIO.Track && canonicalTrackByName[ev.target.name]) ev.target = canonicalTrackByName[ev.target.name];
+    });
 
     var labels = new SIO.Labels({
         labeledFrames: allLabeledFrames,
@@ -892,6 +919,9 @@ async function buildSlpBytes(opts) {
         sessions: allSessions,
         // Keeps the loaded files' provenance (slp-provenance.js).
         provenance: buildSaveProvenance(sessionsToExport),
+        // The catalog collapses to one entry per name when Labels is built.
+        eventTypes: allEventTypes,
+        events: allEvents,
     });
 
     // PR 5.2: export sleap-io.js's canonical bytes directly. The typed graph
