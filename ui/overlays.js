@@ -1546,6 +1546,20 @@ export function drawBehaviorBoxes(ctx, viewName, instanceGroups, session, frameI
         var b = animalBoxInView(group, viewName, spec.nodeMask || null);
         if (b) boxes.set(ident.name, b);
     }
+    // No identities: a one-camera project's animals are its tracks
+    // (ui/behavior-coding.js `sessionAnimals`), grouped or not.
+    if (!(session.identities && session.identities.length) && session.frameGroups && session.tracks) {
+        var trackFg = session.frameGroups.get(frameIdx);
+        if (trackFg) {
+            var inView = trackFg.getInstances(viewName).concat(trackFg.getUnlinkedInstances(viewName).map(function (u) { return u.instance; }));
+            inView.forEach(function (one) {
+                var name = one && one.trackIdx != null && one.trackIdx >= 0 ? session.tracks[one.trackIdx] : null;
+                if (!name || !wanted.has(name) || boxes.has(name)) return;
+                var tb = animalBoxInView({ getInstance: function () { return one; } }, viewName, spec.nodeMask || null);
+                if (tb) boxes.set(name, tb);
+            });
+        }
+    }
     if (!boxes.size) return;
     var vw = options.videoWidth, vh = options.videoHeight;
     var cw = options.canvasWidth != null ? options.canvasWidth : ctx.canvas.width;

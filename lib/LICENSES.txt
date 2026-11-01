@@ -44,6 +44,22 @@ pako 2.2.0                                                    MIT AND Zlib
     https://github.com/nodeca/pako
     Full text: lib/pako/LICENSE
 
+umap-js 1.4.0                                                 Apache-2.0
+    UMAP layouts for Behavior ▸ Discover Behaviors….
+    https://github.com/PAIR-code/umap-js
+    Copyright 2019 Google LLC. The package's LICENSE file and every source header say
+    Apache-2.0, although its package.json says MIT; the Apache text ships here. LUCID
+    changed only the bundle's UMD wrapper, so that it loads as an ES module (see
+    lib/umap-js/PROVENANCE.txt); the code inside is as published. Full text:
+    lib/umap-js/LICENSE
+    It is a port of umap-learn, and carries that notice:
+      BSD 3-Clause License. Copyright (c) 2017, Leland McInnes. All rights reserved.
+      (the BSD text is at the end of this file)
+    The bundle also contains, unmodified, all MIT (the MIT text is below):
+      ml-levenberg-marquardt, ml-matrix, ml-array-max, ml-array-min, ml-array-rescale
+        Copyright (c) 2017 ml.js; ml-matrix Copyright (c) 2014 Michaël Zasso
+      is-any-array  Copyright (c) 2018 cheminfo
+
 
 Fetched by scripts/offline_deps.py (not committed)
 --------------------------------------------------
@@ -74,7 +90,8 @@ yaml 2.8.0                                                    ISC
     Copyright Eemeli Aro. Full text: lib/yaml/LICENSE
 
 
-MIT License (for dockview-core 6.6.1, which ships no LICENSE file)
+MIT License (for dockview-core 6.6.1, which ships no LICENSE file, and for the
+ml-* and is-any-array packages inside the umap-js bundle, whose notices are listed above)
 ------------------------------------------------------------------
 
 Copyright (c) mathuo
@@ -104,3 +121,35 @@ LUCID exports MP4 video through the browser's own WebCodecs H.264 encoder. No
 H.264 encoder or ffmpeg binary is distributed here, so no patent-encumbered or
 GPL-licensed codec enters this tree. Keep it that way: bundling ffmpeg would
 import a licensing problem the current design avoids for free.
+
+
+BSD 3-Clause License (umap-learn, of which umap-js is a port)
+-------------------------------------------------------------
+
+Copyright (c) 2017, Leland McInnes
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the copyright holder nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
