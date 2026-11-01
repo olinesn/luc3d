@@ -5,7 +5,8 @@
 // says why and reverts), so there is no Apply step to forget; Esc or Close
 // leave. Removing a behavior that has bouts asks first and deletes its bouts
 // in every loaded session. Ethogram JSON can be exported and imported (merged
-// by behavior name), to reuse a scheme across projects.
+// by behavior name), to reuse a scheme across projects; Import also takes a
+// BORIS project's ethogram (exclusions become groups where they can).
 //
 // Mark Range Reviewed turns the unlabelled frames of a range into "not"
 // labels, for the chosen animals and behaviors — what a classifier needs to
@@ -13,17 +14,20 @@
 //
 // Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-confirm.js,
 //             pose/behavior-ethogram.js, pose/behavior-labels.js,
-//             import-export/save-load.js
+//             import-export/behavior-io.js, import-export/save-load.js,
+//             loading/cold-read-guard.js
 
 import { state } from './app-state.js';
 import { sessionAnimals, focalAnimal, armedRange, requestBehaviorRepaint } from './behavior-coding.js';
-import { confirmRemoveBehavior } from './behavior-confirm.js';
+import { confirmRemoveBehavior, confirmMakeMutual } from './behavior-confirm.js';
 import {
     behaviors, addBehavior, updateBehavior, removeBehavior, moveBehavior, serializeEthogram, ingestEthogram,
-    behaviorById, BEHAVIOR_KINDS,
+    behaviorById, behaviorByName, BEHAVIOR_KINDS,
 } from '../pose/behavior-ethogram.js';
-import { countBehaviorBouts, deleteBehaviorBouts, markReviewed } from '../pose/behavior-labels.js';
+import { countBehaviorBouts, deleteBehaviorBouts, markReviewed, rekeyBehavior, bothWayPairs } from '../pose/behavior-labels.js';
+import { parseBehaviorFile, ethogramPayload } from '../import-export/behavior-io.js';
 import { markDirty, setStatus } from '../import-export/save-load.js';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 
 function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -60,8 +64,11 @@ function rowHtml(b, i, n) {
         '<td><select data-f="kind">' + BEHAVIOR_KINDS.map(function (k) {
             return '<option value="' + k + '"' + (k === b.kind ? ' selected' : '') + '>' + (k === 'state' ? 'State' : 'Point') + '</option>';
         }).join('') + '</select></td>' +
-        '<td class="behavior-ed-center"><input type="checkbox" data-f="social"' + (b.social ? ' checked' : '') +
-            ' title="Has a target animal (actor → target)"></td>' +
+        '<td><select data-f="socialKind" title="Social: done to a target animal (→), or by a pair with no actor and target (↔ mutual)">' +
+            [['none', '—'], ['directed', '→ target'], ['mutual', '↔ mutual']].map(function (o) {
+                var cur = b.mutual ? 'mutual' : b.social ? 'directed' : 'none';
+                return '<option value="' + o[0] + '"' + (o[0] === cur ? ' selected' : '') + '>' + o[1] + '</option>';
+            }).join('') + '</select></td>' +
         '<td><input type="text" data-f="group" value="' + esc(b.group) + '" maxlength="40" class="behavior-ed-group" ' +
             'title="Behaviors sharing a group are mutually exclusive for one animal"></td>' +
         '<td><input type="text" data-f="description" value="' + esc(b.description) + '" maxlength="500" class="behavior-ed-desc"></td>' +
@@ -76,17 +83,18 @@ export function showEthogramModal() {
     var dlg = openOverlay('behavior-ethogram-modal',
         '<h3>Ethogram</h3>' +
         '<p class="behavior-ed-lead">The behaviors you will label, for every session of this project. A <b>state</b> has a start and an end; ' +
-        'a <b>point</b> is one frame. <b>Social</b> behaviors have a target animal. Behaviors in the same <b>group</b> exclude each other.</p>' +
+        'a <b>point</b> is one frame. A <b>social</b> behavior is done to a target animal (→), or is <b>mutual</b> (↔): ' +
+        'a pair with no actor and target, like nose-to-nose sniffing. Behaviors in the same <b>group</b> exclude each other.</p>' +
         '<div class="behavior-ed-table-wrap"><table class="data-table behavior-ed-table"><thead><tr><th></th><th>Name</th><th>Key</th>' +
         '<th>Kind</th><th>Social</th><th>Group</th><th>Description</th><th></th></tr></thead><tbody id="behaviorEdRows"></tbody></table></div>' +
         '<div class="behavior-ed-msg" id="behaviorEdMsg" role="status"></div>' +
         '<div class="modal-actions behavior-ed-actions">' +
         '<button id="behaviorEdAdd">+ Add behavior</button>' +
-        '<button id="behaviorEdImport" title="Add the behaviors of an ethogram JSON file (matched by name)">Import…</button>' +
+        '<button id="behaviorEdImport" title="Add the behaviors of an ethogram JSON file or a BORIS project (matched by name)">Import…</button>' +
         '<button id="behaviorEdExport" title="Save this ethogram as JSON, to reuse in another project">Export…</button>' +
         '<span class="behavior-ed-spacer"></span>' +
         '<button class="primary" id="behaviorEdClose">Close</button></div>' +
-        '<input type="file" id="behaviorEdFile" accept=".json,application/json" hidden>');
+        '<input type="file" id="behaviorEdFile" accept=".json,.boris,application/json" hidden>');
     _open = dlg.overlay;
     var modal = dlg.modal;
     var tbody = modal.querySelector('#behaviorEdRows');
@@ -120,6 +128,7 @@ export function showEthogramModal() {
         var tr = e.target.closest('tr[data-id]');
         if (!tr) return;
         var f = e.target.dataset.f;
+        if (f === 'socialKind') { changeSocialKind(tr.dataset.id, e.target.value); return; }
         var fields = {};
         fields[f] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
         var res = updateBehavior(tr.dataset.id, fields);
@@ -153,6 +162,25 @@ export function showEthogramModal() {
             say('Removed "' + b.name + '"' + (total ? ' and its ' + total.toLocaleString('en-US') + ' bouts' : ''));
         });
     });
+    // Social kind: none / directed (→ target) / mutual (↔). Making a behavior
+    // mutual merges bouts labelled both ways round (A → B and B → A), so that
+    // asks first when there are any; its bouts are then stored as pairs.
+    function changeSocialKind(id, kind) {
+        var b = behaviorById(id);
+        var sessions = (state.sessions && state.sessions.length) ? state.sessions : (state.session ? [state.session] : []);
+        var toMutual = kind === 'mutual' && !b.mutual;
+        var merging = 0, holding = 0;
+        if (toMutual) sessions.forEach(function (s) { var c = bothWayPairs(s, id); merging += c; if (c) holding++; });
+        (toMutual ? confirmMakeMutual(b, merging, holding) : Promise.resolve(true)).then(function (ok) {
+            if (!ok) { render(); return; }
+            var res = updateBehavior(id, { social: kind !== 'none', mutual: kind === 'mutual' });
+            if (res.error) { say(res.error, true); render(); return; }
+            if (toMutual) sessions.forEach(function (s) { rekeyBehavior(s, id); });
+            say(kind === 'mutual' ? '"' + b.name + '" is mutual: one bout per pair' : '');
+            ethogramChanged();
+        });
+    }
+
     modal.querySelector('#behaviorEdAdd').addEventListener('click', function () {
         var k = behaviors().length + 1, name = 'behavior ' + k;
         while (behaviors().some(function (b) { return b.name.toLowerCase() === name; })) name = 'behavior ' + (++k);
@@ -179,14 +207,25 @@ export function showEthogramModal() {
     file.addEventListener('change', function () {
         var f = file.files && file.files[0];
         if (!f) return;
-        f.text().then(function (txt) {
-            var before = behaviors().length;
-            var data = JSON.parse(txt);
-            ingestEthogram(data && data.ethogram ? data.ethogram : data);
+        readBlobArrayBuffer(f).then(function (buf) {
+            var parsed = parseBehaviorFile(f.name, new TextDecoder('utf-8').decode(new Uint8Array(buf)));
+            if (parsed.error || (parsed.kind !== 'ethogram' && parsed.kind !== 'boris-project')) {
+                throw new Error(parsed.error || 'it holds labels, not an ethogram (use Behavior ▸ Import Labels…)');
+            }
+            var before = behaviors().length, groups = [];
+            if (parsed.kind === 'ethogram') ingestEthogram(parsed.ethogramPayload);
+            else {
+                var fresh = parsed.ethogram.filter(function (e) { return !behaviorByName(e.name); });
+                var res = ethogramPayload(fresh, behaviors().map(function (b) { return b.group; }).filter(Boolean));
+                ingestEthogram(res.payload);
+                groups = res.groups;
+            }
             var added = behaviors().length - before;
-            ethogramChanged();
+            if (added) ethogramChanged();
             render();
-            say(added ? 'Added ' + added + ' behavior' + (added === 1 ? '' : 's') + ' from ' + f.name : 'No new behaviors in ' + f.name);
+            say(added ? 'Added ' + added + ' behavior' + (added === 1 ? '' : 's') + ' from ' + f.name +
+                (groups.length ? ' (BORIS exclusions became ' + groups.length + ' group' + (groups.length === 1 ? '' : 's') + ')' : '')
+                : 'No new behaviors in ' + f.name);
         }).catch(function (err) {
             say('Could not read ' + f.name + ': ' + err.message, true);
         }).finally(function () { file.value = ''; });
