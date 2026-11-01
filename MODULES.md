@@ -7333,10 +7333,10 @@ Remove/Restore smoothing toggle, `tbSmoothToggle`, is one; Behavior's are
 `tbBehavior`, `tbBehaviorFrame`, `tbBehaviorAllFrames` — its Label Behaviors
 mode item stays live, since entering that mode leaves Defining Plane Mode). A disabled
 button still opens its menu on hover (`tests/e2e/plane-mode-toolbar-lock.mjs`
-§4b). Nothing opens those three by keyboard, so their settings are mouse-only in
-the mode, on purpose: planes are placed by dragging, only runs read those
-settings, and the mode blocks runs. Making the menus Tab stops works, but puts
-nine more presses between Sessions and the User checkbox.
+§4b). Nothing opens those four by keyboard, so what is in them is mouse-only in
+the mode (Label Behaviors mode keeps its shortcut), on purpose: planes are placed
+by dragging, only runs read those settings, and the mode blocks runs. Making the
+menus Tab stops works, but takes Sessions to the User checkbox from 1 press to 13.
 
 **Imports** `planeState` from `ui/plane-definition.js` — circular, and safe only
 because the binding is read INSIDE the function body. **Imported by**

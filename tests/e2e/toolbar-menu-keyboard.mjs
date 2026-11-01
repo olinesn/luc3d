@@ -129,6 +129,7 @@ try {
         ['tbTriangulateAll', '#tbTriangulate', 'tbSmooth', 'smoothingDropdown'],
         ['tbTriangulateAll', '#triangulateDropdown input:checked', 'tbSmooth', 'smoothingDropdown'],
         ['tbTriangulateAll', '#tbReprojThreshold', 'tbSmooth', 'smoothingDropdown'],
+        ['tbSmooth', '#smoothingDropdown [data-scope="settings"]', 'tbBehavior', 'behaviorDropdown'],
     ];
     for (const [start, target, pointerOn, pointerMenu] of STOPS) {
         await reset();
@@ -201,6 +202,7 @@ try {
         ['tbTrackAll', '#trackDropdown [data-scope="settings"]', 'trackDropdown', '#tbTriangulateAll'],
         ['tbTriangulateAll', '#triangulateDropdown input:checked', 'triangulateDropdown', '#tbSmooth'],
         ['tbGroupMenu', '#tbEditGroup', 'groupDropdown', '#tbTrackAll'],
+        ['tbBehavior', '#tbBehaviorMode', 'behaviorDropdown', '#visUser'],
     ]) {
         await reset();
         await focusOn(start);
@@ -335,6 +337,21 @@ try {
         'focus is back on Settings…, its menu still open');
     await page.keyboard.press('Escape');
     check(!(await menuOpen('trackDropdown')) && await onBody(), 'the next Esc closes the menu');
+
+    // Behavior's Settings… takes no focus either, and is a different kind of dialog.
+    const behaviorSettings = '#behaviorDropdown [data-scope="settings"]';
+    await reset();
+    await focusOn('tbBehavior');
+    await tabTo(behaviorSettings);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !!document.querySelector('.behavior-modal-overlay'));
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+    check(!(await page.evaluate(() => !!document.querySelector('.behavior-modal-overlay'))),
+        'Esc closes Behavior\'s settings dialog');
+    check(await activeIs(behaviorSettings) && await menuOpen('behaviorDropdown'),
+        'focus is back on its Settings…, the menu still open');
+    await page.keyboard.press('Escape');
 
     // This dialog takes no focus and listens in the bubble phase, so its Esc passes
     // through the toolbar on the way to it.
