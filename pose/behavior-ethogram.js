@@ -7,7 +7,7 @@
 //
 // A behavior is
 //   { id: 'b1', name: 'rear', key: 'r', color: '#…', kind: 'state'|'point',
-//     social: false, group: '', description: '' }
+//     social: false, mutual: false, group: '', description: '' }
 //
 //   * `id` is stable for the life of the project file and is what labelled
 //     bouts reference (pose/behavior-labels.js), so renaming a behavior never
@@ -15,6 +15,9 @@
 //   * `kind`: a state has a start and an end (grooming); a point is one frame
 //     (a jump, a bite).
 //   * `social`: the behavior has a target animal (actor → target, "chases").
+//   * `mutual` (social only): the pair has no actor and target ("nose-to-nose
+//     sniffing", id_1 ↔ id_4) — one bout for the pair, whichever animal was
+//     picked first (pose/behavior-labels.js stores the pair in name order).
 //   * `group`: behaviors that share a non-empty group are mutually exclusive
 //     for one animal — starting one stops the others, and labelling one over a
 //     range clears the others' present labels there (Noldus Observer's
@@ -23,13 +26,30 @@
 //     (ui/behavior-mode.js). Optional: a behavior without a key is coded from
 //     the Behavior tab. Digits pick the animal in the mode, and `[ ] , .`, Space,
 //     Esc and the arrows keep their mode meanings, so keys are letters only.
+//   * `detector` (optional): the rule that detects it automatically
+//     (pose/behavior-rules.js), `{conditions, minDuration, maxGap}`.
+//   * `post` (optional): how a CLASSIFIER's per-frame scores become bouts
+//     (pose/behavior-classifier.js), `{threshold, minBout, maxGap}` — the
+//     threshold on the score, the shortest bout and the longest gap joined,
+//     in seconds. Kept only where it differs from `DEFAULT_POST` (0.5, 0, 0).
+//
+// The ethogram also carries the project's behavior FEATURE settings
+// (`featureSettings`): the node roles, the excluded nodes and the floor the
+// features use (pose/behavior-tensor.js) — null until someone changes them,
+// and only what was changed is kept, so defaults are never written.
 //
 // DOM-free: Node tests import it directly.
 //
-// Depends on: nothing.
+// Depends on: pose/behavior-rules.js (`normalizeDetector`)
+
+import { normalizeDetector } from './behavior-rules.js';
 
 /** The behavior kinds. */
 export var BEHAVIOR_KINDS = ['state', 'point'];
+
+/** A classifier's post-processing when none is set: score ≥ 0.5, any length, no gap joined. */
+export var DEFAULT_POST = { threshold: 0.5, minBout: 0, maxGap: 0 };
+var POST_MAX_S = 600;
 
 /**
  * Default colors, handed out in order to new behaviors: vivid, light enough
@@ -46,11 +66,112 @@ var NAME_MAX = 40;
 var DESCRIPTION_MAX = 500;
 var GROUP_MAX = 40;
 
-var _model = { behaviors: [], nextId: 1 };
+var _model = { behaviors: [], nextId: 1, features: null };
 
-/** Drop every behavior (new project, or before a load). */
+/** Drop every behavior and the feature settings (new project, or before a load). */
 export function resetEthogram() {
-    _model = { behaviors: [], nextId: 1 };
+    _model = { behaviors: [], nextId: 1, features: null };
+}
+
+var FLOOR_SOURCES = ['origin', 'fit', 'plane'];
+
+/**
+ * Feature settings as kept: only the parts that differ from the defaults, or
+ * null when nothing does.
+ *   nodeRoles  {head?: node name, tailBase?: node name}
+ *   exclude    node names left out of features (replaces the default list)
+ *   floor      {source: 'origin'|'fit'|'plane', plane?: plane id}
+ */
+function cleanFeatureSettings(f) {
+    if (!f || typeof f !== 'object') return null;
+    var out = {};
+    if (f.nodeRoles && typeof f.nodeRoles === 'object') {
+        var nr = {};
+        ['head', 'tailBase'].forEach(function (r) {
+            if (typeof f.nodeRoles[r] === 'string' && f.nodeRoles[r]) nr[r] = f.nodeRoles[r];
+        });
+        if (Object.keys(nr).length) out.nodeRoles = nr;
+    }
+    if (Array.isArray(f.exclude)) {
+        out.exclude = f.exclude.filter(function (n, i, a) { return typeof n === 'string' && n && a.indexOf(n) === i; });
+    }
+    if (f.floor && typeof f.floor === 'object' && FLOOR_SOURCES.indexOf(f.floor.source) >= 0) {
+        var fl = { source: f.floor.source };
+        if (fl.source === 'plane') {
+            if (!Number.isFinite(f.floor.plane)) fl = null;
+            else fl.plane = f.floor.plane;
+        }
+        if (fl) out.floor = fl;
+    }
+    return Object.keys(out).length ? out : null;
+}
+
+/** The project's feature settings (null = every default). Do not mutate. */
+export function featureSettings() {
+    return _model.features;
+}
+
+/**
+ * Replace the feature settings. Pass only what differs from the defaults
+ * (`{nodeRoles: {head: 'Nose'}}`); null or {} restores every default.
+ */
+export function setFeatureSettings(f) {
+    _model.features = cleanFeatureSettings(f);
+    return _model.features;
+}
+
+/**
+ * Set (or with null, remove) a behavior's detector.
+ * @returns {{behavior?: Object, error?: string}}
+ */
+export function setBehaviorDetector(id, detector) {
+    var b = behaviorById(id);
+    if (!b) return { error: 'No such behavior' };
+    if (detector == null) { delete b.detector; return { behavior: b }; }
+    var d = normalizeDetector(detector);
+    if (!d) return { error: 'A detector needs at least one condition' };
+    b.detector = d;
+    return { behavior: b };
+}
+
+/**
+ * A clean `post`: only the fields that differ from DEFAULT_POST, or null.
+ * Threshold in [0, 1]; durations in seconds, 0–600.
+ */
+function cleanPost(p) {
+    if (!p || typeof p !== 'object') return null;
+    var out = {};
+    var thr = Number(p.threshold);
+    if (Number.isFinite(thr) && thr >= 0 && thr <= 1 && thr !== DEFAULT_POST.threshold) out.threshold = Math.round(thr * 1000) / 1000;
+    ['minBout', 'maxGap'].forEach(function (k) {
+        var v = Number(p[k]);
+        if (Number.isFinite(v) && v > 0) out[k] = Math.min(POST_MAX_S, Math.round(v * 1000) / 1000);
+    });
+    if (out.threshold === DEFAULT_POST.threshold) delete out.threshold;
+    return Object.keys(out).length ? out : null;
+}
+
+/** A behavior's post-processing with the defaults filled in: `{threshold, minBout, maxGap}`. */
+export function behaviorPost(b) {
+    var p = b && b.post;
+    return {
+        threshold: p && p.threshold != null ? p.threshold : DEFAULT_POST.threshold,
+        minBout: p && p.minBout != null ? p.minBout : DEFAULT_POST.minBout,
+        maxGap: p && p.maxGap != null ? p.maxGap : DEFAULT_POST.maxGap,
+    };
+}
+
+/**
+ * Set (or with null, clear) how a behavior's classifier scores become bouts.
+ * Only what differs from DEFAULT_POST is kept.
+ * @returns {{behavior?: Object, error?: string}}
+ */
+export function setBehaviorPost(id, post) {
+    var b = behaviorById(id);
+    if (!b) return { error: 'No such behavior' };
+    var p = cleanPost(post);
+    if (p) b.post = p; else delete b.post;
+    return { behavior: b };
 }
 
 /** The behaviors, in ethogram order. Do not mutate; use the functions below. */
@@ -141,6 +262,9 @@ function clean(fields, base) {
     if (fields.color != null) out.color = String(fields.color).toLowerCase();
     if (fields.kind != null) out.kind = fields.kind === 'point' ? 'point' : 'state';
     if (fields.social != null) out.social = !!fields.social;
+    if (fields.mutual != null) out.mutual = !!fields.mutual;
+    if (out.mutual && fields.social == null && fields.mutual) out.social = true;   // mutual implies social
+    if (!out.social) out.mutual = false;                                         // and needs it
     if (fields.group != null) out.group = String(fields.group).trim().slice(0, GROUP_MAX);
     if (fields.description != null) out.description = String(fields.description).slice(0, DESCRIPTION_MAX);
     return out;
@@ -156,7 +280,7 @@ export function addBehavior(fields) {
     if (err) return { error: err };
     var b = clean(fields, {
         id: 'b' + (_model.nextId++), name: '', key: '', color: nextBehaviorColor(),
-        kind: 'state', social: false, group: '', description: '',
+        kind: 'state', social: false, mutual: false, group: '', description: '',
     });
     _model.behaviors.push(b);
     return { behavior: b };
@@ -172,7 +296,7 @@ export function updateBehavior(id, fields) {
     var merged = Object.assign({}, b, fields || {});
     var err = validateBehaviorFields(merged, id);
     if (err) return { error: err };
-    Object.assign(b, clean(fields || {}, {}));
+    Object.assign(b, clean(fields || {}, b));
     return { behavior: b };
 }
 
@@ -194,20 +318,28 @@ export function moveBehavior(id, delta) {
     return true;
 }
 
-/** The `metadata.lucid.ethogram` payload, or null for an empty ethogram (nothing is written). */
+/**
+ * The `metadata.lucid.ethogram` payload, or null for an empty ethogram with
+ * default feature settings (nothing is written).
+ */
 export function serializeEthogram() {
-    if (!_model.behaviors.length) return null;
-    return {
+    if (!_model.behaviors.length && !_model.features) return null;
+    var out = {
         v: 1,
         behaviors: _model.behaviors.map(function (b) {
             var o = { id: b.id, name: b.name, color: b.color, kind: b.kind };
             if (b.key) o.key = b.key;
             if (b.social) o.social = true;
+            if (b.mutual) o.mutual = true;
             if (b.group) o.group = b.group;
             if (b.description) o.description = b.description;
+            if (b.detector) o.detector = JSON.parse(JSON.stringify(b.detector));
+            if (b.post) o.post = Object.assign({}, b.post);
             return o;
         }),
     };
+    if (_model.features) out.features = JSON.parse(JSON.stringify(_model.features));
+    return out;
 }
 
 function idNumber(id) {
@@ -230,12 +362,23 @@ export function ingestEthogram(payload) {
     var idMap = new Map();
     if (!payload || typeof payload !== 'object' || payload.v !== 1 || !Array.isArray(payload.behaviors)) return idMap;
     var intoEmpty = _model.behaviors.length === 0;
+    // Feature settings are project-scoped: the first session ingested (or a
+    // project that has none yet) brings them; later ones map onto them.
+    if (!_model.features && payload.features) _model.features = cleanFeatureSettings(payload.features);
     payload.behaviors.forEach(function (e) {
         if (!e || typeof e !== 'object' || typeof e.id !== 'string' || typeof e.name !== 'string' || !e.name.trim()) return;
         var known = behaviorByName(e.name);
-        if (known) { idMap.set(e.id, known.id); return; }
+        if (known) {
+            idMap.set(e.id, known.id);
+            // A detector comes in with an imported ethogram for a behavior that has none.
+            var kd = !known.detector && normalizeDetector(e.detector);
+            if (kd) known.detector = kd;
+            var kp = !known.post && cleanPost(e.post);
+            if (kp) known.post = kp;
+            return;
+        }
         var fields = {
-            name: e.name, kind: e.kind === 'point' ? 'point' : 'state', social: !!e.social,
+            name: e.name, kind: e.kind === 'point' ? 'point' : 'state', social: !!e.social, mutual: !!(e.social && e.mutual),
             group: typeof e.group === 'string' ? e.group : '',
             description: typeof e.description === 'string' ? e.description : '',
             color: typeof e.color === 'string' && /^#[0-9a-f]{6}$/i.test(e.color) ? e.color : nextBehaviorColor(),
@@ -244,8 +387,12 @@ export function ingestEthogram(payload) {
         if (key && !behaviorByKey(key)) fields.key = key;            // a clashing key is dropped, not the behavior
         var sameId = intoEmpty && /^b\d+$/.test(e.id) && !behaviorById(e.id);
         var b = clean(fields, { id: sameId ? e.id : 'b' + (_model.nextId++), name: '', key: '', color: '',
-            kind: 'state', social: false, group: '', description: '' });
+            kind: 'state', social: false, mutual: false, group: '', description: '' });
         if (sameId) _model.nextId = Math.max(_model.nextId, idNumber(e.id) + 1);
+        var det = normalizeDetector(e.detector);
+        if (det) b.detector = det;
+        var post = cleanPost(e.post);
+        if (post) b.post = post;
         _model.behaviors.push(b);
         idMap.set(e.id, b.id);
     });

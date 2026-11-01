@@ -5,7 +5,7 @@
     "Browser dependencies LUCID fetches from a CDN by default. They are NOT",
     "committed; run `python3 scripts/offline_deps.py install` to vendor them into",
     "lib/ for offline use. Everything else LUCID needs (h5wasm, sleap-io.js,",
-    "mediabunny, pako) is already committed under lib/.",
+    "mediabunny, pako, umap-js) is already committed under lib/.",
     "",
     "This file is the single source of truth for three consumers:",
     "  scripts/offline_deps.py  -- what to fetch, verify and extract",

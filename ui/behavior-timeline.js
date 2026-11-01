@@ -1,41 +1,69 @@
 // ui/behavior-timeline.js — behavior labels on the timeline: the "Behavior"
-// row group (one row per animal, see `Timeline.setBehaviorRowsProvider`) and
-// the menu a Shift+drag range opens to label that range.
+// row group (one row per animal, see `Timeline.setBehaviorRowsProvider`), the
+// "States" group after it (keypoint-MoSeq's syllables: ui/behavior-states.js
+// `stateTimelineRows`) and the menu a Shift+drag range opens to label that
+// range.
 //
 // A row shows the behavior selected in the Behavior tab, or — with none
-// selected — every behavior that has bouts, as thin stacked lanes. Present
-// bouts are drawn in the behavior's color, explicit "not" labels as a faint
-// gray (that is what was reviewed), and a running state grows to the playhead.
-// Projects with no ethogram and no bouts get no Behavior group at all.
+// selected — every behavior that has bouts or predictions, as thin stacked
+// lanes. Present bouts are drawn in the behavior's color, explicit "not"
+// labels as a faint gray (that is what was reviewed), and a running state
+// grows to the playhead. PREDICTED bouts (pose/behavior-predictions.js) sit in
+// a band under their lane's labels, as opaque as they are confident (alpha
+// follows the bout's score), fainter still while stale. Projects with no
+// ethogram and no bouts get no Behavior group at all.
 //
-// Depends on: ui/app-state.js, ui/behavior-coding.js, pose/behavior-ethogram.js,
-//             pose/behavior-labels.js, import-export/save-load.js
+// Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-detect.js,
+//             pose/behavior-ethogram.js, pose/behavior-labels.js,
+//             ui/behavior-states.js, pose/behavior-predictions.js, import-export/save-load.js
 
 import { state, timeline } from './app-state.js';
 import {
     sessionAnimals, focalAnimal, selectedBehaviorId, codeBehavior, armRange, clearBehaviorRange,
     registerBehaviorRepaint, animalColor,
 } from './behavior-coding.js';
+import { detectionEnv, detectionFps } from './behavior-detect.js';
+import { stateTimelineRows } from './behavior-states.js';
 import { behaviors, behaviorById } from '../pose/behavior-ethogram.js';
 import { listBouts, runningStates, hasBehaviorData, orphanedAnimals } from '../pose/behavior-labels.js';
+import { predictedBouts, predictionStaleness } from '../pose/behavior-predictions.js';
 import { setStatus } from '../import-export/save-load.js';
 
 /** Color of explicit "not this behavior" labels. */
 export var ABSENT_COLOR = '#9aa0a6';
 var MAX_LANES = 5;                       // 10 px rows: lanes stay >= 2 px
+/** A lane with predictions: labels above, predictions below (fractions of the lane). */
+var LABEL_BAND = [0, 0.56];
+var PREDICTION_BAND = [0.62, 1];
+
+/** A predicted bout's alpha: its score, in steps of 0.05 (few fills), fainter while stale. */
+function predictionAlpha(score, stale) {
+    var s = Number.isFinite(score) ? Math.max(0, Math.min(1, score)) : 0.5;
+    var a = Math.round((0.2 + 0.7 * s) * 20) / 20;
+    return stale ? Math.round(a * 0.45 * 20) / 20 || 0.05 : a;
+}
 
 /**
- * The behavior rows for `session`, or null when it has nothing to show.
- * @returns {Array<{animal:string, color:string, lanes:number, segments:Array}>|null}
+ * The rows for `session`: the "Behavior" group's, then the "States" group's
+ * (`group: 'States'`); null when there is nothing to show.
+ * @returns {Array<{animal:string, color:string, lanes:number, segments:Array, group?:string}>|null}
  */
 export function behaviorTimelineRows(session) {
     if (!session) return null;
+    var labels = labelTimelineRows(session) || [];
+    var states = stateTimelineRows(session);
+    return labels.length || states.length ? labels.concat(states) : null;
+}
+
+/** The "Behavior" group's rows, or null when there is no ethogram and no bout. */
+function labelTimelineRows(session) {
     if (!behaviors().length && !hasBehaviorData(session)) return null;
     var animals = sessionAnimals(session);
     var names = animals.concat(orphanedAnimals(session, animals));
     if (!names.length) return null;
     var bouts = listBouts(session);
     var running = runningStates(session);
+    var predicted = predictedBouts(session);
     var sel = selectedBehaviorId();
     var shown;
     if (sel) {
@@ -44,25 +72,55 @@ export function behaviorTimelineRows(session) {
         var used = new Set();
         bouts.forEach(function (b) { used.add(b.behaviorId); });
         running.forEach(function (r) { used.add(r.behaviorId); });
+        predicted.forEach(function (p) { used.add(p.behaviorId); });
         shown = behaviors().filter(function (b) { return used.has(b.id); }).map(function (b) { return b.id; });
     }
     var laneOf = new Map();
     shown.forEach(function (id, i) { laneOf.set(id, i % MAX_LANES); });
     var lanes = Math.max(1, Math.min(MAX_LANES, shown.length));
     var byAnimal = new Map(names.map(function (n) { return [n, []]; }));
+    // A row shows the bouts its animal does — both animals' rows for a mutual pair.
+    var rowsOf = function (b, animal, target) { return b && b.mutual && target ? [animal, target] : [animal]; };
+    // Predictions first (drawn under), in their band of the lane.
+    var predLanes = new Set();
+    if (predicted.length) {
+        var stale = predictionStaleness(session, detectionEnv());
+        predicted.forEach(function (p) {
+            if (!laneOf.has(p.behaviorId)) return;
+            var b = behaviorById(p.behaviorId);
+            var alpha = predictionAlpha(p.score, stale.input || stale.settings.indexOf(p.behaviorId) >= 0 ||
+                stale.labels.indexOf(p.behaviorId) >= 0 || stale.model.indexOf(p.behaviorId) >= 0);
+            rowsOf(b, p.animal, p.target).forEach(function (a) {
+                if (!byAnimal.has(a)) return;
+                predLanes.add(a + '\u0001' + laneOf.get(p.behaviorId));
+                byAnimal.get(a).push({ start: p.start, end: p.end, lane: laneOf.get(p.behaviorId), color: b.color, alpha: alpha,
+                                       band: PREDICTION_BAND, predicted: true });
+            });
+        });
+    }
+    var bandFor = function (a, lane) { return predLanes.has(a + '\u0001' + lane) ? LABEL_BAND : null; };
     bouts.forEach(function (bt) {
-        if (!laneOf.has(bt.behaviorId) || !byAnimal.has(bt.animal)) return;
+        if (!laneOf.has(bt.behaviorId)) return;
         var b = behaviorById(bt.behaviorId);
-        byAnimal.get(bt.animal).push({
-            start: bt.start, end: bt.end, lane: laneOf.get(bt.behaviorId),
-            color: bt.present ? b.color : ABSENT_COLOR, alpha: bt.present ? 0.85 : 0.22,
+        rowsOf(b, bt.animal, bt.target).forEach(function (a) {
+            if (!byAnimal.has(a)) return;
+            byAnimal.get(a).push({
+                start: bt.start, end: bt.end, lane: laneOf.get(bt.behaviorId),
+                color: bt.present ? b.color : ABSENT_COLOR, alpha: bt.present ? 0.85 : 0.22,
+                band: bandFor(a, laneOf.get(bt.behaviorId)),
+            });
         });
     });
     var cursor = state.currentFrame;
     running.forEach(function (r) {
         var b = behaviorById(r.behaviorId);
-        if (!b || !laneOf.has(r.behaviorId) || !byAnimal.has(r.animal)) return;
-        byAnimal.get(r.animal).push({ start: r.start, end: Math.max(r.start, cursor), lane: laneOf.get(r.behaviorId), color: b.color, alpha: 1 });
+        if (!b || !laneOf.has(r.behaviorId)) return;
+        rowsOf(b, r.animal, r.target).forEach(function (a) {
+            if (byAnimal.has(a)) {
+                byAnimal.get(a).push({ start: r.start, end: Math.max(r.start, cursor), lane: laneOf.get(r.behaviorId), color: b.color, alpha: 1,
+                                       band: bandFor(a, laneOf.get(r.behaviorId)) });
+            }
+        });
     });
     return names.map(function (n) {
         return { animal: n, color: animalColor(session, n), lanes: lanes, segments: byAnimal.get(n) };
@@ -73,7 +131,7 @@ export function behaviorTimelineRows(session) {
 // a state runs (its bar grows with the playhead).
 registerBehaviorRepaint(function (info) {
     if (!timeline) return;
-    if (info.frame && !info.labels && !info.ui && !info.ethogram && !runningStates(state.session).length) return;
+    if (info.frame && !info.labels && !info.ui && !info.ethogram && !info.predictions && !info.states && !runningStates(state.session).length) return;
     timeline.refreshBehaviorRows();
 });
 
@@ -105,9 +163,8 @@ function onOutside(e) {
 
 function frameRangeText(start, end) {
     var n = end - start + 1;
-    var fps = state.fps > 0 ? state.fps : 30;
     return 'Frames ' + (start + 1).toLocaleString('en-US') + '–' + (end + 1).toLocaleString('en-US') +
-        ' · ' + n.toLocaleString('en-US') + ' frame' + (n === 1 ? '' : 's') + ' (' + (n / fps).toFixed(1) + ' s)';
+        ' · ' + n.toLocaleString('en-US') + ' frame' + (n === 1 ? '' : 's') + ' (' + (n / detectionFps()).toFixed(1) + ' s)';
 }
 
 /**
