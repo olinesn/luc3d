@@ -15,6 +15,7 @@
  *     no frame, a (video, frame) listed twice, every kind of thing a session can hold,
  *     identities on poses, the same as an old file holds it inline, a video two sessions
  *     share. A first session with no camera or no video map, where the route differs.
+ *     Behavior bouts on a closed session's video.
  *  B. The real route: File ▸ Open on a file over 200 MB.
  *  C. Edits on the open session: a corrected frame goes first in the file (every other
  *     frame's position moves), a deleted pose compacts the store, a deleted track
@@ -132,8 +133,10 @@ def read(path):
             for ig in fg.instance_groups:
                 if ig.identity is not None:
                     shared.setdefault(str(labels.identities.index(ig.identity)), set()).add(si)
+    events = sorted("|".join([e.video.filename if e.video is not None else "", e.type.name, str(e.start_frame), str(e.end_frame)]) for e in labels.events)
     return {
         "error": None, "videos": [v.filename for v in labels.videos], "tracks": [t.name for t in labels.tracks],
+        "events": events,
         "videoShapes": {v.filename: list(v.backend_metadata.get("shape") or []) for v in labels.videos},
         "identities": [i.name for i in labels.identities],
         "identityOwners": sorted(sorted(v) for v in shared.values()),
@@ -222,6 +225,19 @@ save("first_no_map.slp", fa + fb + fc + fd, [a, b, c, d],
 a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
 save("dup_rows.slp", fa + frames_on(a, 700, n=1) + fb + fc + fd, [a, b, c, d],
      [session([("camA", a, fa), ("camB", b, fb)]), session([("camC", c, fc), ("camD", d, fd)], 7.0)])
+
+# Behavior bouts on the open session's video and on a closed one's. Then the same with a
+# first session with no camera: it has no video map to say that bout is not its own.
+rear, attack = sio.EventType(name="rear"), sio.EventType(name="attack")
+a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
+save("bouts.slp", fa + fb + fc + fd, [a, b, c, d],
+     [session([("camA", a, fa), ("camB", b, fb)]), session([("camC", c, fc), ("camD", d, fd)], 7.0)],
+     events=[sio.UserEvent(type=rear, video=a, start_frame=0, end_frame=1, source="manual"),
+             sio.UserEvent(type=attack, video=c, start_frame=1, end_frame=2, source="manual")])
+a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
+save("bouts_no_cameras.slp", fc + fd, [c, d],
+     [sio.RecordingSession(camera_group=sio.CameraGroup(cameras=[])), session([("camC", c, fc), ("camD", d, fd)], 7.0)],
+     events=[sio.UserEvent(type=attack, video=d, start_frame=1, end_frame=2, source="manual")])
 
 # Every kind of thing a session can hold, in three sessions.
 def rich_parts():
@@ -512,6 +528,7 @@ function compare(what, got, want) {
     if (want.identities && got.identities) check(eq(got.identities, want.identities), what + ': the identity list', got.identities);
     if (want.identityOwners && got.identityOwners) check(eq(got.identityOwners, want.identityOwners), what + ': sessions that shared an identity still do', got.identityOwners);
     if (want.poseIdentities && got.poseIdentities) check(eq(got.poseIdentities, want.poseIdentities), what + ': identities on poses', diff(got.poseIdentities, want.poseIdentities));
+    if (want.events && got.events) check(eq(got.events, want.events), what + ': behavior bouts on their own videos', diff(got.events, want.events));
     if (want.provenance && got.provenance) check(eq(got.provenance, want.provenance), what + ': provenance', got.provenance);
 }
 
@@ -540,7 +557,7 @@ function expectedFor(source, extra) {
 
 try {
     uv(PY_WRITE, [tmp]);
-    const sourcePaths = [...FILES, 'first_no_cameras', 'first_no_map', 'provenance', 'one_session', 'camF_alone', 'camG_alone'].map(n => path.join(tmp, n + '.slp'));
+    const sourcePaths = [...FILES, 'first_no_cameras', 'first_no_map', 'bouts', 'bouts_no_cameras', 'provenance', 'one_session', 'camF_alone', 'camG_alone'].map(n => path.join(tmp, n + '.slp'));
     const sources = {};
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
     for (const p of sourcePaths) sources[path.basename(p, '.slp')] = rawSources[p];
@@ -600,6 +617,18 @@ try {
             check(eq(closedGroups(saved.read.groups), closedGroups(src.groups)), `${what}: the other session's groups`, diff(closedGroups(saved.read.groups), closedGroups(src.groups)));
             check(saved.read.sessions.some(s => s.camC === 'camC.mp4' && s.camD === 'camD.mp4'), `${what}: the other session's cameras`, saved.read.sessions);
             savedForPython(saved.bytes, `${what}, Python`, { poses: src.poses });
+            bytes = saved.bytes;
+        }
+    }
+
+    console.log('\nA3. Behavior bouts');
+    for (const name of ['bouts', 'bouts_no_cameras']) {
+        let bytes = readFile(name);
+        const src = sources[name];
+        check(src.events.length > 0, name + ' holds bouts', src.events);
+        for (let gen = 1; gen <= 2; gen++) {
+            const saved = await saveAndRead(await open('lazy', bytes));
+            savedForPython(saved.bytes, `${name}, save ${gen}, Python`, { poses: src.poses, events: src.events });
             bytes = saved.bytes;
         }
     }
