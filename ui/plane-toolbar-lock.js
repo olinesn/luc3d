@@ -47,6 +47,7 @@ const PLANE_LOCKED_TOOLBAR_IDS = [
     'tbTriangulateAll', 'tbTriangulate', 'tbTriangulateAllFrames',
     'tbSmooth', 'tbSmoothFrame', 'tbSmoothAllFrames', 'tbSmoothToggle',
     'tbTrackAll', 'tbTrackFrame', 'tbTrackAllFrames', 'tbTrackFrameRange',
+    'tbBehavior', 'tbBehaviorFrame', 'tbBehaviorAllFrames',
 ];
 
 /**
@@ -55,10 +56,11 @@ const PLANE_LOCKED_TOOLBAR_IDS = [
  * A `.tri-dropdown` menu opens on **hover** (CSS), so `disabled` on its
  * button does not stop the menu. The Instance and Group menus hold nothing but
  * actions, so their wrappers are locked and the menus do not even open. The
- * Track / Triangulate / Smooth menus are NOT here: they also hold
+ * Track / Triangulate / Smooth / Behavior menus are NOT here: they also hold
  * settings that stay live, so they open, and every run item in them is a
  * `<button>` disabled one by one (the list above). A new run item in those
- * menus must be a `<button>` and go in that list.
+ * menus must be a `<button>` and go in that list. (Behavior's Label Behaviors
+ * mode item stays live: entering that mode leaves Defining Plane Mode.)
  *
  * Nothing opens those three by keyboard, because their buttons are disabled, so
  * their settings are mouse-only in the mode. That is on purpose: planes are placed

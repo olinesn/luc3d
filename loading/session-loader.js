@@ -38,7 +38,7 @@ import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
-    parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO, checkSlpFileFormat,
+    parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO, parseSlpWithRawFallback, checkSlpFileFormat,
     loadCalibrationFile,
 } from '../import-export/file-io.js';
 
@@ -111,6 +111,7 @@ import { readVisibilityMetadata } from '../import-export/visibility-metadata.js'
 import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js';
 import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
 import { readBehaviorMetadata, resetBehaviorState } from '../import-export/behavior-metadata.js';
+import { fileEventsOf, sessionEventScope } from '../import-export/behavior-events.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2186,26 +2187,16 @@ export async function handleLoadSessionFolderSingleSlp() {
         // per-instance nulledNodes/occlusion, identities, 3D points — is
         // available to restoreGroupingAndUnlink below. Loading a project .slp
         // must reflect the changes saved in THAT file, not rebuild flat poses
-        // from it. Fall back to the raw worker only if the typed reader throws.
+        // from it. Fall back to the raw worker only if the typed reader throws
+        // on a file the raw worker can read in full.
         showLoading('Reading SLP: ' + slpFile.name + '...');
         var slpData;
         try {
-            slpData = await parseSlpViaSleapIO(slpFile, function (msg) { showLoading(msg); });
-        } catch (typedErr) {
-            // Too new for this reader is too new for the raw worker as well.
-            if (isNewerSlpFormatError(typedErr)) {
-                hideLoading();
-                setStatus(typedErr.message, 'error');
-                return;
-            }
-            console.warn('[single-slp] typed SLP read failed — falling back to raw h5wasm worker:', typedErr);
-            try {
-                slpData = await parseSlpH5(slpFile, function (msg) { showLoading(msg); });
-            } catch (parseErr) {
-                hideLoading();
-                setStatus('SLP parse error: ' + parseErr.message, 'error');
-                return;
-            }
+            slpData = await parseSlpWithRawFallback(slpFile, function (msg) { showLoading(msg); });
+        } catch (parseErr) {
+            hideLoading();
+            setStatus(slpReadErrorStatus('SLP parse error', parseErr), 'error');
+            return;
         }
 
         // Load calibration
@@ -2346,7 +2337,8 @@ export async function handleLoadSessionFolderSingleSlp() {
         readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         // Behavior labels. Into an open project the file's ethogram is merged
         // by behavior name and its bouts remapped onto the project's ids.
-        readBehaviorMetadata(session, sessLucid);
+        readBehaviorMetadata(session, sessLucid, slpData.behaviorEvents,
+            sessionEventScope(slpData.sessions, slpData.videos.length, 0, true));
         var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
         if (planeConflict) {
             console.warn('[single-slp] not reading the plane state in ' + slpFile.name +
@@ -3004,7 +2996,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // eager read in import-export/slp-import.js.
         readVisibilityMetadata(session, lucid);
         readSmoothingMetadata(session, lucid);   // Temporal Smoothing's last run
-        readBehaviorMetadata(session, lucid);    // ethogram + behavior bouts
+        // Ethogram + behavior bouts. Only this file's first session opens here.
+        readBehaviorMetadata(session, lucid, fileEventsOf(labels),
+            sessionEventScope(labels.rawSessionsJson, (labels.videos || []).length, 0, true));
         // Define Planes state — the lazy-reopen mirror of the eager read in
         // `import-export/slp-import.js`.
         readPlaneMetadata(session, lucid);
