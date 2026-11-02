@@ -5635,7 +5635,7 @@ Every static checkbox in the panel uses the `.toggle-switch` markup.
 
 ---
 
-**Behavior labels.** `updateInfoPanel` also calls `refreshBehaviorPanel()` (ui/behavior-panel.js), which skips itself while the Behavior tab is hidden.
+**Behavior labels.** `updateInfoPanel` also calls `refreshBehaviorPanel()` (ui/behavior-panel.js), which skips itself while the Behavior tab is hidden, and first of all `refreshBehaviorStrip()` (ui/behavior-strip.js), collapsed panel or not: a load does not notify, so this is how a reopened file's labels reach the strip.
 
 ### ui/interaction.js
 
@@ -8843,7 +8843,9 @@ hovering for the tooltip.
 (`mm:ss`, `h:mm:ss` from an hour up, rounded before splitting);
 `formatDurationLabel(seconds, decimals)` (the end tick's label: rounded to the
 millisecond like `formatTimestamp`, then TRUNCATED, so it is a prefix of the
-readout's total); `TICK_STEPS` and the spacing constants
+readout's total); `chooseTickSteps(pxPerSec, frameSec, labelPx)` and
+`stepDecimals(step)` (the step rule below, shared with the bouts strip's ruler);
+`TICK_STEPS` and the spacing constants
 (`MIN_LABEL_SPACING_PX`, `LABEL_SPACING_WIDTHS`, `MIN_MINOR_SPACING_PX`,
 `MAX_MINOR_PER_MAJOR`, `DEFAULT_CHAR_PX`); the DOM half,
 `installSeekbarTicks(layerEl, {getTotalFrames, getFps})` and
@@ -8888,7 +8890,7 @@ in Node).
 
 **Imported by.** `ui/ui-wiring.js` (installed in the seekbar-scrubbing IIFE in
 `setupUI`; refreshed by `updateSeekbarVisual`), `ui/frame-readout.js`
-(`refreshSeekbarTicks`).
+(`refreshSeekbarTicks`), `ui/behavior-strip-model.js` (the step rule and the labels).
 
 **Coverage.** `tests/test-seekbar-ticks.mjs` (label format and the step choice
 over a grid of frame rates × durations × widths, including the end tick and
@@ -11734,7 +11736,7 @@ so a hidden entity stays hidden under its new name.
 
 ---
 
-**Behavior labels.** Behavior labels: `setupMenus` calls `setupBehaviorUi({closeMenus, navigate, switchSession})` (ui/behavior-panel.js; `switchSession` lets the Train Classifiers dialog open a session left out of training); `updateSeekbarVisual` calls `updateBehaviorFrame`; the toolbar's Behavior menu is a `wireActionMenu` (`behaviorDropdown`: the button / All frames → `detectAllFrames` (each behavior with its classifier when it has one, else its detector), This frame → `detectThisFrame`, Settings… → `showBehaviorRulesModal`); Rename Identity calls `renameAnimal`, `renamePredictedAnimal` and `renameStateAnimal` next to `renameHiddenIdentity`; Propagate Tracks → IDs asks first on a labelled session (`confirmRetrackWithBehaviorLabels`); Hot Keys help appends this project's ethogram keys.
+**Behavior labels.** Behavior labels: `setupMenus` calls `setupBehaviorUi({closeMenus, navigate, switchSession, seekKeepingPlayback, pausePlayback})` (ui/behavior-panel.js; `switchSession` lets the Train Classifiers dialog open a session left out of training; `seekKeepingPlayback(frame)` is one click on the seekbar's scale, leaving the video playing or paused, and `pausePlayback` is for the bouts strip's Shift+drag); the FPS box refreshes the bouts strip (`refreshBehaviorStrip`); `updateSeekbarVisual` calls `updateBehaviorFrame`; the toolbar's Behavior menu is a `wireActionMenu` (`behaviorDropdown`: the button / All frames → `detectAllFrames` (each behavior with its classifier when it has one, else its detector), This frame → `detectThisFrame`, Settings… → `showBehaviorRulesModal`); Rename Identity calls `renameAnimal`, `renamePredictedAnimal` and `renameStateAnimal` next to `renameHiddenIdentity`; Propagate Tracks → IDs asks first on a labelled session (`confirmRetrackWithBehaviorLabels`); Hot Keys help appends this project's ethogram keys.
 
 ### ui/viewport3d.js
 
@@ -12670,7 +12672,7 @@ records), `./id-switch-highlight.js` (`idSwitchBoxNodeMask`),
 `#tbBehaviorMode` — lit while on —, `Mod+Shift+L` = catalog
 `behaviorMode`); leaving closes running states at the playhead. Excludes
 Defining Plane Mode both ways. A capture-phase keydown listener (only while
-on, only outside text fields and dialogs) takes: behavior letters (Shift+letter
+on, only outside text fields, dialogs and the range menu) takes: behavior letters (Shift+letter
 = label the armed range "not"; without a range Shift+letter is left to the
 catalog), `1`–`9` (focal animal or pending target, instead of assigning an
 identity), `[` `]` (armed range; Option/AltGr allowed), `,` `.` (adjacent
@@ -12695,7 +12697,7 @@ wiring. Its three `<details>` sections are static in index.html (folds
 browser-local via `persistSectionStates`, key `lucid.behaviorSections`); the
 bodies are rendered here: Coding (animals, behavior buttons that code at the
 playhead with or without the mode, running states, armed range, target
-question, timeline behavior, Undo, Mark reviewed…, On video), Bouts
+question, timeline behavior, Undo, Mark reviewed…, On video, Bouts strip), Bouts
 (filterable list, capped at 500 rows; a click lands
 `BOUT_LEAD_IN_SECONDS` early; set start/end to the playhead, behavior,
 target, note, delete), Predictions (the detectors' bouts to review: filters,
@@ -12727,14 +12729,15 @@ catalog handler, wires detection (`setupBehaviorDetection`) and states
 (`setupBehaviorStates`; a `{states}` repaint refreshes the tab), and makes every label edit `markDirty()` and repaint
 (predictions changes and the This frame readout repaint too, without marking dirty). The
 Summary's mean bout is `boutFrames / bouts`.
-`updateBehaviorFrame` (every frame, from `updateSeekbarVisual`) keeps the save
+`updateBehaviorFrame` (every frame, from `updateSeekbarVisual`) moves the bouts
+strip (`updateBehaviorStripFrame`), keeps the save
 cursor, grows running states, lights the buttons, and closes the running
 states of a session just left (so `switchSession` needs no hook).
 
 **Exports.** `refreshBehaviorPanel`, `updateBehaviorFrame`, `setupBehaviorUi`.
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-mode.js`,
-`./behavior-ethogram-modal.js`, `./behavior-io-modal.js`, `./behavior-timeline.js`,
+`./behavior-ethogram-modal.js`, `./behavior-io-modal.js`, `./behavior-timeline.js`, `./behavior-strip.js`,
 `./behavior-detect.js`, `./behavior-rules-modal.js`, `./behavior-confirm.js`,
 `./info-tip.js`, `./plane-definition.js` (`ICON_INFO`),
 `./panel-visibility.js`, `./section-state.js`, `./settings.js`,
@@ -12763,15 +12766,78 @@ bouts or states.
 `onTimelineRangeSelect` is the timeline's `onRangeSelect`: with an ethogram
 and animals, a menu above the selection labels the range for the animal whose
 row the drag began on (Shift-click = "not"), arms it as the `[` `]` range, or
-clears it; otherwise it reports the range as before.
+clears it; otherwise it reports the range as before. The bouts strip
+(`ui/behavior-strip.js`) opens the same menu, passing `{anchor: {x, top}, onClose}`
+to place it over the strip and take its selection away with it.
 
 **Exports.** `ABSENT_COLOR`, `behaviorTimelineRows`, `onTimelineRangeSelect`.
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js`
 (`detectionEnv`, `detectionFps`), `./behavior-states.js` (`stateTimelineRows`), `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
 `../pose/behavior-predictions.js`, `../import-export/save-load.js`. **Imported by** `pose/initialization.js`
-(`setupTimeline`), `ui/behavior-panel.js`. **Tests.**
-`tests/e2e/behavior-labelling.mjs` §1, §5, `tests/e2e/behavior-kpms-roundtrip.mjs` §2.
+(`setupTimeline`), `ui/behavior-panel.js`, `ui/behavior-strip.js`. **Tests.**
+`tests/e2e/behavior-labelling.mjs` §1, §5, `tests/e2e/behavior-kpms-roundtrip.mjs` §2,
+`tests/e2e/behavior-strip.mjs` §7 (the menu from the strip, and the Timeline's own).
+
+### ui/behavior-strip.js
+
+**Purpose.** The bouts strip: a slim, zoomed-in view of the labels around the
+playhead, under the camera view and the Timeline's resize handle and above the
+Timeline, so someone labelling can read the nearby bouts at a glance. Lined up with
+the seekbar (the CSS variables `--behavior-strip-left` and `--behavior-strip-width`,
+set from a `ResizeObserver` on `#seekbar`): the lane labels take the width of the
+frame readout and transport buttons, the zoom and × that of the FPS pill and the buttons.
+Shows with an ethogram and the user's choice on: always in Label Behaviors mode,
+outside it once the session has labels (`stripWanted`). A click seeks
+(`seekKeepingPlayback`: the video stays playing or paused); Shift+drag pauses, then
+opens the Timeline's range menu (`onTimelineRangeSelect`) for the lane's animal;
+wheel zooms, Shift+wheel scrolls lanes past `MAX_VISIBLE_LANES`, and picking an animal
+brings its lanes into view (`revealFocal`). The hover line and tooltip name the frame a
+click lands on and the bout under the pointer. The range armed with `[` `]` shows too.
+Labels only: predictions and states stay on the Timeline.
+
+**Playback cost.** Bars and ticks are drawn on hidden "film" canvases
+(`stripFilm`: a window each side of the one on show), redrawn once per window of
+playback and on a label, ethogram, zoom or fps change. The per-frame call copies the
+slice under the window to the two canvases on screen (`blit`), plus a rectangle per
+running state or range; nothing when the film has not moved by a whole device pixel.
+A CSS transform per frame looks cheaper and is not: on this page it costs a full
+Layerize, about 1 ms a frame, however small the element, against next to nothing for
+the copy. Timing: `tests/e2e/_bench-behavior-strip.mjs`.
+
+**Browser-local.** `localStorage` `lucid.behaviorStrip` (`'0'` = off) and
+`lucid.behaviorStripWindow` (seconds each side), read in try/catch; a failed write
+holds for the session. Never in the `.slp`.
+
+**Exports.** `setupBehaviorStrip({seek, pause})`, `refreshBehaviorStrip`,
+`updateBehaviorStripFrame(frame)`, `behaviorStripOn`, `setBehaviorStripOn`.
+
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js` (`detectionFps`),
+`./behavior-strip-model.js`, `./behavior-timeline.js` (`ABSENT_COLOR`, `onTimelineRangeSelect`), `./info-tip.js`,
+`./plane-definition.js` (`ICON_INFO`), `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+`../import-export/save-load.js`. **Imported by** `ui/behavior-panel.js`, `ui/info-panel.js`, `ui/ui-wiring.js`.
+**Tests.** `tests/e2e/behavior-strip.mjs`.
+
+### ui/behavior-strip-model.js
+
+**Purpose.** The pure half of the bouts strip. `stripLanes` builds one lane per animal
+and behavior from `listBouts` and `runningStates` alone, never from frames: a mutual
+bout in both animals' lanes, a directed one in the actor's, known animals first, the
+ethogram's order within an animal, "not" labels under present bouts in paint order.
+`stripWanted` says whether it shows. The zoom is `STRIP_ZOOM_STEPS` (seconds each
+side; default `DEFAULT_HALF_SECONDS`, ±5). The rest is geometry: every frame has a
+slot `pxPerFrame` wide, with the playhead in the middle of its frame's slot and of the
+strip (`stripScale`, `frameAtX`, `xOfFrame`); the film and its window (`stripFilm`,
+`filmHolds`, `filmSourceX` in whole device pixels); what is on the film (`filmBars`,
+merging bars that touch once zoomed past a pixel a frame; `filmRect`, `filmOutside`,
+`filmTicks`, `runningBarWidth`); and the hover text (`boutAt`, `boutText`, `stripHoverText`).
+
+**Exports.** The functions above, `normalizeHalfSeconds`, `zoomedHalfSeconds`, `formatStripWindow`, and
+the constants `STRIP_ZOOM_STEPS`, `DEFAULT_HALF_SECONDS`, `LANE_HEIGHT_PX`, `RULER_HEIGHT_PX`,
+`MAX_VISIBLE_LANES`, `MIN_BAR_PX`, `POINT_BAR_PX`.
+
+**Imports.** `./seekbar-ticks.js`, `./seekbar-tooltip.js`, `./frame-readout.js`, all free of the DOM,
+so it runs in Node. **Imported by** `ui/behavior-strip.js`. **Tests.** `tests/test-behavior-strip.mjs`.
 
 ### ui/behavior-ethogram-modal.js
 

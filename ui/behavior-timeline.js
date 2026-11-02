@@ -140,6 +140,7 @@ registerBehaviorRepaint(function (info) {
 // ----------------------------------------------------------------------------
 
 var _menu = null;
+var _menuOnClose = null;
 
 function closeRangeMenu() {
     if (!_menu) return;
@@ -148,6 +149,9 @@ function closeRangeMenu() {
     document.removeEventListener('keydown', onMenuKey, true);
     document.removeEventListener('mousedown', onOutside, true);
     if (timeline) timeline.clearRangeSelection();
+    var onClose = _menuOnClose;
+    _menuOnClose = null;
+    if (onClose) onClose();
 }
 
 function onMenuKey(e) {
@@ -172,7 +176,9 @@ function frameRangeText(start, end) {
  * that labels the range; otherwise just report it, as before.
  * @param {number} start
  * @param {number} end
- * @param {{animal?:string}} [info] the behavior row the drag started on
+ * @param {{animal?:string, anchor?:{x:number, top:number}, onClose?:function()}} [info]
+ *   the behavior row the drag started on; for another caller (the bouts strip,
+ *   ui/behavior-strip.js), where to open the menu and who to tell when it closes
  */
 export function onTimelineRangeSelect(start, end, info) {
     var session = state.session;
@@ -180,11 +186,12 @@ export function onTimelineRangeSelect(start, end, info) {
         setStatus('Selected range: ' + start.toLocaleString('en-US') + '–' + end.toLocaleString('en-US'));
         return;
     }
-    showRangeMenu(start, end, (info && info.animal) || focalAnimal(session));
+    showRangeMenu(start, end, (info && info.animal) || focalAnimal(session), info);
 }
 
-function showRangeMenu(start, end, animal) {
+function showRangeMenu(start, end, animal, info) {
     closeRangeMenu();
+    _menuOnClose = (info && info.onClose) || null;
     var session = state.session;
     var menu = document.createElement('div');
     menu.className = 'behavior-range-menu';
@@ -261,10 +268,11 @@ function showRangeMenu(start, end, animal) {
 
     document.body.appendChild(menu);
     _menu = menu;
-    // Above the timeline, near the end of the selection, kept on screen.
-    var canvas = timeline && timeline._canvas;
-    var rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: window.innerHeight - 120 };
-    var x = canvas ? rect.left + timeline._frameToX(end + 1) : window.innerWidth / 2;
+    // Above the timeline (or the caller's anchor), near the end of the selection, kept on screen.
+    var anchor = info && info.anchor;
+    var canvas = !anchor && timeline && timeline._canvas;
+    var rect = anchor || (canvas ? canvas.getBoundingClientRect() : { left: 0, top: window.innerHeight - 120 });
+    var x = anchor ? anchor.x : canvas ? rect.left + timeline._frameToX(end + 1) : window.innerWidth / 2;
     var w = menu.offsetWidth || 320;
     menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, x - w / 2)) + 'px';
     menu.style.bottom = Math.max(8, window.innerHeight - rect.top + 6) + 'px';
