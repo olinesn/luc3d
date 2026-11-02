@@ -247,6 +247,15 @@
             assertTrue(!!opened.typedSession, 'typed RecordingSession returned for the reconstructor');
         });
 
+        it('a file with no recording session: nothing restored, the usual result', async function () {
+            const session = buildLucidSession(null);
+            const res = await reconstructLazy(session, { typedSession: null }, null);
+            // handleLoadProjectSlpLazy reads movedGroups on this route too.
+            assertDeepEqual(res, { restoredGroups: 0, restoredWith3d: 0, movedGroups: [] },
+                'the same result shape as a file with a session');
+            assertEqual(session.instanceGroups.size, 0, 'nothing grouped');
+        });
+
         it('lightweight reconstruct + on-scrub hydration', async function () {
             const S = window.SleapIO;
             assertTrue(!!window.Session && !!window.Camera && !!window.Skeleton, 'pose-data not bridged');

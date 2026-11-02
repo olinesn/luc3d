@@ -16004,7 +16004,8 @@ workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5. A file with no session
 gets a camera per video, named by `cameraNamesFromVideos`
 (`pose/placeholder-cameras.js`), which the lazy route and the single-SLP folder
-loader share. `reconstructInstanceGroupsFromSessionLazy` takes a null session.
+loader share. `reconstructInstanceGroupsFromSessionLazy` takes a null session,
+and returns its usual result with nothing restored.
 
 **campy recordings.** When the video prompt's folder is a campy recording
 (session.json), `handleLoadSlpFile` puts it on the session
@@ -16125,7 +16126,11 @@ first track.
   `_typedIdentities`, passed by `restoreGroupingAndUnlink` only when the session's
   identities came from that catalog — the group's canonical `identity_idx`). Reads both LUCID's legacy and the canonical
   `sessions_json`. Same pass-1 dedup + trackless/identity-less handling as the
-  dict version. Returns `{ restoredGroups, restoredWith3d }`.
+  dict version. `opts.identityOf` (`import-export/file-edits.js`
+  `reconcileSessionIdentities`, when another tool edited the identities) decides
+  every group. Returns `{ restoredGroups, restoredWith3d, refCollisions, movedGroups }`;
+  `movedGroups` is the `[frameIdx, group]` pairs `opts.identityOf` moved to a
+  different animal, for `applyMovedGroupIdentities`.
   **Per-node model scores** (shown by the node tooltip): from the typed
   instance's `_score` here; in the dict version, from the raw-SLP instance a
   group member REPLACES (`adoptPointScoresFrom` — the group dict has none).
@@ -16134,7 +16139,11 @@ first track.
   below). Imported by `loading/session-loader.js`. Identity per group from
   `metadata.lucid.identityId`; with `opts.fileIdentities` (the typed `/identity`
   catalog, passed only when `session.identities` was built from it) a group
-  without one takes its canonical `identity_idx` (`typedIG.identity`).
+  without one takes its canonical `identity_idx` (`typedIG.identity`);
+  `opts.identityOf`, as in the eager version, decides every group instead.
+  Returns `{ restoredGroups, restoredWith3d, movedGroups }` on every path, a null
+  `typedSession` (a file with no recording session) included:
+  `handleLoadProjectSlpLazy` reads `movedGroups` on that route too.
   `opts.onCount(done, total)` (optional, awaited; frames) is the Open project
   card's counted hook, called at each yield and at the end; `opts.onProgress`
   still gets the old message. `stampFrameIdentitiesFromGroups` takes the same
