@@ -123,8 +123,11 @@ export function headerVideoOfKept(SIO, kept) {
  * @param {Set<number>} claimedVideos - video indices some opened session reads
  * @param {number[]|null} [nodeReorderMap] - reorderMap[fileNodeIdx] = sessionNodeIdx,
  *   when the file's skeleton lists the session's nodes in another order
+ * @param {{ownFile?: boolean}} [opts] - `ownFile`: `slpData` is the file whose other
+ *   sessions `session` carries, so their group members name these frames' file rows
  */
-export function keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap) {
+export function keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap, opts) {
+    var ownFile = !!(opts && opts.ownFile);
     function inSessionOrder(values, blank) {
         if (!values || !nodeReorderMap) return values;
         var out = new Array(nodeReorderMap.length).fill(blank);
@@ -153,7 +156,9 @@ export function keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMa
         if (slot === undefined) {
             slot = kept.videos.length;
             slotOfVideo.set(fd.videoIdx, slot);
-            kept.videos.push(keptVideoOf(slpData, fd.videoIdx));
+            var keptVideo = keptVideoOf(slpData, fd.videoIdx);
+            keptVideo.ownFile = ownFile;
+            kept.videos.push(keptVideo);
         }
         var instances = [];
         for (var ii = 0; ii < fd.instances.length; ii++) {
@@ -165,7 +170,9 @@ export function keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMa
             if (d.fileLabels) inst.fileLabels = d.fileLabels;
             instances.push(inst);
         }
-        kept.frames.push({ video: slot, frameIdx: fd.frameIdx, instances: instances });
+        var keptFrame = { video: slot, frameIdx: fd.frameIdx, instances: instances };
+        if (ownFile) keptFrame.fileRow = fd.fileRow;
+        kept.frames.push(keptFrame);
     }
 }
 
@@ -245,14 +252,16 @@ export function keepOutsideColumnarFrames(session, slpData, own) {
  * (`buildSlpLabelsAllViews`), and the frames need those Labels' skeleton and identities.
  *
  * @param {Session} session
- * @returns {{videos: Array, tracks: Array, listedVideos: Map<Object, Object>, placedVideos: Map<Object, Object>, labeledFramesFor: function(Object, Object[]): Array, rowAt: (Map<number, number>|undefined), videoOfId: (Map<number, Object>|undefined)}|null}
+ * @returns {{videos: Array, tracks: Array, listedVideos: Map<Object, Object>, placedVideos: Map<Object, Object>, labeledFramesFor: function(Object, Object[]): Array, rowAt: (Map<number, number>|undefined), videoOfId: (Map<number, Object>|undefined), recordOfCamera: (Map<string, Object>|undefined)}|null}
  *   `listedVideos`: the file's record of a video (`fileEventsOf`) -> its entry here;
  *   `placedVideos`: its record in the read (`keptVideoOf`) -> its entry here, for a kept
  *   suggestion on it (kept-suggestions.js);
  *   `labeledFramesFor(skeleton, identities)`: the frames, on the `SIO.Skeleton` and the
  *   `SIO.Identity` list of the session's Labels. An identity only these poses name is
- *   added to that list. `rowAt`/`videoOfId`, lazy sessions only: store row -> place in
- *   those frames, store video id -> its header video.
+ *   added to that list. `rowAt`/`videoOfId`, for a session carrying its file's other
+ *   sessions: file row -> place in those frames, video id -> its header video. A lazy
+ *   session's are its store's. `recordOfCamera`, after an eager read: camera name -> the
+ *   file's record of its video, for `buildSlpLabelsAllViews`, which makes those entries.
  */
 export function outsideFramesForSave(session) {
     var SIO = window.SleapIO;
@@ -260,7 +269,8 @@ export function outsideFramesForSave(session) {
     // store holds them, and the eager writer would otherwise leave them behind.
     var loader = session.lazyLoader;
     if (loader && typeof loader.forEachOutsideRow === 'function') return lazyOutsideFramesForSave(SIO, session, loader);
-    var kept = session.outsideFrames;
+    var closed = session.unopenedSessions && session.unopenedSessions.eager ? session.unopenedSessions : null;
+    var kept = session.outsideFrames || (closed ? { videos: [], tracks: [], frames: [] } : null);
     if (!kept) return null;
     var listedVideos = new Map();
     var placedVideos = new Map();
@@ -271,7 +281,7 @@ export function outsideFramesForSave(session) {
         return video;
     });
     var tracks = kept.tracks.map(function (name) { return new SIO.Track(name); });
-    return {
+    var out = {
         videos: videos, tracks: tracks, listedVideos: listedVideos, placedVideos: placedVideos,
         labeledFramesFor: function (skeleton, identities) {
             var findIdentity = identityCatalogFinder(SIO, identities);
@@ -289,6 +299,39 @@ export function outsideFramesForSave(session) {
             });
         },
     };
+    if (closed) listClosedSessionVideos(SIO, closed, kept, out);
+    return out;
+}
+
+/**
+ * After an eager read: what a save of the session's closed sessions needs from its kept
+ * frames (`unopenedSessionsForEagerSave`), and an entry for each video they name that has
+ * none yet. A closed session's video has its entry here even with no frame, so a bout or
+ * a suggestion on it goes on the entry that session names. A camera's video is listed by
+ * the session's Labels, so it only says which record that entry is for.
+ */
+function listClosedSessionVideos(SIO, closed, kept, out) {
+    var eventRecords = closed.eager.eventRecords || [];
+    var readRecords = closed.eager.readRecords || [];
+    out.rowAt = new Map();
+    out.videoOfId = new Map();
+    kept.videos.forEach(function (v, i) { if (v.ownFile) out.videoOfId.set(v.id, out.videos[i]); });
+    kept.frames.forEach(function (f, i) { if (f.fileRow !== undefined) out.rowAt.set(f.fileRow, i); });
+    out.recordOfCamera = new Map();
+    closed.eager.videoIdByCam.forEach(function (id, camName) {
+        if (eventRecords[id]) out.recordOfCamera.set(camName, eventRecords[id]);
+    });
+    var cameraIds = new Set(closed.eager.videoIdByCam.values());
+    closed.sessions.forEach(function (record) {
+        record.videos.forEach(function (v) {
+            if (cameraIds.has(v.id) || out.videoOfId.has(v.id)) return;
+            var video = headerVideoForOutsideFrames(SIO, v.video, v.id);
+            out.videos.push(video);
+            out.videoOfId.set(v.id, video);
+            if (eventRecords[v.id]) out.listedVideos.set(eventRecords[v.id], video);
+            if (readRecords[v.id]) out.placedVideos.set(readRecords[v.id], video);
+        });
+    });
 }
 
 function lazyOutsideFramesForSave(SIO, session, loader) {
@@ -334,11 +377,15 @@ function lazyOutsideFramesForSave(SIO, session, loader) {
 }
 
 /**
- * Eager save of a lazy session (a project mixing lazy and eager sessions): the file's
- * sessions nobody opened, as `unopenedSessionsForSave` gives them. Their poses are
- * `outside`'s frames, so that is where their members go. A member on a video the open
- * session has too cannot be placed: this writer lists that frame's instances in its own
- * order. Then nothing is saved, rather than a session losing its links with no word.
+ * The eager writer's save of a session carrying its file's other sessions, as
+ * `unopenedSessionsForSave` gives them. Their poses are `outside`'s frames, so that is
+ * where their members go.
+ *
+ * This writer lists a frame's instances in its own order. A member on a video the open
+ * session has too holds its pose after an eager read (`kept.eager`), and `places` says
+ * where that pose went; a pose no longer in the project takes the member with it. A lazy
+ * session (a project mixing lazy and eager sessions) has no such pose, so then nothing
+ * is saved, rather than a session losing its links with no word.
  *
  * @param {Object} SIO - window.SleapIO
  * @param {Session} session - its `unopenedSessions` is set
@@ -347,16 +394,18 @@ function lazyOutsideFramesForSave(SIO, session, loader) {
  * @param {number} outsideBase - where `outside.labeledFrames` start in the file
  * @param {Array} videos - the file's video list (appended to)
  * @param {Array} identities - the file's identity list (appended to)
+ * @param {Map<Object, (number[]|null)>|null} [places] - `instancePlacesForSave`, as
+ *   `buildSlpLabelsAllViews` filled it in
  * @returns {Array} `RecordingSession`s
  */
-export function unopenedSessionsForEagerSave(SIO, session, labels, outside, outsideBase, videos, identities) {
+export function unopenedSessionsForEagerSave(SIO, session, labels, outside, outsideBase, videos, identities, places) {
     var kept = session.unopenedSessions;
     var loader = session.lazyLoader;
-    if (!loader) {
+    if (!kept.eager && !loader) {
         throw new Error('Cannot save: "' + session.name + '" is no longer loaded, and its file holds ' +
             kept.sessions.length + ' more session(s) that only it can write back. Open the file again, then save.');
     }
-    if (hasMembersOnOpenVideos(kept)) {
+    if (!kept.eager && hasMembersOnOpenVideos(kept)) {
         throw new Error('Cannot save: this project mixes lazily-loaded and fully-loaded sessions, and a session in the file of "' +
             session.name + '" shares a video with it. Save that file on its own.');
     }
@@ -364,9 +413,11 @@ export function unopenedSessionsForEagerSave(SIO, session, labels, outside, outs
     var listed = session.identities || [];
     listed.forEach(function (identity, i) { headerOf.set(identity.id, labels.identities[i]); });
     var headerVideoOfId = new Map(outside ? outside.videoOfId : []);
+    var videoIdByCam = kept.eager ? kept.eager.videoIdByCam : loader.videoIdByCam;
     session.cameras.forEach(function (c, i) {
-        if (loader.videoIdByCam && loader.videoIdByCam.has(c.name)) headerVideoOfId.set(loader.videoIdByCam.get(c.name), labels.videos[i]);
+        if (videoIdByCam && videoIdByCam.has(c.name)) headerVideoOfId.set(videoIdByCam.get(c.name), labels.videos[i]);
     });
+    var sessionBase = outsideBase - labels.labeledFrames.length;
     return unopenedSessionsForSave(kept, {
         SIO: SIO,
         identities: identities,
@@ -387,6 +438,11 @@ export function unopenedSessionsForEagerSave(SIO, session, labels, outside, outs
             var at = outside ? outside.rowAt.get(row) : undefined;
             return at === undefined ? undefined : outsideBase + at;
         },
+        movedRef: places ? function (row, inst) {
+            var poses = kept.eager.posesOfRows.get(row);
+            var place = poses && poses[inst] ? places.get(poses[inst]) : null;
+            return place ? [sessionBase + place[0], place[1]] : null;
+        } : null,
     });
 }
 
@@ -397,7 +453,8 @@ export function unopenedSessionsForEagerSave(SIO, session, labels, outside, outs
  * @param {{frames: number, videos: number}} counts - frames and videos outside the
  *   opened sessions
  * @param {number} [fileSessions] - sessions in the file, for a loader that opens only
- *   the first and keeps only the others' poses (the single-`.slp` folder loader)
+ *   the first and keeps only the others' poses (the single-`.slp` folder loader on the
+ *   raw worker's read, which has no typed sessions to keep whole)
  * @returns {string}
  */
 export function outsideFramesNote(counts, fileSessions) {

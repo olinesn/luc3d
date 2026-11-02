@@ -879,7 +879,8 @@ nothing is wrong is a warning nobody reads.
 - `countSkeletonEditImpact(sessions)` → the tally: `userInstances`,
   `predictedInstances`, `instances` (an eager session's `outsideFrames` poses
   included: the edit re-shapes them too), `reprojectedInstances`, `groups`,
-  `keypoints3d`, the lazy fields above, and `perSession` — the same record once
+  `keypoints3d` (both with the closed sessions an eager read keeps, whose 3D the
+  edit re-shapes), the lazy fields above, and `perSession` — the same record once
   per session. Every total is a FOLD of `perSession`, so the dialog's by-session
   rows and its headline cannot be two different arithmetics.
 - `skeletonEditNeedsConfirmation(tally)` → the gate. Building the first skeleton
@@ -1542,9 +1543,12 @@ session graph that holds them.
   - **`outsideFrames`** — eager loads only: the file's poses on a video no session
     names (null when none). Not shown; written back on save, and re-shaped by
     `propagateNodeAdded`/`propagateNodeRemoved` (`import-export/outside-frames.js`).
-  - **`unopenedSessions`** — lazy opens only: the file's other recording sessions, as
-    typed columns (null when none). Not shown, not editable; written back whole on save
-    (`import-export/unopened-sessions.js`).
+  - **`unopenedSessions`** — a loader that opens only a file's first session (lazy, or
+    the single-`.slp` folder loader): the file's other recording sessions, as typed
+    columns (null when none). Not shown, not editable; written back whole on save
+    (`import-export/unopened-sessions.js`). After an eager read `propagateNodeAdded`/
+    `propagateNodeRemoved` re-shape them through `unopenedSessions.eager`, because this
+    module imports nothing.
   - **`keptSuggestions`** — eager loads only: the file's suggestions, each with the
     camera whose video it is on (null when none). Not shown; written back on save
     (`import-export/kept-suggestions.js`). `renameCameraInAllData` renames their camera.
@@ -13404,7 +13408,13 @@ filesystem enumeration, decoder rebuild.
   dropped and the status bar says so (plane-node IDs restart at 1 in every
   project). Covered by `tests/e2e/reopen-folder-session-settings.mjs`. Views are
   ordered by **calibration camera index**, not enumeration order, so panes don't
-  reshuffle on reload.
+  reshuffle on reload. It opens the file's first session; the others stay whole on
+  `session.unopenedSessions` (`keepUnopenedSessionsOfRead`, then
+  `seatMembersOnOpenVideos` once the first session's instances are final), and their
+  planes stay their own when the file's are not the open project's. A first session
+  with no camera reads like a plain file, one camera per video, as on the lazy route;
+  those videos are the closed sessions' too. The raw worker's read has no typed
+  sessions, so it keeps only their poses and its status says so.
   `handleEmptySession()` creates a blank, video-less session and makes it
   active (the session-strip **"+"** button). It **inherits the shared project
   skeleton** via `buildRememberedSkeleton()` (one skeleton per project); only
@@ -13714,8 +13724,10 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   `hasRealCalibration`, `ensurePlaceholderCameras`),
 - `../import-export/outside-frames.js` (poses on a video no session reads: kept
   aside, and said in the load's status),
-- `../import-export/unopened-sessions.js` (a lazy open's other sessions: `keepUnopenedSessions`
-  right after the read, `session.unopenedSessions`, the status sentence),
+- `../import-export/unopened-sessions.js` (the other sessions of a file only its first
+  opens: `keepUnopenedSessions` right after a lazy read, `readKeepsUnopenedSessions`,
+  `keepUnopenedSessionsOfRead` and `seatMembersOnOpenVideos` on the folder loader's eager
+  read, `session.unopenedSessions`, the status sentence),
 - `../import-export/kept-suggestions.js` (`keepSuggestions`: the single-`.slp` and
   per-camera folder loaders keep a file's suggestions),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
@@ -15361,7 +15373,8 @@ per SESSION, but the plane model is not:
 - `planeMetadataConflict(lucid)` — why a `metadata.lucid` dict's plane state
   cannot be read into the live model, or `null` when it can. For a loader that
   ADDS a session to an open project (the single-SLP folder load) and so does not
-  reset: the file's 2D is seated on the open pool by node ID, and plane-node IDs
+  reset, and for each later session of `handleLoadSlpFile` (a save can keep a closed
+  session whose planes are another project's): the file's 2D is seated on the open pool by node ID, and plane-node IDs
   restart at 1 in every project, so another project's corners would land on
   this one's nodes. `null` when the model is empty, or when every node and plane
   the file lists is in the model under the same id AND name; otherwise a short
@@ -15415,9 +15428,11 @@ every save on their own video. The lazy path keeps them in its store
   of such a video, and the `SIO.Video` a header lists for it. `record` is the file's
   own entry (`slpData.videos[id]`): one object per video per file, so it tells a video
   apart where an id cannot (File ▸ Add SLP brings a second file's ids).
-- `keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap)` — eager load;
+- `keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap, opts)` — eager load;
   adds to what `session.outsideFrames` already holds. Each kept video remembers the
-  record its file's events name it by (`eventRecord`, `fileEventsOf`).
+  record its file's events name it by (`eventRecord`, `fileEventsOf`). `opts.ownFile`:
+  `slpData` is the file whose other sessions `session` carries, so these frames keep their
+  `fileRow`.
 - `ownVideoOfColumnar(col)`, `ownVideoOfFrames(frames)`, `keepOutsideColumnarFrames(session, slpData, own)` — the
   per-camera eager load: a camera is the first video its file lists with frames.
 - `outsideFramesForSave(session)` — eager save, before the session's Labels are built:
@@ -15425,15 +15440,20 @@ every save on their own video. The lazy path keeps them in its store
   or null. `listedVideos` (the file's record -> the entry) is what puts a kept event on
   the entry its video's poses have (`buildBehaviorEvents`), and `placedVideos` (the
   read's record -> the entry) a kept suggestion. The frames take those Labels' skeleton
-  and identity list, and an identity only these poses name is added to that list.
+  and identity list, and an identity only these poses name is added to that list. For a
+  session carrying its file's other sessions, also `rowAt` and `videoOfId` (`ownFile`
+  frames only: File ▸ Add SLP's rows are another file's). After an eager read a closed
+  session's video has an entry here even with no frame (`listClosedSessionVideos`), and
+  `recordOfCamera` says which record a camera's entry is for.
 - `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(session)` — the
   sentence for a load's final status.
 
 - `unopenedSessionsForEagerSave(SIO, session, labels, outside, outsideBase, videos,
-  identities)` — a lazy session on the eager writer's path (a project mixing lazy and
-  eager sessions): the file's closed sessions, their members sent to the kept frames.
-  Throws rather than write them badly when the session's loader is gone or a closed
-  session names a video it has too.
+  identities, places)` — the eager writer's save of a session carrying closed sessions:
+  their members sent to the kept frames. After an eager read (`kept.eager`) a member on
+  a video the open session has too goes where `places` says its pose went. A lazy session
+  on this path (a project mixing lazy and eager sessions) throws rather than write them
+  badly when its loader is gone or a closed session names a video it has too.
 
 **Imports from project modules.** `../pose/pose-data.js` (`Instance`), `./file-io.js`
 (`makePooledSioInstances`), `./behavior-events.js` (`keptVideoRecords`), `./unopened-sessions.js`.
@@ -15446,10 +15466,12 @@ every save on their own video. The lazy path keeps them in its store
 
 ### import-export/unopened-sessions.js
 
-**Purpose.** The recording sessions of a file that a lazy open leaves closed. A lazy
-open (`handleLoadProjectSlpLazy`) shows a file's first session; a save writes the others
-back with their cameras, groups, 3D, calibration, identities and every key LUC3D does not
-read. Their poses are rows of the one store (`outside-frames.js`). Not shown, not
+**Purpose.** The recording sessions of a file that a loader leaves closed. A lazy open
+(`handleLoadProjectSlpLazy`) and the single-`.slp` folder loader
+(`handleLoadSessionFolderSingleSlp`, eager) show a file's first session; a save writes the
+others back with their cameras, groups, 3D, calibration, identities and every key LUC3D
+does not read. Their poses are rows of the one store after a lazy open and
+`session.outsideFrames` after an eager read (`outside-frames.js`). Not shown, not
 editable. DOM-free.
 
 **How.** `keepUnopenedSessions(labels, { openVideoIds })` turns each closed session into
@@ -15486,12 +15508,29 @@ fields, which the reader drops; `keepOneSession` reads them from the raw dict.
 - Provenance: `withUnopenedSessions(sessions)` is the list `buildSaveProvenance` walks, in
   save order; each kept record has `name` and `fileProvenance`, like a session.
 
-**Key exports.** `keepUnopenedSessions`, `unopenedSessionsForSave`,
-`identityEntriesOfOpenSession`, `renumberUnopenedMembers`, `hasMembersOnOpenVideos`,
-`withUnopenedSessions`, `unopenedVideoIds` (each kept session's videos, so
-`buildSessionRefGraph` lists them with the other outside videos, a video with no frame too, and
-a bout on one lands on that entry), `unopenedSessionsNote(fileSessions)` (the load's status
-sentence).
+**After an eager read.** `readKeepsUnopenedSessions(slpData)` says whether the read has
+typed sessions (the raw worker's has none). `keepUnopenedSessionsOfRead(slpData, opts)`
+gives what `keepUnopenedSessions` gives, with `kept.eager` set; `opts.keepOwnPlanes` keeps a
+closed session's planes off the open session's, for a file whose planes are another
+project's.
+- File rows are `outsideFrames`' (`rowAt`, `outsideFramesForSave`).
+- The eager writer lists a frame's instances in its own order, so a member on a video the
+  open session has too holds the pose: `seatMembersOnOpenVideos` ties it to the open
+  session's `Instance` by the file's coordinates, once those are final, and
+  `instancePlacesForSave` asks `buildSlpLabelsAllViews` where each went. A deleted pose
+  takes the member with it. `renumberUnopenedMembers` is not used here.
+- A skeleton node edit reaches them, because it re-shapes their poses:
+  `kept.eager.addNode()` and `removeNode(i)` (for `Session`, which imports nothing) change
+  the 3D rows and hidden-node lists, and at save the dict's `metadata.lucid.skeleton`
+  follows the open session's when the two matched at load (`skeletonFollowsFirst`).
+
+**Key exports.** `keepUnopenedSessions`, `readKeepsUnopenedSessions`,
+`keepUnopenedSessionsOfRead`, `seatMembersOnOpenVideos`, `instancePlacesForSave`,
+`unopenedSessionsForSave`, `identityEntriesOfOpenSession`, `renumberUnopenedMembers`,
+`hasMembersOnOpenVideos`, `withUnopenedSessions`, `unopenedVideoIds` (each kept session's
+videos, so `buildSessionRefGraph` lists them with the other outside videos, a video with no
+frame too, and a bout on one lands on that entry), `unopenedSessionsNote(fileSessions)` (the
+load's status sentence).
 
 **Imports from project modules.** `./slp-provenance.js`.
 
@@ -15726,7 +15765,7 @@ session's resident/total) rather than truncate silently. Covered by
   frame carries a user-type instance; the caller then takes the streaming (or,
   fully resident, eager) correction-aware path. Covered by
   `tests/test-lazy-export-instance-filter.js`.
-- `buildSlpLabelsAllViews` builds the full typed graph (RecordingSession /
+- `buildSlpLabelsAllViews(session, views, videoFiles, placeOf)` builds the full typed graph (RecordingSession /
   FrameGroup / InstanceGroup with `instance3d`, `identity`, and `metadata.lucid`)
   that `saveSlpToBytes` serializes as **SLP 2.8**: 3D points + grouping go to the
   columnar `/session_data` group and `sessions_json` stays slim (calibration +
@@ -15788,7 +15827,8 @@ session's resident/total) rather than truncate silently. Covered by
   `points[]` + parallel `occluded[]`, NOT `numpy()`; a prediction's per-node
   scores as `pointScores`, the typed instance's own `_score` column by reference,
   null for a user instance — the importers copy it with `Instance.setPointScores`). Each `videos[]` entry
-  carries the typed `Video` as `_typedVideo` (`import-export/outside-frames.js` writes it back whole). `suggestions[]` holds
+  carries the typed `Video` as `_typedVideo` (`import-export/outside-frames.js` writes it back whole). Each `frames[]` entry has
+  its `fileRow`, what a session's group members name it by (frames with no instance are left out). `suggestions[]` holds
   `{videoIdx, frameIdx, group}`, `group` as the file holds it, for `import-export/kept-suggestions.js`. Each `sessions[]` entry is
   the verbatim on-disk dict (for the direct calibration/video-map/metadata reads)
   PLUS a `_typedSession` ref (the typed RecordingSession) used by
@@ -16232,7 +16272,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   download fallback when there is no save-file picker, says why and how to
   enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
   `./outside-frames.js` (`outsideFramesForSave`, `unopenedSessionsForEagerSave`),
-  `./unopened-sessions.js` (`withUnopenedSessions`: who the provenance is keyed by),
+  `./unopened-sessions.js` (`withUnopenedSessions`: who the provenance is keyed by;
+  `instancePlacesForSave`: the poses `buildSlpLabelsAllViews` must place),
   `./kept-suggestions.js` (`suggestionsForSave`),
   `../ui/app-state.js`, `../loading/session-loader.js`,
   `../loading/cold-read-guard.js` (`readBlobRange`, the check of the source files
@@ -16518,7 +16559,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
   (`readVisibilityMetadata`), `./frame-identity-metadata.js`
   (`stampFrameIdentitiesFromGroups`, `readFrameIdentityMetadata`), `./plane-metadata.js` (`readPlaneMetadata`,
-  `resetPlaneState`), `./smoothing-metadata.js` (`readSmoothingMetadata`, and
+  `resetPlaneState`, and `planeMetadataConflict`: a session whose planes are another
+  project's is not read), `./smoothing-metadata.js` (`readSmoothingMetadata`, and
   `adoptSmoothingSource` in both typed group rebuilders), `./import-track-resolve.js`
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each

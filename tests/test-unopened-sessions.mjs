@@ -4,7 +4,8 @@
  * Python, is `tests/e2e/lazy-keeps-other-sessions.mjs`.
  */
 import {
-    keepUnopenedSessions, unopenedSessionsForSave, identityEntriesOfOpenSession,
+    keepUnopenedSessions, keepUnopenedSessionsOfRead, readKeepsUnopenedSessions, seatMembersOnOpenVideos,
+    instancePlacesForSave, unopenedSessionsForSave, identityEntriesOfOpenSession,
     renumberUnopenedMembers, hasMembersOnOpenVideos, withUnopenedSessions, unopenedSessionsNote,
 } from '../import-export/unopened-sessions.js';
 
@@ -250,6 +251,128 @@ console.log('9. Provenance order and the note');
     check(eq(withUnopenedSessions([open, other]).map(s => s.name), ['first', 'second', 'third', 'other']), 'each session then those it carries');
     check(eq(withUnopenedSessions([other]), [other]), 'a session with none');
     check(/Only the first of 3 sessions/.test(unopenedSessionsNote(3)), 'the status sentence');
+}
+
+// What `parseSlpViaSleapIO` gives for `fixture()`'s file: raw dicts plus the reader's objects.
+function eagerRead(over) {
+    const f = fixture();
+    const typedIdentities = f.identities;
+    const pose = x => ({ points: [[x, 1], [x, 2]] });
+    return Object.assign({
+        sessions: f.rawSessionsJson.map((raw, i) => Object.assign({}, raw, { _typedSession: f.sessions[i], _typedIdentities: typedIdentities })),
+        videos: f.videos.map(v => ({ _typedVideo: v })),
+        provenance: f.provenance,
+        // Row 0 has no instance, so the read leaves it out.
+        frames: [
+            { fileRow: 1, videoIdx: 1, frameIdx: 5, instances: [pose(10), pose(20)] },
+            { fileRow: 2, videoIdx: 1, frameIdx: 9, instances: [pose(30)] },
+            { fileRow: 3, videoIdx: 2, frameIdx: 5, instances: [pose(40), pose(50)] },
+            { fileRow: 4, videoIdx: 2, frameIdx: 9, instances: [pose(60)] },
+        ],
+    }, over);
+}
+class Pose {
+    constructor(xy) { this.xy = xy; }
+    get numNodes() { return this.xy.length; }
+    hasPoint(n) { return !!this.xy[n]; }
+    getX(n) { return this.xy[n][0]; }
+    getY(n) { return this.xy[n][1]; }
+}
+
+console.log('10. An eager read');
+{
+    check(!readKeepsUnopenedSessions(eagerRead({ sessions: [{ _typedSession: {} }] })), 'one session: nothing to keep');
+    check(!readKeepsUnopenedSessions(eagerRead({ sessions: [{ calibration: {} }, { calibration: {} }] })), 'the raw worker\'s read has no typed sessions');
+    check(readKeepsUnopenedSessions(eagerRead()), 'the typed reader\'s has');
+
+    const read = eagerRead();
+    const k = await keepUnopenedSessionsOfRead(read, { videoIdByCam: new Map([['a', 0]]) });
+    check(k.eager && k.eager.videoIdByCam.get('a') === 0 && k.sessions.length === 2, 'kept as an eager read');
+    check(read.sessions.length === 3, 'its own session list stays', read.sessions.length);
+    check(eq(k.sessions[0].videos.map(v => v.id), [1, 2, 3]), 'a video goes by its place in the list', k.sessions[0].videos.map(v => v.id));
+    const [s2] = unopenedSessionsForSave(k, saveOpts({ firstLucid: { planes: [1, 'edited'] } }));
+    const d = JSON.parse(s2.lucidFileDictJson);
+    check(d._typedSession === undefined && d._typedIdentities === undefined, 'the reader\'s objects stay out of the saved dict', Object.keys(d));
+    check(eq(d.metadata.lucid.planes, [1, 'edited']), 'planes that matched follow the open session', d.metadata.lucid.planes);
+
+    const foreign = await keepUnopenedSessionsOfRead(eagerRead(), { videoIdByCam: new Map(), keepOwnPlanes: true });
+    const [f2] = unopenedSessionsForSave(foreign, saveOpts({ firstLucid: { planes: ['the open project'] } }));
+    check(eq(JSON.parse(f2.lucidFileDictJson).metadata.lucid.planes, [1]), 'planes of another project stay as the file has them');
+
+    const lazy = await keepUnopenedSessions(fixture(), {});
+    check(instancePlacesForSave(lazy) === null, 'a lazy open has no poses to place');
+    check(instancePlacesForSave(k) === null, 'nor does an eager read with nothing shared');
+}
+
+console.log('11. An eager read: a member on a video the open session has too');
+{
+    const read = eagerRead();
+    const k = await keepUnopenedSessionsOfRead(read, { videoIdByCam: new Map([['open', 1]]) });
+    const r = k.sessions[0];
+    check(eq(Array.from(r.membersOnOpenVideos), [0, 2, 4]), 'found by the file row\'s video', Array.from(r.membersOnOpenVideos));
+    // The open session lists the frame its own way; row 2's pose was dropped as a copy of
+    // one that has more nodes, and that one stands for it.
+    const frame5 = [new Pose([[20.2, 1], [20, 2]]), new Pose([[10, 1], [10, 2]]), new Pose([[10.3, 1], [10.3, 2]])];
+    const frame9 = [new Pose([[30, 1], null])];
+    seatMembersOnOpenVideos(k, read.frames, frame => (frame.frameIdx === 5 ? frame5 : frame9));
+    const seated = k.eager.posesOfRows;
+    check(seated.get(1)[0] === frame5[1], 'the closest pose, not the first that is near', seated.get(1)[0] && seated.get(1)[0].xy);
+    check(seated.get(1)[1] === frame5[0], 'each place its own', seated.get(1)[1] && seated.get(1)[1].xy);
+    check(seated.get(2)[0] === frame9[0], 'a pose matching on the nodes both have stands for it');
+    check(!seated.has(3), 'rows on another video are not looked at');
+    const places = instancePlacesForSave(k);
+    check(places.size === 3 && places.has(frame5[0]) && !places.has(frame5[2]), 'a save asks only for those poses', places.size);
+    check([...places.values()].every(v => v === null), 'nothing placed yet');
+    // Nothing near: the member has no pose, and a save drops it.
+    const k2 = await keepUnopenedSessionsOfRead(eagerRead(), { videoIdByCam: new Map([['open', 1]]) });
+    seatMembersOnOpenVideos(k2, read.frames, () => [new Pose([[500, 500], [500, 500]])]);
+    check(k2.eager.posesOfRows.size === 0, 'a pose nothing matches is left unseated', k2.eager.posesOfRows.size);
+}
+
+console.log('12. An eager read: a node edit');
+{
+    const k = await keepUnopenedSessionsOfRead(eagerRead(), { videoIdByCam: new Map() });
+    const r = k.sessions[0];
+    const groupsOf = () => writerGraph(unopenedSessionsForSave(k, saveOpts())[0]).flatMap(fg => fg.g);
+    const before = groupsOf();
+    check(eq(before[0].pts.slice(0, 3), [1, 2, 3]) && before[1].pts.length === 3 && before[2].pts === null && before[3].pts.length === 6, 'as read', before.map(g => g.pts && g.pts.length));
+    k.eager.addNode();
+    const added = groupsOf();
+    check(added[0].pts.length === 9 && eq(added[0].pts.slice(0, 3), [1, 2, 3]) && added[0].pts.slice(6).every(Number.isNaN), 'an added node is a NaN row at the end', added[0].pts);
+    check(added[1].pts.length === 6 && eq(added[1].ps.slice(0, 1), [0.9]) && Number.isNaN(added[1].ps[1]), 'a predicted group\'s scores grow too', added[1].ps);
+    check(added[2].pts === null, 'a group with no 3D gets none');
+    check(added[3].pts.length === 9 && eq(added[3].src.slice(0, 6), [0, 0, 0, 5, 5, 5]) && added[3].src.slice(6).every(Number.isNaN), 'Temporal Smoothing\'s source too', added[3].src);
+
+    k.eager.removeNode(0);
+    const removed = groupsOf();
+    check(removed[0].pts.length === 6 && removed[0].pts[0] === 4 && Number.isNaN(removed[0].pts[1]) && removed[0].pts[2] === 6, 'a removed node\'s row goes, the next takes its index', removed[0].pts);
+    check(removed[3].src.length === 6 && eq(removed[3].src.slice(0, 3), [5, 5, 5]), 'from the source too', removed[3].src);
+    check(eq(Array.from(r.memberRow), [1, 3, 1, 4, 2]), 'members are not touched', Array.from(r.memberRow));
+
+    // A hidden-node list goes by node index.
+    const withHidden = eagerRead();
+    withHidden.sessions[1]._typedSession.frameGroups.get(5).instanceGroups[0].metadata = { lucid: { instanceMeta: { c: { nulledNodes: [0, 2], modified: true } } } };
+    const h = await keepUnopenedSessionsOfRead(withHidden, { videoIdByCam: new Map() });
+    h.eager.removeNode(0);
+    const meta = writerGraph(unopenedSessionsForSave(h, saveOpts())[0])[0].g[0].meta;
+    check(eq(meta.lucid.instanceMeta.c, { nulledNodes: [1], modified: true }), 'a hidden node\'s index follows', meta);
+
+    // Its copy of the skeleton follows the open session's, when it was the same.
+    const sk = { name: 'sk', nodes: ['a', 'b'], edges: [] };
+    const same = eagerRead();
+    same.sessions[0].metadata.lucid.skeleton = sk;
+    same.sessions[1].metadata.lucid.skeleton = JSON.parse(JSON.stringify(sk));
+    same.sessions[2].metadata.lucid.skeleton = { name: 'other', nodes: ['x'], edges: [] };
+    const fk = await keepUnopenedSessionsOfRead(same, { videoIdByCam: new Map() });
+    const saved = unopenedSessionsForSave(fk, saveOpts({ firstLucid: { skeleton: { name: 'sk', nodes: ['a', 'b', 'new'], edges: [] } } }));
+    check(eq(JSON.parse(saved[0].lucidFileDictJson).metadata.lucid.skeleton.nodes, ['a', 'b', 'new']), 'a copy of the skeleton follows an edit');
+    check(eq(JSON.parse(saved[1].lucidFileDictJson).metadata.lucid.skeleton.nodes, ['x']), 'another skeleton is left alone');
+    const lazyDicts = fixture();
+    lazyDicts.rawSessionsJson[0].metadata.lucid.skeleton = sk;
+    lazyDicts.rawSessionsJson[1].metadata.lucid.skeleton = JSON.parse(JSON.stringify(sk));
+    const lk = await keepUnopenedSessions(lazyDicts, {});
+    const [ls] = unopenedSessionsForSave(lk, saveOpts({ firstLucid: { skeleton: { name: 'sk', nodes: ['a', 'b', 'new'], edges: [] } } }));
+    check(eq(JSON.parse(ls.lucidFileDictJson).metadata.lucid.skeleton.nodes, ['a', 'b']), 'a lazy open keeps the file\'s: its poses are not re-shaped');
 }
 
 console.log(`\ntest-unopened-sessions: ${passed} passed, ${failed} failed`);

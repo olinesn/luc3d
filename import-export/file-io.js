@@ -2202,9 +2202,11 @@ export function makePooledSioInstances(SIO, skeleton, numNodes) {
  * @param {?{videos: Array, listedVideos: Map}} [outside] - the session's poses on videos
  *   no camera has (`outsideFramesForSave`): their videos go in the list after the cameras,
  *   and the session's events on them on those entries
+ * @param {?Map<Object, ?number[]>} [placeOf] - instances whose place in the file a caller
+ *   needs (`instancePlacesForSave`); set to `[labeled frame, place in it]` when written
  * @returns {Object} sleap-io.js Labels instance
  */
-export function buildSlpLabelsAllViews(session, views, videoFiles, outside) {
+export function buildSlpLabelsAllViews(session, views, videoFiles, outside, placeOf) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -2385,6 +2387,11 @@ export function buildSlpLabelsAllViews(session, views, videoFiles, outside) {
             return sioInst;
         }
 
+        function _addToFrame(frameInstances, inst) {
+            if (placeOf && placeOf.has(inst)) placeOf.set(inst, [labeledFrames.length, frameInstances.length]);
+            frameInstances.push(_getOrCreateSioInst(inst));
+        }
+
         // Create per-camera LabeledFrames from grouped + ungrouped instances
         var lfByCamera = new Map();
         for (var [camName3, camInstances] of fg.instances) {
@@ -2395,13 +2402,13 @@ export function buildSlpLabelsAllViews(session, views, videoFiles, outside) {
 
             var frameInstances = [];
             for (var ii = 0; ii < camInstances.length; ii++) {
-                frameInstances.push(_getOrCreateSioInst(camInstances[ii]));
+                _addToFrame(frameInstances, camInstances[ii]);
             }
 
             // Also add ungrouped instances for this camera
             var ulList = fg.getUnlinkedInstances(camName3);
             for (var ui = 0; ui < ulList.length; ui++) {
-                frameInstances.push(_getOrCreateSioInst(ulList[ui].instance));
+                _addToFrame(frameInstances, ulList[ui].instance);
             }
 
             if (frameInstances.length > 0) {
@@ -2419,7 +2426,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles, outside) {
             if (!ulVideo || !ulSioCam) continue;
             var ulFrameInsts = [];
             for (var ui2 = 0; ui2 < ulInstList.length; ui2++) {
-                ulFrameInsts.push(_getOrCreateSioInst(ulInstList[ui2].instance));
+                _addToFrame(ulFrameInsts, ulInstList[ui2].instance);
             }
             if (ulFrameInsts.length > 0) {
                 var ulLf = new SIO.LabeledFrame({ video: ulVideo, frameIdx: frameIdx, instances: ulFrameInsts });
@@ -2523,6 +2530,14 @@ export function buildSlpLabelsAllViews(session, views, videoFiles, outside) {
         }
     }
 
+    // A bout kept on a video a closed session names and a camera here has too goes on
+    // that camera's entry.
+    if (outside && outside.recordOfCamera) {
+        session.cameras.forEach(function (cam, i) {
+            var record = outside.recordOfCamera.get(cam.name);
+            if (record) outside.listedVideos.set(record, sioVideos[i]);
+        });
+    }
     var behaviorEvents = buildBehaviorEvents(SIO, [{
         session: session, video: sioVideos[0] || null, videos: sioVideos, listedVideos: outside ? outside.listedVideos : null,
         identities: sioIdentities, tracks: tracks,
@@ -2968,7 +2983,8 @@ export async function parseSlpViaSleapIO(file, onProgress, opts) {
         for (var ii = 0; ii < lfInsts.length; ii++) {
             instances.push(_typedInstanceToSlpData(lfInsts[ii], typedTracks, numNodes, PredictedInstance));
         }
-        frames.push({ frameIdx: lf.frameIdx, videoIdx: videoIdx, instances: instances });
+        // `fileRow`: what a session's group members name this frame by.
+        frames.push({ frameIdx: lf.frameIdx, videoIdx: videoIdx, fileRow: li, instances: instances });
     }
 
     // --- videos[] ---

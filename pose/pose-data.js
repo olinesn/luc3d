@@ -1876,10 +1876,11 @@ export class Session {
          */
         this.outsideFrames = null;
         /**
-         * Lazy opens only: the other recording sessions of the file, as typed
-         * columns (`import-export/unopened-sessions.js`). Not shown and not
-         * editable; a save writes them back whole. Null when the file has no other.
-         * @type {{sessions: Array, identities: Array}|null}
+         * A loader that opens only a file's first session (lazy, or the single-`.slp`
+         * folder loader): the file's other recording sessions, as typed columns
+         * (`import-export/unopened-sessions.js`). Not shown and not editable; a save
+         * writes them back whole. Null when the file has no other.
+         * @type {{sessions: Array, identities: Array, eager: (Object|undefined)}|null}
          */
         this.unopenedSessions = null;
         /**
@@ -3596,6 +3597,8 @@ export class Session {
         // Poses on a video no session names get an empty slot: nobody can click
         // a node on a frame that is not shown, so none is placed there.
         for (const inst of this._outsideFrameInstances()) inst.insertNodeAt(inst.numNodes);
+        // After an eager read those poses include the closed sessions', so their 3D goes too.
+        if (this.unopenedSessions && this.unopenedSessions.eager) this.unopenedSessions.eager.addNode();
         // Keep the 3D node-aligned with the 2D. `points3d` is a flat
         // Float64Array(3N) on the SAME node index space, so a group left at the
         // old length would report the new node as triangulated-at-garbage the
@@ -3658,6 +3661,7 @@ export class Session {
             }
         }
         for (const inst of this._outsideFrameInstances()) inst.removeNodeAt(nodeIdx);
+        if (this.unopenedSessions && this.unopenedSessions.eager) this.unopenedSessions.eager.removeNode(nodeIdx);
         // Mark all instance groups as dirty (triangulation needs recomputing)
         // and splice the removed node out of their 3D, re-pooling it for the
         // same reason as in `propagateNodeAdded`.

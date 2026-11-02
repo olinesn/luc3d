@@ -144,6 +144,14 @@ export function countSkeletonEditImpact(sessions) {
             }
         }
 
+        // A file's other sessions an eager read keeps: their 3D is re-shaped too.
+        // Their poses are `outsideFrames`, below.
+        var closed = sess.unopenedSessions && sess.unopenedSessions.eager ? sess.unopenedSessions.sessions : [];
+        for (var ci = 0; ci < closed.length; ci++) {
+            ps.groups += closed[ci].memberEnd.length;
+            ps.keypoints3d += (closed[ci].points3d.length / 3) | 0;
+        }
+
         // ---- the 2D population, from whichever enumeration is COMPLETE ----
         if (loader && typeof loader.forEachInstanceRow === 'function') {
             ps.instanceScope = 'store';

@@ -73,7 +73,10 @@ import {
 } from '../pose/triangulation.js';
 import { SioLazyLoader } from './sio-lazy-loader.js';
 import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js';
-import { keepUnopenedSessions, hasMembersOnOpenVideos, renumberUnopenedMembers, unopenedSessionsNote } from '../import-export/unopened-sessions.js';
+import {
+    keepUnopenedSessions, keepUnopenedSessionsOfRead, readKeepsUnopenedSessions, seatMembersOnOpenVideos,
+    hasMembersOnOpenVideos, renumberUnopenedMembers, unopenedSessionsNote,
+} from '../import-export/unopened-sessions.js';
 import { unionTrackNames, remapTrackIdx } from './track-union.js';
 import {
     readCampyRecording, campyCameraFor, orderByCampyCameras, preferCampyVideo, campyVideoFile,
@@ -2271,6 +2274,10 @@ export async function handleLoadSessionFolderSingleSlp() {
             } catch (e) { /* ignore */ }
         }
 
+        // This loader opens the file's first session. The others stay whole on it,
+        // when this read has them (`import-export/unopened-sessions.js`).
+        var keepsOtherSessions = readKeepsUnopenedSessions(slpData);
+
         // Build video index to name mapping
         var videoIdxToCameraName = {};
         if (cameras.length === 0) {
@@ -2310,7 +2317,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         var folderName = allFiles[0].webkitRelativePath ? allFiles[0].webkitRelativePath.split('/')[0] : 'Session';
         var session = new Session(cameras, skeleton, tracks, folderName);
         // The file's provenance (e.g. campy-live-export's records), written back
-        // on save. This loader reads the file's first session only.
+        // on save. This loader opens the file's first session only.
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), 0);
         // What the file says about each camera's video, for a save with none loaded.
@@ -2396,7 +2403,19 @@ export async function handleLoadSessionFolderSingleSlp() {
         // session of the file, which this loader does not open): not shown, kept
         // for the save.
         if (cameras.length > 0) {
-            keepOutsideFrames(session, slpData, new Set(Object.keys(videoIdxToCameraName).map(Number)));
+            keepOutsideFrames(session, slpData, new Set(Object.keys(videoIdxToCameraName).map(Number)), null,
+                { ownFile: keepsOtherSessions });
+        }
+        // Into columns before the first session's groups are built, so their object
+        // graphs are not resident on top of those. Planes that are not the open
+        // project's stay as the file has them: the file's node ids mean other nodes here.
+        if (keepsOtherSessions) {
+            var videoIdByCam = new Map();
+            for (var ovk in videoIdxToCameraName) videoIdByCam.set(videoIdxToCameraName[ovk], Number(ovk));
+            session.unopenedSessions = await keepUnopenedSessionsOfRead(slpData, {
+                videoIdByCam: videoIdByCam,
+                keepOwnPlanes: !!planeConflict,
+            });
         }
         keepSuggestions(slpData, [{ session: session, cameraByVideo: videoIdxToCameraName }]);
 
@@ -2408,6 +2427,15 @@ export async function handleLoadSessionFolderSingleSlp() {
         // instance to unlinked, matching the previous behavior of this path.
         await restoreGroupingAndUnlink(session, slpData, 0,
             { onProgress: function (msg) { showLoading(msg); } });
+        // A closed session's member on a video this one has too follows the pose.
+        if (keepsOtherSessions) {
+            seatMembersOnOpenVideos(session.unopenedSessions, slpData.frames, function (frame) {
+                var openFrame = session.frameGroups.get(frame.frameIdx);
+                var openCam = videoIdxToCameraName[frame.videoIdx];
+                return !openFrame ? [] : openFrame.getInstances(openCam).concat(
+                    openFrame.getUnlinkedInstances(openCam).map(function (ul) { return ul.instance; }));
+            });
+        }
 
         // Save current session state before switching
         if (state.sessions.length > 0 && state.session) {
@@ -2593,8 +2621,8 @@ export async function handleLoadSessionFolderSingleSlp() {
             finalMsg = 'Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)';
             finalKind = 'success';
         }
-        var singleOutsideNote = outsideFramesNote(keptOutsideCounts(session),
-            slpData.sessions ? slpData.sessions.length : 0);
+        var singleOutsideNote = keepsOtherSessions ? unopenedSessionsNote(slpData.sessions.length)
+            : outsideFramesNote(keptOutsideCounts(session), slpData.sessions ? slpData.sessions.length : 0);
         if (singleOutsideNote) {
             finalMsg += ' — ' + singleOutsideNote;
             if (finalKind === 'success') finalKind = 'warning';

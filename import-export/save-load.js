@@ -59,7 +59,7 @@ import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adop
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { writeBehaviorMetadata, readBehaviorMetadata, resetBehaviorState } from './behavior-metadata.js';
 import { buildSaveProvenance } from './slp-provenance.js';
-import { withUnopenedSessions } from './unopened-sessions.js';
+import { instancePlacesForSave, withUnopenedSessions } from './unopened-sessions.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 
 /**
@@ -853,7 +853,8 @@ async function buildSlpBytes(opts) {
         // share its entry, so this goes before the Labels are built.
         var sessListed = sessOutside || { videos: [], listedVideos: new Map(), placedVideos: new Map() };
         var sessSuggestions = suggestionsForSave(sess, sessListed);
-        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessListed);
+        var sessPlaces = instancePlacesForSave(sess.unopenedSessions);
+        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessListed, sessPlaces);
 
         var sessOutsideBase = allLabeledFrames.length + (sessLabels.labeledFrames || []).length;
 
@@ -883,7 +884,7 @@ async function buildSlpBytes(opts) {
         allSuggestions = allSuggestions.concat(sessSuggestions(sessLabels.videos));
         // The sessions of this session's file that nobody opened go right after it.
         if (sess.unopenedSessions) {
-            allSessions = allSessions.concat(unopenedSessionsForEagerSave(SIO, sess, sessLabels, sessOutside, sessOutsideBase, allVideos, allIdentities));
+            allSessions = allSessions.concat(unopenedSessionsForEagerSave(SIO, sess, sessLabels, sessOutside, sessOutsideBase, allVideos, allIdentities, sessPlaces));
         }
     }
 
