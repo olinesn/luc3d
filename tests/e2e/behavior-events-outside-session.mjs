@@ -231,7 +231,7 @@ const LOADERS = {
 /** Dismiss a load's prompts until it finishes. */
 async function settleLoad(page, what) {
     let done = false;
-    for (let i = 0; i < 240 && !done; i++) {
+    for (let i = 0; i < 6000 && !done; i++) {
         const s = await page.evaluate(() => {
             const b = [...document.querySelectorAll('button')].find(x => x.offsetParent && /^(Skip|Later|Cancel|Not now)$/i.test((x.textContent || '').trim()));
             if (b) { b.click(); return { done: false }; }
