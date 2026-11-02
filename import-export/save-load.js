@@ -845,8 +845,8 @@ async function buildSlpBytes(opts) {
             return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
         });
 
-        // Poses on a video no session names go back on their own video, and the
-        // session's events on that video on the same entry.
+        // Poses LUC3D does not show go back on their own video and skeleton, and the
+        // session's events on such a video on the same entry.
         var sessOutside = outsideFramesForSave(sess);
         // A video only a suggestion names joins this list, and the session's bouts on it
         // share its entry, so this goes before the Labels are built.
@@ -855,7 +855,7 @@ async function buildSlpBytes(opts) {
         var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessListed);
 
         // Merge into combined Labels
-        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFramesFor(sessLabels.skeletons[0], sessLabels.identities) : []);
+        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFramesFor(sessLabels) : []);
         allVideos = allVideos.concat(sessLabels.videos || []);
         for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
             var skel = sessLabels.skeletons[sk];

@@ -877,8 +877,9 @@ nothing is wrong is a warning nobody reads.
   DIFFERENT-shaped skeleton is not re-shaped by this edit and goes in `others`,
   so the dialog can say it exists rather than leaving the totals quietly short.
 - `countSkeletonEditImpact(sessions)` → the tally: `userInstances`,
-  `predictedInstances`, `instances` (an eager session's `outsideFrames` poses
-  included: the edit re-shapes them too), `reprojectedInstances`, `groups`,
+  `predictedInstances`, `instances` (an eager session's `outsideFrames.frames` poses
+  included: the edit re-shapes them too; its `otherSkeletonFrames` are on another
+  skeleton, so no), `reprojectedInstances`, `groups`,
   `keypoints3d`, the lazy fields above, and `perSession` — the same record once
   per session. Every total is a FOLD of `perSession`, so the dialog's by-session
   rows and its headline cannot be two different arithmetics.
@@ -1539,9 +1540,12 @@ session graph that holds them.
   - **`fileProvenance`** — the provenance of the `.slp` it was loaded from,
     without LUC3D's own keys (null when none); in memory only, written back on
     save by `import-export/slp-provenance.js`.
-  - **`outsideFrames`** — eager loads only: the file's poses on a video no session
-    names (null when none). Not shown; written back on save, and re-shaped by
-    `propagateNodeAdded`/`propagateNodeRemoved` (`import-export/outside-frames.js`).
+  - **`outsideFrames`** — eager loads only: the file's poses this session does not
+    show (null when none). `frames`, on a video no session names, are re-shaped by
+    `propagateNodeAdded`/`propagateNodeRemoved`. `otherSkeletonFrames`, on another
+    skeleton on any video, are the reader's own sleap-io.js instances and no edit
+    touches them, but `renameCameraInAllData` carries `videos[].camera` along. A save
+    writes both back (`import-export/outside-frames.js`).
   - **`keptSuggestions`** — eager loads only: the file's suggestions, each with the
     camera whose video it is on (null when none). Not shown; written back on save
     (`import-export/kept-suggestions.js`). `renameCameraInAllData` renames their camera.
@@ -9093,6 +9097,8 @@ multi-video docking layout.
   `hideLoading`, `quickSave`, `markDirty`.
 - `../import-export/kept-suggestions.js` — `moveKeptSuggestions` (a moved video's
   suggestions go with it).
+- `../import-export/outside-frames.js` — `moveKeptCameraPoses` (a moved video's
+  poses on another skeleton go with it).
 - `./video-filters.js` — the `CONTRAST_*` / `BRIGHTNESS_*` / `ROTATION_*`
   bounds, `clampContrast` / `clampBrightness` / `clampRotation` /
   `clampRotationSetting`, `buildVideoFilter`, and the three per-session
@@ -13386,7 +13392,9 @@ filesystem enumeration, decoder rebuild.
   exported for `tests/e2e/slp-import-fast-compound.mjs`).
   `handleLoadSessionFolderSingleSlp()` loads a folder holding a project `.slp`
   plus `videos/` + calibration. It reads the SLP with the **typed** reader
-  (`parseSlpWithRawFallback`, `import-export/file-io.js`) and restores
+  (`parseSlpWithRawFallback`, `import-export/file-io.js`) and, unless a group
+  crosses skeletons (`groupsAcrossSkeletonsRefusal` refuses the load), shows the poses
+  on `sessionSkeletonEntry`'s skeleton, as File ▸ Open does, and restores
   grouping, `nulledNodes`/occlusion, identities and 3D via the shared
   `restoreGroupingAndUnlink` (`import-export/slp-import.js`), then the rest of
   `metadata.lucid` through `readVisibilityMetadata`, `readSmoothingMetadata`
@@ -13705,8 +13713,9 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
 **Imports from project modules.**
 - `../pose/placeholder-cameras.js` (`makePlaceholderCamera`,
   `hasRealCalibration`, `ensurePlaceholderCameras`),
-- `../import-export/outside-frames.js` (poses on a video no session reads: kept
-  aside, and said in the load's status),
+- `../import-export/outside-frames.js` (poses on a video no session reads or on a
+  skeleton it does not show: kept aside, and said in the load's status; a group
+  across skeletons refuses the load),
 - `../import-export/kept-suggestions.js` (`keepSuggestions`: the single-`.slp` and
   per-camera folder loaders keep a file's suggestions),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
@@ -14090,6 +14099,15 @@ frames/instances and values, as typed arrays TRANSFERRED in the `postMessage`.
 Only `parseSlpH5(file, null, { columnar: true })` from
 `handleLoadSessionFolderPerCamera` asks for it. The equivalence test also
 requires the columnar result to expand back to exactly the nested `frames`.
+
+**A pose goes with the skeleton it is on (`readSkeletonRecord`, `sameSkeleton`).** A
+file with more than one skeleton also gets `data.skeletons`, one `{name, nodes, edges,
+symmetries, frames}` per skeleton (a duplicate, same nodes in the same order and same
+edges and symmetries, shares its twin's), the first being `data.skeleton` +
+`data.frames`, and not an unused one. `data.frames` and `data.columnar` hold only that
+first skeleton's poses (`buildColumnarFrames`' `skipRow`); the others are always boxed,
+with their `row`, `fromPredicted`, `trackingScore` and `complete` for
+`import-export/outside-frames.js`. A file with one skeleton gets no `data.skeletons`.
 
 **A prediction's per-node scores (`pred_points.score`)** ride along both ways:
 each nested instance carries `pointScores` (a `Float64Array(numNodes)`, NaN where
@@ -15383,9 +15401,11 @@ incl. `planeMetadataConflict`).
 
 ### import-export/outside-frames.js
 
-**Purpose.** Poses on a video no recording session names: not shown, and kept by
-every save on their own video. The lazy path keeps them in its store
-(`buildSessionRefGraph`; File ▸ Add SLP adds its own there,
+**Purpose.** Poses a `.slp` holds that LUC3D does not show, kept by every save: those
+on a video no recording session names, each on its own video, and those on a skeleton
+their session does not show, each on its own skeleton with its own nodes, on any video.
+The lazy path keeps both in its store (`buildSessionRefGraph`, though see CLAUDE.md for
+what it still reads by position; File ▸ Add SLP adds its own there,
 `SioLazyLoader.commitAddedRows`); this module holds them for the eager path, on
 `session.outsideFrames`, and has the rules both share.
 
@@ -15396,23 +15416,51 @@ every save on their own video. The lazy path keeps them in its store
   id `videos_json` does not hold, as older LUC3D saves left it).
 - `headerVideoOfRecord(SIO, record, id)` — the same for a `slpData.videos` record (the
   raw worker's have no typed video to keep). File ▸ Add SLP on a lazy project.
+- `fileSkeletons(slpData)` — `slpData.skeletons`, filled in for a reader's result that
+  lists none (one skeleton; an analysis `.h5`).
+- `sessionSkeletonEntry(slpData, sessionIdx)` — the entry a file's session shows: the
+  one its `metadata.lucid.skeleton` names (by nodes and edges, else nodes; a project
+  can hold sessions on different skeletons), else the first with a pose on its videos,
+  else the first.
+- `groupsAcrossSkeletonsRefusal(slpData, nSessions)` — the status sentence when a load
+  must refuse, else null: a group links a pose on a skeleton its session does not show.
+  A session with no typed session has groups going by position in the file's frame, so
+  any such group refuses in a file with more than one skeleton. Called before the load
+  touches anything; the loader then resolves `false`, so the file does not become the
+  save target.
 - `keptVideoOf(slpData, id)`, `headerVideoOfKept(SIO, kept)` — what an eager load holds
   of such a video, and the `SIO.Video` a header lists for it. `record` is the file's
   own entry (`slpData.videos[id]`): one object per video per file, so it tells a video
   apart where an id cannot (File ▸ Add SLP brings a second file's ids).
 - `keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap)` — eager load;
-  adds to what `session.outsideFrames` already holds. Each kept video remembers the
-  record its file's events name it by (`eventRecord`, `fileEventsOf`).
-- `ownVideoOfColumnar(col)`, `ownVideoOfFrames(frames)`, `keepOutsideColumnarFrames(session, slpData, own)` — the
-  per-camera eager load: a camera is the first video its file lists with frames.
+  adds to what `session.outsideFrames.frames` already holds. It reads `slpData.frames`,
+  which must be on `session`'s skeleton. Each kept video remembers the record its file's
+  events name it by (`eventRecord`, `fileEventsOf`).
+- `noteVideoReaders(readers, session, entry, claimedVideos, videoIdxToCameraName, cameras)`,
+  `keepOtherSkeletonFrames(slpData, readers, fallback, fallbackEntry)` — eager load: the
+  poses on a skeleton their session does not show go on
+  `session.outsideFrames.otherSkeletonFrames` as the reader's own instances (the raw
+  worker's are built into the same, with their `from_predicted` links), and a video's
+  camera is recorded in `videos[].camera`.
+- `ownVideoOfColumnar(col, slpData)`, `ownVideoOfFrames(frames, slpData)`,
+  `keepOutsideColumnarFrames(session, slpData, own, camName)`,
+  `keepCameraOtherSkeletonFrames(session, slpData, own, camName)` — the per-camera eager
+  load: a camera is the first video its file lists with frames, on any skeleton.
+- `moveKeptCameraPoses(fromSession, toSession, cameraName)` — a video moved to another
+  session takes the poses kept on it along, so they stay in that camera's frames.
 - `outsideFramesForSave(session)` — eager save, before the session's Labels are built:
-  `{videos, tracks, listedVideos, placedVideos, labeledFramesFor(skeleton, identities)}`,
-  or null. `listedVideos` (the file's record -> the entry) is what puts a kept event on
-  the entry its video's poses have (`buildBehaviorEvents`), and `placedVideos` (the
-  read's record -> the entry) a kept suggestion. The frames take those Labels' skeleton
-  and identity list, and an identity only these poses name is added to that list.
-- `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(session)` — the
-  sentence for a load's final status.
+  `{videos, tracks, listedVideos, placedVideos, labeledFramesFor(labels)}`, or null.
+  `videos` are those no camera of the session has. `listedVideos` (the file's record ->
+  the entry) is what puts a kept event on the entry its video's poses have
+  (`buildBehaviorEvents`), and `placedVideos` (the read's record -> the entry) a kept
+  suggestion. `labeledFramesFor` gives the frames those Labels lack: a kept pose on a
+  camera's video goes into the frame the Labels already have there, because a lazy
+  reopen's save keeps only the first row of each video and frame. An identity only
+  these poses name is added to `labels.identities`, and `new SIO.Labels` lists a kept
+  pose's skeleton by itself.
+- `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(sessions)` — the
+  sentences for a load's final status: what is on no session's video, and what on a
+  camera's video is not shown for being on another skeleton.
 
 **Imports from project modules.** `../pose/pose-data.js` (`Instance`), `./file-io.js`
 (`makePooledSioInstances`), `./behavior-events.js` (`keptVideoRecords`).
@@ -15421,7 +15469,7 @@ every save on their own video. The lazy path keeps them in its store
 `import-export/slp-streaming-write.js`, `import-export/kept-suggestions.js`,
 `loading/session-loader.js`.
 
-**Tests.** `tests/e2e/poses-outside-session.mjs`.
+**Tests.** `tests/e2e/poses-outside-session.mjs`, `tests/e2e/poses-other-skeleton.mjs`.
 
 ### import-export/kept-suggestions.js
 
@@ -15712,7 +15760,12 @@ session's resident/total) rather than truncate silently. Covered by
   scores as `pointScores`, the typed instance's own `_score` column by reference,
   null for a user instance — the importers copy it with `Instance.setPointScores`). Each `videos[]` entry
   carries the typed `Video` as `_typedVideo` (`import-export/outside-frames.js` writes it back whole). `suggestions[]` holds
-  `{videoIdx, frameIdx, group}`, `group` as the file holds it, for `import-export/kept-suggestions.js`. Each `sessions[]` entry is
+  `{videoIdx, frameIdx, group}`, `group` as the file holds it, for `import-export/kept-suggestions.js`. A pose goes with the skeleton
+  it is on: `skeletons` lists `{name, nodes, edges, typed, frames}` per skeleton (a
+  duplicate by `Skeleton.matches` with `requireSameOrder` shares its twin's), the first
+  being `skeleton` + `frames`, and not an unused one; `skeletonEntryOf` maps a typed
+  skeleton to its entry; with more than one, each pose dict carries the typed instance
+  as `_typed`. Each `sessions[]` entry is
   the verbatim on-disk dict (for the direct calibration/video-map/metadata reads)
   PLUS a `_typedSession` ref (the typed RecordingSession) used by
   `reconstructInstanceGroupsFromSession` for grouping — which reads LUCID's legacy
@@ -16287,7 +16340,10 @@ first track.
   non-embedded folder picker so the overlay stays up during video decode. Calls
   `resetPlaneState()` up front, then `readVisibilityMetadata` /
   `readPlaneMetadata` per session. Skip-and-continue on per-session video-load
-  failure (the failed session is dropped from `state.sessions`).
+  failure (the failed session is dropped from `state.sessions`). Each session shows
+  the poses on its own skeleton (`sessionSkeletonEntry`); the rest are kept for the
+  save, and a group across skeletons refuses the load before anything changes
+  (`import-export/outside-frames.js`).
 - `slpHasEmbeddedImages(file)` — whether a `.slp` holds embedded images (one worker
   start and a metadata read; no for a file that cannot be read). File ▸ Open asks it
   for a large file.
@@ -16443,8 +16499,10 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
   session keeps its part of the file's provenance),
-  `./outside-frames.js` (`keepOutsideFrames`, `keptOutsideCounts`,
-  `outsideFramesNote`, `headerVideoOfRecord` — poses on a video no session reads),
+  `./outside-frames.js` (`fileSkeletons`, `groupsAcrossSkeletonsRefusal`,
+  `headerVideoOfRecord`, `keepOtherSkeletonFrames`, `keepOutsideFrames`,
+  `keptOutsideCounts`, `noteVideoReaders`, `outsideFramesNote`, `sessionSkeletonEntry` —
+  poses on a video no session reads or on a skeleton it does not show),
   `./kept-suggestions.js` (`keepSuggestions`),
   `../loading/lazy-store-rows.js` (`storeFromParsedFrames`),
   `../loading/video-file-pick.js` (`preferNonCalibrationVideos`),
