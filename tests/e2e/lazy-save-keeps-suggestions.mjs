@@ -21,6 +21,8 @@
  *  E. A correction moves frames, not suggestions. An attached video renames a camera's
  *     entry, and its suggestions follow.
  *  F. A file with no suggestions gets none, and no extra video.
+ *  G. A suggestion and a behavior bout on one video: one entry of the save's video list,
+ *     with both on it, whether or not the video has poses.
  *
  * Needs `uv` for Python (skipped without it).
  *
@@ -613,6 +615,63 @@ try {
         const bytes = await save(page);
         await page.close();
         expectSave(bytes, name, { suggestions: [], videos, poses: sources[name].poses, groups: sources[name].groups, sessions: sources[name].sessions });
+    }
+
+    console.log('\nG. A suggestion and a bout on one video: one entry of the list');
+    {
+        const page = await newAppPage();
+        await page.evaluate(async () => {
+            const SIO = window.SleapIO;
+            const video = (filename) => {
+                const v = new SIO.Video({ filename, backendMetadata: { type: 'MediaVideo', shape: [400, 64, 64, 1], filename }, openBackend: false });
+                v.shape = [400, 64, 64, 1];
+                return v;
+            };
+            const skeleton = new SIO.Skeleton({ name: 'sk', nodes: [new SIO.Node('nose'), new SIO.Node('tail')] });
+            const track = new SIO.Track('mouse1');
+            const [a, b, withPoses, noPoses, boutOnly] = ['camA.mp4', 'camB.mp4', 'both_with_poses.mp4', 'both_no_poses.mp4', 'bout_only.mp4'].map(video);
+            const framesOn = (v, base) => [0, 1].map(f => new SIO.LabeledFrame({ video: v, frameIdx: f, instances: [new SIO.PredictedInstance({
+                points: [{ xy: [base + f, 10], visible: true, complete: true, score: 0.9 }, { xy: [base + f, 20], visible: true, complete: true, score: 0.9 }],
+                skeleton, track, score: 0.9,
+            })] }));
+            const cameras = ['camA', 'camB'].map((name, i) => new SIO.Camera({
+                name, rvec: [0, 0.1 * i, 0], tvec: [10 * i, 0, 0], matrix: [[500, 0, 32], [0, 500, 32], [0, 0, 1]], distortions: [0, 0, 0, 0, 0], size: [64, 64],
+            }));
+            const session = new SIO.RecordingSession({ cameraGroup: new SIO.CameraGroup({ cameras }) });
+            session.addVideo(a, cameras[0]);
+            session.addVideo(b, cameras[1]);
+            const rear = new SIO.EventType({ name: 'rear' });
+            const bout = (v, startFrame) => new SIO.UserEvent({ type: rear, video: v, startFrame, endFrame: startFrame + 5, source: '', name: '', metadata: {} });
+            const labels = new SIO.Labels({
+                labeledFrames: [...framesOn(a, 100), ...framesOn(b, 200), ...framesOn(withPoses, 500)],
+                videos: [boutOnly, noPoses, a, b, withPoses], skeletons: [skeleton], tracks: [track], sessions: [session], eventTypes: [rear],
+                events: [bout(withPoses, 10), bout(noPoses, 20), bout(boutOnly, 30)],
+                suggestions: [new SIO.SuggestionFrame({ video: noPoses, frameIdx: 60, group: 0 }), new SIO.SuggestionFrame({ video: withPoses, frameIdx: 61, group: 0 }), new SIO.SuggestionFrame({ video: a, frameIdx: 62, group: 0 })],
+            });
+            window.__built = await SIO.saveSlpToBytes(labels);
+        });
+        const builtB64 = await page.evaluate(() => { const u = window.__built; let s = ''; for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768)); return btoa(s); });
+        await page.close();
+        const entriesOf = page2 => page2.evaluate(async () => {
+            const fileio = await import('/import-export/file-io.js');
+            const slp = await fileio.parseSlpViaSleapIO(new File([window.__saved], 'saved.slp'), () => {});
+            const rows = slp.behaviorEvents ? slp.behaviorEvents.rows : [];
+            return slp.videos.map((v, i) => [v.filename, rows.filter(r => r.video === i).map(r => r.start).sort((x, y) => x - y)]);
+        });
+        const suggestions = ['both_no_poses.mp4|60|0', 'both_with_poses.mp4|61|0', 'camA.mp4|62|0'];
+        const entries = [['camA.mp4', []], ['camB.mp4', []], ['both_with_poses.mp4', [10]], ['both_no_poses.mp4', [20]], ['bout_only.mp4', [30]]];
+        let bytes = Buffer.from(builtB64, 'base64');
+        for (const gen of [1, 2]) {
+            const p = await openLazy(bytes, 'a bout and a suggestion, save ' + gen);
+            bytes = await save(p);
+            const got = await entriesOf(p);
+            // A bout on a video with no entry is added after the others, so compare by name too.
+            check(eq(got.map(e => e[0]).sort(), entries.map(e => e[0]).sort()), `a bout and a suggestion, save ${gen}: each video listed once`, got);
+            check(eq(new Map(got).get('both_no_poses.mp4'), [20]) && eq(new Map(got).get('both_with_poses.mp4'), [10]) && eq(new Map(got).get('bout_only.mp4'), [30]),
+                `a bout and a suggestion, save ${gen}: each bout on its video`, got);
+            await p.close();
+            expectSave(bytes, `a bout and a suggestion, save ${gen}`, { suggestions });
+        }
     }
 
     console.log('\nPython reads every save:');

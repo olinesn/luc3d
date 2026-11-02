@@ -15,8 +15,9 @@
  *    video renames it), and on a camera with no poses too;
  *  - on a video with kept poses (a video no session names, a session the loader did
  *    not open): their entry (outside-frames.js);
- *  - on anything else: its own place in the header, after those. A camera that is gone
- *    leaves its suggestions on the video the file named.
+ *  - on anything else: its own place in the header, after those, and the session's
+ *    bouts on that video share it. A camera that is gone leaves its suggestions on the
+ *    video the file named.
  *
  * Where they come from:
  *  - An eager load keeps a list on the session (`keepSuggestions`,
@@ -30,6 +31,7 @@
  */
 
 import { keptVideoOf, headerVideoOfKept } from './outside-frames.js';
+import { keptVideoRecords } from './behavior-events.js';
 
 // Rows of one file sit on the sessions that read their videos. This puts them back in
 // the file's order at save, and rows of a file added later after them.
@@ -59,7 +61,7 @@ export function keepSuggestions(slpData, opened) {
         }
         var video = keptVideos.get(sug.videoIdx);
         if (!video) {
-            video = keptVideoOf((slpData.videos || [])[sug.videoIdx] || null, sug.videoIdx);
+            video = keptVideoOf(slpData, sug.videoIdx);
             keptVideos.set(sug.videoIdx, video);
         }
         if (!holder.keptSuggestions) holder.keptSuggestions = [];
@@ -87,15 +89,19 @@ function lazySuggestionRows(session) {
     var loader = session.lazyLoader;
     // The worker-backed loader (a SLEAP analysis .h5) has none to keep.
     if (!loader.labelsByCam) return [];
+    // A project file's store lists its videos as the file does, which is where this
+    // session's kept events come from. A per-camera store is another file: no events.
+    var eventRecords = loader._sharedStore ? keptVideoRecords(session) : new Map();
     var rows = [];
     function addRows(labels, cameraOfVideo) {
         var suggestions = (labels && labels.suggestions) || [];
         for (var i = 0; i < suggestions.length; i++) {
             var sug = suggestions[i];
             var camera = cameraOfVideo.get(sug.video);
+            var id = labels.videos.indexOf(sug.video);
             rows.push({
                 camera: camera === undefined ? null : camera,
-                video: { id: labels.videos.indexOf(sug.video), record: sug.video, typed: sug.video },
+                video: { id: id, record: sug.video, typed: sug.video, eventRecord: eventRecords.get(id) || null },
                 frameIdx: sug.frameIdx,
                 group: sug.metadata ? sug.metadata.group : null,
                 order: LAZY_ROW_ORDER,
@@ -123,52 +129,57 @@ function lazySuggestionRows(session) {
 }
 
 /**
- * Every suggestion of `sessions`, each on a video of `allVideos`, in the order their
- * files held them. A video only a suggestion names is appended to `allVideos`.
+ * A session's suggestions for a save, in two steps, because the writers need the first
+ * before the camera videos of the second exist. Called now, it gives each video only a
+ * suggestion names its place. A session's events must go on those entries too, and the
+ * eager writer builds them with the session's Labels.
  *
- * @param {Array<{session: Session, cameraVideos: Object[], placedVideos: ?Iterable}>} sessions
- *   each session with the header's video per `session.cameras` entry, and what is
- *   already placed: [the file's record of a video, the header's video] pairs
- *   (`outsideFramesForSave`'s `placedVideos`)
- * @param {Object[]} allVideos - the header's `SIO.Video` list so far
- * @returns {Object[]} `SIO.SuggestionFrame`s, for the `Labels` or the writer's header
+ * @param {Session} session
+ * @param {{videos: Object[], listedVideos: Map<Object, Object>, placedVideos: Map<Object, Object>}} listed
+ *   what the header holds so far, added to here: its `SIO.Video`s, the file's record of a
+ *   video -> its entry for the session's events (`buildBehaviorEvents`), and the read's
+ *   record of a video -> its entry (`outsideFramesForSave`)
+ * @returns {function(Object[]): Array} given the header's video per `session.cameras`
+ *   entry, the session's suggestions, for `suggestionsInFileOrder`
  */
-export function suggestionsForSave(sessions, allVideos) {
+export function suggestionsForSave(session, listed) {
     var SIO = window.SleapIO;
-    var placed = new Map();
-    sessions.forEach(function (s) {
-        if (s.placedVideos) for (var pair of s.placedVideos) placed.set(pair[0], pair[1]);
+    var rows = (session.lazyLoader ? lazySuggestionRows(session) : []).concat(session.keptSuggestions || []);
+    var cameraNames = new Set(session.cameras.map(function (c) { return c.name; }));
+    rows.forEach(function (row) {
+        if (row.camera !== null && cameraNames.has(row.camera)) return;
+        if (listed.placedVideos.has(row.video.record)) return;
+        var video = headerVideoOfKept(SIO, row.video);
+        listed.placedVideos.set(row.video.record, video);
+        // Two embedded records can share one source video, and a closed session's
+        // video can already be in the header.
+        if (listed.videos.indexOf(video) < 0) listed.videos.push(video);
+        if (row.video.eventRecord) listed.listedVideos.set(row.video.eventRecord, video);
     });
-    var entries = [];
-    sessions.forEach(function (s) {
-        var rows = (s.session.lazyLoader ? lazySuggestionRows(s.session) : []).concat(s.session.keptSuggestions || []);
-        if (rows.length === 0) return;
+    return function (cameraVideos) {
         var videoOfCamera = new Map();
-        s.session.cameras.forEach(function (c, i) {
-            if (!videoOfCamera.has(c.name)) videoOfCamera.set(c.name, s.cameraVideos[i]);
+        session.cameras.forEach(function (c, i) {
+            if (!videoOfCamera.has(c.name)) videoOfCamera.set(c.name, cameraVideos[i]);
         });
-        rows.forEach(function (row) {
-            var video = row.camera === null ? undefined : videoOfCamera.get(row.camera);
-            if (!video) video = placed.get(row.video.record);
-            if (!video) {
-                video = headerVideoOfKept(SIO, row.video);
-                placed.set(row.video.record, video);
-                // Two embedded records can share one source video, and a closed session's
-                // video can already be in the header.
-                if (allVideos.indexOf(video) < 0) allVideos.push(video);
-            }
-            entries.push({
+        return rows.map(function (row) {
+            return {
                 order: row.order,
                 frame: new SIO.SuggestionFrame({
-                    video: video,
+                    video: (row.camera !== null && videoOfCamera.get(row.camera)) || listed.placedVideos.get(row.video.record),
                     frameIdx: row.frameIdx,
                     // As the file holds it (the reader's `.group` is a string). A file with
                     // none reads as 0 in Python; left out, the writer would write "default".
                     group: row.group != null ? row.group : 0,
                 }),
-            });
+            };
         });
-    });
-    entries.sort(function (a, b) { return a.order - b.order; });
-    return entries.map(function (e) { return e.frame; });
+    };
+}
+
+/**
+ * `suggestionsForSave`'s results as `SIO.SuggestionFrame`s, in the order their files held
+ * them, for the `Labels` or the writer's header.
+ */
+export function suggestionsInFileOrder(entries) {
+    return entries.slice().sort(function (a, b) { return a.order - b.order; }).map(function (e) { return e.frame; });
 }

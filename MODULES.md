@@ -7268,6 +7268,49 @@ RIGHT edge, or the closed menu runs past the window as scroll overflow.
 Covered by `tests/e2e/toolbar-animal-count.mjs` and, for the file format, `tests/e2e/visibility-settings-roundtrip.mjs`
 and `tests/test-visibility-metadata.js`.
 
+### ui/toolbar-menu-keys.js
+
+**Purpose.** The keyboard's side of the toolbar's hover menus (`.tri-dropdown`,
+pure CSS in `styles.css`): which of two open menus paints on top, and Esc.
+
+**Which menu paints on top.** Focus and hover can each hold a menu open, so two
+can overlap. Tab sets `.keyboard-nav` on the toolbar and the pointer moving over
+the toolbar drops it. With it, the menu holding focus is on top; without it, the
+one under the pointer is (`z-index` 202 and 201 over the menus' 200). Plain
+`:focus-within` is not enough: a number field keeps focus after a click, and its
+menu would then cover the next menu's items, right where the pointer has to pass
+to reach them.
+
+**Esc** on a menu's button or item closes the menu and blurs the control: the
+keys go back to the app. Focus does not go to the menu's button, where the next
+Space or Enter would run Track, Triangulate or Smooth on all frames, and that
+matches the menus' number fields, whose own handlers revert and blur on Esc (they
+are left to it: there Esc means "drop what I typed", so a pointer on the menu keeps
+it open). `.menu-dismissed` shuts the menu at once, without the 0.35 s hover grace
+period (so the next Tab skips its items), and beats `:hover` (so a pointer resting
+on it does not hold it open); it lasts until `mouseenter` or `focusin` on that
+dropdown. Chromium and Firefox keep the place after the blur, so Tab carries on at
+the next control. WebKit does not: its next Tab starts over at the top of the page.
+
+It closes the innermost thing first. The listener is on `window` in the capture
+phase, ahead of everything on `document`, and stops the event: the first Esc closes
+the menu, the next cancels Edit Group or leaves Label Behaviors mode (whose Esc also
+ends running behaviors). Dialogs keep their Esc: several take no focus from the
+toolbar (Settings…, Calibration Required), so `underDialog` hit-tests the focused
+control, because the dialogs share no class but every one covers the window.
+
+**Key exports.**
+- `wireToolbarMenuKeys()` — called once from `setupUI` (`ui/ui-wiring.js`).
+- `returnFocusTo(el)` — give focus back after a dialog that took it closes. The
+  menu has closed by then and a closed menu's item cannot take focus, so the
+  menu is opened (`.open`) for that one call. Used by Custom…'s dialog.
+
+**Imports from project modules.** `./keyboard-target.js` (`isTextEntryTarget`).
+
+**Imported by.** `ui/ui-wiring.js`.
+
+Test: `tests/e2e/toolbar-menu-keyboard.mjs` (`BROWSER=firefox|webkit` to switch).
+
 ### ui/plane-toolbar-lock.js
 
 **Purpose.** Disable the pose-annotation toolbar while Defining Plane Mode is
@@ -7297,7 +7340,10 @@ Remove/Restore smoothing toggle, `tbSmoothToggle`, is one; Behavior's are
 `tbBehavior`, `tbBehaviorFrame`, `tbBehaviorAllFrames` — its Label Behaviors
 mode item stays live, since entering that mode leaves Defining Plane Mode). A disabled
 button still opens its menu on hover (`tests/e2e/plane-mode-toolbar-lock.mjs`
-§4b).
+§4b). Nothing opens those four by keyboard, so what is in them is mouse-only in
+the mode (Label Behaviors mode keeps its shortcut), on purpose: planes are placed
+by dragging, only runs read those settings, and the mode blocks runs. Making the
+menus Tab stops works, but takes Sessions to the User checkbox from 1 press to 13.
 
 **Imports** `planeState` from `ui/plane-definition.js` — circular, and safe only
 because the binding is read INSIDE the function body. **Imported by**
@@ -11231,9 +11277,17 @@ environment file is too new, rather than triangulating from the readable cameras
   button's tooltip, and gives the button `.active` while any trail is on. The
   FPS pill's commit redraws when trails are on. The label stays a bare
   "Trails ▾" to save toolbar width. The button is a `.tri-dropdown` (CSS hover
-  menu; clicking the button does nothing). Display state, never saved; not in
+  menu; clicking the button does nothing). `addTrailItems` builds the toolbar's
+  items as `<button>`s, so Tab reaches them and Enter and Space pick them, and
+  the menu bar's as `<div>`s, like every other item there (nothing opens those
+  menus by keyboard). A click on a `<button>` item must land on the button itself,
+  or focus release misses it and the menu stays open, so its children are
+  `pointer-events: none` (`styles.css`, also the toolbar buttons' carets). Keyboard
+  focus comes back to Custom… when its dialog closes
+  (`returnFocusTo`, `ui/toolbar-menu-keys.js`). Display state, never saved; not in
   the Defining Plane Mode toolbar lock. Covered by
-  `tests/e2e/node-trails-toolbar.mjs` and `tests/test-trail-presets.mjs`.
+  `tests/e2e/node-trails-toolbar.mjs`, `tests/e2e/toolbar-menu-keyboard.mjs` and
+  `tests/test-trail-presets.mjs`.
   **Trail shade.** Both menus hold two radio groups (`.trail-menu-heading`,
   `role="group"`): **Length** and **Shade** — one item per `TRAIL_SHADES` entry
   (`data-trail-shade`, ids `menuTrailsShade<Key>`) with a `.trail-shade-swatch`.
@@ -11462,6 +11516,7 @@ dropdown item),
 field),
 `reproj-threshold-field.js` (`wireReprojThresholdField`, the Triangulate menu's
 Reprojection error field),
+`toolbar-menu-keys.js` (`wireToolbarMenuKeys`, `returnFocusTo`),
 `view-align-modal.js` (`showAlignViewsModal`, View ▸ "Align Views to
 References…"),
 `seekbar-tooltip.js` (`installSeekbarTooltip`),
@@ -13701,7 +13756,42 @@ skeleton-only 3D-points import prompts before discarding it.
 
 ---
 
-**Behavior labels.** `handleLoadProjectSlpLazy` resets and reads behavior metadata like the eager reader; `handleLoadSessionFolderSingleSlp` resets only when it starts a project, and otherwise merges the file's ethogram by name (its bouts remapped).
+**Behavior labels.** `handleLoadProjectSlpLazy` resets and reads behavior metadata like the eager reader; `handleLoadSessionFolderSingleSlp` resets only when it starts a project, and otherwise merges the file's ethogram by name (its bouts remapped). When its filename fallback makes a camera of a video no session names, the events it keeps on that video go back on that camera's entry, with the poses (`eventScope.cameras`).
+
+### loading/lazy-store-rows.js
+
+**Purpose.** Another file's poses, added to a lazy project's columnar store (File ▸
+Add SLP). On a lazy project the store is the project: frames hydrate from it, a save
+writes it whole, and everything holding frames in memory may drop one with no user
+instance (`evictLazyFrameGroups`, `sweepLazyFrameWindows`, `buildSessionRefGraph`'s
+pruning). So an added pose must be a store row, or it is gone the next time one of those
+runs. Rows are only ever APPENDED: no existing row moves or changes, so `frameRowByCam`,
+`_rawInstIndex` and the file-wide group refs stay right. All or nothing:
+`allocateStoreRows` allocates every column and changes nothing, then `commitStoreRows`
+only fills what is allocated and swaps it in, without a break. Import-free and DOM-free.
+
+**Key exports.**
+- `sourceRowsByVideo(source)` — a store's frame rows by video, in ascending id. A frame
+  listed twice joins its first row (the writer keeps one row per `video:frame`).
+- `allocateStoreRows(store, blocks, source)`, `commitStoreRows(plan, source, rules)` —
+  `rules` has `trackMap` (the file's track id → the store's; a value outside it has no
+  track) and `skeletons` (per file skeleton: the store's id and, when its nodes are in
+  another order, `order[fileNode] = storeNode`). Each block gets `rowMap`. A file older
+  than format 1.1 is shifted to today's coordinates, as `materializeFrame` would read it.
+  What detections carry outside the columns (a model's identity, category, embeddings,
+  `import-export/detection-labels.js`) follows its rows, into the store's catalogs by name.
+- `firstFreeVideoId(store)` — past every row's, annotation's and negative frame's id and
+  the store's own list (`videoIndexFor` falls back to a raw id as an index).
+- `storeFromParsedFrames(slpData)` — an eagerly parsed file's poses (an analysis `.h5`)
+  in a store's columns.
+- `ADDED_STORE_FORMAT`, `OLDEST_STORE_FORMAT`.
+
+**Imports from project modules.** None.
+
+**Imported by.** `loading/sio-lazy-loader.js`, `import-export/slp-import.js`
+(`storeFromParsedFrames`).
+
+**Tests.** `tests/test-lazy-store-rows.mjs`, `tests/e2e/add-slp-lazy-project.mjs`.
 
 ### loading/sio-lazy-loader.js
 
@@ -13749,6 +13839,19 @@ synchronous.
   `store.tracks`, and `_tracksPastSession` keeps them out of the timeline's count.
   `tracksPastSession(labels, sessionTracks, camName)` — how many such names a save
   lists after the session's tracks, moving those rows past any track added since.
+- `prepareAddedRows(source, opts)`, `commitAddedRows(prepared, opts)`,
+  `addedRowsRefusal()` — File ▸ Add SLP (`loading/lazy-store-rows.js`). Prepare works out
+  where each row goes and allocates, changing nothing; commit cannot run out of memory
+  half way. A video the file gives a camera becomes that camera's, so its rows hydrate,
+  evict, count and save like any other; every other video stays on its own, like any
+  video no camera names. A shared store takes every row under new video ids
+  (`videoIdByCam`); per-camera stores get one new `Labels` + `LazyDataStore` per added
+  camera, and the other videos' rows go in the first added camera's (`_ownVideoByCam`).
+  `_followSessionTracks` gives every store the session's grown list
+  (`_installStoreTrackList`, shared with `remapTracksFromIdentity`): a camera's rows keep
+  their ids because that list only grew at its end. Sets `rowsAddedInMemory`, which no
+  re-read can restore, so the multi-session save keeps the loader itself. Refuses a store
+  older than format 1.1, whose rows `materializeFrame` shifts by half a pixel.
 - `getFrame` / `getFrameSync` — typed instances → `{trackIdx (-1 = none, as in
   the store; hydration maps it to `null`), score, type, points, occluded}`,
   LRU-cached. `prefetch`, `close` (also clears `videoIdByCam` and `_projectLabels`).
@@ -13898,7 +14001,7 @@ no score. NaN for a user row, an offset outside the frame's rows, a missing
 frame/camera, or a NaN score. Pinned by `tests/test-node-scores.mjs` and
 `tests/e2e/node-score-tooltip.mjs`.
 
-**Imports.** `./track-union.js` (`unionTrackNames`);
+**Imports.** `./track-union.js` (`unionTrackNames`), `./lazy-store-rows.js` (File ▸ Add SLP);
 `window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
 bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 `h5wasmUrl`).
@@ -15023,7 +15126,10 @@ the first camera's events are labels, and each other stays on its camera. DOM-fr
 
 **Exports.** `buildBehaviorEvents(SIO, items)` → `{eventTypes, events}` (an event on a
 video outside `items[].videos` brings it along: `new SIO.Labels` and `openSlpWriter`
-add it to the file's list),
+add it to the file's list, unless `items[].listedVideos` says the writer lists it already,
+for its poses, and then it goes on that entry),
+`keptVideoRecords(session)` → `Map` from a video's place in the file to the record of it,
+for the videos the session keeps events on (a lazy writer's way to `listedVideos`),
 `fileEventsOf(labels)` → plain `{types, rows, videos}` or null,
 `sessionVideoIdxs(rawSession)` → `Set<number>` or null,
 `sessionEventScope(rawSessions, nVideos, idx, onlyThisSession?)` → `{videos, keep, cameras, noVideo}`
@@ -15036,7 +15142,8 @@ else null: a place, never the file's video number, so a save finds that camera's
 **Imports.** `pose/behavior-ethogram.js`, `pose/behavior-labels.js`,
 `pose/behavior-predictions.js`, `pose/placeholder-cameras.js` (`hasRealCalibration`, on a
 file's raw cameras). **Imported by** `import-export/behavior-metadata.js`,
-`import-export/file-io.js`, `import-export/slp-import.js`, `import-export/slp-streaming-write.js`,
+`import-export/file-io.js`, `import-export/outside-frames.js`, `import-export/slp-import.js`,
+`import-export/slp-streaming-write.js`,
 `loading/session-loader.js`. **Tests.** `tests/test-behavior-events.mjs`, e2e
 `behavior-label-roundtrip` (with files sleap-app and Python wrote,
 `tests/fixtures/behavior-events/`), `behavior-events-outside-session` (the three loaders and
@@ -15278,7 +15385,8 @@ incl. `planeMetadataConflict`).
 
 **Purpose.** Poses on a video no recording session names: not shown, and kept by
 every save on their own video. The lazy path keeps them in its store
-(`buildSessionRefGraph`); this module holds them for the eager path, on
+(`buildSessionRefGraph`; File ▸ Add SLP adds its own there,
+`SioLazyLoader.commitAddedRows`); this module holds them for the eager path, on
 `session.outsideFrames`, and has the rules both share.
 
 **Key exports.**
@@ -15286,22 +15394,28 @@ every save on their own video. The lazy path keeps them in its store
   such frames: the file's own record, its source video when the record has embedded
   images (a save does not copy them), else a placeholder `unknown_video_<id>.mp4` (an
   id `videos_json` does not hold, as older LUC3D saves left it).
-- `keptVideoOf(record, id)`, `headerVideoOfKept(SIO, kept)` — what an eager load holds
+- `headerVideoOfRecord(SIO, record, id)` — the same for a `slpData.videos` record (the
+  raw worker's have no typed video to keep). File ▸ Add SLP on a lazy project.
+- `keptVideoOf(slpData, id)`, `headerVideoOfKept(SIO, kept)` — what an eager load holds
   of such a video, and the `SIO.Video` a header lists for it. `record` is the file's
   own entry (`slpData.videos[id]`): one object per video per file, so it tells a video
   apart where an id cannot (File ▸ Add SLP brings a second file's ids).
 - `keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap)` — eager load;
-  adds to what `session.outsideFrames` already holds.
+  adds to what `session.outsideFrames` already holds. Each kept video remembers the
+  record its file's events name it by (`eventRecord`, `fileEventsOf`).
 - `ownVideoOfColumnar(col)`, `ownVideoOfFrames(frames)`, `keepOutsideColumnarFrames(session, slpData, own)` — the
   per-camera eager load: a camera is the first video its file lists with frames.
-- `outsideFramesForSave(session, skeleton, identities)` — eager save: `{videos, tracks,
-  labeledFrames, placedVideos}`, or null. `placedVideos` pairs the file's record of each
-  video with its entry in `videos`, so a kept suggestion on it finds it.
+- `outsideFramesForSave(session)` — eager save, before the session's Labels are built:
+  `{videos, tracks, listedVideos, placedVideos, labeledFramesFor(skeleton, identities)}`,
+  or null. `listedVideos` (the file's record -> the entry) is what puts a kept event on
+  the entry its video's poses have (`buildBehaviorEvents`), and `placedVideos` (the
+  read's record -> the entry) a kept suggestion. The frames take those Labels' skeleton
+  and identity list, and an identity only these poses name is added to that list.
 - `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(session)` — the
   sentence for a load's final status.
 
 **Imports from project modules.** `../pose/pose-data.js` (`Instance`), `./file-io.js`
-(`makePooledSioInstances`).
+(`makePooledSioInstances`), `./behavior-events.js` (`keptVideoRecords`).
 
 **Imported by.** `import-export/slp-import.js`, `import-export/save-load.js`,
 `import-export/slp-streaming-write.js`, `import-export/kept-suggestions.js`,
@@ -15325,16 +15439,20 @@ no error. The header holds fresh objects, so a suggestion is never handed along 
   first session holds a suggestion on a video none of them reads, as kept poses are.
   Every eager loader calls it: `handleLoadSlpFile`, `handleAddSlp`,
   `handleLoadSessionFolderSingleSlp`, `handleLoadSessionFolderPerCamera`.
-- `suggestionsForSave(sessions, allVideos)` — both writers
-  (`buildSlpBytes`, `buildSessionRefGraph`): every suggestion of
-  `[{session, cameraVideos, placedVideos}]` as a `SIO.SuggestionFrame` on a video of
-  `allVideos`: its camera's entry (by name, whatever it is called now, with or without
-  poses), else the entry of the kept poses on that video (`placedVideos`, by the file's
-  record, never an id), else a place of its own appended to `allVideos`. So a camera
-  that is gone leaves its suggestions on the video the file named. Kept rows go in
-  the order their files held them; a lazy session's, read from its reader's `Labels`
-  at save (the rule `SioLazyLoader` reads a camera's video by), go first, in session
-  order. No group or a null one is written as 0, what Python reads a missing one as.
+- `suggestionsForSave(session, listed)` — both writers (`buildSlpBytes`,
+  `buildSessionRefGraph`), in two steps. Called, it gives each video only a suggestion
+  names a place of its own in `listed` (`{videos, listedVideos, placedVideos}`, the
+  header so far), so the session's bouts on it share that entry: the eager writer builds
+  its events with the session's Labels, so this comes before them. It returns a function
+  that, given the header's video per camera, makes the session's `SIO.SuggestionFrame`s:
+  each on its camera's entry (by name, whatever it is called now, with or without poses),
+  else on the entry of the kept poses on that video (`placedVideos`, by the read's record,
+  never an id), else on its own place. So a camera that is gone leaves its suggestions on
+  the video the file named. A lazy session's rows are read from its reader's `Labels` at
+  save, by the rule `SioLazyLoader` reads a camera's video by. No group or a null one is
+  written as 0, what Python reads a missing one as.
+- `suggestionsInFileOrder(entries)` — those frames, kept rows in the order their files
+  held them, a lazy session's first, in session order.
 - `moveKeptSuggestions(fromSession, toSession, cameraName)` — a video moved to another
   session takes its suggestions along.
 
@@ -15343,7 +15461,7 @@ byte-identically. Exports (per session, by camera) and the JSON project format h
 suggestions.
 
 **Imports from project modules.** `./outside-frames.js` (`keptVideoOf`,
-`headerVideoOfKept`).
+`headerVideoOfKept`), `./behavior-events.js` (`keptVideoRecords`).
 
 **Imported by.** `import-export/slp-import.js`, `import-export/save-load.js`,
 `import-export/slp-streaming-write.js`, `loading/session-loader.js`,
@@ -15541,7 +15659,9 @@ session's resident/total) rather than truncate silently. Covered by
   reload — the canonical `identity_idx`/`ig.identity` resolve against the
   file-level concat and mis-scope for multi-session files). The file-level
   `identities_json` is a cross-session concatenation, NOT the per-session
-  source of truth on reload.
+  source of truth on reload. Its optional fourth argument is
+  `outsideFramesForSave`'s result (`import-export/outside-frames.js`): those videos
+  go in the list after the cameras, and the session's events on them on those entries.
   **Its 2D instances come from `makePooledSioInstances(SIO, skeleton, numNodes)`**
   (exported), not `new SIO.Instance({ points: _buildSioPoints(...) })` (four
   typed arrays per instance, held for the whole save — about 4x the heap). The
@@ -15581,7 +15701,9 @@ session's resident/total) rather than truncate silently. Covered by
   failure resolves and is left to the real read. For a loader that clears the open
   project before its read (`handleLoadProjectSlpLazy`). Costs a worker start, so
   the loaders that change nothing before they read don't use it.
-- SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress)` —
+- SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress, opts)` — with
+  `opts.lazy`, reads the poses as columns and builds no frames (`frames` is empty,
+  `store` is the file's `LazyDataStore`), for File ▸ Add SLP on a lazy project. Otherwise
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` and adapts
   the typed `Labels` into the `slpData` shape (a video's names as one string: an
   image sequence's is a list of its images, of which it takes the first) via the private
@@ -15690,6 +15812,9 @@ each holding only one session's data at a time:
   uses is covered. Without that, its rows point past the end of the list (Python's
   `load_slp` raises IndexError) or at a camera's index, where first write wins. A
   camera's own file with frames on other videos gets the same (`nativeToHeader`).
+  A behavior event kept on such a video goes on the same entry: the project file's
+  store and the file's events count videos alike (`keptVideoRecords`), so
+  `addOutsideVideos` fills the session's `listedVideos` for `buildBehaviorEvents`.
   `skeletonPairsFor` does the same for skeletons: rows on one but the session's find
   it in the header (`_appendWithHeaderSkeletons`).
   **Suggestions** (`suggestions_json`, SLEAP's frames to label next; LUC3D has no UI
@@ -15697,8 +15822,9 @@ each holding only one session's data at a time:
   the same as the eager writer) sends each to this header's video for it, into
   `ctx.allSuggestions`, which `openProjectWriter` passes on. A video with neither a
   camera nor poses gets a header place after those that have (so the order is cameras,
-  videos with poses, videos only a suggestion names). They are resolved in pass 1, so
-  pass 2's re-read of each file plays no part. Test:
+  videos with poses, videos only a suggestion names), and this session's bouts on it
+  share that entry (`listedVideos`). They are resolved in pass 1, so pass 2's re-read of
+  each file plays no part. Test:
   `tests/e2e/lazy-save-keeps-suggestions.mjs`.
   **Non-shared-store track dedup:** for separate per-camera prediction files
   (session-folder load, `loader._sharedStore` false), each camera's
@@ -15977,6 +16103,12 @@ eager path shows them.
   save streams from the live loader and never needs this. Covered by
   `tests/e2e/multi-session-save-store-edits.mjs`.
 
+  **Rows no file holds.** After File ▸ Add SLP (`SioLazyLoader.rowsAddedInMemory`) a
+  re-read cannot give pass 2 what pass 1 saw, so `commitSessionForMultiSessionSave`
+  keeps the loader itself (`keptLoader` on `handle.pending`), unclosed, and
+  `finalizeMultiSessionSave` streams from it. Covered by
+  `tests/e2e/add-slp-lazy-project.mjs`.
+
   **GC between sessions.** Dereferencing a session's heavy state makes it
   only *eligible* for GC, so the multi-session flow streams to `opts.sink`
   (no extra whole-output buffer) and calls the private `encourageGC(totalMB)`
@@ -16076,7 +16208,8 @@ workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5. A file with no session
 gets a camera per video, named by `cameraNamesFromVideos`
 (`pose/placeholder-cameras.js`), which the lazy route and the single-SLP folder
-loader share. `reconstructInstanceGroupsFromSessionLazy` takes a null session.
+loader share. `reconstructInstanceGroupsFromSessionLazy` takes a null session,
+and returns its usual result with nothing restored.
 
 **campy recordings.** When the video prompt's folder is a campy recording
 (session.json), `handleLoadSlpFile` puts it on the session
@@ -16085,6 +16218,18 @@ was picked loads only that video, views follow campy's camera order, the frame
 rate is session.json's, and the final status gains each session's warnings
 (`campyRecordingWarnings`). No calibration hash check here: the calibration
 came from the `.slp`.
+
+**File ▸ Add SLP on a lazy project** (`handleAddSlp`) puts the poses in the columnar
+store, because everything else that holds a frame may drop it and a save writes only the
+store and the user's edits (`loading/lazy-store-rows.js`). A `.slp` is read lazily, as
+columns, so it costs no frame objects and keeps every field a row holds; an analysis
+`.h5` goes through `storeFromParsedFrames`. `prepareAddedRows` runs before tracks or
+cameras change, so a failure there changes nothing. The poses arrive ungrouped, like any
+row no group names, and Track All groups them: `rebuildInstanceGroupsForFrames` is not
+called, because it would replace those frames' groups, 3D included. Frames already in
+memory take the new cameras' rows at once. Refused, with a status saying why, on a
+worker-backed loader (analysis `.h5` per camera: no store) or a store older than format
+1.1. Every Add SLP marks the project dirty.
 
 **Embedded images.** One frame worker per file (`openEmbeddedFrames`). Each session
 takes the videos its frames went to, in list order, each matched to its images by
@@ -16197,7 +16342,11 @@ first track.
   `_typedIdentities`, passed by `restoreGroupingAndUnlink` only when the session's
   identities came from that catalog — the group's canonical `identity_idx`). Reads both LUCID's legacy and the canonical
   `sessions_json`. Same pass-1 dedup + trackless/identity-less handling as the
-  dict version. Returns `{ restoredGroups, restoredWith3d }`.
+  dict version. `opts.identityOf` (`import-export/file-edits.js`
+  `reconcileSessionIdentities`, when another tool edited the identities) decides
+  every group. Returns `{ restoredGroups, restoredWith3d, refCollisions, movedGroups }`;
+  `movedGroups` is the `[frameIdx, group]` pairs `opts.identityOf` moved to a
+  different animal, for `applyMovedGroupIdentities`.
   **Per-node model scores** (shown by the node tooltip): from the typed
   instance's `_score` here; in the dict version, from the raw-SLP instance a
   group member REPLACES (`adoptPointScoresFrom` — the group dict has none).
@@ -16206,7 +16355,11 @@ first track.
   below). Imported by `loading/session-loader.js`. Identity per group from
   `metadata.lucid.identityId`; with `opts.fileIdentities` (the typed `/identity`
   catalog, passed only when `session.identities` was built from it) a group
-  without one takes its canonical `identity_idx` (`typedIG.identity`).
+  without one takes its canonical `identity_idx` (`typedIG.identity`);
+  `opts.identityOf`, as in the eager version, decides every group instead.
+  Returns `{ restoredGroups, restoredWith3d, movedGroups }` on every path, a null
+  `typedSession` (a file with no recording session) included:
+  `handleLoadProjectSlpLazy` reads `movedGroups` on that route too.
   `opts.onCount(done, total)` (optional, awaited; frames) is the Open project
   card's counted hook, called at each yield and at the end; `opts.onProgress`
   still gets the old message. `stampFrameIdentitiesFromGroups` takes the same
@@ -16291,8 +16444,9 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
   session keeps its part of the file's provenance),
   `./outside-frames.js` (`keepOutsideFrames`, `keptOutsideCounts`,
-  `outsideFramesNote` — poses on a video no session reads),
+  `outsideFramesNote`, `headerVideoOfRecord` — poses on a video no session reads),
   `./kept-suggestions.js` (`keepSuggestions`),
+  `../loading/lazy-store-rows.js` (`storeFromParsedFrames`),
   `../loading/video-file-pick.js` (`preferNonCalibrationVideos`),
   `../ui/loading-progress-modal.js` (`getLoadingProgressModal`),
   `../loading/cold-read-guard.js`
@@ -16391,7 +16545,9 @@ compatibility check, track merging, frame merging, group rebuild.
 (`validateSkeletonCompatibility`).
 
 **User-facing features.** Backs File ▸ Load SLP's merge path (`handleAddSlp`) — merging an SLP into
-an existing session without overwriting it.
+an existing session without overwriting it. On a lazy project `handleAddSlp` uses
+only the skeleton check, the track merge and `videosClaimedBy`: its poses go in the
+store instead (`loading/lazy-store-rows.js`).
 
 ---
 

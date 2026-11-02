@@ -43,7 +43,7 @@ import { fitTimelineToData } from '../ui/timeline-controller.js';
 import { slpHasEmbeddedImages } from './slp-import.js';
 import { handleLoadSlpFile } from './slp-import.js';
 import { outsideFramesForSave } from './outside-frames.js';
-import { suggestionsForSave } from './kept-suggestions.js';
+import { suggestionsForSave, suggestionsInFileOrder } from './kept-suggestions.js';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
@@ -700,7 +700,7 @@ async function buildSlpBytes(opts) {
     var allEvents = [];
     var seenSkeletonNames = new Set();
     var seenTrackNames = new Set();
-    var suggestionSessions = [];
+    var allSuggestions = [];
 
     var sessionsToExport = sessionsToSave();
 
@@ -845,13 +845,18 @@ async function buildSlpBytes(opts) {
             return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
         });
 
-        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
-        // Poses on a video no session names go back on their own video.
-        var sessOutside = outsideFramesForSave(sess, sessLabels.skeletons[0], sessLabels.identities);
+        // Poses on a video no session names go back on their own video, and the
+        // session's events on that video on the same entry.
+        var sessOutside = outsideFramesForSave(sess);
+        // A video only a suggestion names joins this list, and the session's bouts on it
+        // share its entry, so this goes before the Labels are built.
+        var sessListed = sessOutside || { videos: [], listedVideos: new Map(), placedVideos: new Map() };
+        var sessSuggestions = suggestionsForSave(sess, sessListed);
+        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessListed);
 
         // Merge into combined Labels
-        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFrames : []);
-        allVideos = allVideos.concat(sessLabels.videos || [], sessOutside ? sessOutside.videos : []);
+        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFramesFor(sessLabels.skeletons[0], sessLabels.identities) : []);
+        allVideos = allVideos.concat(sessLabels.videos || []);
         for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
             var skel = sessLabels.skeletons[sk];
             if (!seenSkeletonNames.has(skel.name)) {
@@ -871,14 +876,9 @@ async function buildSlpBytes(opts) {
         allSessions = allSessions.concat(sessLabels.sessions || []);
         allEventTypes = allEventTypes.concat(sessLabels.eventTypes || []);
         allEvents = allEvents.concat(sessLabels.events || []);
-        suggestionSessions.push({
-            session: sess, cameraVideos: sessLabels.videos, placedVideos: sessOutside ? sessOutside.placedVideos : null,
-        });
+        // SLEAP's frames to label next, each on this header's video for it.
+        allSuggestions = allSuggestions.concat(sessSuggestions(sessLabels.videos));
     }
-
-    // SLEAP's frames to label next, each on this header's video for it. A video only a
-    // suggestion names goes last.
-    var allSuggestions = suggestionsForSave(suggestionSessions, allVideos);
 
     // Re-point every instance's track to the canonical (deduped) Track object
     // for its NAME. buildSlpLabelsAllViews creates a fresh SIO.Track array per
@@ -914,7 +914,7 @@ async function buildSlpBytes(opts) {
         videos: allVideos,
         skeletons: allSkeletons,
         tracks: allTracks,
-        suggestions: allSuggestions,
+        suggestions: suggestionsInFileOrder(allSuggestions),
         identities: allIdentities,
         sessions: allSessions,
         // Keeps the loaded files' provenance (slp-provenance.js).
@@ -1104,15 +1104,18 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     // A store edited in memory is not what pass 2 will read back from the
     // files: keep its frame + instance columns (`keepEditedStoreColumns`).
     var editedColumns = keepEditedStoreColumns(session.lazyLoader);
+    // Rows File ▸ Add SLP put in a store are in no file, so pass 2 cannot read them
+    // back: it gets this loader as it is, at the cost of keeping it till then.
+    var keptLoader = session.lazyLoader.rowsAddedInMemory ? session.lazyLoader : null;
     handle.pending.push({
         session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore,
-        editedColumns: editedColumns, cameraRenames: cameraRenames,
+        editedColumns: keptLoader ? null : editedColumns, cameraRenames: cameraRenames, keptLoader: keptLoader,
     });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
     // ref-only RecordingSession + the materialized user-edit overlay
     // instances) — the lazy loader and per-frame LUCID state can go.
-    session.lazyLoader.close();
+    if (!keptLoader) session.lazyLoader.close();
     session.lazyLoader = null;
     session.frameGroups = new Map();
     session.instanceGroups = new Map();
@@ -1155,7 +1158,8 @@ export async function finalizeMultiSessionSave(handle, opts) {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
             if (onProgress) await onProgress('frames', j, handle.pending.length, 'sessions');
-            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.cameraRenames);
+            if (p.keptLoader) p.session.lazyLoader = p.keptLoader;
+            else await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.cameraRenames);
             if (p.editedColumns) restoreEditedStoreColumns(p.session.lazyLoader, p.editedColumns);
             await streamSessionIntoWriter(writer, p.session, p.refGraph);
             p.session.lazyLoader.close();
