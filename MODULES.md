@@ -1540,6 +1540,8 @@ session graph that holds them.
   - **`fileProvenance`** — the provenance of the `.slp` it was loaded from,
     without LUC3D's own keys (null when none); in memory only, written back on
     save by `import-export/slp-provenance.js`.
+  - **`fileNotKept`** — what that file holds that a save leaves out, by name; in
+    memory only, read by `import-export/slp-not-kept.js`, cleared once saved elsewhere.
   - **`outsideFrames`** — eager loads only: the file's poses this session does not
     show (null when none). `frames`, on a video no session names, are re-shaped by
     `propagateNodeAdded`/`propagateNodeRemoved`. `otherSkeletonFrames`, on another
@@ -8333,9 +8335,10 @@ the `project.slp`, which never scans a folder.
 
 **The project IS saved, automatically.** `autoSaveAfterRebase` runs `quickSave`
 as the commit's last step, so `project.slp` agrees with the calibration written
-beside it. It saves ONLY when `state.slpFileHandle` already exists: `quickSave`
-would otherwise open `showSaveFilePicker` without the transient activation it
-needs, so that case gets a status asking for Save As instead. Success is read
+beside it. It saves ONLY when `state.slpFileHandle` already exists and the file
+holds nothing a save leaves out (`holdsNotKept`): `quickSave` would otherwise open
+`showSaveFilePicker` without the transient activation it needs, so that case gets a
+status asking for Save As instead. Success is read
 from the DIRTY FLAG (`!state.isDirty`), not from the absence of an exception,
 because `quickSave` reports its own failures without re-raising. It runs before
 the summary status line, or `quickSave`'s own status text would overwrite the
@@ -8467,6 +8470,7 @@ skeletons are built from `points3d`.
 **Imports from project modules.** `./progress-delta.js` (`noteProgress`, the
 lit stretch on the re-base bar), `./app-state.js` (`state`, `viewport3d`),
 `../import-export/save-load.js` (`setStatus`, `markDirty`, `quickSave`),
+`../import-export/slp-not-kept.js` (`holdsNotKept`),
 `../import-export/file-io.js` (`exportCalibrationTOML`, `downloadTOML`),
 `../loading/calibration-pick.js` (`REBASED_CALIBRATION_NAME`),
 `../pose/origin-rebase.js` (`countRebaseTargets`, `subsetRebaseTally`,
@@ -13197,33 +13201,41 @@ only cites it in a comment.)
 
 ### loading/slp-format-check.js
 
-**Purpose.** The rule for refusing a `.slp` newer than LUC3D can read. Python
-sleap-io 0.10 writes SLP format 3.0 by default, where every table is a group of
-columns; LUC3D's two readers know the 2.x layout only, and without this read such
-a file as 0 frames with no error, under a success message. Same rule as Python's
-`_check_format_id`: refuse at or above the limit, and let a file with no
-`format_id` through.
+**Purpose.** The rules for refusing a `.slp` LUC3D can't read. Too new: a `format_id`
+at or above the limit, or a `required_features` entry LUC3D doesn't understand (the
+same rule as Python's `_check_format_id`; a file with no `format_id` passes).
+Compressed with a filter this HDF5 build doesn't have, such as Python's
+`compression="lzf"`: h5wasm hands back the buffer it allocated, so the tables read as
+garbage or empty frames. Read anyway, either comes out with no error under a success
+message.
 
 **No imports, deliberately.** The raw worker and a Node test load it. The vendored
-reader cannot (`lib/` stays self-contained), so it has its own copy of the rule and
-the wording (`LUCID local patch (luc3d newer-format)`), and
-`tests/e2e/slp-newer-format.mjs` fails if the two messages differ.
+reader cannot (`lib/` stays self-contained), so it has its own copy of the rules and
+the wording (`LUCID local patch (luc3d newer-format)`, `(slp 3.0)`), and
+`tests/e2e/slp-newer-format.mjs` and `slp-format-30.mjs` fail if the messages differ.
 
 **Key exports.**
-- `SLP_FORMAT_ID_LIMIT` — `3.0`.
-- `newerSlpFormatMessage(formatId, fileName)` — what a refused file tells the user.
+- `SLP_FORMAT_ID_LIMIT` — `4.0`.
+- `newerSlpFormatMessage(formatId, fileName)`, `requiredFeaturesMessage(features,
+  fileName)`, `unreadableFilterMessage(path, filter, fileName)` — what a refused file
+  tells the user.
 - `checkSlpFormatAttrs(metadataAttrs, fileName)` — throws an `Error` named
   `UnsupportedSlpFormatError` (with `formatId`). Takes h5wasm's `{value}` wrappers
   or bare values; no attributes pass.
-- `isNewerSlpFormatError(err)` — by name, so it holds for the vendored class and
-  for what `parseSlpH5` rebuilds from the worker's message.
+- `findUnreadableFilter(group, prefix)` — walks an h5wasm file for the first dataset
+  whose filter id is above 6: `{path, filter}` or null. `checkSlpFilters(file,
+  fileName)` throws the same error for it.
+- `isNewerSlpFormatError(err)` — whether a failed read was a refusal of either kind.
+  By name, so it holds for the vendored class and for what `parseSlpH5` rebuilds from
+  the worker's message.
 - `slpReadErrorStatus(prefix, err)` — status text for a failed read: a refusal
   stands alone, anything else gets `prefix: message`.
 
 **Imported by.** `loading/slp-import-worker.js`, `import-export/file-io.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`, `ui/ui-wiring.js`.
 
-**Tests.** `tests/test-slp-format-check.mjs`, `tests/e2e/slp-newer-format.mjs`.
+**Tests.** `tests/test-slp-format-check.mjs`, `tests/e2e/slp-newer-format.mjs`,
+`tests/e2e/slp-format-30.mjs`.
 
 ### loading/campy-session.js
 
@@ -13594,7 +13606,7 @@ are collected per camera (`slpFailures`) and named in the status line, which
 downgrades to `error`, rather than leaving an empty view under a success-styled
 "Loaded N camera(s)". The worker's `f.keys()` check (see
 `loading/slp-import-worker.js`) is what turns a non-HDF5 file into a rejection.
-A file too new to read (`loading/slp-format-check.js`) is treated the same on both
+A file LUC3D refuses (`loading/slp-format-check.js`) is treated the same on both
 routes, so a lazy camera refused this way no longer stops the folder, and the
 status (`slpFailuresStatus`) leads with the reason, because the way past it is the
 user's to take. The function returns `{slpFailures}` for `handleLoadMultiSession`.
@@ -13614,7 +13626,7 @@ open (`closeEmbeddedFrames`).
 Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
 `import-export/save-load.js` via `shouldUseLazySlp`). **It frees the open project
 before it reads the new one**, for the memory, so it runs `checkSlpFileFormat`
-first: refusing a file too new to read must not cost the user that project. It
+first: refusing a file must not cost the user that project. It
 resolves `false` for that (and for a cancelled load), like `handleLoadSlpFile`.
 **It shows the progress
 card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
@@ -14049,7 +14061,8 @@ open-and-stream-frames.
 - IN: `{type: 'close'}` — close lazy file.
 - OUT: `{type: 'progress', message}`, `{type: 'result', data: {...}}`,
   `{type: 'metadata', data: {...}}`, `{type: 'frameData', ...}`,
-  `{type: 'framesData', ...}`, `{type: 'error', message, name?}`.
+  `{type: 'framesData', ...}`, `{type: 'error', message, name?}`. A file in the 3.0
+  layout gets `{type: 'result', data: {needsTypedReader: true}}`: see below.
 
 **An unopenable file must reject, not resolve empty.** `new h5wasm.File(path,
 'r')` does **not** throw on non-HDF5 bytes, and every `f.get()` in `parseSlp` is
@@ -14058,11 +14071,17 @@ an ordinary `result` with 0 frames. `parseSlp` therefore checks `f.keys()` right
 after the open and throws `Not a readable HDF5/SLP file (no root datasets)`.
 Covered by `tests/e2e/percam-slp-choice-and-failure.mjs`.
 
-**So must a file too new to read.** The tables of SLP format 3.0 are not where this
-code looks, so it would post a result with 0 frames. `parseSlp` runs
-`checkSlpFormatAttrs` (`loading/slp-format-check.js`) before reading anything else.
-That error goes out with its `name` and without the stack every other error gets
-appended, since it ends up in the status bar as it stands.
+**So must a file it can't read.** A newer layout's tables are not where this code
+looks, so it would post a result with 0 frames, and an lzf dataset reads as garbage.
+`parseSlp` runs `checkSlpFormatAttrs` and `checkSlpFilters`
+(`loading/slp-format-check.js`) before reading anything else. That error goes out
+with its `name` and without the stack every other error gets appended, since it ends
+up in the status bar as it stands.
+
+**SLP format 3.0 goes to the typed reader.** This worker reads the 2.x tables and the
+old split-field export. A file with format 3.0 or more, or a `/frames` group with no
+`frame_id` column (`usesColumnTables`), gets `needsTypedReader`, and `parseSlpH5`
+calls `parseSlpViaSleapIO`, which also checks that the tables agree with each other.
 
 **A failed read must reject too.** The same try/catches turned a read that failed
 (a file removed mid-parse, a dropped network share) into a table the file doesn't
@@ -15562,6 +15581,32 @@ without provenance, a ~120 KB provenance).
 
 ---
 
+### import-export/slp-not-kept.js
+
+**Purpose.** What a `.slp` holds that a LUC3D save leaves out, and what the app does
+about it. A save writes poses, 3D, identities and behavior labels. Python sleap-io can
+also put ROIs, masks, boxes, centroids, label images, negative frames and per-row
+metadata in a file, in format 3.0 or 2.x, and overwriting the opened file would destroy
+those with nothing said. So `quickSave` asks where to save instead of writing over it,
+and the load's status says why (the same answer as for a file with embedded images).
+Once saved elsewhere, the project's file holds only what a save keeps, and the next save
+goes there as usual. A file without any of it is saved over directly, 3.0 included.
+
+**Where the list comes from.** `labels.lucidNotKept` (`LUCID local patch (slp 3.0)`,
+`lucidListNotKept`), as `slpData.notKept` from `parseSlpViaSleapIO`; each loader that
+reads a `.slp` for a session puts it on `session.fileNotKept`, beside
+`session.fileProvenance`. In memory only. The raw worker's result has none: it reads the
+per-camera folders, which have no file to overwrite.
+
+**Key exports.** `holdsNotKept(sessions)`, `clearNotKept(sessions)`,
+`notKeptNote(sessions)` (the status text, or `''`; `noteNotKept` in
+`import-export/save-load.js` adds it to the status, and the loaders call that last).
+
+**Imported by.** `import-export/save-load.js`, `ui/origin-rebase.js` (its auto-save needs
+a file it can write without asking).
+
+**Tests.** `tests/test-slp-not-kept.mjs`, `tests/e2e/slp-format-30.mjs` §8.
+
 ### import-export/skeleton-json.js
 
 **Purpose.** Pure, DOM-free (de)serialization for standalone `.skeleton.json`
@@ -15730,11 +15775,12 @@ session's resident/total) rather than truncate silently. Covered by
   guard `buildSlpLabelsMultiSession` and to pre-flight the per-camera download.
 - SLP parse for a load: `parseSlpWithRawFallback(file, onProgress)` —
   `parseSlpViaSleapIO`, and `parseSlpH5` only if that throws on a file the raw
-  worker can read in full. Never for a file too new to read
+  worker can read in full. Never for a file LUC3D refuses
   (`loading/slp-format-check.js`), after a failed read (`err.failedRead`), or
   on a file with `/session_data`, `/identity`, `/categories` or `/embeddings`, which
   the raw worker can't read: it would open the project with every group and all the
-  3D gone, or the labels on detections, and the next save would write that (private
+  3D gone, or the labels on detections, and the next save would write that, or in
+  format 3.0, where the typed reader's error is the answer (private
   `rawWorkerCanStandIn`, which answers no when it can't tell). Used by
   `parseSlpForImport` and `handleLoadSessionFolderSingleSlp`. Tests:
   `tests/e2e/slp-failed-read.mjs` §3, §4.
@@ -15745,10 +15791,13 @@ session's resident/total) rather than truncate silently. Covered by
   typed arrays (`data.columnar`) instead of nested `data.frames`. The rejection
   keeps the worker's error `name`.
 - `checkSlpFileFormat(file)` — rejects only if the file is too new to read
-  (`loading/slp-format-check.js`), reading nothing but its metadata; any other
+  or holds a dataset this HDF5 build can't decompress (`loading/slp-format-check.js`),
+  reading nothing but its metadata and each dataset's header; any other
   failure resolves and is left to the real read. For a loader that clears the open
   project before its read (`handleLoadProjectSlpLazy`). Costs a worker start, so
   the loaders that change nothing before they read don't use it.
+- A file in the 3.0 layout: the worker answers `needsTypedReader`, and `parseSlpH5`
+  resolves with `parseSlpViaSleapIO`'s result, which has no `data.columnar`.
 - SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress, opts)` — with
   `opts.lazy`, reads the poses as columns and builds no frames (`frames` is empty,
   `store` is the file's `LazyDataStore`), for File ▸ Add SLP on a lazy project. Otherwise
@@ -16227,7 +16276,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `./smoothing-metadata.js` (Temporal Smoothing: `unsmoothedPoints3d` per group
   and the session-level key in the project JSON, same reason),
   `./slp-provenance.js` (`buildSaveProvenance` — every `.slp` project save keeps
-  the loaded files' provenance).
+  the loaded files' provenance), `./slp-not-kept.js` (`quickSave` asks where to save
+  rather than overwrite a file holding what a save leaves out).
 - `../lib/sleap-io/index.browser.js` — dynamic `import()` in the private
   `ensureSleapIO()`, a fallback taken only when the `window.SleapIO` bridge in
   `index.html` is missing. The specifier resolves against THIS module, hence

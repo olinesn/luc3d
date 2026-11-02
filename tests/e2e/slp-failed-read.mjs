@@ -437,7 +437,11 @@ for (var i = 0; i < early.length; i++) self.onmessage(early[i]);`
         for (const [name, type, p, opts] of [...KINDS, ...OPEN_VIDEO_KINDS.map(k => [...k, { openVideos: true }])]) {
             const r = await readWith(files[name], { request: { type, path: p }, hiccup }, opts);
             const hit = fired(r) && reallyFailed(r);
-            check(hit && r.threw && r.failedRead, `${name}: failed ${type} of ${p} is an error`,
+            // The walk for filters a reader can't decompress read every dataset's header
+            // before anything else, so a listing or a shape may now come from memory, with
+            // nothing on disk to fail: then the file back in time means the whole file.
+            const fromMemory = hiccup && (type === M || type === K) && fired(r) && !reallyFailed(r) && r.digest === healthy[name];
+            check((hit && r.threw && r.failedRead) || fromMemory, `${name}: failed ${type} of ${p} is an error`,
                 hit ? (r.digest ? { opened: r.digest, healthy: healthy[name] } : r.threw) : { never: 'the read did not fail: fix the test', r });
         }
     }
@@ -540,7 +544,7 @@ for (var i = 0; i < early.length; i++) self.onmessage(early[i]);`
 
     // Lazy: the previous project is released before the read (as it always was), so nothing
     // is left open, but nothing half-read opens either.
-    for (const [type, p] of [[M, 'frames'], [V, 'frames'], [V, 'points'], [V, 'videos_json'], [V, 'session_data/frame_groups'], [V, 'session_data/points_3d'], [V, 'sessions_json']]) {
+    for (const [type, p] of [[V, 'frames'], [V, 'points'], [V, 'videos_json'], [V, 'session_data/frame_groups'], [V, 'session_data/points_3d'], [V, 'sessions_json']]) {
         const r = await openInApp('lazy', files.project, { request: { type, path: p }, hiccup: true }, 'lazy.slp');
         check(r.done === true && /^Lazy reopen error/.test(r.status) && looksLikeAFailedRead(r.status) && r.session === null,
             `File ▸ Open (large project), failed read of ${p}: says so, nothing half-read opens`, { status: r.status, session: r.session, groups: r.groups });
@@ -628,10 +632,10 @@ for (var i = 0; i < early.length; i++) self.onmessage(early[i]);`
     const rawProject = await rawParse(files.project, {});
     check(rawProject.parsed && rawProject.parsed.frames === 40 * 3 && rawProject.parsed.sessions === 1 && rawProject.parsed.identities > 0, 'a healthy parse of a project', rawProject.parsed);
     for (const [stage, what, buf] of [['^Skeleton:', 'tracks_json', files.project], ['^Tracks:', 'videos_json', files.project],
-        ['^Reading frames', 'frames + instances', files.project], ['^instancesData:', 'points + pred_points', files.project],
+        ['^.readColumnar. frames:', 'frames + instances', files.project], ['^instancesData:', 'points + pred_points', files.project],
         ['^Built ', 'sessions_json + identities_json', files.project],
         ['^Skeleton:', 'tracks_json, compound', files.compound], ['^Tracks:', 'videos_json, compound', files.compound],
-        ['^Reading frames', 'frames + instances, compound', files.compound], ['^instancesData:', 'points + pred_points, compound', files.compound]]) {
+        ['^.readColumnar. frames:', 'frames + instances, compound', files.compound], ['^instancesData:', 'points + pred_points, compound', files.compound]]) {
         const r = await rawParse(buf, { stage, hiccup: true });
         const hit = fired(r) && reallyFailed(r);
         check(hit && !!r.threw && !r.parsed, `failed read of ${what}: an error, not a parse with it missing`,

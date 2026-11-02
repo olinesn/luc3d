@@ -85,6 +85,7 @@ import { readBlobArrayBuffer } from './cold-read-guard.js';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
+    noteNotKept,
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
 } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
@@ -2321,6 +2322,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         // on save. This loader reads the file's first session only.
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), 0);
+        session.fileNotKept = slpData.notKept || null;
         // What the file says about each camera's video, for a save with none loaded.
         session.fileVideos = new Map();
         for (var fvk in videoIdxToCameraName) {
@@ -2612,6 +2614,8 @@ export async function handleLoadSessionFolderSingleSlp() {
         }
         var campyFinal = withCampyWarnings(finalMsg, finalKind, session.campyRecording);
         setStatus(campyFinal.message, campyFinal.kind);
+
+        noteNotKept([session]);
     } catch (err) {
         console.error('[single-slp] Error:', err);
         hideLoading();
@@ -2958,6 +2962,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
                 var inFullNote = outsideFramesNote(keptOutsideCounts(state.sessions));
                 setStatus('Opened ' + slpFile.name + ' in full, not on demand: ' + eagerReason
                     + '. A file this large can run out of memory.' + (inFullNote ? ' ' + inFullNote : ''), 'warning');
+                noteNotKept(state.sessions);
             }
             return;
         }
@@ -3007,6 +3012,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // The file's provenance (e.g. campy-live-export's records), written back on save.
         session.fileProvenance = fileSessionProvenance(labels.provenance,
             fileSessionNames(labels.rawSessionsJson), 0);
+        session.fileNotKept = labels.lucidNotKept || null;
         // Identities: LUC3D's per-session list, else the file's `/identity`
         // catalog (as the eager `restoreGroupingAndUnlink` does). A file from
         // another tool (campy-live-export) has only the catalog, with each
@@ -3181,6 +3187,8 @@ export async function handleLoadProjectSlpLazy(slpFile) {
                 + (videosAttached ? '' : '. File → Load Videos to show images.'), 'success', session.campyRecording);
             setStatus(plainStatus.message, plainStatus.kind);
         }
+
+        noteNotKept([session]);
     } catch (err) {
         console.error('[load-project-lazy] Error:', err);
         hideLoading();
