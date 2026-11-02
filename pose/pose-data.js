@@ -1878,6 +1878,13 @@ export class Session {
          */
         this.outsideFrames = null;
         /**
+         * Lazy sessions only: frame index -> the file's groups that link a pose this
+         * session does not show (`keepGroupAside`, `import-export/outside-frames.js`).
+         * Not shown, and written back as they were. Null when there are none.
+         * @type {Map<number, Array<{members: Map<string, {row: number, offset: number}>, instance3d: Object, identity: Object, score: number, metadata: Object}>>|null}
+         */
+        this.outsideGroups = null;
+        /**
          * Eager loads only: suggestions of the loaded .slp (`suggestions_json`, SLEAP's
          * frames to label next). Not shown; a save writes them back on their own video
          * (`import-export/kept-suggestions.js`). `camera` is the camera whose video it
@@ -3511,6 +3518,15 @@ export class Session {
                 if (video.camera === oldName) video.camera = newName;
             }
         }
+        if (this.outsideGroups) {
+            for (const groups of this.outsideGroups.values()) {
+                for (const group of groups) {
+                    if (!group.members.has(oldName)) continue;
+                    group.members.set(newName, group.members.get(oldName));
+                    group.members.delete(oldName);
+                }
+            }
+        }
 
         // A lazy project's other frames are under this name in its loader.
         if (this.lazyLoader && typeof this.lazyLoader.renameCamera === 'function') {
@@ -3520,6 +3536,42 @@ export class Session {
         // Suggestions on this camera's video
         for (const row of this.keptSuggestions || []) {
             if (row.camera === oldName) row.camera = newName;
+        }
+    }
+
+    /**
+     * A delete compacts a lazy store, so a pose left in the same camera-frame moves
+     * down in it. `outsideGroups` names its poses by that position, as `_rawInstIndex`
+     * does for a shown one (`ui/custom-delete-ops.js` `deleteTargetsFromStore`).
+     *
+     * @param {Map<string, Map<number, Set<number>>>} killByCam - camera -> frame -> the
+     *   deleted rows' positions before the delete
+     */
+    shiftOutsideGroupMembers(killByCam) {
+        const loader = this.lazyLoader;
+        if (!this.outsideGroups || !loader || !loader.frameRowByCam) return;
+        const killsByRow = new Map();     // camera -> store frame row -> positions
+        for (const [cam, perFrame] of killByCam) {
+            const rowMap = loader.frameRowByCam.get(cam);
+            if (!rowMap) continue;
+            const rows = new Map();
+            for (const [frameIdx, kills] of perFrame) {
+                const row = rowMap.get(frameIdx);
+                if (row !== undefined) rows.set(row, kills);
+            }
+            killsByRow.set(cam, rows);
+        }
+        for (const groups of this.outsideGroups.values()) {
+            for (const group of groups) {
+                for (const [cam, member] of group.members) {
+                    const camRows = killsByRow.get(cam);
+                    const kills = camRows ? camRows.get(member.row) : null;
+                    if (!kills) continue;
+                    let shift = 0;
+                    for (const k of kills) if (k < member.offset) shift++;
+                    member.offset -= shift;
+                }
+            }
         }
     }
 

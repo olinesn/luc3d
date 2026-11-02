@@ -45,7 +45,7 @@ import {
 import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
 import {
     groupsAcrossSkeletonsRefusal, keepCameraOtherSkeletonFrames, keepOtherSkeletonFrames, keepOutsideFrames,
-    keepOutsideColumnarFrames, keptOutsideCounts, noteVideoReaders, outsideFramesNote, ownVideoOfColumnar,
+    keepOutsideColumnarFrames, keptOutsideCounts, noteVideoReaders, outsideFramesNote, outsideGroupCount, ownVideoOfColumnar,
     ownVideoOfFrames, sessionSkeletonEntry,
 } from '../import-export/outside-frames.js';
 import { keepSuggestions } from '../import-export/kept-suggestions.js';
@@ -3061,6 +3061,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
             fileIdentities: identitiesFromFile ? labels.identities : null,
             identityOf: identityEdits ? identityEdits.identityOf : null,
         });
+        if (session.outsideGroups) loader.refreshProjectOccupancy();
         // With nothing grouped, only this says which tracks fill the frames that
         // are not resident (the Tracks timeline; as the per-camera loader does).
         if (session.instanceGroups.size === 0 && loader.trackOccupancy.size > 0) {
@@ -3161,7 +3162,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
         updateInfoPanel();
         // This loader opens a file's first session only; the store holds every frame.
-        var lazyOutsideNote = outsideFramesNote(loader.outsideFrameCounts(), (labels.sessions || []).length);
+        var lazyCounts = loader.outsideFrameCounts();
+        lazyCounts.groups = outsideGroupCount(session);
+        var lazyOutsideNote = outsideFramesNote(lazyCounts, (labels.sessions || []).length);
         if (videosAttached) {
             var lazyStatus = withCampyWarnings('Reopened ' + slpFile.name + ' — '
                 + session.instanceGroups.size.toLocaleString('en-US')

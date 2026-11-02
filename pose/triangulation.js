@@ -1519,7 +1519,9 @@ function finalizeLazyFrameGroup(session, fg, frameIdx) {
         var mm2 = memberByCamIdx.get(cn2);
         var grouped = [];
         for (var bi = 0; bi < built.length; bi++) {
-            var member = mm2 ? mm2.get(bi) : undefined;
+            // Not `bi`: a pose the session does not show has no entry here, and the
+            // poses after it keep their positions in the file's frame.
+            var member = mm2 ? mm2.get(built[bi]._rawInstIndex) : undefined;
             if (member) {
                 if (member._lazy2d) {
                     // Hydrate the member's 2D from the store instance at this row.
@@ -1640,6 +1642,7 @@ async function hydrateLazyCameras(session, frameIdx, camNames) {
         var haveUl = fg.getUnlinkedInstances(camName);
         if (haveUl && haveUl.length > 0) continue;
         for (var ii = 0; ii < instances.length; ii++) {
+            if (!instances[ii]) continue;   // a pose this session does not show
             staged.addInstance(camName, lazyRowInstance(instances[ii], ii));
             added++;
         }
@@ -1684,6 +1687,7 @@ export async function ensureLazyFrameData(frameIdx) {
     var fg = new FrameGroup(frameIdx);
     for (var [camName, instances] of cameraData) {
         for (var ii = 0; ii < instances.length; ii++) {
+            if (!instances[ii]) continue;   // a pose this session does not show
             fg.addInstance(camName, lazyRowInstance(instances[ii], ii));
         }
     }
@@ -1722,6 +1726,7 @@ export function buildLazyFrameGroupSync(frameIdx) {
     var fg = new FrameGroup(frameIdx);
     for (var [camName, instances] of cached) {
         for (var ii = 0; ii < instances.length; ii++) {
+            if (!instances[ii]) continue;   // a pose this session does not show
             fg.addInstance(camName, lazyRowInstance(instances[ii], ii));
         }
     }
