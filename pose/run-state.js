@@ -1,7 +1,10 @@
 /**
  * run-state.js — has Track or Triangulate been run on a session, and does its
  * result still stand? Drives the toolbar's blue Track and Triangulate buttons
- * (`ui/run-buttons.js`), the way smoothing's own state drives Smooth's.
+ * (`ui/run-buttons.js`), the way smoothing's own state drives Smooth's. The
+ * Behavior button's answer is the predictions' own (`hasBehaviorResult`:
+ * some predicted bout, none of it stale — pose/behavior-predictions.js keeps
+ * and saves them, so unlike Track and Triangulate it survives a reopen).
  *
  * A run is noted when it finishes (`noteTrackRun`, `noteTriangulateRun`). Its
  * result stands while the session still shows it:
@@ -22,6 +25,7 @@
  */
 
 import { someValidPoint3d } from './pose-data.js';
+import { predictionsStand } from './behavior-predictions.js';
 
 /** Session -> {frame, group} witness, or null = find one. Absent = not run. */
 var _trackRuns = new WeakMap();
@@ -109,4 +113,16 @@ export function hasTrackResult(session) {
 /** Has Triangulate been run on `session`, with some of its 3D still in place? */
 export function hasTriangulateResult(session) {
     return resultStands(session, _triangulateRuns, holdsTriangulateResult);
+}
+
+/**
+ * Do the session's behavior predictions stand: some predicted bout, and
+ * neither the poses nor the settings changed since it was detected? Cached
+ * state only (cheap enough for every draw).
+ * @param {Session} session
+ * @param {{fps:number, floorKey?:string}} env the frame rate and floor now
+ *   (ui/behavior-detect.js `detectionEnv`)
+ */
+export function hasBehaviorResult(session, env) {
+    return predictionsStand(session, env);
 }

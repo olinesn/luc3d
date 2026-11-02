@@ -1316,6 +1316,26 @@ body {
   transition-delay: 0s;
 }
 
+/* Hover and focus can hold two menus open at once, and they overlap. The one on
+   top is the one in use, not the later one in the page: the keyboard's while it
+   is what moves (.keyboard-nav, ui/toolbar-menu-keys.js), otherwise the pointer's. */
+.tri-dropdown:hover .tri-dropdown-menu {
+  z-index: 201;
+}
+
+.toolbar.keyboard-nav .tri-dropdown:focus-within .tri-dropdown-menu {
+  z-index: 202;
+}
+
+/* Esc closed this menu (ui/toolbar-menu-keys.js): at once, without the hover grace
+   period, so the next Tab skips its items, and even with the pointer resting on it. */
+.tri-dropdown.menu-dismissed .tri-dropdown-menu {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition-delay: 0s;
+}
+
 /* The toolbar's Trails menu (ui/ui-wiring.js): narrower, with a checkmark
    column like Tracks ▸ Node Trails. Hung from the button's RIGHT edge: Trails
    is the last control before the panel toggles, and a menu opening rightwards
@@ -1392,6 +1412,14 @@ button.tri-dropdown-item:disabled {
   opacity: 0.4;
   cursor: default;
   background: transparent;
+}
+
+/* A click on a menu button's label, caret or hint must land on the <button> itself:
+   that is what installFocusRelease (ui/keyboard-target.js) gives focus back from.
+   Otherwise the button keeps focus, and focus holds its menu open. */
+button.tri-dropdown-item > *,
+.tri-dropdown > .toolbar-btn > * {
+  pointer-events: none;
 }
 
 /* An item that is ON: a pressed Group item, or Temporal Smoothing's scope
@@ -8823,4 +8851,535 @@ div.track-summary-steps { padding-left: 0; }
 .behavior-confirm-counts {
   margin-top: 10px;
   font-size: 12px;
+}
+
+/* Behavior ▸ Import Labels… / Export Labels… (one scroller: the modal itself) */
+.multi-frame-modal.behavior-io-modal {
+  max-width: 600px;
+  width: min(600px, 94vw);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+.behavior-io-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.behavior-io-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.behavior-io-choice input {
+  margin-top: 3px;
+}
+.behavior-io-choice-text {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.behavior-io-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.behavior-io-opts select {
+  margin-left: 4px;
+}
+.multi-frame-modal .behavior-io-file,
+.multi-frame-modal .behavior-io-into,
+.multi-frame-modal .behavior-io-detail,
+.multi-frame-modal .behavior-io-summary,
+.multi-frame-modal .behavior-io-warn {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.multi-frame-modal .behavior-io-file,
+.multi-frame-modal .behavior-io-summary {
+  color: var(--text-primary);
+}
+.multi-frame-modal .behavior-io-warn {
+  color: var(--warning-color);
+}
+.behavior-io-detail:empty {
+  display: none;
+}
+.behavior-io-check {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.behavior-io-obs {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.behavior-io-subjects {
+  width: 100%;
+  margin-bottom: 8px;
+}
+.behavior-io-subjects select {
+  width: 100%;
+}
+.behavior-io-body.is-off {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.behavior-io-modal [hidden] {
+  display: none !important;
+}
+
+/* Behavior ▸ Detection Settings… (ui/behavior-rules-modal.js; one scroller: the modal itself) */
+.multi-frame-modal.behavior-rules-modal {
+  max-width: 760px;
+  width: min(760px, 94vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  --bd-hist-on: #5fb3f9;
+  --bd-hist-off: #555c66;
+}
+.behavior-rules-modal .info-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.behavior-rules-modal .info-section > summary h3 {
+  margin: 0;
+}
+/* The modal's generic button look would turn these into large boxes. */
+.behavior-rules-modal button.plane-section-info,
+.behavior-discovery-modal button.plane-section-info {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+}
+.behavior-rules-modal .panel-btn {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+.bd-note {
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.bd-warn {
+  color: var(--warning-color);
+}
+.bd-roles,
+.bd-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.bd-row input[type="number"] {
+  width: 56px;
+}
+.bd-exclude {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.bd-label {
+  color: var(--text-secondary);
+}
+.bd-node.is-role {
+  color: var(--text-muted);
+}
+.bd-floor {
+  font-size: 12px;
+}
+.bd-floor select {
+  max-width: 100%;
+}
+.bd-card {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+}
+.bd-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.bd-card-head .panel-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+}
+.bd-spacer {
+  flex: 1 1 auto;
+}
+.bd-conds {
+  width: 100%;
+  margin: 6px 0 2px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.bd-conds td {
+  padding: 2px 3px;
+}
+.bd-conds tr.is-focus td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.bd-feat-cell {
+  width: 100%;
+}
+.bd-conds input[data-f="feature"] {
+  width: 100%;
+  min-width: 220px;
+  box-sizing: border-box;
+}
+.bd-conds input[data-f="feature"].is-invalid {
+  border-color: var(--warning-color);
+}
+.bd-conds input[data-f="value"] {
+  width: 70px;
+}
+.bd-unit {
+  min-width: 34px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.behavior-rules-modal button.bd-x {
+  padding: 0 5px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.behavior-rules-modal button.bd-x:hover {
+  color: var(--text-primary);
+}
+.bd-hist {
+  margin: 6px 0 2px;
+}
+.bd-hist-canvas {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  height: 78px;
+}
+.bd-hist-caption,
+.bd-live {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.bd-live {
+  margin-top: 2px;
+  color: var(--text-primary);
+}
+
+/* Behavior ▸ Train Classifiers… (ui/behavior-train-modal.js; the rules dialog's look, one scroller) */
+.bt-table {
+  width: 100%;
+  font-size: 12px;
+}
+.bt-table td:first-child {
+  width: 22px;
+}
+.bt-table tr.is-short td {
+  color: var(--text-secondary);
+}
+.bt-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: flex-start;
+}
+.bt-left {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+.bt-right {
+  flex: 0 0 auto;
+}
+.bt-curve {
+  display: block;
+  width: 220px;
+  height: 150px;
+}
+.bt-metrics {
+  font-size: 12px;
+  margin: 6px 0;
+}
+.bt-metrics td,
+.bt-metrics th {
+  padding: 2px 8px;
+}
+.bt-post {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  font-size: 12px;
+}
+.bt-post input[type="number"] {
+  width: 56px;
+}
+.bt-post input[type="range"] {
+  width: 120px;
+  vertical-align: middle;
+}
+.bt-thr {
+  display: inline-block;
+  min-width: 30px;
+  font-variant-numeric: tabular-nums;
+}
+.bt-top {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.bt-top ol {
+  margin: 2px 0 0;
+  padding-left: 22px;
+  columns: 2;
+  column-gap: 18px;
+}
+.bt-imp {
+  color: var(--text-secondary);
+}
+
+/* Behavior tab ▸ Classifiers */
+.behavior-classifiers {
+  width: 100%;
+  margin: 4px 0;
+  font-size: 12px;
+}
+.behavior-short {
+  color: var(--text-secondary);
+}
+.behavior-al {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.behavior-al-item {
+  margin: 4px 0 6px;
+  padding: 4px 6px;
+  border-left: 3px solid var(--accent);
+  font-size: 12px;
+}
+
+/* Behavior tab ▸ States (ui/behavior-states.js) */
+.behavior-states-head,
+.behavior-states-promote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.behavior-states-head .panel-btn,
+.behavior-states-promote .panel-btn {
+  flex: 0 0 auto;
+}
+.behavior-states-labels {
+  display: block;
+  margin: 6px 0 4px;
+  font-size: 12px;
+}
+.behavior-states-legend {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.behavior-states-list {
+  margin: 2px 0 4px;
+  font-size: 12px;
+}
+.behavior-state-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  padding: 3px 2px;
+  border-bottom: 1px solid var(--border-light);
+}
+.behavior-state-row .behavior-state-stats {
+  margin-left: auto;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.behavior-state-row .behavior-state-labels {
+  flex: 1 0 100%;
+  padding-left: 22px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.behavior-state-go {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.behavior-state-go:hover {
+  color: var(--accent);
+}
+.behavior-state-name {
+  flex: 1 1 60px;
+  min-width: 50px;
+  max-width: 160px;
+  font-size: 12px;
+}
+.behavior-states-rare {
+  margin: 2px 0 4px;
+  font-size: 11px;
+}
+.behavior-state-row.is-selected {
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.15));
+}
+.behavior-state-row .behavior-state-marks {
+  flex: 1 0 100%;
+  padding-left: 22px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.behavior-discovery-map {
+  margin: 6px 0;
+}
+.behavior-discovery-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 220px;
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  background: #15181c;
+  cursor: crosshair;
+}
+
+/* Behavior ▸ Discover Behaviors… (ui/behavior-discovery-modal.js) */
+.behavior-discovery-opts {
+  flex-wrap: wrap;
+}
+.behavior-discovery-opts input[type="number"] {
+  width: 74px;
+}
+.behavior-discovery-opts input[type="text"] {
+  width: 180px;
+}
+
+/* Behavior ▸ Export for keypoint-MoSeq… / Import keypoint-MoSeq Results… (ui/behavior-kpms-modal.js) */
+.kpms-frames {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.kpms-frames input[type="number"] {
+  width: 90px;
+}
+.kpms-recordings {
+  width: 100%;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.kpms-recordings td:first-child {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kpms-recordings select {
+  width: 100%;
+}
+.kpms-recordings input[type="number"] {
+  width: 80px;
+}
+.kpms-recordings tr.kpms-unmatched td {
+  color: var(--warning-color);
+}
+.kpms-layer {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.kpms-layer input {
+  margin-left: 4px;
+  width: 200px;
+}
+
+/* Behavior tab ▸ Predictions */
+.behavior-stale {
+  margin: 6px 0;
+  padding: 4px 6px;
+  border-left: 3px solid var(--warning-color);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.behavior-stale .panel-btn {
+  padding: 1px 6px;
+  font-size: 11px;
+}
+.behavior-review-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.behavior-pred-score {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.behavior-pred.is-accepted .behavior-bout-name,
+.behavior-pred.is-rejected .behavior-bout-name {
+  color: var(--text-muted);
+}
+.behavior-readout {
+  margin: 8px 0 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color);
+  font-size: 12px;
+}
+.behavior-readout-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+}
+.behavior-readout-head .panel-btn {
+  padding: 0 6px;
+  font-size: 11px;
+}
+.behavior-readout-row {
+  margin: 3px 0;
+  color: var(--text-secondary);
+}
+.behavior-readout-row.is-on {
+  color: var(--text-primary);
+}
+.behavior-readout-conds {
+  margin-left: 18px;
+  font-size: 11px;
+}
+.behavior-readout-conds .is-ok {
+  color: #4cc878;
+}
+.behavior-readout-conds .is-no {
+  color: var(--text-muted);
 }

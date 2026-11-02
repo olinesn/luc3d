@@ -10,13 +10,17 @@
 //             the whole range instead of starting / stopping at the playhead
 //   pending   a social behavior waiting for its target (a digit or a click on
 //             the animal picks it; Esc cancels)
+//   review    the predicted bout selected in the Predictions list, or the
+//             stretch the active-learning queue shows
+//             (ui/behavior-panel.js), boxed on the video while the playhead is
+//             in it, so the animal it names is plain to see
 //
 // Every edit goes through pose/behavior-labels.js, whose change listener
 // (set up in ui/behavior-panel.js) marks the project dirty and repaints.
 // UI-only changes (a new focal animal, a selection) repaint through
 // `requestBehaviorRepaint` here.
 //
-// Depends on: ui/app-state.js, pose/behavior-ethogram.js,
+// Depends on: ui/app-state.js, ui/behavior-detect.js (`sessionFps`), pose/behavior-ethogram.js,
 //             pose/behavior-labels.js, import-export/save-load.js,
 //             ui/id-switch-highlight.js (the node mask boxes share)
 
@@ -26,9 +30,10 @@ import {
     labelRange, clearRange, toggleState, noteBehaviorFps, listBouts, activeAt, hasBehaviorData, runningStates,
 } from '../pose/behavior-labels.js';
 import { setStatus } from '../import-export/save-load.js';
+import { sessionFps } from './behavior-detect.js';
 import { idSwitchBoxNodeMask } from './id-switch-highlight.js';
 
-var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null, mode: false };
+var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null, mode: false, review: null };
 
 /** The coding state (read-only for callers; use the setters). */
 export function behaviorUi() {
@@ -113,6 +118,27 @@ export function setBehaviorBoxesVisible(on) {
     requestBehaviorRepaint({ labels: true });
 }
 
+/**
+ * The predicted bout being reviewed (the Predictions list's selection), or
+ * the stretch the active-learning queue shows (ui/behavior-train.js), or a
+ * state's example (ui/behavior-discovery.js: `label` and `color` instead of a
+ * behavior), or null: `{behaviorId, animal, target, start, end, score, from}`.
+ * The viewer boxes its animals, dashed and marked "?", while the playhead is in it.
+ * @param {string} [from] who set it: 'predictions' (default), 'learning' or
+ *   'states' — each clears only its own
+ */
+export function setReviewFocus(session, bout, from) {
+    var next = session && bout ? { session: session, behaviorId: bout.behaviorId, animal: bout.animal, target: bout.target || '',
+                                   start: bout.start, end: bout.end, score: bout.score, from: from || 'predictions',
+                                   label: bout.label || '', color: bout.color || '' } : null;
+    var cur = ui.review;
+    if (!next && !cur) return;
+    if (next && cur && cur.session === next.session && cur.behaviorId === next.behaviorId && cur.animal === next.animal &&
+        cur.target === next.target && cur.start === next.start && cur.end === next.end && cur.from === next.from && cur.label === next.label) return;
+    ui.review = next;
+    requestBehaviorRepaint({ ui: true });
+}
+
 /** Label Behaviors mode tells the boxes whether it is on (ui/behavior-mode.js). */
 export function noteBehaviorMode(on) {
     ui.mode = !!on;
@@ -124,8 +150,10 @@ export function noteBehaviorMode(on) {
  * be drawn: one item per behavior an animal (with its target) is doing there —
  * dashed while it is still being coded. With `opts.live` (the viewer, never an
  * exported video) also the coding state: in Label Behaviors mode a light box
- * with its number on the animal the keys label, and while a social behavior
- * waits for its target a dashed box on the animal that will be its actor.
+ * with its number on the animal the keys label, while a social behavior
+ * waits for its target a dashed box on the animal that will be its actor, and
+ * a dashed "behavior?" box (with its score) on the predicted bout being
+ * reviewed, while the playhead is in it.
  * @param {{live?: boolean}} [opts]
  * @returns {{items: Array<{animals:string[], color:string, dashed:boolean, light?:boolean, parts:Array}>, nodeMask: ?boolean[]}|null}
  */
@@ -144,14 +172,22 @@ export function behaviorBoxesAt(session, frame, opts) {
         var b = behaviorById(a.behaviorId);
         if (!b) return;
         var parts = [[(a.running ? '● ' : '') + b.name, b.color], [' · ', '#ffffff'], who(a.animal)];
-        if (a.target) parts.push([' → ', '#ffffff'], who(a.target));
+        if (a.target) parts.push([pairGlyph(b), '#ffffff'], who(a.target));
         items.push({ animals: a.target ? [a.animal, a.target] : [a.animal], color: b.color, dashed: !!a.running, parts: parts });
     });
     var p = live ? ui.pending : null;
     var pb = p ? behaviorById(p.behaviorId) : null;
     if (pb) {
         items.push({ animals: [p.animal], color: pb.color, dashed: true,
-                     parts: [[pb.name, pb.color], [' · ', '#ffffff'], who(p.animal), [' → ? (press 1–9)', '#ffffff']] });
+                     parts: [[pb.name, pb.color], [' · ', '#ffffff'], who(p.animal), [pairGlyph(pb) + '? (press 1–9)', '#ffffff']] });
+    }
+    var r = live ? ui.review : null;
+    var rb = r && r.session === session && frame >= r.start && frame <= r.end ? (r.label ? { name: r.label, color: r.color } : behaviorById(r.behaviorId)) : null;
+    if (rb) {
+        var rp = [[rb.name + '?', rb.color], [' · ', '#ffffff'], who(r.animal)];
+        if (r.target) rp.push([pairGlyph(rb), '#ffffff'], who(r.target));
+        if (Number.isFinite(r.score)) rp.push([' · ' + Math.round(100 * r.score) + '%', '#ffffff']);
+        items.push({ animals: r.target ? [r.animal, r.target] : [r.animal], color: rb.color, dashed: true, review: true, parts: rp });
     }
     if (!items.length) return null;
     return { items: items, nodeMask: idSwitchBoxNodeMask(session.skeleton && session.skeleton.nodes) };
@@ -161,9 +197,20 @@ export function behaviorBoxesAt(session, frame, opts) {
 // Animals and selection
 // ----------------------------------------------------------------------------
 
-/** The session's animals: its identity names, in identity order (what digits 1–9 pick). */
+/**
+ * The session's animals, in order (what digits 1–9 pick): its identity names. A
+ * one-camera project with no identities (a plain SLEAP file, as sleap-app labels it)
+ * has its track names instead; on several cameras, tracks are per camera and not animals.
+ */
 export function sessionAnimals(session) {
-    return session && session.identities ? session.identities.map(function (i) { return i.name; }) : [];
+    if (!session) return [];
+    if (session.identities && session.identities.length) return session.identities.map(function (i) { return i.name; });
+    return session.cameras && session.cameras.length === 1 && session.tracks ? session.tracks.slice() : [];
+}
+
+/** How a pair reads: "↔" for a mutual behavior (no actor and target), "→" otherwise. */
+export function pairGlyph(behavior) {
+    return behavior && behavior.mutual ? ' ↔ ' : ' → ';
 }
 
 /** The identity color for an animal name, or a neutral gray. */
@@ -237,10 +284,17 @@ export function armedRange() {
 // Coding
 // ----------------------------------------------------------------------------
 
-/** The target of the one running bout of `behaviorId` by `animal`, or null (none, or several). */
+/**
+ * The partner in the one running bout of `behaviorId` by `animal` (as actor,
+ * or as either animal of a mutual pair), or null (none, or several).
+ */
 function runningTarget(session, behaviorId, animal) {
-    var mine = runningStates(session).filter(function (r) { return r.behaviorId === behaviorId && r.animal === animal; });
-    return mine.length === 1 ? mine[0].target : null;
+    var b = behaviorById(behaviorId);
+    var mine = runningStates(session).filter(function (r) {
+        return r.behaviorId === behaviorId && (r.animal === animal || (b && b.mutual && r.target === animal));
+    });
+    if (mine.length !== 1) return null;
+    return mine[0].animal === animal ? mine[0].target : mine[0].animal;
 }
 
 /** With exactly two animals the target of a social behavior is the other one. */
@@ -252,8 +306,8 @@ function automaticTarget(session, animal) {
 function nameOf(b) { return '"' + b.name + '"'; }
 
 function apply(session, b, animal, target, range, absent, frame) {
-    noteBehaviorFps(session, state.fps);
-    var who = animal + (target ? ' → ' + target : '');
+    noteBehaviorFps(session, sessionFps(session));
+    var who = animal + (target ? pairGlyph(b) + target : '');
     if (range) {
         var r = labelRange(session, b.id, animal, target, range.start, range.end, !absent);
         if (!r) { setStatus('Could not label ' + nameOf(b) + ' for ' + who, 'warning'); return null; }
@@ -339,7 +393,7 @@ export function clearBehaviorRange(session, animal, start, end, behaviorId) {
     listBouts(session, { animal: animal }).forEach(function (bt) {
         if (behaviorId && bt.behaviorId !== behaviorId) return;
         if (bt.end < start || bt.start > end) return;
-        if (clearRange(session, bt.behaviorId, animal, bt.target, start, end)) n++;
+        if (clearRange(session, bt.behaviorId, bt.animal, bt.target, start, end)) n++;
     });
     return n;
 }

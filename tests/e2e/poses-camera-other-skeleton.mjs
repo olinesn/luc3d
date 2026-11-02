@@ -23,6 +23,7 @@
  *  J. Analysis `.h5` cameras.
  *  K. Per-camera export of a hidden camera, and the raw worker as the fallback read.
  *  L. The real multi-session picker: its last status keeps what each session's said.
+ *  M. File ▸ Add SLP beside a hidden camera.
  *
  * Needs `uv` for Python (skipped without it).
  *
@@ -160,6 +161,7 @@ cam("camA", sk, 100)
 cam("camB", sk, 200)
 cam("camC", sk, 300)
 cam("camD", sk, 400)
+cam("camF", sk, 500)
 cam("camA", sk2, 110)
 cam("camB", sk2, 210)
 cam("camC", sk2, 310)
@@ -407,6 +409,27 @@ async function openSessionsPicker(sessions, opts = {}) {
     return { page, status };
 }
 
+/** File ▸ Add SLP, the real route, with a fixture as the file picked. */
+async function addSlp(page, fixture) {
+    page.once('filechooser', fc => fc.setFiles(path.join(tmp, fixture + '.slp')));
+    await page.evaluate(() => { window.__done = false; (async () => {
+        await (await import('/import-export/slp-import.js')).handleAddSlp();
+    })().then(() => { window.__done = true; }, e => { window.__done = 'ERR ' + (e && e.stack || e); }); });
+    let done = false;
+    for (let i = 0; i < 6000 && !done; i++) {
+        const s = await page.evaluate(() => {
+            const b = [...document.querySelectorAll('button')].find(x => x.offsetParent && /^(Skip|Later|Cancel|Not now)$/i.test((x.textContent || '').trim()));
+            if (b) { b.click(); return { done: false }; }
+            return { done: window.__done, prompt: !!document.getElementById('videoSelectOverlay') };
+        });
+        if (s.prompt) await page.keyboard.press('Escape');
+        done = s.done;
+        if (!done) await page.waitForTimeout(100);
+    }
+    if (done !== true) throw new Error('Add SLP did not finish: ' + done);
+    return page.evaluate(() => document.getElementById('statusText').textContent);
+}
+
 /** File ▸ Save, the real route; the file's bytes. Leaves the page open. */
 async function saveBytes(page) {
     const b64 = await page.evaluate(async () => {
@@ -522,7 +545,7 @@ async function saveEveryWay(page, what, want, reopenRoutes = ROUTES) {
 
 try {
     uv(PY_WRITE, [tmp]);
-    const NAMES = ['camA_main', 'camB_main', 'camC_main', 'camD_main', 'camA_other', 'camB_other', 'camC_other', 'camD_other', 'camB_reversed', 'camC_reversed', 'camA_reversed',
+    const NAMES = ['camA_main', 'camB_main', 'camC_main', 'camD_main', 'camF_main', 'camA_other', 'camB_other', 'camC_other', 'camD_other', 'camB_reversed', 'camC_reversed', 'camA_reversed',
         'camC_main_abc', 'camD_main_abc', 'camC_main_rev', 'camD_main_rev', 'camB_edged', 'camB_twin', 'camB_kinds', 'camB_other_labeled', 'camB_reversed_labeled', 'camB_reversed_hand', 'camB_other_first', 'camB_main_first', 'camB_stale', 'camB_two_videos', 'camB_reversed_two_videos', 'camB_later_video', 'camB_empty'];
     const sourcePaths = NAMES.map(n => path.join(tmp, n + '.slp'));
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
@@ -1179,6 +1202,34 @@ try {
         check(/Loaded 2 sessions/.test(status.text) && (status.text.match(/Not read: the annotation file of camB/g) || []).length === 1 && /error/.test(status.dot),
             what + ': the refusal is in the last status, in red, once', status);
         await page.close();
+    }
+
+    console.log('\nM. File ▸ Add SLP beside a hidden camera');
+    for (const route of ROUTES) {
+        // The session's list grows or not, a track only the hidden camera has keeps its name.
+        const what = `Add SLP beside a hidden camera, ${route}`;
+        const { page } = await openFolder({ camA: 'camA_main', camB: 'camB_kinds' }, { route });
+        const status = await addSlp(page, 'camF_main');
+        check(!/Nothing added|rror/.test(status), what + ': added', status);
+        const shown = await shownInApp(page);
+        check(!shown[0].cams.camB && shown[0].cams.camA.length === 6 && Object.values(shown[0].cams).flat().length === 12, what + ': the added camera shows, the hidden one does not', Object.keys(shown[0].cams));
+        await saveEveryWay(page, what, {
+            poses: [...sources.camA_main.poses, ...sources.camB_kinds.poses, ...sources.camF_main.poses].sort(),
+            detail: sources.camB_kinds.detail, skeletons: [MAIN, OTHER],
+        });
+    }
+    {
+        // Rows only in memory: the multi-session save keeps this loader, not the files.
+        const what = 'Add SLP beside a hidden camera, two lazy sessions';
+        const first = await openFolder({ camA: 'camA_main' }, { route: 'lazy', folder: 'sess1' });
+        await openFolder({ camB: 'camB_kinds', camC: 'camC_main', camD: 'camD_main' }, { route: 'lazy', folder: 'sess2', page: first.page });
+        const status = await addSlp(first.page, 'camF_main');
+        check(!/Nothing added|mismatch|rror/.test(status), what + ': added', status);
+        savedForPython(await saveBytes(first.page), what, {
+            poses: [...sources.camA_main.poses, ...sources.camC_main.poses, ...sources.camD_main.poses, ...sources.camB_kinds.poses, ...sources.camF_main.poses].sort(),
+            detail: sources.camB_kinds.detail, skeletons: [MAIN, OTHER],
+        });
+        await first.page.close();
     }
 
     console.log('\nPython reads every save:');
