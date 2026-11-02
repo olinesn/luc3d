@@ -1546,6 +1546,9 @@ session graph that holds them.
     skeleton on any video, are the reader's own sleap-io.js instances and no edit
     touches them, but `renameCameraInAllData` carries `videos[].camera` along. A save
     writes both back (`import-export/outside-frames.js`).
+  - **`keptSuggestions`** — eager loads only: the file's suggestions, each with the
+    camera whose video it is on (null when none). Not shown; written back on save
+    (`import-export/kept-suggestions.js`). `renameCameraInAllData` renames their camera.
   - **`predictedNodeScore(cameraName, frameIdx, inst, k)`** is the one answer to
     "what did the model score this node?" — the node tooltip and the streaming
     writer's overlay both ask it. NaN unless `inst` is `'predicted'` (an edit
@@ -9092,6 +9095,10 @@ multi-video docking layout.
   `zoomRatioLabel` (the zoom badge's preset menu).
 - `../import-export/save-load.js` — `setStatus`, `showLoading`,
   `hideLoading`, `quickSave`, `markDirty`.
+- `../import-export/kept-suggestions.js` — `moveKeptSuggestions` (a moved video's
+  suggestions go with it).
+- `../import-export/outside-frames.js` — `moveKeptCameraPoses` (a moved video's
+  poses on another skeleton go with it).
 - `./video-filters.js` — the `CONTRAST_*` / `BRIGHTNESS_*` / `ROTATION_*`
   bounds, `clampContrast` / `clampBrightness` / `clampRotation` /
   `clampRotationSetting`, `buildVideoFilter`, and the three per-session
@@ -13709,6 +13716,8 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
 - `../import-export/outside-frames.js` (poses on a video no session reads or on a
   skeleton it does not show: kept aside, and said in the load's status; a group
   across skeletons refuses the load),
+- `../import-export/kept-suggestions.js` (`keepSuggestions`: the single-`.slp` and
+  per-camera folder loaders keep a file's suggestions),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
@@ -14076,6 +14085,10 @@ never take this path. `tests/e2e/slp-import-fast-compound.mjs` requires both
 paths to give `Object.is`-equal results, on
 `tests/fixtures/slp-compound/sleap-compound-small.slp` (a Python sleap-io file,
 regenerable with `make_fixture.py`) and with `DATASET=` on real files.
+
+**Suggestions.** `data.suggestions` (`{videoIdx, frameIdx, group}` from
+`suggestions_json`, as the typed reader gives them: a row on no listed video is
+dropped) is for `import-export/kept-suggestions.js`, on both result shapes.
 
 **Columnar result (`buildColumnarFrames`).** The default `data.frames` (boxed
 `[x, y]` arrays + an object per instance) is expensive to structured-clone. With
@@ -15415,6 +15428,10 @@ what it still reads by position; File ▸ Add SLP adds its own there,
   any such group refuses in a file with more than one skeleton. Called before the load
   touches anything; the loader then resolves `false`, so the file does not become the
   save target.
+- `keptVideoOf(slpData, id)`, `headerVideoOfKept(SIO, kept)` — what an eager load holds
+  of such a video, and the `SIO.Video` a header lists for it. `record` is the file's
+  own entry (`slpData.videos[id]`): one object per video per file, so it tells a video
+  apart where an id cannot (File ▸ Add SLP brings a second file's ids).
 - `keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap)` — eager load;
   adds to what `session.outsideFrames.frames` already holds. It reads `slpData.frames`,
   which must be on `session`'s skeleton. Each kept video remembers the record its file's
@@ -15429,14 +15446,18 @@ what it still reads by position; File ▸ Add SLP adds its own there,
   `keepOutsideColumnarFrames(session, slpData, own, camName)`,
   `keepCameraOtherSkeletonFrames(session, slpData, own, camName)` — the per-camera eager
   load: a camera is the first video its file lists with frames, on any skeleton.
+- `moveKeptCameraPoses(fromSession, toSession, cameraName)` — a video moved to another
+  session takes the poses kept on it along, so they stay in that camera's frames.
 - `outsideFramesForSave(session)` — eager save, before the session's Labels are built:
-  `{videos, tracks, listedVideos, labeledFramesFor(labels)}`, or null. `videos` are those
-  no camera of the session has. `listedVideos` (the file's record -> the entry) is what
-  puts a kept event on the entry its video's poses have (`buildBehaviorEvents`).
-  `labeledFramesFor` gives the frames those Labels lack: a kept pose on a camera's video
-  goes into the frame the Labels already have there, because a lazy reopen's save keeps
-  only the first row of each video and frame. An identity only these poses name is added
-  to `labels.identities`, and `new SIO.Labels` lists a kept pose's skeleton by itself.
+  `{videos, tracks, listedVideos, placedVideos, labeledFramesFor(labels)}`, or null.
+  `videos` are those no camera of the session has. `listedVideos` (the file's record ->
+  the entry) is what puts a kept event on the entry its video's poses have
+  (`buildBehaviorEvents`), and `placedVideos` (the read's record -> the entry) a kept
+  suggestion. `labeledFramesFor` gives the frames those Labels lack: a kept pose on a
+  camera's video goes into the frame the Labels already have there, because a lazy
+  reopen's save keeps only the first row of each video and frame. An identity only
+  these poses name is added to `labels.identities`, and `new SIO.Labels` lists a kept
+  pose's skeleton by itself.
 - `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(sessions)` — the
   sentences for a load's final status: what is on no session's video, and what on a
   camera's video is not shown for being on another skeleton.
@@ -15445,9 +15466,57 @@ what it still reads by position; File ▸ Add SLP adds its own there,
 (`makePooledSioInstances`), `./behavior-events.js` (`keptVideoRecords`).
 
 **Imported by.** `import-export/slp-import.js`, `import-export/save-load.js`,
-`import-export/slp-streaming-write.js`, `loading/session-loader.js`.
+`import-export/slp-streaming-write.js`, `import-export/kept-suggestions.js`,
+`loading/session-loader.js`.
 
 **Tests.** `tests/e2e/poses-outside-session.mjs`, `tests/e2e/poses-other-skeleton.mjs`.
+
+### import-export/kept-suggestions.js
+
+**Purpose.** A `.slp`'s suggestions (`suggestions_json`, SLEAP's frames to label next)
+through a save. LUC3D has no screen for them, so a save only leaves them alone: each on
+its own video and frame, in the file's order, its group as the file holds it. The
+vendored `writeSuggestions` finds a suggestion's video in the header by object and writes
+-1 for one the header lacks, which Python reads as the LAST video: the wrong video, with
+no error. The header holds fresh objects, so a suggestion is never handed along as read.
+
+**Key exports.**
+- `keepSuggestions(slpData, opened)` — eager load: `slpData.suggestions` onto
+  `session.keptSuggestions` of the sessions in `opened`
+  (`[{session, cameraByVideo}]`), each row with the camera whose video it is on. The
+  first session holds a suggestion on a video none of them reads, as kept poses are.
+  Every eager loader calls it: `handleLoadSlpFile`, `handleAddSlp`,
+  `handleLoadSessionFolderSingleSlp`, `handleLoadSessionFolderPerCamera`.
+- `suggestionsForSave(session, listed)` — both writers (`buildSlpBytes`,
+  `buildSessionRefGraph`), in two steps. Called, it gives each video only a suggestion
+  names a place of its own in `listed` (`{videos, listedVideos, placedVideos}`, the
+  header so far), so the session's bouts on it share that entry: the eager writer builds
+  its events with the session's Labels, so this comes before them. It returns a function
+  that, given the header's video per camera, makes the session's `SIO.SuggestionFrame`s:
+  each on its camera's entry (by name, whatever it is called now, with or without poses),
+  else on the entry of the kept poses on that video (`placedVideos`, by the read's record,
+  never an id), else on its own place. So a camera that is gone leaves its suggestions on
+  the video the file named. A lazy session's rows are read from its reader's `Labels` at
+  save, by the rule `SioLazyLoader` reads a camera's video by. No group or a null one is
+  written as 0, what Python reads a missing one as.
+- `suggestionsInFileOrder(entries)` — those frames, kept rows in the order their files
+  held them, a lazy session's first, in session order.
+- `moveKeptSuggestions(fromSession, toSession, cameraName)` — a video moved to another
+  session takes its suggestions along.
+
+Nothing is written to `metadata.lucid`, and a file with no suggestions saves
+byte-identically. Exports (per session, by camera) and the JSON project format have no
+suggestions.
+
+**Imports from project modules.** `./outside-frames.js` (`keptVideoOf`,
+`headerVideoOfKept`), `./behavior-events.js` (`keptVideoRecords`).
+
+**Imported by.** `import-export/slp-import.js`, `import-export/save-load.js`,
+`import-export/slp-streaming-write.js`, `loading/session-loader.js`,
+`ui/sessions-panes.js`.
+
+**Tests.** `tests/e2e/eager-save-keeps-suggestions.mjs`,
+`tests/e2e/lazy-save-keeps-suggestions.mjs`.
 
 ### import-export/slp-provenance.js
 
@@ -15690,7 +15759,8 @@ session's resident/total) rather than truncate silently. Covered by
   `points[]` + parallel `occluded[]`, NOT `numpy()`; a prediction's per-node
   scores as `pointScores`, the typed instance's own `_score` column by reference,
   null for a user instance — the importers copy it with `Instance.setPointScores`). Each `videos[]` entry
-  carries the typed `Video` as `_typedVideo` (`import-export/outside-frames.js` writes it back whole). A pose goes with the skeleton
+  carries the typed `Video` as `_typedVideo` (`import-export/outside-frames.js` writes it back whole). `suggestions[]` holds
+  `{videoIdx, frameIdx, group}`, `group` as the file holds it, for `import-export/kept-suggestions.js`. A pose goes with the skeleton
   it is on: `skeletons` lists `{name, nodes, edges, typed, frames}` per skeleton (a
   duplicate by `Skeleton.matches` with `requireSameOrder` shares its twin's), the first
   being `skeleton` + `frames`, and not an unused one; `skeletonEntryOf` maps a typed
@@ -15774,7 +15844,7 @@ lazy sessions that can never all be resident at once, this forces two passes,
 each holding only one session's data at a time:
 - **`createProjectWriterContext()`** — a fresh shared context
   (`{ runningOut, allSkeletons, allVideos, allTracks, allIdentities,
-  trackBaseByNameSig }`) threaded through every session so refs stay
+  allSuggestions, trackBaseByNameSig }`) threaded through every session so refs stay
   file-global (never reset per session).
 - **`buildSessionRefGraph(session, views, videoFiles, ctx)`** — **`async`** (both
   call sites must `await`: `buildSessionSlpBytesStreaming` here and
@@ -15800,6 +15870,15 @@ each holding only one session's data at a time:
   `addOutsideVideos` fills the session's `listedVideos` for `buildBehaviorEvents`.
   `skeletonPairsFor` does the same for skeletons: rows on one but the session's find
   it in the header (`_appendWithHeaderSkeletons`).
+  **Suggestions** (`suggestions_json`, SLEAP's frames to label next; LUC3D has no UI
+  for them, it only keeps them): `suggestionsForSave` (`import-export/kept-suggestions.js`,
+  the same as the eager writer) sends each to this header's video for it, into
+  `ctx.allSuggestions`, which `openProjectWriter` passes on. A video with neither a
+  camera nor poses gets a header place after those that have (so the order is cameras,
+  videos with poses, videos only a suggestion names), and this session's bouts on it
+  share that entry (`listedVideos`). They are resolved in pass 1, so pass 2's re-read of
+  each file plays no part. Test:
+  `tests/e2e/lazy-save-keeps-suggestions.mjs`.
   **Non-shared-store track dedup:** for separate per-camera prediction files
   (session-folder load, `loader._sharedStore` false), each camera's
   `labels.tracks` is appended onto `ctx.allTracks` under a growing
@@ -15989,7 +16068,9 @@ eager path shows them.
   missing, so a session with none (a folder loaded without calibration.toml)
   used to save as an EMPTY file. A session with a real calibration is never
   touched (`ensurePlaceholderCameras` returns early; `tests/test-placeholder-cameras.mjs`
-  §5), so what it writes does not change. **When EVERY
+  §5), so what it writes does not change. The eager path also writes each session's
+  suggestions (`suggestionsForSave`, `import-export/kept-suggestions.js`) on this
+  header's videos. **When EVERY
   session in `state.sessions` has an open `lazyLoader`, it routes to the
   memory-bounded streaming path** — `buildSessionSlpBytesStreaming`
   (`import-export/slp-streaming-write.js`) for a single lazy session, or
@@ -16125,6 +16206,7 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   download fallback when there is no save-file picker, says why and how to
   enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
   `./outside-frames.js` (`outsideFramesForSave`),
+  `./kept-suggestions.js` (`suggestionsForSave`),
   `../ui/app-state.js`, `../loading/session-loader.js`,
   `../loading/cold-read-guard.js` (`readBlobRange`, the check of the source files
   before a multi-session save releases anything),
@@ -16421,6 +16503,7 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   `headerVideoOfRecord`, `keepOtherSkeletonFrames`, `keepOutsideFrames`,
   `keptOutsideCounts`, `noteVideoReaders`, `outsideFramesNote`, `sessionSkeletonEntry` —
   poses on a video no session reads or on a skeleton it does not show),
+  `./kept-suggestions.js` (`keepSuggestions`),
   `../loading/lazy-store-rows.js` (`storeFromParsedFrames`),
   `../loading/video-file-pick.js` (`preferNonCalibrationVideos`),
   `../ui/loading-progress-modal.js` (`getLoadingProgressModal`),
@@ -16501,6 +16584,8 @@ compatibility check, track merging, frame merging, group rebuild.
 - `mergeTracksIntoSession(session, incomingTracks)`.
 - `videosClaimedBy(videoIdxToCameraName, nCameras)` — the video indices a session's
   frame loop reads: its camera map's, or, when it maps none, each camera's own index.
+- `cameraOfClaimedVideos(videoIdxToCameraName, cameras)` — the same videos, each with
+  its camera's name, for `keepSuggestions`.
 - `mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName,
   cameras, trackRemap, nodeReorderMap)` — trackless instances (track=-1/null),
   user OR predicted, keep `trackIdx = null`.

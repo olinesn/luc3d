@@ -23,6 +23,9 @@
  *  G. A group linking a pose on another skeleton: the load refuses, nothing changes.
  *  H. A LUC3D project whose sessions are on different skeletons: each shows its own.
  *  I. A project mixing lazy and eager sessions.
+ *  J. A suggestion on a video kept poses are on: one entry of the list for both, through
+ *     the routes, a renamed camera, a camera gone, a video moved to another session, File ▸
+ *     Add SLP and a per-camera folder.
  *
  * Needs `uv` for Python (skipped without it).
  *
@@ -119,6 +122,7 @@ def read(path):
         "identities": [i.name for i in labels.identities],
         "sessions": sessions, "poses": sorted(poses), "detail": sorted(detail), "groups": sorted(groups),
         "repeatedFrames": len(keys) - len(set(keys)),
+        "suggestions": [s.video.filename + "|" + str(s.frame_idx) for s in labels.suggestions],
     }
 `;
 
@@ -291,6 +295,26 @@ fa[0].instances.append(labeled)
 sio.Labels(labeled_frames=fa + frames_on_sk2(y, 500), videos=[a, y], skeletons=[sk, sk2], tracks=[T1, T2], identities=[beta]).save(os.path.join(out, "camA_labeled.slp"), embed=False)
 b = video("camB.mp4")
 sio.Labels(labeled_frames=frames_on(b, 200), videos=[b], skeletons=[sk], tracks=[T1, T2]).save(os.path.join(out, "camB_alone.slp"), embed=False)
+
+# Suggestions on the videos kept poses are on, for section J. All of camA's poses are kept,
+# because camA is the camera J can lose: on camB alone a save still calls the session
+# calibrated, while camA alone, at the origin, would not.
+from sleap_io.model.suggestions import SuggestionFrame
+a, b, x = video("camA.mp4"), video("camB.mp4"), video("outside.mp4")
+save("skeleton_suggested", frames_on_sk2(a, 100) + frames_on(b, 200) + frames_on_sk2(x, 500), [a, b, x], [sk, sk2], [session([("camA", a), ("camB", b)])],
+     suggestions=[SuggestionFrame(video=x, frame_idx=40), SuggestionFrame(video=b, frame_idx=41), SuggestionFrame(video=a, frame_idx=42)])
+# Two sessions, so a camera holding a kept pose and a suggestion can move between them.
+a, b, c, d = video("camA.mp4"), video("camB.mp4"), video("camC.mp4"), video("camD.mp4")
+fb = frames_on(b, 200)
+fb[0].instances.append(on_sk2(600, 0))
+save("skeleton_suggested_two", frames_on(a, 100) + fb + frames_on(c, 300) + frames_on(d, 400), [a, b, c, d], [sk, sk2],
+     [session([("camA", a), ("camB", b)]), session([("camC", c), ("camD", d)])], suggestions=[SuggestionFrame(video=b, frame_idx=41)])
+# A camera's own file: both skeletons on its video, another video with only the second.
+a, y = video("camA.mp4"), video("camA_second.mp4")
+fa = frames_on(a, 100)
+fa[0].instances.append(on_sk2(600, 0))
+sio.Labels(labeled_frames=fa + frames_on_sk2(y, 500), videos=[a, y], skeletons=[sk, sk2], tracks=[T1, T2],
+           suggestions=[SuggestionFrame(video=y, frame_idx=43), SuggestionFrame(video=a, frame_idx=44)]).save(os.path.join(out, "camA_suggested.slp"), embed=False)
 `;
 
 function uv(script, args) {
@@ -431,6 +455,7 @@ function compare(what, got, want) {
     if (want.tracks) check(eq(got.tracks, want.tracks), what + ': track list', got.tracks);
     if (want.skeletons) check(eq(got.skeletons, want.skeletons), what + ': skeleton list', got.skeletons);
     if (want.identities) check(eq(got.identities, want.identities), what + ': identity list', got.identities);
+    if (want.suggestions) check(eq(got.suggestions, want.suggestions), what + ': every suggestion on its own video and frame', got.suggestions);
 }
 
 /** The app's own view of the open project, session by session. */
@@ -463,7 +488,7 @@ const FIXTURES = {
 
 try {
     uv(PY_WRITE, [tmp]);
-    const NAMES = [...Object.keys(FIXTURES), 'skeleton_mixed', 'skeleton_twin', 'skeleton_stale', 'skeleton_two_sessions', 'one_skeleton', 'skeleton_group', 'camA_two_skeletons', 'camA_labeled', 'camB_alone'];
+    const NAMES = [...Object.keys(FIXTURES), 'skeleton_mixed', 'skeleton_twin', 'skeleton_stale', 'skeleton_two_sessions', 'one_skeleton', 'skeleton_group', 'camA_two_skeletons', 'camA_labeled', 'camB_alone', 'skeleton_suggested', 'skeleton_suggested_two', 'camA_suggested'];
     const sourcePaths = NAMES.map(n => path.join(tmp, n + '.slp'));
     const sources = {};
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
@@ -992,6 +1017,82 @@ try {
         // Only that video's: a lazy camera's poses on this writer lose their per-node scores, as they always have.
         const outside = sources.skeleton_outside.poses.filter(r => r.startsWith('outside.mp4|'));
         savedForPython(await save(page), 'mixed project', { onVideo: 'outside.mp4', poses: outside, detail: sources.skeleton_outside.detail });
+    }
+
+    console.log('\nJ. A suggestion on a video kept poses are on');
+    {
+        const source = sources.skeleton_suggested;
+        check(eq(source.suggestions, ['outside.mp4|40', 'camB.mp4|41', 'camA.mp4|42']), 'skeleton_suggested.slp holds a suggestion on each of its videos', source.suggestions);
+        const held = { poses: source.poses, detail: source.detail, suggestions: source.suggestions };
+        for (const loader of ['eager', 'folder', 'raw']) {
+            let bytes = readFile('skeleton_suggested');
+            for (let gen = 1; gen <= 2; gen++) {
+                const page = await open(loader, bytes);
+                bytes = await save(page);
+                savedForPython(bytes, `suggested, ${loader}, save ${gen}`, { ...held, videos: ['camA.mp4', 'camB.mp4', 'outside.mp4'], sessions: source.sessions });
+            }
+        }
+        {
+            // A renamed camera keeps the one entry for its video, poses and suggestion.
+            const page = await open('eager', readFile('skeleton_suggested'));
+            await page.evaluate(async () => {
+                const { state } = await import('/ui/app-state.js');
+                state.session.cameras.find(c => c.name === 'camA').name = 'top';
+                state.session.renameCameraInAllData('camA', 'top');
+            });
+            savedForPython(await save(page), 'suggested, a renamed camera', { ...held, videos: ['camA.mp4', 'camB.mp4', 'outside.mp4'], sessions: [{ top: 'camA.mp4', camB: 'camB.mp4' }] });
+        }
+        {
+            // A camera gone: its kept poses and its suggestion share the file's own record.
+            const page = await open('eager', readFile('skeleton_suggested'));
+            await page.evaluate(async () => {
+                const { state } = await import('/ui/app-state.js');
+                state.session.cameras = state.session.cameras.filter(c => c.name !== 'camA');
+            });
+            savedForPython(await save(page), 'suggested, a camera gone', { ...held, videos: ['camB.mp4', 'camA.mp4', 'outside.mp4'], sessions: [{ camB: 'camB.mp4' }] });
+        }
+    }
+    {
+        // A video moved to another session takes its kept pose along, as it does its suggestion:
+        // one row for the frame, in the session the video is now in. A calibrated session
+        // keeps its camera, so it lists that video too, with no poses, whatever the poses are.
+        const source = sources.skeleton_suggested_two;
+        const page = await open('eager', readFile('skeleton_suggested_two'));
+        await page.evaluate(async () => {
+            const { state } = await import('/ui/app-state.js');
+            const panes = await import('/ui/sessions-panes.js');
+            state.activeSessionIdx = 0;
+            state.session = state.sessions[0];
+            const moved = panes.showMoveVideoModal(['camB'], 0, 1);
+            [...document.querySelectorAll('button')].find(b => b.offsetParent && b.textContent.trim() === 'Continue').click();
+            await moved;
+        });
+        const bytes = await save(page);
+        const movedWant = { poses: source.poses, detail: source.detail, suggestions: source.suggestions, sessions: [{ camA: 'camA.mp4', camB: 'camB.mp4' }, { camC: 'camC.mp4', camD: 'camD.mp4', camB: 'camB.mp4' }], videos: ['camA.mp4', 'camB.mp4', 'camC.mp4', 'camD.mp4', 'camB.mp4'] };
+        savedForPython(bytes, 'suggested, a video moved to another session', movedWant);
+        savedForPython(await save(await open('eager', bytes)), 'suggested, a video moved to another session, saved again', movedWant);
+    }
+    {
+        // File ▸ Add SLP: the added file's ids mean other videos than the open project's.
+        const source = sources.skeleton_suggested;
+        const page = await open('eager', readFile('one_skeleton'));
+        page.once('filechooser', fc => fc.setFiles(path.join(tmp, 'skeleton_suggested.slp')));
+        await page.evaluate(() => { window.__done = false; (async () => {
+            await (await import('/import-export/slp-import.js')).handleAddSlp();
+        })().then(() => { window.__done = true; }, e => { window.__done = 'ERR ' + (e && e.stack || e); }); });
+        await settle(page, 'Add SLP, suggested');
+        const renamed = r => r.replace(/^cam([AB])\.mp4\|/, 'cam$1_2.mp4|');
+        savedForPython(await save(page), 'suggested, Add SLP', {
+            poses: [...sources.one_skeleton.poses, ...source.poses.map(renamed)].sort(), suggestions: source.suggestions.map(renamed),
+            videos: ['camA.mp4', 'camB.mp4', 'camA_2.mp4', 'camB_2.mp4', 'outside.mp4'],
+        });
+    }
+    {
+        const { page } = await openFolder('eager', 'camA_suggested');
+        savedForPython(await save(page), 'suggested, per-camera', {
+            poses: [...sources.camA_suggested.poses, ...sources.camB_alone.poses].sort(), detail: sources.camA_suggested.detail,
+            suggestions: ['camA_second.mp4|43', 'camA.mp4|44'], videos: ['camA.mp4', 'camB.mp4', 'camA_second.mp4'], sessions: [{ camA: 'camA.mp4', camB: 'camB.mp4' }],
+        });
     }
 
     console.log('\nPython reads every save:');

@@ -209,6 +209,33 @@ function emptyOutsideFrames() {
     return { videos: [], tracks: [], frames: [], otherSkeletonFrames: [] };
 }
 
+/**
+ * What an eager load holds of a video it keeps something on. `record` is the file's
+ * own entry (`slpData.videos[id]`): one object per video per file, so it tells a video
+ * apart where an id cannot, as File ▸ Add SLP brings a second file's ids.
+ *
+ * @param {Object} slpData - `parseSlpViaSleapIO` / `parseSlpH5` result
+ * @param {number} id - the video's id in the file
+ */
+export function keptVideoOf(slpData, id) {
+    var record = (slpData.videos || [])[id] || null;
+    return {
+        id: id,
+        record: record,
+        typed: record && record._typedVideo ? record._typedVideo : null,
+        // What this file's events know the video by (`fileEventsOf`): the very
+        // object a kept event of this file holds. A video File ▸ Add SLP brought
+        // has another file's record, so even at the same place in its own list
+        // it is never taken for theirs.
+        eventRecord: slpData.behaviorEvents ? slpData.behaviorEvents.videos[id] : null,
+    };
+}
+
+/** The `SIO.Video` a header lists for `keptVideoOf`'s result. */
+export function headerVideoOfKept(SIO, kept) {
+    return kept.typed ? headerVideoForOutsideFrames(SIO, kept.typed, kept.id) : headerVideoOfRecord(SIO, kept.record, kept.id);
+}
+
 // One place per video of one file, whichever call asks, because a video listed twice
 // is two videos: a file's `videos` list -> `session.outsideFrames` -> (index -> place).
 var keptVideoPlaces = new WeakMap();
@@ -228,21 +255,8 @@ function keptVideoSlot(kept, slpData, videoIdx, camera) {
     if (!ofList.has(kept)) ofList.set(kept, new Map());
     var places = ofList.get(kept);
     if (!places.has(videoIdx)) {
-        var record = list[videoIdx] || null;
         places.set(videoIdx, kept.videos.length);
-        kept.videos.push({
-            id: videoIdx,
-            typed: record && record._typedVideo ? record._typedVideo : null,
-            // Only the raw worker's records lack `_typedVideo`.
-            filename: record && !record.embedded ? record.filename : null,
-            shape: record ? record.shape : null,
-            camera: camera,
-            // What this file's events know the video by (`fileEventsOf`): the very
-            // object a kept event of this file holds. A video File ▸ Add SLP brought
-            // has another file's record, so even at the same place in its own list
-            // it is never taken for theirs.
-            eventRecord: slpData.behaviorEvents ? slpData.behaviorEvents.videos[videoIdx] : null,
-        });
+        kept.videos.push(Object.assign(keptVideoOf(slpData, videoIdx), { camera: camera }));
     }
     return places.get(videoIdx);
 }
@@ -401,6 +415,34 @@ export function keepOtherSkeletonFrames(slpData, readers, fallback, fallbackEntr
 }
 
 /**
+ * A video moved to another session takes the poses kept on it along, so they stay in
+ * that camera's frames. A place with no camera holds `frames` too, and stays.
+ *
+ * @param {Session} fromSession
+ * @param {Session} toSession
+ * @param {string} cameraName
+ */
+export function moveKeptCameraPoses(fromSession, toSession, cameraName) {
+    var from = fromSession.outsideFrames;
+    if (!from || !from.videos.some(function (v) { return v.camera === cameraName; })) return;
+    var to = toSession.outsideFrames || (toSession.outsideFrames = emptyOutsideFrames());
+    var before = from.videos;
+    from.videos = [];
+    var placeAfter = before.map(function (v) {
+        var list = v.camera === cameraName ? to.videos : from.videos;
+        list.push(v);
+        return list.length - 1;
+    });
+    from.frames.forEach(function (f) { f.video = placeAfter[f.video]; });
+    from.otherSkeletonFrames = from.otherSkeletonFrames.filter(function (f) {
+        var moves = before[f.video].camera === cameraName;
+        f.video = placeAfter[f.video];
+        if (moves) to.otherSkeletonFrames.push(f);
+        return !moves;
+    });
+}
+
+/**
  * Per-camera eager load: a camera is one video, and its file's frames on any other
  * video are kept aside. The camera's own video is the first that file lists with
  * frames, on any skeleton: the rule `SioLazyLoader.open` applies, so a folder reads
@@ -513,11 +555,13 @@ export function keepOutsideColumnarFrames(session, slpData, own, camName) {
  * the session's, by itself.
  *
  * @param {Session} session
- * @returns {{videos: Array, tracks: Array, listedVideos: Map<Object, Object>, labeledFramesFor: function(Object): Array}|null}
+ * @returns {{videos: Array, tracks: Array, listedVideos: Map<Object, Object>, placedVideos: Map<Object, Object>, labeledFramesFor: function(Object): Array}|null}
  *   `videos`: those no camera of the session has, for the Labels to list after its
  *   cameras; `listedVideos`: the file's record of a video (`fileEventsOf`) -> its entry
- *   here; `labeledFramesFor(labels)`: the frames the session's Labels lack. An identity
- *   only these poses name is added to `labels.identities`.
+ *   here; `placedVideos`: its record in the read (`keptVideoOf`) -> its entry here, for a
+ *   kept suggestion on it (kept-suggestions.js); `labeledFramesFor(labels)`: the frames
+ *   the session's Labels lack. An identity only these poses name is added to
+ *   `labels.identities`.
  */
 export function outsideFramesForSave(session) {
     var SIO = window.SleapIO;
@@ -528,13 +572,14 @@ export function outsideFramesForSave(session) {
     var kept = session.outsideFrames;
     if (!kept) return null;
     var listedVideos = new Map();
+    var placedVideos = new Map();
     var videos = [];
     // Each place's own entry; null for one a camera of this session has.
     var entryOfSlot = kept.videos.map(function (v) {
         if (v.camera != null && session.cameras.some(function (c) { return c.name === v.camera; })) return null;
-        var video = !v.typed && v.filename ? newHeaderVideo(SIO, v.filename, v.shape)
-            : headerVideoForOutsideFrames(SIO, v.typed, v.id);
+        var video = headerVideoOfKept(SIO, v);
         if (v.eventRecord) listedVideos.set(v.eventRecord, video);
+        placedVideos.set(v.record, video);
         videos.push(video);
         return video;
     });
@@ -549,7 +594,7 @@ export function outsideFramesForSave(session) {
         });
     });
     return {
-        videos: videos, tracks: tracks, listedVideos: listedVideos,
+        videos: videos, tracks: tracks, listedVideos: listedVideos, placedVideos: placedVideos,
         labeledFramesFor: function (labels) {
             var findIdentity = identityCatalogFinder(SIO, labels.identities);
             var newSioInstance = makePooledSioInstances(SIO, labels.skeletons[0], session.skeleton.nodes.length);
@@ -619,6 +664,7 @@ function lazyOutsideFramesForSave(SIO, session, loader) {
     if (labeledFrames.length === 0) return null;
     return {
         videos: Array.from(headerVideoOf.values()), tracks: Array.from(trackByName.values()), listedVideos: listedVideos,
+        placedVideos: headerVideoOf,
         labeledFramesFor: function (labels) {
             var findIdentity = identityCatalogFinder(SIO, labels.identities);
             labeledFrames.forEach(function (lf) {

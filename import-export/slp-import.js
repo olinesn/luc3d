@@ -20,7 +20,7 @@ import {
 import { slpReadErrorStatus } from '../loading/slp-format-check.js';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
-    mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames, videosClaimedBy,
+    mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames, videosClaimedBy, cameraOfClaimedVideos,
 } from './slp-merge.js';
 import { OnDemandVideoDecoder, EmbeddedVideoDecoder, closeEmbeddedFrames } from '../loading/video.js';
 import { embeddedVideoForEntry } from '../loading/slp-package-reader.js';
@@ -49,6 +49,7 @@ import {
     fileSkeletons, groupsAcrossSkeletonsRefusal, headerVideoOfRecord, keepOtherSkeletonFrames, keepOutsideFrames,
     keptOutsideCounts, noteVideoReaders, outsideFramesNote, sessionSkeletonEntry,
 } from './outside-frames.js';
+import { keepSuggestions } from './kept-suggestions.js';
 import { storeFromParsedFrames } from '../loading/lazy-store-rows.js';
 import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js';
 import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js';
@@ -1169,6 +1170,8 @@ export async function handleLoadSlpFile(slpFile) {
         var claimedVideos = new Set();
         // Who reads each of them, for the poses on another skeleton (kept aside too).
         var videoReaders = new Map();
+        // Each session with its cameras' videos, for its suggestions below.
+        var openedSessions = [];
         for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
         showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
         await new Promise(function (r) { setTimeout(r, 0); });
@@ -1430,6 +1433,7 @@ export async function handleLoadSlpFile(slpFile) {
         state.sessions.push(session);
         state.session = session;
         state.activeSessionIdx = state.sessions.length - 1;
+        openedSessions.push({ session: session, cameraByVideo: cameraOfClaimedVideos(videoIdxToCameraName, cameras) });
 
         console.log('[load-slp] Session', slpSessIdx + 1, ':', session.numFrames, 'frames,',
             cameras.length, 'cameras, tracks:', session.tracks);
@@ -1786,6 +1790,8 @@ export async function handleLoadSlpFile(slpFile) {
             var firstEntry = sessionSkeletonEntry(slpData, 0);
             keepOutsideFrames(state.sessions[0], Object.assign({}, slpData, { frames: firstEntry.frames }), claimedVideos);
             keepOtherSkeletonFrames(slpData, videoReaders, state.sessions[0], firstEntry);
+            // Suggestions likewise. A session whose videos failed to load is gone.
+            keepSuggestions(slpData, openedSessions.filter(function (o) { return state.sessions.indexOf(o.session) >= 0; }));
         }
 
         // Create views for the active session only
@@ -2156,6 +2162,7 @@ export async function handleAddSlp() {
             rebuildInstanceGroupsForFrames(state.session, affectedFrames);
             mergedFrames = affectedFrames.length;
         }
+        keepSuggestions(slpData, [{ session: state.session, cameraByVideo: cameraOfClaimedVideos(videoIdxToCameraName, cameras) }]);
         markDirty();
 
         console.log('[add-slp] Merged ' + cameras.length + ' camera(s), ' + mergedFrames + ' frames affected');
