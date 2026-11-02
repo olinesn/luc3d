@@ -1542,6 +1542,9 @@ session graph that holds them.
   - **`outsideFrames`** — eager loads only: the file's poses on a video no session
     names (null when none). Not shown; written back on save, and re-shaped by
     `propagateNodeAdded`/`propagateNodeRemoved` (`import-export/outside-frames.js`).
+  - **`unopenedSessions`** — lazy opens only: the file's other recording sessions, as
+    typed columns (null when none). Not shown, not editable; written back whole on save
+    (`import-export/unopened-sessions.js`).
   - **`keptSuggestions`** — eager loads only: the file's suggestions, each with the
     camera whose video it is on (null when none). Not shown; written back on save
     (`import-export/kept-suggestions.js`). `renameCameraInAllData` renames their camera.
@@ -9056,7 +9059,9 @@ multi-video docking layout.
   has no file to reopen and its decoder is not pooled, so both keep its decoder: a
   switch only drops its decoded frames. `switchSession` sets `state.currentFrame` before
   `refreshPaneInteractions`, which seeks to it: at the old session's frame number, that
-  seek could finish last and leave that picture up.
+  seek could finish last and leave that picture up. `removeSession`'s confirm says when the
+  session carries other sessions of its file (`Session.unopenedSessions`): only it writes
+  them back.
 
 **Imports from project modules.**
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `switchSession` shows the new
@@ -13625,8 +13630,10 @@ changes the card awaits a paint, so each step is on screen before its work.
 Over a network share the open is bound by reading the file, which is why step 1
 counts bytes (it used to sit on "Reading points" for minutes). Covered by
 `tests/e2e/project-open-progress.mjs`. Opens the ONE interleaved
-multi-camera file with `SioLazyLoader.openProjectSlp`, restores calibration +
-grouping/IDs/3D from the typed `RecordingSession` via
+multi-camera file with `SioLazyLoader.openProjectSlp`, keeps the file's other
+sessions as columns (`keepUnopenedSessions`, `import-export/unopened-sessions.js`:
+a save writes them back whole), restores calibration +
+grouping/IDs/3D from the first one's typed `RecordingSession` via
 `reconstructInstanceGroupsFromSessionLazy` — 2D hydrates on scrub — and brings
 up the 3D view + timeline immediately. With no decoders yet `updateTotalFrames()`
 would reset to 0, so `#totalFrames` and `timeline.setTotalFrames` are written
@@ -13707,6 +13714,8 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   `hasRealCalibration`, `ensurePlaceholderCameras`),
 - `../import-export/outside-frames.js` (poses on a video no session reads: kept
   aside, and said in the load's status),
+- `../import-export/unopened-sessions.js` (a lazy open's other sessions: `keepUnopenedSessions`
+  right after the read, `session.unopenedSessions`, the status sentence),
 - `../import-export/kept-suggestions.js` (`keepSuggestions`: the single-`.slp` and
   per-camera folder loaders keep a file's suggestions),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
@@ -13825,9 +13834,10 @@ synchronous.
   calibration) has no camera map: it gets one camera per video
   (`cameraNamesFromVideos`) and a `videos` record for each, frames or not, since
   a save writes the header from those. `eagerReason` names what the store cannot
-  hold, for `handleLoadProjectSlpLazy` to send to the eager path; `appendStore`
-  keeps only the first row of a repeated (video, frame), hydration only the last.
-  `firstLabeledFrame`: the lowest frame with an instance.
+  show, for `handleLoadProjectSlpLazy` to send to the eager path. A file listing one
+  (video, frame) twice: the first row is the camera's, the second is not shown, and
+  `appendStore` writes both back; a plain file like that goes to the eager path, which
+  shows both. `firstLabeledFrame`: the lowest frame with an instance.
 - `renameCamera(oldName, newName)` — every per-camera map, keeping its order; no-op
   when `newName` is already a camera. `Session.renameCameraInAllData` calls it.
   `cameraRenames` lists them in order, for the multi-session save's pass 2, which
@@ -13898,6 +13908,11 @@ when a row is genuinely out of order (`tests/e2e/occupancy-sort-skip-optimizatio
 the `sparse` flag (`_buildTrackSegments`, `ui/timeline.js`). Regression:
 `tests/test-lazy-reopen.js`'s "propagateIdentitiesToTracks rebuilds the lazy
 loader's trackOccupancy" test.
+
+`onInstanceRowsDeleted(framesData, kill, survBefore)`, when set, runs inside
+`deleteInstanceRows` before the frame ranges change: `handleLoadProjectSlpLazy` sets it
+when a session of the file nobody opened names rows of a video these cameras have
+(`renumberUnopenedMembers`, `import-export/unopened-sessions.js`).
 
 **`deleteInstanceRows(shouldDeleteFn, opts)` — the durable-delete primitive**
 (Custom Instance Delete and every interactive delete, via
@@ -15414,14 +15429,76 @@ every save on their own video. The lazy path keeps them in its store
 - `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(session)` — the
   sentence for a load's final status.
 
+- `unopenedSessionsForEagerSave(SIO, session, labels, outside, outsideBase, videos,
+  identities)` — a lazy session on the eager writer's path (a project mixing lazy and
+  eager sessions): the file's closed sessions, their members sent to the kept frames.
+  Throws rather than write them badly when the session's loader is gone or a closed
+  session names a video it has too.
+
 **Imports from project modules.** `../pose/pose-data.js` (`Instance`), `./file-io.js`
-(`makePooledSioInstances`), `./behavior-events.js` (`keptVideoRecords`).
+(`makePooledSioInstances`), `./behavior-events.js` (`keptVideoRecords`), `./unopened-sessions.js`.
 
 **Imported by.** `import-export/slp-import.js`, `import-export/save-load.js`,
 `import-export/slp-streaming-write.js`, `import-export/kept-suggestions.js`,
 `loading/session-loader.js`.
 
 **Tests.** `tests/e2e/poses-outside-session.mjs`.
+
+### import-export/unopened-sessions.js
+
+**Purpose.** The recording sessions of a file that a lazy open leaves closed. A lazy
+open (`handleLoadProjectSlpLazy`) shows a file's first session; a save writes the others
+back with their cameras, groups, 3D, calibration, identities and every key LUC3D does not
+read. Their poses are rows of the one store (`outside-frames.js`). Not shown, not
+editable. DOM-free.
+
+**How.** `keepUnopenedSessions(labels, { openVideoIds })` turns each closed session into
+typed columns, the tables `/session_data` holds (frames, groups, members, 3D rows), plus
+its own `sessions_json` dict as UTF-8 and the reader's small camera objects. It empties
+`labels.sessions` down to the first, so no object per group stays resident while the
+project is open (Memory rule, CLAUDE.md). `session.unopenedSessions` holds the result; null
+for a file with one session, whose save does not change by a byte.
+
+`unopenedSessionsForSave(kept, opts)` gives the writer real `RecordingSession`s whose
+`frameGroupByFrameIdx` builds each frame's objects as the writer walks it. A member names
+a frame by its position in the file and an instance by its place in that frame, and a
+save renumbers frames, so every member goes through `opts.outputRow(row)` on every save.
+The kept columns stay in the file's numbering, so saving twice works. Must run before the
+writer opens: `opts.headerVideo` and `opts.identities` extend the header's lists.
+
+A file's old inline `frame_group_dicts` hold a group's metadata as extra keys beside its
+fields, which the reader drops; `keepOneSession` reads them from the raw dict.
+
+**The rules.**
+- A kept group's identity stays the catalog entry it was. An entry the open session lists
+  too (`identityEntriesOfOpenSession`: same place in the catalog, same name) goes under the
+  open session's header identity, so both sessions' groups write one index, which is what
+  says they are one animal. Renaming it in the open session splits it. A name the file's
+  poses brought into the header (`detection-labels.js`, matched by name) is that entry's too.
+- A member on a video the open session shares with a closed one: a correction moves it into
+  the overlay (`opts.movedRef`, by `_rawInstIndex`), a delete renumbers or drops it
+  (`renumberUnopenedMembers`, through `SioLazyLoader.onInstanceRowsDeleted`). Nothing else
+  edits a store row a closed session names: those rows are in no camera's row map.
+- Its copy of the project's planes follows the open session's when the two matched at load
+  (`plane-metadata.js`: every session of a LUC3D project holds the same, and an eager open
+  reads the first it finds, so a deleted plane would come back). Its `planePlacements` and
+  every other key stay as the file had them.
+- Provenance: `withUnopenedSessions(sessions)` is the list `buildSaveProvenance` walks, in
+  save order; each kept record has `name` and `fileProvenance`, like a session.
+
+**Key exports.** `keepUnopenedSessions`, `unopenedSessionsForSave`,
+`identityEntriesOfOpenSession`, `renumberUnopenedMembers`, `hasMembersOnOpenVideos`,
+`withUnopenedSessions`, `unopenedVideoIds` (each kept session's videos, so
+`buildSessionRefGraph` lists them with the other outside videos, a video with no frame too, and
+a bout on one lands on that entry), `unopenedSessionsNote(fileSessions)` (the load's status
+sentence).
+
+**Imports from project modules.** `./slp-provenance.js`.
+
+**Imported by.** `loading/session-loader.js`, `import-export/slp-streaming-write.js`,
+`import-export/outside-frames.js`, `import-export/save-load.js`.
+
+**Tests.** `tests/test-unopened-sessions.mjs`, `tests/e2e/lazy-keeps-other-sessions.mjs`.
 
 ### import-export/kept-suggestions.js
 
@@ -15802,9 +15879,11 @@ each holding only one session's data at a time:
   per-`InstanceGroup` refs against `ctx`'s running counter (advancing it for
   the next session), and accumulates this session's cameras/tracks/skeleton
   into `ctx`. Requires `session.lazyLoader` open and Track All/Triangulate All
-  already run. Touches no writer. Returns `{ sioSession, overlayLfs, cam,
+  already run. Touches no writer. Returns `{ sioSession, unopened, overlayLfs, cam,
   outsideVideos, sharedTrackBase, sharedSkeletonPairs, sharedIdentityByName }` — small enough that the caller can evict the
-  session's lazy loader/`frameGroups`/`instanceGroups` right after.
+  session's lazy loader/`frameGroups`/`instanceGroups` right after. `unopened` holds the
+  file's sessions nobody opened (`import-export/unopened-sessions.js`), for the writer's
+  list right after `sioSession`.
   **Frames on a video no camera names** (`import-export/outside-frames.js`):
   `appendStore` writes a whole store, so each such video gets a header place after
   the session's cameras, and `streamSessionIntoWriter` maps the store's id to it
@@ -16152,7 +16231,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `../ui/browser-hints.js` (`fileSystemAccessHint` — `saveProjectSlp`, the
   download fallback when there is no save-file picker, says why and how to
   enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
-  `./outside-frames.js` (`outsideFramesForSave`),
+  `./outside-frames.js` (`outsideFramesForSave`, `unopenedSessionsForEagerSave`),
+  `./unopened-sessions.js` (`withUnopenedSessions`: who the provenance is keyed by),
   `./kept-suggestions.js` (`suggestionsForSave`),
   `../ui/app-state.js`, `../loading/session-loader.js`,
   `../loading/cold-read-guard.js` (`readBlobRange`, the check of the source files

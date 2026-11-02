@@ -73,6 +73,7 @@ import {
 } from '../pose/triangulation.js';
 import { SioLazyLoader } from './sio-lazy-loader.js';
 import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js';
+import { keepUnopenedSessions, hasMembersOnOpenVideos, renumberUnopenedMembers, unopenedSessionsNote } from '../import-export/unopened-sessions.js';
 import { unionTrackNames, remapTrackIdx } from './track-union.js';
 import {
     readCampyRecording, campyCameraFor, orderByCampyCameras, preferCampyVideo, campyVideoFile,
@@ -2804,7 +2805,10 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
  *    `sessions_json`;
  *  - rebuilds `session.instanceGroups` with LIGHTWEIGHT members (3D + refs, no 2D)
  *    via `reconstructInstanceGroupsFromSessionLazy` (~2.5s, ~1 GB) — 2D hydrates
- *    on scrub (`ensureLazyFrameData` → `finalizeLazyFrameGroup`).
+ *    on scrub (`ensureLazyFrameData` → `finalizeLazyFrameGroup`);
+ *  - opens the file's first session only. The others stay whole on
+ *    `session.unopenedSessions`, and a save writes them back
+ *    (`import-export/unopened-sessions.js`).
  *
  * A project `.slp` only references videos by path, so after the data comes up
  * the user is prompted to attach them (`attachVideosForLazyReopen`, skippable —
@@ -2951,6 +2955,17 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
         var labels = opened.labels;
         var typedSession = opened.typedSession;
+        // What `sessionEventScope` reads of each of the file's sessions: the reader keeps
+        // only the first from here on.
+        var fileSessionMaps = (labels.rawSessionsJson || []).map(function (s) {
+            return s && { camcorder_to_video_idx_map: s.camcorder_to_video_idx_map, calibration: s.calibration };
+        });
+        // This loader opens a file's first session. The others go into columns now,
+        // before the first one's groups are built, so their object graphs are not
+        // resident on top of those: a save writes them back whole.
+        var unopened = await keepUnopenedSessions(labels, {
+            openVideoIds: new Set(loader.videoIdByCam ? loader.videoIdByCam.values() : []),
+        });
 
         // Cameras from the embedded calibration.
         var cameras = [];
@@ -3031,7 +3046,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         readSmoothingMetadata(session, lucid);   // Temporal Smoothing's last run
         // Ethogram + behavior bouts. Only this file's first session opens here.
         readBehaviorMetadata(session, lucid, fileEventsOf(labels),
-            sessionEventScope(labels.rawSessionsJson, (labels.videos || []).length, 0, true));
+            sessionEventScope(fileSessionMaps, (labels.videos || []).length, 0, true));
         // Define Planes state — the lazy-reopen mirror of the eager read in
         // `import-export/slp-import.js`.
         readPlaneMetadata(session, lucid);
@@ -3039,6 +3054,12 @@ export async function handleLoadProjectSlpLazy(slpFile) {
 
         session.lazyLoader = loader;
         session._lazyReopened = true;
+        session.unopenedSessions = unopened;
+        if (hasMembersOnOpenVideos(unopened)) {
+            loader.onInstanceRowsDeleted = function (framesData, kill, survBefore) {
+                renumberUnopenedMembers(unopened, framesData, kill, survBefore);
+            };
+        }
 
         // Rebuild grouping + 3D (lightweight, memory-bounded).
         var nodeNames = skeleton.nodes.map(function (n) { return typeof n === 'string' ? n : (n.name || ''); });
@@ -3148,8 +3169,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
             hideLoading();
         }
         updateInfoPanel();
-        // This loader opens a file's first session only; the store holds every frame.
-        var lazyOutsideNote = outsideFramesNote(loader.outsideFrameCounts(), (labels.sessions || []).length);
+        var lazyOutsideNote = unopened ? unopenedSessionsNote(unopened.sessions.length + 1) : outsideFramesNote(loader.outsideFrameCounts());
         if (videosAttached) {
             var lazyStatus = withCampyWarnings('Reopened ' + slpFile.name + ' — '
                 + session.instanceGroups.size.toLocaleString('en-US')

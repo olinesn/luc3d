@@ -1876,6 +1876,13 @@ export class Session {
          */
         this.outsideFrames = null;
         /**
+         * Lazy opens only: the other recording sessions of the file, as typed
+         * columns (`import-export/unopened-sessions.js`). Not shown and not
+         * editable; a save writes them back whole. Null when the file has no other.
+         * @type {{sessions: Array, identities: Array}|null}
+         */
+        this.unopenedSessions = null;
+        /**
          * Eager loads only: suggestions of the loaded .slp (`suggestions_json`, SLEAP's
          * frames to label next). Not shown; a save writes them back on their own video
          * (`import-export/kept-suggestions.js`). `camera` is the camera whose video it

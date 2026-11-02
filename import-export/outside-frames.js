@@ -31,11 +31,14 @@
  *
  * Nothing here is written to `metadata.lucid`, and a file with no such frames saves
  * byte-identically (`tests/e2e/save-golden-digest.mjs`).
+ *
+ * The other sessions themselves (cameras, groups, 3D) are `unopened-sessions.js`.
  */
 
 import { Instance } from '../pose/pose-data.js';
 import { keptVideoRecords } from './behavior-events.js';
 import { makePooledSioInstances } from './file-io.js';
+import { hasMembersOnOpenVideos, identityEntriesOfOpenSession, unopenedSessionsForSave } from './unopened-sessions.js';
 import { identityCatalogFinder, writeFileLabels } from './detection-labels.js';
 
 function newHeaderVideo(SIO, filename, shape) {
@@ -242,13 +245,14 @@ export function keepOutsideColumnarFrames(session, slpData, own) {
  * (`buildSlpLabelsAllViews`), and the frames need those Labels' skeleton and identities.
  *
  * @param {Session} session
- * @returns {{videos: Array, tracks: Array, listedVideos: Map<Object, Object>, placedVideos: Map<Object, Object>, labeledFramesFor: function(Object, Object[]): Array}|null}
+ * @returns {{videos: Array, tracks: Array, listedVideos: Map<Object, Object>, placedVideos: Map<Object, Object>, labeledFramesFor: function(Object, Object[]): Array, rowAt: (Map<number, number>|undefined), videoOfId: (Map<number, Object>|undefined)}|null}
  *   `listedVideos`: the file's record of a video (`fileEventsOf`) -> its entry here;
  *   `placedVideos`: its record in the read (`keptVideoOf`) -> its entry here, for a kept
  *   suggestion on it (kept-suggestions.js);
  *   `labeledFramesFor(skeleton, identities)`: the frames, on the `SIO.Skeleton` and the
  *   `SIO.Identity` list of the session's Labels. An identity only these poses name is
- *   added to that list.
+ *   added to that list. `rowAt`/`videoOfId`, lazy sessions only: store row -> place in
+ *   those frames, store video id -> its header video.
  */
 export function outsideFramesForSave(session) {
     var SIO = window.SleapIO;
@@ -295,6 +299,8 @@ function lazyOutsideFramesForSave(SIO, session, loader) {
     var headerVideoOf = new Map();
     var trackByName = new Map();
     var labeledFrames = [];
+    var rowAt = new Map();
+    var videoOfId = new Map();
     loader.forEachOutsideRow(function (store, row, id) {
         var lf = store.materializeFrame(row);
         if (!lf) return;
@@ -304,15 +310,17 @@ function lazyOutsideFramesForSave(SIO, session, loader) {
             var record = records.get(store.videos.indexOf(lf.video));
             if (record) listedVideos.set(record, headerVideo);
         }
+        videoOfId.set(id, headerVideoOf.get(lf.video));
         lf.instances.forEach(function (inst) {
             if (inst.track && !trackByName.has(inst.track.name)) trackByName.set(inst.track.name, inst.track);
         });
+        rowAt.set(row, labeledFrames.length);
         labeledFrames.push(new SIO.LabeledFrame({ video: headerVideoOf.get(lf.video), frameIdx: lf.frameIdx, instances: lf.instances }));
     });
     if (labeledFrames.length === 0) return null;
     return {
         videos: Array.from(headerVideoOf.values()), tracks: Array.from(trackByName.values()), listedVideos: listedVideos,
-        placedVideos: headerVideoOf,
+        placedVideos: headerVideoOf, rowAt: rowAt, videoOfId: videoOfId,
         labeledFramesFor: function (skeleton, identities) {
             var findIdentity = identityCatalogFinder(SIO, identities);
             labeledFrames.forEach(function (lf) {
@@ -326,13 +334,70 @@ function lazyOutsideFramesForSave(SIO, session, loader) {
 }
 
 /**
+ * Eager save of a lazy session (a project mixing lazy and eager sessions): the file's
+ * sessions nobody opened, as `unopenedSessionsForSave` gives them. Their poses are
+ * `outside`'s frames, so that is where their members go. A member on a video the open
+ * session has too cannot be placed: this writer lists that frame's instances in its own
+ * order. Then nothing is saved, rather than a session losing its links with no word.
+ *
+ * @param {Object} SIO - window.SleapIO
+ * @param {Session} session - its `unopenedSessions` is set
+ * @param {Object} labels - `buildSlpLabelsAllViews` of it
+ * @param {Object|null} outside - `outsideFramesForSave` of it
+ * @param {number} outsideBase - where `outside.labeledFrames` start in the file
+ * @param {Array} videos - the file's video list (appended to)
+ * @param {Array} identities - the file's identity list (appended to)
+ * @returns {Array} `RecordingSession`s
+ */
+export function unopenedSessionsForEagerSave(SIO, session, labels, outside, outsideBase, videos, identities) {
+    var kept = session.unopenedSessions;
+    var loader = session.lazyLoader;
+    if (!loader) {
+        throw new Error('Cannot save: "' + session.name + '" is no longer loaded, and its file holds ' +
+            kept.sessions.length + ' more session(s) that only it can write back. Open the file again, then save.');
+    }
+    if (hasMembersOnOpenVideos(kept)) {
+        throw new Error('Cannot save: this project mixes lazily-loaded and fully-loaded sessions, and a session in the file of "' +
+            session.name + '" shares a video with it. Save that file on its own.');
+    }
+    var headerOf = new Map();
+    var listed = session.identities || [];
+    listed.forEach(function (identity, i) { headerOf.set(identity.id, labels.identities[i]); });
+    var headerVideoOfId = new Map(outside ? outside.videoOfId : []);
+    session.cameras.forEach(function (c, i) {
+        if (loader.videoIdByCam && loader.videoIdByCam.has(c.name)) headerVideoOfId.set(loader.videoIdByCam.get(c.name), labels.videos[i]);
+    });
+    return unopenedSessionsForSave(kept, {
+        SIO: SIO,
+        identities: identities,
+        // `outsideFramesForSave` added what these poses name after the session's own.
+        identityOfEntry: identityEntriesOfOpenSession(kept, listed, headerOf, new Map(labels.identities.slice(listed.length).map(function (identity) {
+            return [identity.name, identity];
+        }))),
+        firstLucid: labels.sessions[0].metadata.lucid,
+        headerVideo: function (id, video) {
+            if (!headerVideoOfId.has(id)) {
+                var added = headerVideoForOutsideFrames(SIO, video, id);
+                headerVideoOfId.set(id, added);
+                videos.push(added);
+            }
+            return headerVideoOfId.get(id);
+        },
+        outputRow: function (row) {
+            var at = outside ? outside.rowAt.get(row) : undefined;
+            return at === undefined ? undefined : outsideBase + at;
+        },
+    });
+}
+
+/**
  * The sentence a load's final status adds: what the file holds that is not on
  * screen, and what a save does with it. Empty when there is nothing to say.
  *
  * @param {{frames: number, videos: number}} counts - frames and videos outside the
  *   opened sessions
  * @param {number} [fileSessions] - sessions in the file, for a loader that opens only
- *   the first
+ *   the first and keeps only the others' poses (the single-`.slp` folder loader)
  * @returns {string}
  */
 export function outsideFramesNote(counts, fileSessions) {
