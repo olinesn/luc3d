@@ -844,16 +844,17 @@ async function buildSlpBytes(opts) {
             return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
         });
 
+        // Poses on a video no session names go back on their own video, and the
+        // session's events on that video on the same entry.
+        var sessOutside = outsideFramesForSave(sess);
         var sessPlaces = instancePlacesForSave(sess.unopenedSessions);
-        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessPlaces);
-        // Poses on a video no session names go back on their own video.
-        var sessOutside = outsideFramesForSave(sess, sessLabels.skeletons[0], sessLabels.identities);
+        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessOutside, sessPlaces);
 
         var sessOutsideBase = allLabeledFrames.length + (sessLabels.labeledFrames || []).length;
 
         // Merge into combined Labels
-        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFrames : []);
-        allVideos = allVideos.concat(sessLabels.videos || [], sessOutside ? sessOutside.videos : []);
+        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFramesFor(sessLabels.skeletons[0], sessLabels.identities) : []);
+        allVideos = allVideos.concat(sessLabels.videos || []);
         for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
             var skel = sessLabels.skeletons[sk];
             if (!seenSkeletonNames.has(skel.name)) {
@@ -1102,15 +1103,18 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     // A store edited in memory is not what pass 2 will read back from the
     // files: keep its frame + instance columns (`keepEditedStoreColumns`).
     var editedColumns = keepEditedStoreColumns(session.lazyLoader);
+    // Rows File ▸ Add SLP put in a store are in no file, so pass 2 cannot read them
+    // back: it gets this loader as it is, at the cost of keeping it till then.
+    var keptLoader = session.lazyLoader.rowsAddedInMemory ? session.lazyLoader : null;
     handle.pending.push({
         session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore,
-        editedColumns: editedColumns, cameraRenames: cameraRenames,
+        editedColumns: keptLoader ? null : editedColumns, cameraRenames: cameraRenames, keptLoader: keptLoader,
     });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
     // ref-only RecordingSession + the materialized user-edit overlay
     // instances) — the lazy loader and per-frame LUCID state can go.
-    session.lazyLoader.close();
+    if (!keptLoader) session.lazyLoader.close();
     session.lazyLoader = null;
     session.frameGroups = new Map();
     session.instanceGroups = new Map();
@@ -1155,7 +1159,8 @@ export async function finalizeMultiSessionSave(handle, opts) {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
             if (onProgress) await onProgress('frames', j, handle.pending.length, 'sessions');
-            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.cameraRenames);
+            if (p.keptLoader) p.session.lazyLoader = p.keptLoader;
+            else await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.cameraRenames);
             if (p.editedColumns) restoreEditedStoreColumns(p.session.lazyLoader, p.editedColumns);
             await streamSessionIntoWriter(writer, p.session, p.refGraph);
             p.session.lazyLoader.close();

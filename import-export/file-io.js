@@ -2199,9 +2199,14 @@ export function makePooledSioInstances(SIO, skeleton, numNodes) {
  * @param {Session} session
  * @param {Array} views - Array of view objects with .name, .videoWidth, .videoHeight, .frameCount
  * @param {Array} videoFiles - Array of videoFile objects
+ * @param {?{videos: Array, listedVideos: Map}} [outside] - the session's poses on videos
+ *   no camera has (`outsideFramesForSave`): their videos go in the list after the cameras,
+ *   and the session's events on them on those entries
+ * @param {?Map<Object, ?number[]>} [placeOf] - instances whose place in the file a caller
+ *   needs (`instancePlacesForSave`); set to `[labeled frame, place in it]` when written
  * @returns {Object} sleap-io.js Labels instance
  */
-export function buildSlpLabelsAllViews(session, views, videoFiles, placeOf) {
+export function buildSlpLabelsAllViews(session, views, videoFiles, outside, placeOf) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -2525,12 +2530,21 @@ export function buildSlpLabelsAllViews(session, views, videoFiles, placeOf) {
         }
     }
 
+    // A bout kept on a video a closed session names and a camera here has too goes on
+    // that camera's entry.
+    if (outside && outside.recordOfCamera) {
+        session.cameras.forEach(function (cam, i) {
+            var record = outside.recordOfCamera.get(cam.name);
+            if (record) outside.listedVideos.set(record, sioVideos[i]);
+        });
+    }
     var behaviorEvents = buildBehaviorEvents(SIO, [{
-        session: session, video: sioVideos[0] || null, videos: sioVideos, identities: sioIdentities, tracks: tracks,
+        session: session, video: sioVideos[0] || null, videos: sioVideos, listedVideos: outside ? outside.listedVideos : null,
+        identities: sioIdentities, tracks: tracks,
     }]);
     return new SIO.Labels({
         labeledFrames: labeledFrames,
-        videos: sioVideos,
+        videos: outside ? sioVideos.concat(outside.videos) : sioVideos,
         skeletons: [skeleton],
         tracks: tracks,
         identities: sioIdentities,
@@ -2915,9 +2929,12 @@ export async function checkSlpFileFormat(file) {
  *
  * @param {File} file - The .slp file
  * @param {Function} [onProgress] - Optional progress callback `(msg) => void`
+ * @param {{lazy?: boolean}} [opts] - `lazy`: read the poses as columns and build no
+ *   frames (`frames` is empty, `store` is the file's `LazyDataStore`), for a file whose
+ *   poses go straight into a lazy project's store
  * @returns {Promise<Object>} `slpData` matching parseSlpH5's result shape
  */
-export async function parseSlpViaSleapIO(file, onProgress) {
+export async function parseSlpViaSleapIO(file, onProgress, opts) {
     var SIO = window.SleapIO;
     if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
         throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
@@ -2927,7 +2944,9 @@ export async function parseSlpViaSleapIO(file, onProgress) {
     var report = function (msg) { if (onProgress) onProgress(msg); };
     report('Reading SLP (streaming)...');
 
+    var lazy = !!(opts && opts.lazy);
     var labels = await SIO.readSlpStreaming(file, {
+        lazy: lazy,
         openVideos: false,
         rawSessions: true, // capture verbatim sessions_json (legacy-identity fallback)
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
@@ -2954,7 +2973,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
     // Only frames that carry at least one pose instance, matching the worker
     // (SI-worker only emits frames with >=1 instance).
     var frames = [];
-    var lfs = labels.labeledFrames || [];
+    var lfs = lazy ? [] : (labels.labeledFrames || []);
     for (var li = 0; li < lfs.length; li++) {
         var lf = lfs[li];
         var lfInsts = lf.instances || [];
@@ -3042,6 +3061,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // The file's whole provenance dict (slp-provenance.js picks each
         // session's part).
         provenance: labels.provenance || null,
+        store: lazy ? labels._lazyDataStore : undefined,
         behaviorEvents: behaviorEvents,
     };
 }

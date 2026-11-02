@@ -414,6 +414,9 @@ export async function keepUnopenedSessionsOfRead(slpData, opts) {
         // File row -> the open session's pose at each place in that row, for rows a
         // closed session's member names on a video the open session has too.
         posesOfRows: new Map(),
+        // What the file's events know each video by (`fileEventsOf`), by its place in the
+        // file: a kept bout goes on the entry its video has (`outsideFramesForSave`).
+        videoRecords: slpData.behaviorEvents ? slpData.behaviorEvents.videos : null,
         // For `Session.propagateNodeAdded`/`propagateNodeRemoved` (`pose-data.js` imports nothing).
         addNode: function () { addNodeToUnopenedSessions(kept); },
         removeNode: function (nodeIdx) { removeNodeFromUnopenedSessions(kept, nodeIdx); },
@@ -772,6 +775,19 @@ export function renumberUnopenedMembers(kept, framesData, kill, survBefore) {
             record.memberInst[m] = kill[old] ? -1 : survBefore[old] - survBefore[start];
         }
     });
+}
+
+/**
+ * Every store video id the kept sessions name, with frames or not.
+ * @param {{sessions: Array}} kept
+ * @returns {number[]}
+ */
+export function unopenedVideoIds(kept) {
+    var ids = [];
+    kept.sessions.forEach(function (record) {
+        record.videos.forEach(function (v) { ids.push(v.id); });
+    });
+    return ids;
 }
 
 /**
