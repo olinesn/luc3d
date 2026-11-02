@@ -304,7 +304,7 @@ async function oneSession(loader, title, videos) {
 
 /** C: two sessions, a video in neither, an event on no video. */
 /** Where a save leaves the second session's two videos, for a loader that opens the first. */
-const closedVideoPlaces = (loader) => (loader === 'large project (lazy)' ? ['session 1 first camera', 'session 1 camera 1'] : ['b0.mp4', 'b1.mp4']);
+const CLOSED_VIDEO_PLACES = ['session 1 first camera', 'session 1 camera 1'];
 
 async function twoSessions(loader, opensAll) {
     console.log(`\n-- C. two sessions and a video in neither, ${loader} --`);
@@ -335,7 +335,7 @@ async function twoSessions(loader, opensAll) {
     } else {
         check(one.shown.length === 1 && eq(one.shown[0].bouts, firstShows), 'this loader opens the first session: its own and the event with no video', one.shown);
         expected = ownRead(firstCam, [[10, 19], [30, 39]])
-            .concat(ownRead(closedVideoPlaces(loader)[0], [[110, 119]], 'animal_B'), ownRead(closedVideoPlaces(loader)[1], [[130, 139]], 'animal_B'), OTHER_READ('other.mp4'), noVideoRead);
+            .concat(ownRead(CLOSED_VIDEO_PLACES[0], [[110, 119]], 'animal_B'), ownRead(CLOSED_VIDEO_PLACES[1], [[130, 139]], 'animal_B'), OTHER_READ('other.mp4'), noVideoRead);
     }
     check(eq(one.read.events, expected), 'saved: no event lost or doubled, each where it belongs', one.read.events);
     check(one.read.videos.length === 5, 'no copy of a video', one.read.videos);
@@ -439,7 +439,7 @@ async function uncalibratedTwoSessions(loader, opensAll) {
         : [{ bouts: [['rear', 10, 19, 1]], predicted: 0 }];
     const expected = opensAll
         ? aRead.concat([rearOn('session 1 first camera', 110, 119, 'animal_B'), rearOn('session 1 camera 1', 130, 139, 'animal_B')])
-        : aRead.concat([rearOn(closedVideoPlaces(loader)[0], 110, 119, 'animal_B'), rearOn(closedVideoPlaces(loader)[1], 130, 139, 'animal_B')]);
+        : aRead.concat([rearOn(CLOSED_VIDEO_PLACES[0], 110, 119, 'animal_B'), rearOn(CLOSED_VIDEO_PLACES[1], 130, 139, 'animal_B')]);
     check(eq(one.shown, shows), 'each session shows its first camera\'s bouts', one.shown);
     check(eq(one.read.events, expected), 'saved: each on its own session\'s camera', one.read.events);
     check(one.read.videos.length === 4, 'no copy of a video', one.read.videos);
@@ -790,8 +790,8 @@ try {
             await posesAndBouts(loader, 'two sessions, this loader opens the first', twoSessionsBoth, [
                 entry('session 0 first camera', posesOf(0), [10, 30]),
                 entry('session 0 camera 1', posesOf(1), []),
-                entry(closedVideoPlaces(loader)[0], posesOf(2), [110]),
-                entry(closedVideoPlaces(loader)[1], posesOf(3), [130]),
+                entry(CLOSED_VIDEO_PLACES[0], posesOf(2), [110]),
+                entry(CLOSED_VIDEO_PLACES[1], posesOf(3), [130]),
                 entry('other.mp4', posesOf(4), [300, 310, 320, 330]),
             ]);
         }
@@ -834,8 +834,8 @@ try {
                 await posesAndBoutsOf(loader, 'two sessions Python wrote, this loader opens the first', twoSessionsFile, [
                     entry('session 0 first camera', posesOf(0), [10]),
                     entry('session 0 camera 1', posesOf(1), []),
-                    entry(closedVideoPlaces(loader)[0], posesOf(2), [110]),
-                    entry(closedVideoPlaces(loader)[1], posesOf(3), [130]),
+                    entry(CLOSED_VIDEO_PLACES[0], posesOf(2), [110]),
+                    entry(CLOSED_VIDEO_PLACES[1], posesOf(3), [130]),
                     entry('other.mp4', posesOf(4), [300]),
                 ]);
             }
