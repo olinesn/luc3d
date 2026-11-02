@@ -696,7 +696,7 @@ function lazyOutsideFramesForSave(SIO, session, loader) {
  * @param {Session} session - its `unopenedSessions` is set
  * @param {Object} labels - `buildSlpLabelsAllViews` of it
  * @param {Object|null} outside - `outsideFramesForSave` of it
- * @param {number} outsideBase - where `outside.labeledFrames` start in the file
+ * @param {number} outsideBase - where `outside.labeledFramesFor`'s frames start in the file
  * @param {Array} videos - the file's video list (appended to)
  * @param {Array} identities - the file's identity list (appended to)
  * @returns {Array} `RecordingSession`s
