@@ -422,7 +422,7 @@ try {
     await page.keyboard.press('Escape');
     check(!(await dialogUp(SETUP.dialog)) && await onBody(), 'focus was on the page: it stays there');
     await freshSession();
-    await focusOn('tbBehaviorMode');
+    await focusOn('tbBehavior');
     await tabTo('#visUser');
     await page.keyboard.press('Shift+T');
     await page.waitForSelector(SETUP.dialog, { timeout: 15000 });
