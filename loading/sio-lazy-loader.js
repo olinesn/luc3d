@@ -34,6 +34,10 @@
 import { rekeyStoreRows } from '../import-export/detection-labels.js';
 import { unionTrackNames } from './track-union.js';
 import { cameraNamesFromVideos } from '../pose/placeholder-cameras.js';
+import {
+    sourceRowsByVideo, allocateStoreRows, commitStoreRows, firstFreeVideoId,
+    ADDED_STORE_FORMAT, OLDEST_STORE_FORMAT,
+} from './lazy-store-rows.js';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -140,6 +144,13 @@ export class SioLazyLoader {
          * `_unifyTracks`' load-time re-index does NOT set it: a re-open repeats it.
          */
         this._storeEditedInMemory = false;
+        /**
+         * True once File ▸ Add SLP has put rows in a store (`commitAddedRows`). No
+         * file holds them, so nothing may re-read this loader's stores from
+         * `sourceFiles`: the multi-session save keeps the loader itself instead
+         * (`commitSessionForMultiSessionSave`, import-export/save-load.js).
+         */
+        this.rowsAddedInMemory = false;
         // Embedded calibration recovered from a project .slp's sessions_json
         // (raw calibration dict + camcorder→video map), used by the session
         // builder when the folder has no separate calibration.toml.
@@ -148,6 +159,14 @@ export class SioLazyLoader {
         // camName → native store video id (only set by openProjectSlp; the
         // per-camera open() path has one single-video store per camera).
         this.videoIdByCam = null;
+        // camName -> the store video id that is this camera's, set by open() only
+        // when it is not simply "every row, id 0": the file has frames on other
+        // videos too, or only on a later one.
+        this._ownVideoByCam = new Map();
+        // labels -> how many names at the end of its track list only rows on a
+        // video no camera names use (`_keepOutsideRowTracks`); `trackNames` stops
+        // before them.
+        this._tracksPastSession = new Map();
         // The lowest video frame with an instance (openProjectSlp only).
         this.firstLabeledFrame = -1;
         // [old, new] camera names, in order (`renameCamera`): what a fresh open of
@@ -235,9 +254,23 @@ export class SioLazyLoader {
         // nothing → an empty frame).
         var store = labels._lazyDataStore;
         var frameIdxCol = (store && store.framesData && store.framesData.frame_idx) || [];
+        // A camera is one video. A file with frames on more is read as the first
+        // it lists that has any; the others' rows stay in the store, out of this
+        // camera's row map, and a save keeps them on their own videos
+        // (`buildSessionRefGraph`, import-export/outside-frames.js).
+        var videoCol = (store && store.framesData && store.framesData.video) || [];
+        var ownVideo = Infinity;
+        var otherVideos = false;
+        for (var vr = 0; vr < videoCol.length; vr++) {
+            var rowVideo = Number(videoCol[vr]);
+            if (rowVideo < ownVideo) { otherVideos = otherVideos || ownVideo !== Infinity; ownVideo = rowVideo; }
+            else if (rowVideo !== ownVideo) otherVideos = true;
+        }
+        if (videoCol.length > 0 && (otherVideos || ownVideo !== 0)) this._ownVideoByCam.set(cameraName, ownVideo);
         var rowMap = new Map();
         var maxFrameIdx = -1;
         for (var r = 0; r < frameIdxCol.length; r++) {
+            if (otherVideos && Number(videoCol[r]) !== ownVideo) continue;
             var fi = Number(frameIdxCol[r]);
             rowMap.set(fi, r);
             if (fi > maxFrameIdx) maxFrameIdx = fi;
@@ -256,7 +289,9 @@ export class SioLazyLoader {
         this._trackSourceByCam.set(cameraName, { names: ownNames, toSession: ownToSession });
         this._unifyTracks(cameraName);
 
-        var v = labels.videos && labels.videos[0];
+        var ownVideoIdx = this._ownVideoByCam.has(cameraName) && store && typeof store.videoIndexFor === 'function'
+            ? store.videoIndexFor(ownVideo) : 0;
+        var v = labels.videos && labels.videos[ownVideoIdx];
         this.videos.set(cameraName, v ? { filename: v.filename, shape: v.shape } : null);
 
         return {
@@ -357,7 +392,7 @@ export class SioLazyLoader {
                     var nf = 0;
                     var rm = this.frameRowByCam.get(cam);
                     if (rm) for (var fk of rm.keys()) if (fk + 1 > nf) nf = fk + 1;
-                    var fresh = this._computeSparseOccupancy(labels, nf);
+                    var fresh = this._computeSparseOccupancy(labels, nf, this._ownVideoByCam.has(cam) ? rm : undefined);
                     if (fresh) this.trackOccupancy.set(cam, fresh);
                     else this.trackOccupancy.delete(cam);
                 } catch (e) { /* occupancy is optional; ignore */ }
@@ -427,6 +462,7 @@ export class SioLazyLoader {
             onReadBytes: onReadBytes || undefined,
         });
         this._projectLabels = labels;
+        this._projectFile = file;
         // A single project `.slp` interleaves every camera in ONE store, so all
         // `labelsByCam` entries point at the same `labels`/`_lazyDataStore`. The
         // streaming writer must append that shared store ONCE (not per camera) or
@@ -581,6 +617,7 @@ export class SioLazyLoader {
         [
             this.labelsByCam, this.sourceFiles, this.frameRowByCam, this.numNodesByCam, this.videos,
             this.videoIdByCam, this.trackOccupancy, this._trackSourceByCam, this._skeletonByCam,
+            this._ownVideoByCam,
         ].forEach(function (byCam) {
             if (!byCam || !byCam.has(oldName)) return;
             var entries = Array.from(byCam);
@@ -623,7 +660,8 @@ export class SioLazyLoader {
         var startCol = fd.instance_id_start || [];
         var endCol = fd.instance_id_end || [];
         var trackCol = idn.track || [];
-        var nTracks = (labels.tracks || []).length;
+        // Tracks only rows on a video no camera names use are not the session's.
+        var nTracks = (labels.tracks || []).length - (this._tracksPastSession.get(labels) || 0);
         // Row source: either every row in the table (single-camera store) or
         // just this camera's own rows (shared multi-camera store), sorted by
         // frame so the run-length segment logic below (which relies on
@@ -1025,13 +1063,7 @@ export class SioLazyLoader {
 
             if (TrackCtor && !rebuiltLabels.has(labels)) {
                 rebuiltLabels.add(labels);
-                var tracksArr = store.tracks;   // === labels.tracks (shared ref)
-                if (Array.isArray(tracksArr)) {
-                    tracksArr.length = 0;
-                    for (var t = 0; t < newTrackNames.length; t++) {
-                        tracksArr.push(new TrackCtor(newTrackNames[t]));
-                    }
-                }
+                this._installStoreTrackList(labels, newTrackNames, camName);
             }
             // Every camera now indexes `newTrackNames` directly, so that is its
             // own list from here on (a later `_unifyTracks` must start from it,
@@ -1142,6 +1174,423 @@ export class SioLazyLoader {
                 'session.tracks is replaced with the shorter identity-derived list. First error:', firstError);
         }
         return { changed: changed, errorRows: errorRows, firstError: firstError };
+    }
+
+    /**
+     * Replace one store's track list with `newTrackNames`, then any names only its
+     * rows on a video no camera names use. Those rows are in no row map, so their ids
+     * follow the list here (`_keepOutsideRowTracks`); the caller answers for the rest.
+     * `store.tracks` === `labels.tracks` and stays the same array. Materialized frames
+     * hold the old `Track` objects, so the caller must also drop them.
+     *
+     * @param {Object} labels
+     * @param {string[]} newTrackNames
+     * @param {string} [camName] - a camera on this store; a shared store needs none
+     */
+    _installStoreTrackList(labels, newTrackNames, camName) {
+        var TrackCtor = window.SleapIO && window.SleapIO.Track;
+        var store = labels._lazyDataStore;
+        var tracksArr = store.tracks;
+        if (!TrackCtor || !Array.isArray(tracksArr)) return;
+        var outsideNames = this._keepOutsideRowTracks(store, newTrackNames, this._ownVideosOf(camName));
+        tracksArr.length = 0;
+        for (var t = 0; t < newTrackNames.length; t++) tracksArr.push(new TrackCtor(newTrackNames[t]));
+        for (var ot = 0; ot < outsideNames.length; ot++) tracksArr.push(new TrackCtor(outsideNames[ot]));
+        this._tracksPastSession.set(labels, outsideNames.length);
+    }
+
+    /**
+     * The store rows on a video no camera names keep their track NAME when
+     * `remapTracksFromIdentity` replaces the store's track list: the session's
+     * track edits are not about them, and `appendStore` writes them with
+     * whatever their id then indexes — another track's name, or (past the end of
+     * the shorter list) a file Python cannot open.
+     *
+     * Rewrites those rows' track ids for the new list, in place, so it must run
+     * BEFORE the list is rebuilt.
+     *
+     * @param {Object} store
+     * @param {string[]} newTrackNames - the list being installed
+     * @param {Set<number>|null} owned - `_ownVideosOf`: null when every row is a camera's
+     * @returns {string[]} names those rows use that the new list lacks. They go
+     *   after it in `store.tracks`, past the session's own tracks.
+     */
+    _keepOutsideRowTracks(store, newTrackNames, owned) {
+        var kept = [];
+        var videoCol = (store.framesData || {}).video;
+        var startCol = (store.framesData || {}).instance_id_start;
+        var endCol = (store.framesData || {}).instance_id_end;
+        var trackCol = (store.instancesData || {}).track;
+        if (!owned || !videoCol || !startCol || !endCol || !trackCol) return kept;
+        var oldTracks = store.tracks || [];
+        var names = newTrackNames.map(String);
+        var slotByOld = new Map();
+        for (var r = 0; r < videoCol.length; r++) {
+            if (owned.has(Number(videoCol[r]))) continue;
+            for (var j = Number(startCol[r]) || 0, end = Number(endCol[r]) || 0; j < end; j++) {
+                var old = Number(trackCol[j]);
+                if (!(old >= 0)) continue;
+                var slot = slotByOld.get(old);
+                if (slot === undefined) {
+                    slot = -1;
+                    if (oldTracks[old]) {
+                        var name = String(oldTracks[old].name);
+                        slot = names.indexOf(name);
+                        if (slot < 0) {
+                            slot = names.length;
+                            names.push(name);
+                            kept.push(name);
+                        }
+                    }
+                    slotByOld.set(old, slot);
+                }
+                trackCol[j] = slot;
+            }
+        }
+        return kept;
+    }
+
+    /**
+     * How many names at the end of `labels`' track list only rows on a video no camera
+     * names use (`_keepOutsideRowTracks`). A track added to the session since takes the
+     * next slot of the session's list, which is where those names are, so they move past
+     * it first: a save lists the session's tracks, then these.
+     *
+     * @param {Object} labels
+     * @param {string[]} sessionTracks - `session.tracks`
+     * @param {string} [camName] - a per-camera store's camera
+     * @returns {number}
+     */
+    tracksPastSession(labels, sessionTracks, camName) {
+        var past = this._tracksPastSession.get(labels) || 0;
+        var store = labels._lazyDataStore;
+        if (past === 0 || !store || !Array.isArray(store.tracks)
+            || sessionTracks.length <= store.tracks.length - past) return past;
+        var TrackCtor = window.SleapIO.Track;
+        var outsideNames = this._keepOutsideRowTracks(store, sessionTracks, this._ownVideosOf(camName));
+        var tracksArr = store.tracks;   // === labels.tracks (shared ref)
+        tracksArr.length = 0;
+        sessionTracks.concat(outsideNames).forEach(function (name) { tracksArr.push(new TrackCtor(name)); });
+        this._tracksPastSession.set(labels, outsideNames.length);
+        this._storeEditedInMemory = true;
+        return outsideNames.length;
+    }
+
+    /**
+     * The video ids in `camName`'s store whose rows belong to a camera, or null
+     * when all of them do (the usual per-camera file).
+     * @returns {Set<number>|null}
+     */
+    _ownVideosOf(camName) {
+        if (this._sharedStore) return this.videoIdByCam ? new Set(this.videoIdByCam.values()) : null;
+        return this._ownVideoByCam.has(camName) ? new Set([this._ownVideoByCam.get(camName)]) : null;
+    }
+
+    /**
+     * How many labeled frames in the opened files, on how many videos, belong to
+     * no camera of this session. They are not shown, and a save keeps them
+     * (import-export/outside-frames.js).
+     *
+     * @returns {{frames: number, videos: number}}
+     */
+    outsideFrameCounts() {
+        var counts = { frames: 0, videos: 0 };
+        var idsByStore = new Map();
+        this.forEachOutsideRow(function (store, row, id) {
+            counts.frames++;
+            if (!idsByStore.has(store)) idsByStore.set(store, new Set());
+            idsByStore.get(store).add(id);
+        });
+        for (var ids of idsByStore.values()) counts.videos += ids.size;
+        return counts;
+    }
+
+    /**
+     * Visit every frame row of the opened files that belongs to no camera of this
+     * session (the ones row-map walks do not see).
+     *
+     * @param {(store: Object, frameRow: number, videoId: number) => void} visit
+     */
+    forEachOutsideRow(visit) {
+        var walk = function (labels, owned) {
+            var store = labels && labels._lazyDataStore;
+            var videoCol = store && store.framesData && store.framesData.video;
+            if (!videoCol || !owned) return;
+            for (var r = 0; r < videoCol.length; r++) {
+                var id = Number(videoCol[r]);
+                if (!owned.has(id)) visit(store, r, id);
+            }
+        };
+        if (this._sharedStore) {
+            walk(this._projectLabels, this._ownVideosOf());
+            return;
+        }
+        for (var camName of this._ownVideoByCam.keys()) {
+            walk(this.labelsByCam.get(camName), this._ownVideosOf(camName));
+        }
+    }
+
+    /**
+     * Why File ▸ Add SLP cannot add to this loader's stores, or null when it can.
+     * @returns {string|null}
+     */
+    addedRowsRefusal() {
+        var store = this._projectLabels && this._projectLabels._lazyDataStore;
+        if (store && store.formatId < OLDEST_STORE_FORMAT) {
+            return 'it was saved by a very old SLEAP (format ' + store.formatId + '), whose coordinates ' +
+                'are half a pixel from today\'s, so added poses would land off by that much';
+        }
+        return null;
+    }
+
+    /**
+     * File ▸ Add SLP, first half: work out where each of a file's rows goes and allocate
+     * the room. Changes nothing, so a failure here (out of memory) costs nothing.
+     *
+     * Each video the file gives a camera becomes that camera's, so its rows hydrate,
+     * evict, count and save like any other camera's. Every other video's rows stay on
+     * their own video, like the rows of any file's video no camera names
+     * (import-export/outside-frames.js).
+     *  - A shared store (`openProjectSlp`) takes every row, under new video ids.
+     *  - Per-camera stores (`open`) get one new store per added camera, as a camera's own
+     *    file would give, and the other videos' rows go in the first added camera's.
+     *
+     * @param {Object} source - the file's `LazyDataStore`, or `storeFromParsedFrames`
+     * @param {Object} opts
+     * @param {string[]} opts.cameraNames - the added cameras, in order
+     * @param {(videoIdx: number) => (string|null)} opts.cameraOfVideo
+     * @param {(videoIdx: number, rawId: number) => Object} opts.videoRecord - the
+     *   `SIO.Video` a video's rows hang on
+     * @returns {Object} for `commitAddedRows`
+     */
+    prepareAddedRows(source, opts) {
+        var SIO = window.SleapIO;
+        var blocks = sourceRowsByVideo(source);
+        var taken = new Set();
+        for (var bi = 0; bi < blocks.length; bi++) {
+            var b = blocks[bi];
+            var videoIdx = typeof source.videoIndexFor === 'function' ? source.videoIndexFor(b.raw) : b.raw;
+            var cam = opts.cameraOfVideo(videoIdx);
+            // A camera is one video. Two videos under one name: the second stays apart.
+            b.camera = cam != null && !taken.has(cam) ? cam : null;
+            if (b.camera !== null) taken.add(cam);
+            b.video = opts.videoRecord(videoIdx, b.raw);
+        }
+
+        var targets = [];
+        if (this._sharedStore) {
+            var labels = this._projectLabels;
+            var store = labels._lazyDataStore;
+            // Built now, from the ids in use: `commitAddedRows` tells it about the new ones.
+            store.videoIndexFor(-1);
+            var nextId = firstFreeVideoId(store);
+            for (var si = 0; si < blocks.length; si++) blocks[si].id = nextId++;
+            targets.push({ labels: labels, store: store, blocks: blocks, plan: allocateStoreRows(store, blocks, source) });
+            return { source: source, targets: targets, blocks: blocks };
+        }
+
+        var self = this;
+        var makeTarget = function (camName) {
+            // Same arrays on the store and its Labels, as the reader leaves them.
+            var newStore = new SIO.LazyDataStore({
+                framesData: {}, instancesData: {}, pointsData: {}, predPointsData: {},
+                skeletons: [], tracks: [], videos: [], formatId: ADDED_STORE_FORMAT,
+            });
+            var newLabels = new SIO.Labels({ videos: newStore.videos, skeletons: newStore.skeletons, tracks: newStore.tracks });
+            newLabels._lazyFrameList = new SIO.LazyFrameList(newStore);
+            newLabels._lazyDataStore = newStore;
+            newLabels.frameCacheLimit = self.internalFrameCacheLimit;
+            return { labels: newLabels, store: newStore, blocks: [], newStoreFor: camName };
+        };
+        var outside = blocks.filter(function (x) { return x.camera === null; });
+        var firstHost = blocks.filter(function (x) { return x.camera !== null; })[0];
+        var hostName = outside.length === 0 ? null : (firstHost ? firstHost.camera : opts.cameraNames[0]);
+        // In a new store a video's id is its place in the store's list: its camera's is 0.
+        for (var ci = 0; ci < blocks.length; ci++) {
+            if (blocks[ci].camera === null) continue;
+            var t = makeTarget(blocks[ci].camera);
+            blocks[ci].id = 0;
+            t.blocks.push(blocks[ci]);
+            targets.push(t);
+        }
+        if (hostName != null) {
+            var host = targets.filter(function (x) { return x.newStoreFor === hostName; })[0];
+            if (!host) {
+                // No frame on any added camera: its store holds just the other videos.
+                host = makeTarget(hostName);
+                targets.push(host);
+                host.ownVideoHasNoRows = true;
+            }
+            host.holdsOtherVideos = true;
+            for (var oi = 0; oi < outside.length; oi++) {
+                outside[oi].id = 1 + oi;
+                host.blocks.push(outside[oi]);
+            }
+        }
+        for (var ti = 0; ti < targets.length; ti++) {
+            targets[ti].plan = allocateStoreRows(targets[ti].store, targets[ti].blocks, source);
+        }
+        return { source: source, targets: targets, blocks: blocks };
+    }
+
+    /**
+     * File ▸ Add SLP, second half: every store takes its rows. `prepared` already holds
+     * the room, so this cannot run out of memory half way.
+     *
+     * No existing row moves. The session's own list only grew at its end, so a camera's
+     * rows keep their track ids; the stores' lists just follow it.
+     *
+     * @param {Object} prepared - `prepareAddedRows`
+     * @param {Object} opts
+     * @param {string[]} opts.sessionTracks - the session's list, with the file's merged in
+     * @param {Int32Array} opts.trackMap - the file's track id -> `sessionTracks` index
+     * @param {{name: string, nodes: Array, edges: Array}} opts.sessionSkeleton
+     * @param {Array<{order: number[]|null}|null>} opts.skeletonRules - per file skeleton:
+     *   how its nodes fit the session's (order[fileNode] = sessionNode, null when they
+     *   line up), or null for one that does not fit, whose rows keep their own shape.
+     * @param {Map<string, Object|null>} opts.cameraVideos - each added camera's `SIO.Video`
+     * @returns {{frames: number, otherVideoFrames: number}} video frames with a pose on an
+     *   added camera, and frame rows on the other videos
+     */
+    commitAddedRows(prepared, opts) {
+        var SIO = window.SleapIO;
+        var source = prepared.source;
+        var sessionTracks = opts.sessionTracks.map(String);
+        var nodeNames = opts.sessionSkeleton.nodes.map(function (n) { return typeof n === 'string' ? n : (n.name || ''); });
+        var sessionSkeleton = function () {
+            var nodes = nodeNames.map(function (name) { return new SIO.Node(name); });
+            var edges = (opts.sessionSkeleton.edges || []).map(function (e) { return new SIO.Edge(nodes[e[0]], nodes[e[1]]); });
+            return new SIO.Skeleton({ nodes: nodes, edges: edges, name: opts.sessionSkeleton.name || 'skeleton' });
+        };
+        var skeletonIdIn = function (store, names, make) {
+            for (var i = 0; i < store.skeletons.length; i++) {
+                var have = store.skeletons[i].nodeNames;
+                if (have.length === names.length && have.every(function (n, k) { return n === names[k]; })) return i;
+            }
+            store.skeletons.push(make());
+            return store.skeletons.length - 1;
+        };
+
+        // Stores on the session's list first, so ids below name the right tracks. A file
+        // with no tracks changes neither.
+        if (opts.trackMap.length > 0) this._followSessionTracks(sessionTracks);
+
+        for (var ti = 0; ti < prepared.targets.length; ti++) {
+            var target = prepared.targets[ti];
+            var store = target.store;
+            if (target.newStoreFor) {
+                for (var st = 0; st < sessionTracks.length; st++) store.tracks.push(new SIO.Track(sessionTracks[st]));
+            }
+            var rules = (source.skeletons || []).map(function (sk, k) {
+                var rule = opts.skeletonRules[k];
+                if (rule) return { id: skeletonIdIn(store, nodeNames, sessionSkeleton), order: rule.order };
+                return { id: skeletonIdIn(store, sk.nodeNames, function () { return sk; }), order: null };
+            });
+            // A file with no skeleton has no rows that need one, but a new store still does.
+            if (store.skeletons.length === 0) store.skeletons.push(sessionSkeleton());
+
+            // A row with no video behind its id does not materialize.
+            if (target.ownVideoHasNoRows) {
+                store.videos.push(opts.cameraVideos.get(target.newStoreFor)
+                    || new SIO.Video({ filename: target.newStoreFor + '.mp4', openBackend: false }));
+            }
+            for (var sb = 0; sb < target.blocks.length; sb++) {
+                if (!target.newStoreFor) store._videoIdToIndex.set(target.blocks[sb].id, store.videos.length);
+                store.videos.push(target.blocks[sb].video);
+            }
+            commitStoreRows(target.plan, source, { trackMap: opts.trackMap, skeletons: rules });
+
+            for (var bi = 0; bi < target.blocks.length; bi++) {
+                var block = target.blocks[bi];
+                if (block.camera === null) continue;
+                this.labelsByCam.set(block.camera, target.labels);
+                this.frameRowByCam.set(block.camera, block.rowMap);
+                this.numNodesByCam.set(block.camera, nodeNames.length);
+                if (this._sharedStore) {
+                    if (!this.videoIdByCam) this.videoIdByCam = new Map();
+                    this.videoIdByCam.set(block.camera, block.id);
+                }
+            }
+            if (target.holdsOtherVideos) {
+                // Its camera owns id 0; the rest are on no camera.
+                this._ownVideoByCam.set(target.newStoreFor, 0);
+                if (!this.labelsByCam.has(target.newStoreFor)) {
+                    this.labelsByCam.set(target.newStoreFor, target.labels);
+                    this.frameRowByCam.set(target.newStoreFor, new Map());
+                    this.numNodesByCam.set(target.newStoreFor, nodeNames.length);
+                }
+            }
+        }
+
+        // A header takes each added camera's video from here, frames or not.
+        for (var cv of opts.cameraVideos) {
+            this.videos.set(cv[0], cv[1] ? { filename: cv[1].filename, shape: cv[1].shape } : null);
+        }
+
+        var framesOnCameras = new Set();
+        var otherVideoFrames = 0;
+        var addedCams = [];
+        for (var pb = 0; pb < prepared.blocks.length; pb++) {
+            var added = prepared.blocks[pb];
+            if (added.camera === null) { otherVideoFrames += added.rows.length; continue; }
+            addedCams.push(added.camera);
+            for (var fk of added.rowMap.keys()) {
+                framesOnCameras.add(fk);
+                if (fk + 1 > this.nFrames) this.nFrames = fk + 1;
+            }
+        }
+
+        // Frames already built know nothing of the new rows or tracks.
+        this.cache.clear();
+        this.cacheOrder = [];
+        var seenLabels = new Set(this.labelsByCam.values());
+        if (this._projectLabels) seenLabels.add(this._projectLabels);
+        for (var labels of seenLabels) if (labels._lazyFrameList) labels._lazyFrameList.clearCache();
+
+        for (var ac = 0; ac < addedCams.length; ac++) {
+            var occ = this._computeSparseOccupancy(this.labelsByCam.get(addedCams[ac]), this.nFrames, this.frameRowByCam.get(addedCams[ac]));
+            if (occ) this.trackOccupancy.set(addedCams[ac], occ);
+        }
+        for (var entry of this.trackOccupancy) {
+            entry[1].nFrames = this.nFrames;
+            var occLabels = this.labelsByCam.get(entry[0]);
+            if (occLabels) entry[1].nTracks = occLabels.tracks.length - (this._tracksPastSession.get(occLabels) || 0);
+        }
+
+        this.trackNames = sessionTracks;
+        this._storeEditedInMemory = true;
+        this.rowsAddedInMemory = true;
+        return { frames: framesOnCameras.size, otherVideoFrames: otherVideoFrames };
+    }
+
+    /**
+     * Give every store the session's track list, when it has changed since the store's
+     * was last set. Rows on a camera index the session's list, and those indices have not
+     * moved, so only the list changes (with `_keepOutsideRowTracks` for the other rows).
+     * `remapTracksFromIdentity` would walk every row for the same result, and misses a
+     * shared store none of whose rows is on a camera.
+     */
+    _followSessionTracks(sessionTracks) {
+        var cameraOf = new Map();
+        if (this._projectLabels) cameraOf.set(this._projectLabels, undefined);
+        for (var camName of this.labelsByCam.keys()) {
+            var camLabels = this.labelsByCam.get(camName);
+            if (!cameraOf.has(camLabels)) cameraOf.set(camLabels, camName);
+        }
+        for (var entry of cameraOf) {
+            var labels = entry[0];
+            var have = (labels._lazyDataStore && labels._lazyDataStore.tracks) || [];
+            var same = have.length >= sessionTracks.length;
+            for (var i = 0; same && i < sessionTracks.length; i++) same = String(have[i].name) === sessionTracks[i];
+            if (!same) this._installStoreTrackList(labels, sessionTracks, entry[1]);
+            var src = entry[1] !== undefined ? this._trackSourceByCam.get(entry[1]) : null;
+            if (src && !same) {
+                var identity = new Int32Array(sessionTracks.length);
+                for (var ia = 0; ia < identity.length; ia++) identity[ia] = ia;
+                src.names = sessionTracks.slice();
+                src.toSession = identity;
+            }
+        }
     }
 
     /**
@@ -1473,7 +1922,10 @@ export class SioLazyLoader {
         this.numNodesByCam.clear();
         this._trackSourceByCam.clear();
         this._skeletonByCam.clear();
+        this._ownVideoByCam.clear();
+        this._tracksPastSession.clear();
         this._storeEditedInMemory = false;
+        this.rowsAddedInMemory = false;
         this.cache.clear();
         this.cacheOrder = [];
         this.videos.clear();

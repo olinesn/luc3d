@@ -21,7 +21,7 @@ import {
     deleteBehaviorBouts, renameAnimal, swapAnimalsInRange, orphanedAnimals, reassignAnimal, hasBehaviorData,
     boutIntervals, listBouts, runningStates, isRunning, activeAt, timeBudget, countBehaviorBouts,
     setBehaviorCursor, exportBoutRows, importBoutRows, undoBehaviorEdit, redoBehaviorEdit,
-    canUndoBehaviorEdit, onBehaviorChange,
+    canUndoBehaviorEdit, onBehaviorChange, rekeyBehavior, bothWayPairs,
 } from '../pose/behavior-labels.js';
 
 let passed = 0, failed = 0;
@@ -29,6 +29,7 @@ const check = (cond, msg) => {
     if (cond) { passed++; console.log('  ok   ' + msg); }
     else { failed++; console.log('  FAIL ' + msg); }
 };
+const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const spans = (list) => list.map(iv => `${iv.start}-${iv.end}${iv.present ? '' : '!'}`).join(' ');
 
 let notified = 0;
@@ -309,6 +310,67 @@ console.log('\n13. Save rows and load them back');
     const r2 = importBoutRows({}, [['b9', 'id_1', '', 0, 5, 1, 'm', ''], ['b1', 'id_1', '', 7, 3, 1, 'm', ''], 'junk',
                                    ['old1', 'id_1', '', 0, 5, 1, 'm', '']], new Map([['old1', rear.id]]));
     check(r2.kept === 1 && r2.dropped === 3, 'unknown behaviors and malformed rows are dropped; the id map remaps');
+}
+
+console.log('\n14. Mutual behaviors: one bout per pair, whoever was picked first');
+{
+    resetEthogram();
+    const sniff = addBehavior({ name: 'nose-to-nose', key: 'n', social: true, mutual: true, group: 'social' }).behavior;
+    const chase = addBehavior({ name: 'chase', key: 'c', social: true, group: 'social' }).behavior;
+    check(sniff.mutual && sniff.social, 'a behavior can be mutual');
+    check(addBehavior({ name: 'huddle', mutual: true }).behavior.social, 'mutual implies social');
+    check(updateBehavior('b3', { social: false }).behavior.mutual === false, 'and not social clears mutual');
+    const saved = serializeEthogram();
+    check(saved.behaviors[0].mutual === true && saved.behaviors[1].mutual === undefined, 'saved only when set');
+    resetEthogram(); ingestEthogram(saved);
+    check(behaviorById(sniff.id).mutual && !behaviorById(chase.id).mutual, 'and read back');
+
+    const s = {};
+    labelRange(s, sniff.id, 'id_4', 'id_1', 10, 20, true);
+    check(spans(boutIntervals(s, sniff.id, 'id_1', 'id_4')) === '10-20' && boutIntervals(s, sniff.id, 'id_4', 'id_1').length === 1,
+        'labelled id_4 ↔ id_1, found either way round');
+    check(listBouts(s, { animal: 'id_4' }).length === 1 && listBouts(s, { animal: 'id_1' }).length === 1, 'listed for both animals');
+    labelRange(s, sniff.id, 'id_1', 'id_4', 21, 30, true);
+    check(spans(boutIntervals(s, sniff.id, 'id_1', 'id_4')) === '10-30', 'the other order extends the same bout');
+    const tb = timeBudget(s).filter(r => r.behaviorId === sniff.id).map(r => r.animal + ':' + r.presentFrames).sort().join();
+    check(tb === 'id_1:21,id_4:21', `the time budget counts it for both animals (${tb})`);
+    toggleState(s, sniff.id, 'id_4', 'id_2', 100);
+    check(isRunning(s, sniff.id, 'id_2', 'id_4'), 'a state started from one animal is running for the pair');
+    toggleState(s, sniff.id, 'id_2', 'id_4', 110);
+    check(spans(boutIntervals(s, sniff.id, 'id_2', 'id_4')) === '100-110', 'and stopped from the other');
+    check(eq(activeAt(s, 15).map(a => [a.animal, a.target]), [['id_1', 'id_4']]), 'activeAt names the pair in name order');
+
+    // Exclusive group: id_4 chasing id_9 over the sniff turns the sniff (id_4 is its 2nd animal) absent there.
+    labelRange(s, chase.id, 'id_4', 'id_9', 25, 30, true);
+    check(spans(boutIntervals(s, sniff.id, 'id_1', 'id_4')) === '10-24 25-30!', 'an exclusive peer reaches either animal of a pair');
+
+    // Swaps: within the pair nothing moves; with a third animal the pair follows.
+    const t = {};
+    labelRange(t, sniff.id, 'id_1', 'id_4', 0, 50, true);
+    swapAnimalsInRange(t, 'id_1', 'id_4', 0, 50);
+    check(spans(boutIntervals(t, sniff.id, 'id_1', 'id_4')) === '0-50', 'swapping the pair\'s own animals changes nothing');
+    swapAnimalsInRange(t, 'id_4', 'id_2', 30, 50);
+    check(spans(boutIntervals(t, sniff.id, 'id_1', 'id_4')) === '0-29' && spans(boutIntervals(t, sniff.id, 'id_1', 'id_2')) === '30-50',
+        'swapping one of them with another animal moves the pair');
+    renameAnimal(t, 'id_1', 'zed');
+    check(spans(boutIntervals(t, sniff.id, 'id_4', 'zed')) === '0-29', 'a rename keeps the pair findable (stored in the new name order)');
+
+    // Loading rows saved the other way round.
+    const u = {};
+    importBoutRows(u, [[sniff.id, 'id_9', 'id_3', 5, 9, 1, 'm', '']]);
+    check(exportBoutRows(u)[0].slice(1, 3).join() === 'id_3,id_9', 'saved rows are read into name order');
+
+    // A directed behavior made mutual: both directions merge, present wins.
+    const v = {};
+    labelRange(v, chase.id, 'a', 'b', 0, 10, true);
+    labelRange(v, chase.id, 'b', 'a', 5, 20, false);
+    labelRange(v, chase.id, 'b', 'c', 0, 3, true);
+    check(bothWayPairs(v, chase.id) === 2, 'bouts labelled both ways round are counted before merging');
+    updateBehavior(chase.id, { mutual: true });
+    rekeyBehavior(v, chase.id);
+    check(spans(boutIntervals(v, chase.id, 'a', 'b')) === '0-10 11-20!' && spans(boutIntervals(v, chase.id, 'b', 'c')) === '0-3',
+        'making it mutual merges both directions; a frame present either way stays present');
+    check(markReviewed({}, [sniff.id], ['p', 'q'], ['p', 'q'], 0, 9) === 10, 'reviewing a pair from both animals fills it once');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

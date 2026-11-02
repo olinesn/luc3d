@@ -89,13 +89,33 @@ export function mergeTracksIntoSession(session, incomingTracks) {
  * @param {number[]|null} nodeReorderMap - If non-null, reorderMap[incomingIdx] = existingIdx
  * @returns {number[]} List of affected frame indices
  */
+/**
+ * The video indices a session's frame loop reads from a file: its camera map's, or,
+ * when it maps no video at all, each camera's own index. A video past the last
+ * camera has no camera (wrapping round would merge its poses into another camera's).
+ * Frames on any other video are kept aside: import-export/outside-frames.js.
+ *
+ * @param {Object<string, string>} videoIdxToCameraName
+ * @param {number} nCameras
+ * @returns {Set<number>}
+ */
+export function videosClaimedBy(videoIdxToCameraName, nCameras) {
+    var claimed = new Set(Object.keys(videoIdxToCameraName).map(Number));
+    if (claimed.size === 0) for (var i = 0; i < nCameras; i++) claimed.add(i);
+    return claimed;
+}
+
 export function mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap) {
     var affectedFrames = new Set();
+    var claimedVideos = videosClaimedBy(videoIdxToCameraName, cameras.length);
     for (var fi = 0; fi < slpData.frames.length; fi++) {
         var fd = slpData.frames[fi];
+        // A video no camera has must not merge into another camera's poses. The
+        // caller keeps it aside (outside-frames.js).
+        if (cameras.length > 0 && !claimedVideos.has(fd.videoIdx)) continue;
         var camName = videoIdxToCameraName[fd.videoIdx];
         if (!camName && cameras.length > 0) {
-            camName = cameras[fd.videoIdx % cameras.length].name;
+            camName = cameras[fd.videoIdx].name;
         }
         if (!camName) camName = 'cam_' + fd.videoIdx;
 

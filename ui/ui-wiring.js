@@ -39,8 +39,13 @@ import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
 import { renameAnimal } from '../pose/behavior-labels.js';
+import { renamePredictedAnimal } from '../pose/behavior-predictions.js';
+import { renameStateAnimal } from '../pose/behavior-states.js';
+import { renameDiscoveryAnimal } from '../pose/behavior-discovery.js';
 import { behaviors } from '../pose/behavior-ethogram.js';
 import { setupBehaviorUi, updateBehaviorFrame } from './behavior-panel.js';
+import { detectAllFrames, detectThisFrame } from './behavior-detect.js';
+import { showBehaviorRulesModal } from './behavior-rules-modal.js';
 import { confirmRetrackWithBehaviorLabels } from './behavior-confirm.js';
 // View ▸ Define Planes — "Defining Plane Mode".
 import { togglePlaneMode, syncPlanes3D } from './plane-definition.js';
@@ -228,6 +233,9 @@ function showRenameModal(kind) {
             idObj.name = newName;
             renameHiddenIdentity(state.session, oldIdName, newName);
             renameAnimal(state.session, oldIdName, newName);   // behavior labels are keyed by name
+            renamePredictedAnimal(state.session, oldIdName, newName);   // and so are predictions
+            renameStateAnimal(state.session, oldIdName, newName);   // and behavioral states
+            renameDiscoveryAnimal(state.session, oldIdName, newName);
             setStatus('Renamed identity to: ' + newName, 'success');
         }
         drawAllOverlays(state.currentFrame);
@@ -900,7 +908,7 @@ export function setupMenus() {
     // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
     setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
     // Behavior labelling: the Behavior menu, toolbar button, tab and mode.
-    setupBehaviorUi({ closeMenus: closeMenus, navigate: navigateToFrame });
+    setupBehaviorUi({ closeMenus: closeMenus, navigate: navigateToFrame, switchSession: switchSession });
     setTrackSummaryNavigator(navigateToFrame);   // the Track All summary's Identities samples and maps
     // After the tab fixes (or un-fixes) a switch, repaint everything that shows identities.
     setIdSwitchRefresher(function () {
@@ -3176,6 +3184,17 @@ export function setupUI() {
         settings: function () { showSettingsModal('wizard'); },
     });
 
+    // Behavior: the button (All frames) detects behaviors with each behavior's
+    // detector; This frame says what they find on the playhead's frame (the
+    // Behavior tab shows why). Label Behaviors mode, also in this menu, is
+    // wired by ui/behavior-panel.js. Blue while predictions stand
+    // (ui/run-buttons.js).
+    wireActionMenu('behaviorDropdown', {
+        all: function () { detectAllFrames(); },
+        frame: function () { detectThisFrame(); },
+        settings: function () { showBehaviorRulesModal(); },
+    });
+
     wireAnimalCountField();
     wireReprojThresholdField();
     wireToolbarMenuKeys();
@@ -3782,6 +3801,7 @@ export function seekToLabeledFrame(direction) {
             var num = parseFloat(raw);
             if (raw !== '' && !isNaN(num) && num > 0 && num <= 1000) {
                 state.fps = num;
+                if (state.session) state.session.typedFps = num;   // said, not a default (`detectionEnv`)
                 applyPlaybackRate();
                 if (videoController && state.isPlaying) {
                     videoController.stopPlayback();

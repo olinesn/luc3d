@@ -701,19 +701,20 @@ try {
 
     await load('longnames', 'lazy');
     await loadCalibration(['left', 'right']);
-    const refused = await page.evaluate(async () => {
-        const { state } = window.__lucid;
-        let wrote = 0;
-        state.slpFileHandle = { createWritable: async () => ({ write: async (c) => { wrote += c.byteLength; }, close: async () => { wrote = -1; }, abort: async () => {} }) };
-        await (await import('/import-export/save-load.js')).quickSave();
-        state.slpFileHandle = null;
-        return { wrote, status: document.getElementById('statusText').textContent };
+    const kept = await page.evaluate(async () => {
+        const got = await window.__posesOf(await window.__saveBytes());
+        // The calibration's cameras come first in the file's list, so each video moves by two.
+        const moved = window.__source.lines.map(l => (Number(l.split('|')[0]) + 2) + l.slice(l.indexOf('|'))).sort();
+        return {
+            same: JSON.stringify(got.lines) === JSON.stringify(moved),
+            videos: got.videos.slice(2).map(v => v.filename), source: window.__source.videos.map(v => v.filename),
+        };
     });
-    check(/^Save failed:.*no camera of this session's calibration/.test(refused.status), 'a calibration naming none of the cameras: a save refuses, and says why', refused.status);
-    check(refused.wrote === 0, 'and nothing is written over the file', refused.wrote);
+    check(kept.same, 'a calibration naming none of the cameras: a save keeps every pose, each on its own video', kept);
+    check(JSON.stringify(kept.videos) === JSON.stringify(kept.source), 'and lists those videos after its cameras', kept);
 
-    // The console errors of a refused save and a failed read are this test's own doing.
-    const unexpected = errs.filter(e => !/Quick save failed|Parse failed/.test(e));
+    // The console errors of a failed read are this test's own doing.
+    const unexpected = errs.filter(e => !/Parse failed/.test(e));
     check(unexpected.length === 0, 'no page/console errors', unexpected.length ? unexpected.slice(0, 3) : undefined);
     await browser.close();
 } finally {
