@@ -133,7 +133,12 @@ def read(path):
             for ig in fg.instance_groups:
                 if ig.identity is not None:
                     shared.setdefault(str(labels.identities.index(ig.identity)), set()).add(si)
-    events = sorted("|".join([e.video.filename if e.video is not None else "", e.type.name, str(e.start_frame), str(e.end_frame)]) for e in labels.events)
+    def session_of(video):
+        for si, s in enumerate(labels.sessions):
+            if any(v is video for v in s.videos):
+                return "s" + str(si)
+        return "no session"
+    events = sorted("|".join([e.video.filename if e.video is not None else "", session_of(e.video), e.type.name, str(e.start_frame), str(e.end_frame)]) for e in labels.events)
     return {
         "error": None, "videos": [v.filename for v in labels.videos], "tracks": [t.name for t in labels.tracks],
         "events": events,
@@ -230,10 +235,12 @@ save("dup_rows.slp", fa + frames_on(a, 700, n=1) + fb + fc + fd, [a, b, c, d],
 # first session with no camera: it has no video map to say that bout is not its own.
 rear, attack = sio.EventType(name="rear"), sio.EventType(name="attack")
 a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
-save("bouts.slp", fa + fb + fc + fd, [a, b, c, d],
-     [session([("camA", a, fa), ("camB", b, fb)]), session([("camC", c, fc), ("camD", d, fd)], 7.0)],
+quiet = video("quiet.mp4")
+save("bouts.slp", fa + fb + fc + fd, [a, b, c, d, quiet],
+     [session([("camA", a, fa), ("camB", b, fb)]), session([("camC", c, fc), ("camD", d, fd), ("camQ", quiet, [])], 7.0)],
      events=[sio.UserEvent(type=rear, video=a, start_frame=0, end_frame=1, source="manual"),
-             sio.UserEvent(type=attack, video=c, start_frame=1, end_frame=2, source="manual")])
+             sio.UserEvent(type=attack, video=c, start_frame=1, end_frame=2, source="manual"),
+             sio.UserEvent(type=attack, video=quiet, start_frame=3, end_frame=4, source="manual")])
 a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
 save("bouts_no_cameras.slp", fc + fd, [c, d],
      [sio.RecordingSession(camera_group=sio.CameraGroup(cameras=[])), session([("camC", c, fc), ("camD", d, fd)], 7.0)],
@@ -529,6 +536,7 @@ function compare(what, got, want) {
     if (want.identityOwners && got.identityOwners) check(eq(got.identityOwners, want.identityOwners), what + ': sessions that shared an identity still do', got.identityOwners);
     if (want.poseIdentities && got.poseIdentities) check(eq(got.poseIdentities, want.poseIdentities), what + ': identities on poses', diff(got.poseIdentities, want.poseIdentities));
     if (want.events && got.events) check(eq(got.events, want.events), what + ': behavior bouts on their own videos', diff(got.events, want.events));
+    if (want.videos && got.videos) check(eq(got.videos.slice().sort(), want.videos), what + ': each video listed once', got.videos);
     if (want.provenance && got.provenance) check(eq(got.provenance, want.provenance), what + ': provenance', got.provenance);
 }
 
@@ -628,7 +636,7 @@ try {
         check(src.events.length > 0, name + ' holds bouts', src.events);
         for (let gen = 1; gen <= 2; gen++) {
             const saved = await saveAndRead(await open('lazy', bytes));
-            savedForPython(saved.bytes, `${name}, save ${gen}, Python`, { poses: src.poses, events: src.events });
+            savedForPython(saved.bytes, `${name}, save ${gen}, Python`, { poses: src.poses, events: src.events, videos: src.videos.slice().sort() });
             bytes = saved.bytes;
         }
     }

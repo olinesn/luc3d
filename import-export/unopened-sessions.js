@@ -532,6 +532,19 @@ export function renumberUnopenedMembers(kept, framesData, kill, survBefore) {
 }
 
 /**
+ * Every store video id the kept sessions name, with frames or not.
+ * @param {{sessions: Array}} kept
+ * @returns {number[]}
+ */
+export function unopenedVideoIds(kept) {
+    var ids = [];
+    kept.sessions.forEach(function (record) {
+        record.videos.forEach(function (v) { ids.push(v.id); });
+    });
+    return ids;
+}
+
+/**
  * The sentence a lazy open's final status adds for a file with more sessions.
  * @param {number} fileSessions - sessions in the file
  * @returns {string}
