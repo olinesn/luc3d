@@ -11,11 +11,11 @@ import {
     markPoints3dFromFile,
 } from '../pose/pose-data.js';
 import {
-    getInstanceGroupsForFrame,
+    getInstanceGroupsForFrame, ensureLazyFrameData,
 } from '../pose/triangulation.js';
 import { hasRealCalibration, cameraNamesFromVideos } from '../pose/placeholder-cameras.js';
 import {
-    parseSlpH5, parseSlpWithRawFallback, instanceMatchesPoints, parsePoints3dH5, pickFiles,
+    parseSlpH5, parseSlpViaSleapIO, parseSlpWithRawFallback, instanceMatchesPoints, parsePoints3dH5, pickFiles,
 } from './file-io.js';
 import { slpReadErrorStatus } from '../loading/slp-format-check.js';
 import {
@@ -45,7 +45,8 @@ import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadat
 import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
 import { adoptIdentityMetadata, adoptTypedLabels } from './detection-labels.js';
 import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
-import { keepOutsideFrames, keptOutsideCounts, outsideFramesNote } from './outside-frames.js';
+import { keepOutsideFrames, keptOutsideCounts, outsideFramesNote, headerVideoOfRecord } from './outside-frames.js';
+import { storeFromParsedFrames } from '../loading/lazy-store-rows.js';
 import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js';
 import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js';
 import {
@@ -53,7 +54,7 @@ import {
     remapFrameIdentityTrackSlots, typedSessionGroups,
 } from './file-edits.js';
 import {
-    showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
+    showLoading, hideLoading, setStatus, clearDirty, markDirty, ensureNo3dImportBlockingLoad,
 } from './save-load.js';
 
 // Circular import — these are still defined in app.js for now. They are only
@@ -1900,6 +1901,20 @@ export async function handleLoadSlpFile(slpFile) {
 
 export async function handleAddSlp() {
     try {
+        // A lazy project's poses live in its columnar store: everything else that
+        // holds a frame may drop it, and a save writes only the store and the user's
+        // edits. So the file's poses go in the store too (loading/lazy-store-rows.js),
+        // or nowhere: a merge that does not reach the file must not be claimed.
+        var lazyLoader = state.session ? state.session.lazyLoader : null;
+        var lazyRefusal = !lazyLoader ? null
+            : typeof lazyLoader.prepareAddedRows !== 'function'
+                ? 'its poses are read from analysis .h5 files, which have no room for added ones, so a save would lose them'
+                : lazyLoader.addedRowsRefusal();
+        if (lazyRefusal) {
+            setStatus('Nothing added: ' + lazyRefusal + '.', 'error');
+            return;
+        }
+
         // TODO(slp-load): wire SLP-parse + per-cam decoder phases through
         // ui/loading-progress-modal.js (out of current scope — see plan).
         setStatus('Pick SLP file to add...', 'warning');
@@ -1915,9 +1930,11 @@ export async function handleAddSlp() {
 
         var slpData;
         try {
-            slpData = await parseSlpForImport(slpFile, function (msg) {
-                showLoading(msg);
-            });
+            var onParseProgress = function (msg) { showLoading(msg); };
+            // Columns for a lazy project: no frame objects, and every field a row holds.
+            slpData = lazyLoader && /\.slp$/i.test(slpFile.name)
+                ? await parseSlpViaSleapIO(slpFile, onParseProgress, { lazy: true })
+                : await parseSlpForImport(slpFile, onParseProgress);
         } catch (parseErr) {
             console.error('[add-slp] Parse failed:', parseErr);
             hideLoading();
@@ -2001,12 +2018,13 @@ export async function handleAddSlp() {
             makeCameraNamesUnique(cameras, videoIdxToCameraName);
         }
 
-        var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
-        var maxTrack = 0;
+        // A store row with no track has none: a lazy add does not invent a first one.
+        var tracks = slpData.tracks.length > 0 || lazyLoader ? slpData.tracks : ['track_0'];
+        var maxTrack = lazyLoader ? -1 : 0;
         for (var fri = 0; fri < slpData.frames.length; fri++) {
             var fd = slpData.frames[fri];
             for (var ii = 0; ii < fd.instances.length; ii++) {
-                if (fd.instances[ii].trackIdx > maxTrack) maxTrack = fd.instances[ii].trackIdx;
+                if (fd.instances[ii].trackIdx != null && fd.instances[ii].trackIdx > maxTrack) maxTrack = fd.instances[ii].trackIdx;
             }
         }
         while (tracks.length <= maxTrack) tracks.push('track_' + tracks.length);
@@ -2021,13 +2039,17 @@ export async function handleAddSlp() {
         }
         var nodeReorderMap = skelResult.reorderMap;
 
-        // Auto-rename duplicate camera names
+        // Auto-rename duplicate camera names. A lazy store can back a name the
+        // session no longer lists (a renamed camera), and its rows must stay apart.
+        var cameraNameTaken = function (name) {
+            return state.session.cameras.some(function (c) { return c.name === name; })
+                || !!(lazyLoader && lazyLoader.labelsByCam.has(name));
+        };
         for (var aci = 0; aci < cameras.length; aci++) {
             var addCamName = cameras[aci].name;
-            var isDuplicate = state.session.cameras.some(function (c) { return c.name === addCamName; });
-            if (isDuplicate) {
+            if (cameraNameTaken(addCamName)) {
                 var suffix = 2;
-                while (state.session.cameras.some(function (c) { return c.name === addCamName + '_' + suffix; })) {
+                while (cameraNameTaken(addCamName + '_' + suffix)) {
                     suffix++;
                 }
                 var newName = addCamName + '_' + suffix;
@@ -2041,6 +2063,31 @@ export async function handleAddSlp() {
             }
         }
 
+        // Lazy: find the room before anything changes. If this fails (out of memory)
+        // the project is as it was.
+        var addSource = null, addPrepared = null, addCameraVideos = null;
+        if (lazyLoader) {
+            addSource = slpData.store || storeFromParsedFrames(slpData);
+            var addClaimed = videosClaimedBy(videoIdxToCameraName, cameras.length);
+            var cameraOfAddedVideo = function (v) {
+                if (!addClaimed.has(v)) return null;
+                return videoIdxToCameraName[v] || (cameras[v] ? cameras[v].name : null);
+            };
+            var addedVideoRecord = function (v, rawId) {
+                return headerVideoOfRecord(window.SleapIO, slpData.videos[v], rawId);
+            };
+            addPrepared = lazyLoader.prepareAddedRows(addSource, {
+                cameraNames: cameras.map(function (c) { return c.name; }),
+                cameraOfVideo: cameraOfAddedVideo,
+                videoRecord: addedVideoRecord,
+            });
+            addCameraVideos = new Map(cameras.map(function (c) { return [c.name, null]; }));
+            for (var acv = 0; acv < slpData.videos.length; acv++) {
+                var acvCam = cameraOfAddedVideo(acv);
+                if (acvCam && !addCameraVideos.get(acvCam)) addCameraVideos.set(acvCam, addedVideoRecord(acv, acv));
+            }
+        }
+
         // Merge tracks
         var trackRemap = mergeTracksIntoSession(state.session, tracks);
 
@@ -2049,18 +2096,41 @@ export async function handleAddSlp() {
             state.session.cameras.push(cameras[aci2]);
         }
 
-        // Merge frames (with node reorder map if needed)
-        var affectedFrames = mergeSlpFramesIntoSession(state.session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap);
-        // Its poses on a video no camera has: not shown, kept for the save. The
-        // lazy writer never writes these, so a lazy session cannot hold them.
-        if (!state.session.lazyLoader) {
+        var mergedFrames;
+        if (addPrepared) {
+            // Into the store, ungrouped like any row no group names. Rebuilding this
+            // frame's groups by track, as below, would drop the ones it has and their 3D.
+            var addTrackMap = new Int32Array(tracks.length);
+            for (var atm = 0; atm < tracks.length; atm++) addTrackMap[atm] = trackRemap.get(atm);
+            mergedFrames = lazyLoader.commitAddedRows(addPrepared, {
+                sessionTracks: state.session.tracks,
+                trackMap: addTrackMap,
+                sessionSkeleton: state.session.skeleton,
+                skeletonRules: (addSource.skeletons || []).map(function (sk, k) {
+                    var fit = k === 0 ? skelResult : validateSkeletonCompatibility(state.session.skeleton, { nodes: sk.nodeNames });
+                    return fit.error ? null : { order: fit.reorderMap };
+                }),
+                cameraVideos: addCameraVideos,
+            }).frames;
+            // Its columns are copied: they need not sit in memory through the video prompt.
+            addPrepared = addSource = slpData.store = null;
+            // Frames already in memory take the new cameras' rows.
+            var residentFrames = Array.from(state.session.frameGroups.keys());
+            for (var rfi = 0; rfi < residentFrames.length; rfi++) await ensureLazyFrameData(residentFrames[rfi]);
+            await ensureLazyFrameData(state.currentFrame);
+        } else {
+            // Merge frames (with node reorder map if needed)
+            var affectedFrames = mergeSlpFramesIntoSession(state.session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap);
+            // Its poses on a video no camera has: not shown, kept for the save.
             keepOutsideFrames(state.session, slpData, videosClaimedBy(videoIdxToCameraName, cameras.length), nodeReorderMap);
+
+            // Rebuild instance groups for affected frames
+            rebuildInstanceGroupsForFrames(state.session, affectedFrames);
+            mergedFrames = affectedFrames.length;
         }
+        markDirty();
 
-        // Rebuild instance groups for affected frames
-        rebuildInstanceGroupsForFrames(state.session, affectedFrames);
-
-        console.log('[add-slp] Merged ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames affected');
+        console.log('[add-slp] Merged ' + cameras.length + ' camera(s), ' + mergedFrames + ' frames affected');
 
         // Create video views or prompt cells for new cameras
         var hasEmbedded = slpData.videos.some(function (v) { return v.embedded; });
@@ -2271,8 +2341,17 @@ export async function handleAddSlp() {
 
         // Dock empty message is hidden by addVideoPanel when user drags videos in
 
-        // Validate currentFrame is still valid
-        if (!state.session.frameGroups.has(state.currentFrame)) {
+        // A file can reach past the project's last labeled frame, and a lazy frame needs
+        // to be in range to hydrate. updateTotalFrames above goes by the decoders alone.
+        if (lazyLoader && lazyLoader.nFrames > state.totalFrames) {
+            state.totalFrames = lazyLoader.nFrames;
+            refreshReadoutTotals();
+            if (timeline) timeline.setTotalFrames(state.totalFrames);
+        }
+
+        // Validate currentFrame is still valid (any frame is, on a lazy project: its
+        // resident frames are just a window)
+        if (!lazyLoader && !state.session.frameGroups.has(state.currentFrame)) {
             var firstAvail = 0;
             for (var [fk] of state.session.frameGroups) {
                 firstAvail = fk;
@@ -2297,8 +2376,9 @@ export async function handleAddSlp() {
         hideLoading();
         var dockPanelCount = paneManager.api ? paneManager.api.panels.length : 0;
         console.log('[add-slp] Done. Dock panels: ' + dockPanelCount + ', Views: ' + state.views.length);
-        var addOutsideNote = outsideFramesNote(keptOutsideCounts(state.session));
-        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length.toLocaleString('en-US') + ' frames merged. Panels: ' + dockPanelCount
+        var addOutsideNote = outsideFramesNote(lazyLoader ? lazyLoader.outsideFrameCounts() : keptOutsideCounts(state.session));
+        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + mergedFrames.toLocaleString('en-US') + ' frames merged'
+            + (lazyLoader && mergedFrames > 0 ? ', not grouped yet (Track All groups them)' : '') + '. Panels: ' + dockPanelCount
             + (addOutsideNote ? ' — ' + addOutsideNote : ''), addOutsideNote ? 'warning' : 'success');
     } catch (err) {
         console.error('[add-slp] FATAL:', err);
