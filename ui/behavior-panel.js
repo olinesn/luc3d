@@ -588,7 +588,8 @@ function renderClassifiers(session) {
         '<th title="Its classifier, and the cross-validated F1 on frames">Predicted by</th></tr></thead><tbody>';
     rows.forEach(function (r) {
         var b = r.behavior, m = r.model;
-        var labels = r.gate.length ? '<span class="behavior-short" title="' + esc(r.gate.join('; ')) + '">' + n(r.counts.present.bouts) + ' / ' +
+        var short = r.gate.concat(r.unreviewed.length ? [r.unreviewed.join(', ') + ': labelled present with no "not" frames'] : []);
+        var labels = short.length ? '<span class="behavior-short" title="' + esc(short.join('; ')) + '">' + n(r.counts.present.bouts) + ' / ' +
             n(r.counts.absent.bouts) + ' · needs more</span>' : n(r.counts.present.bouts) + ' / ' + n(r.counts.absent.bouts);
         var cv = m && m.cv;
         var by = m ? (m.imported ? 'imported' : 'classifier') + (cv && cv.frame ? ' · F1 ' + fmt(cv.frame.f1) : '') : (b.detector ? 'its detector' : '–');

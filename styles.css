@@ -9098,6 +9098,10 @@ div.track-summary-steps { padding-left: 0; }
 .bt-table tr.is-short td {
   color: var(--text-secondary);
 }
+.bt-table tr.bt-unreviewed td {
+  color: var(--warning-color);
+  white-space: normal;
+}
 .bt-body {
   display: flex;
   flex-wrap: wrap;

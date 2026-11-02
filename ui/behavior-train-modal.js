@@ -77,7 +77,10 @@ function tableHtml() {
             (b.social ? ' <span class="behavior-tag">' + (b.mutual ? '↔' : '→') + '</span>' : '') + '</td>' +
             '<td class="num">' + n(r.counts.present.frames) + ' · ' + n(r.counts.present.bouts) + '</td>' +
             '<td class="num">' + n(r.counts.absent.frames) + ' · ' + n(r.counts.absent.bouts) + '</td>' +
-            '<td>' + (ready ? esc(status) : '<span class="bd-warn">' + esc(r.gate.join('; ')) + '</span>') + '</td></tr>';
+            '<td>' + (ready ? esc(status) : '<span class="bd-warn">' + esc(r.gate.join('; ')) + '</span>') + '</td></tr>' +
+            (r.unreviewed.length ? '<tr class="bt-unreviewed"><td></td><td colspan="4" class="bd-warn">' + esc(r.unreviewed.join(', ')) +
+                ': labelled present with no "not" frames, so a classifier would learn the animal rather than the behavior. ' +
+                'Behavior ▸ Mark Range Reviewed… adds them.</td></tr>' : '');
     });
     return html + '</tbody></table>';
 }

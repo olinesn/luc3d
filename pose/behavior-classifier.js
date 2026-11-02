@@ -275,6 +275,27 @@ export function labelCounts(sessions, behaviorId) {
     return res;
 }
 
+/**
+ * The animals (pairs, for a social behavior) labelled present in a session
+ * with no "not" frame of their own there. Their rows meet "not" only on other
+ * animals, so a classifier learns who the animal is rather than what it does.
+ * @returns {Array<{session: Session, who: string}>} `who` as 'id_1', 'id_1 → id_0' or 'id_0 ↔ id_1'
+ */
+export function labelledWithoutNot(sessions, behaviorId) {
+    var b = behaviorById(behaviorId);
+    var out = [];
+    if (!b) return out;
+    (sessions || []).forEach(function (s) {
+        labelClasses(s, b).forEach(function (e) {
+            var has = [false, false];
+            e.ivs.forEach(function (iv) { has[iv[2] ? 1 : 0] = true; });
+            if (!has[1] || has[0]) return;
+            out.push({ session: s, who: e.target ? e.actor + (b.mutual ? ' ↔ ' : ' → ') + e.target : e.actor });
+        });
+    });
+    return out;
+}
+
 /** Why counts do not pass the gate (empty = it trains). */
 export function gateProblems(counts) {
     var out = [];

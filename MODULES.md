@@ -2805,8 +2805,11 @@ frames (not the gaps it bridged) number at least `minFrames`, so scattered
 one-frame detections never make a bout; a bout scores the mean of its finite
 frames; a point behavior keeps its peak frame.
 `secondsToFrames`. The classifiers' evaluation: `framePrf(scores, truth,
-threshold)` (the decision `scoresToBouts` makes; unscored = not detected),
-`prCurve(scores, truth, steps)` (P/R/F1 at thresholds 0…1 and the best F1),
+threshold, weights)` (the decision `scoresToBouts` makes; unscored = not
+detected; `weights` = the frames one sampled frame of each class stands for,
+[absent, present], so P/R/F1 read as on every frame while the counts stay the
+frames given), `prCurve(scores, truth, steps, weights)` (P/R/F1 at thresholds
+0…1 and the best F1),
 `boutPrf(predicted, truth)` (a predicted bout is right when it overlaps a true
 one, a true one found when a predicted one overlaps it), and
 `exclusiveScores(members)` (an exclusive group's per-frame choice: only the
@@ -3207,7 +3210,10 @@ a rare class, raw = binned, files, feature lists).
 end to end, inline). Classes per series (actor, target; a mutual pair in name
 order): the behavior's own labels plus "not" where an exclusive peer is present
 and its own labels say nothing (`labelClasses`); `labelCounts` and the gate
-(`gateProblems`: `GATE_FRAMES` 20 and `GATE_BOUTS` 2 per class). Samples are the
+(`gateProblems`: `GATE_FRAMES` 20 and `GATE_BOUTS` 2 per class);
+`labelledWithoutNot` names who is labelled present in a session with no "not"
+frame of their own there (their rows meet "not" only on other animals, so the
+classifier would learn the animal, not the behavior). Samples are the
 labelled frames where the animal (and target) have at least half the used nodes
 and are not skipped as broken tracking; a mutual pair gives a row in each
 direction. Over the cap (`rowCap`: `MAX_TRAINING_ROWS` 40,000 and rows × features
@@ -3254,7 +3260,7 @@ first). `topFeatures`, `trainingRowsComputed` (rows computed, not cached).
 `TRAIN_CHUNK_FRAMES`, `PREDICT_CHUNK_FRAMES`, `MAX_FOLDS`, `onModelsChange`,
 `setBehaviorModel`, `behaviorModelOf`, `behaviorModels`, `removeBehaviorModel`,
 `resetBehaviorModels`, `modelHashOf`, `labelClasses`, `labelCounts`,
-`gateProblems`, `trainingLabelPrint`, `noteLabelsChanged`, `labelPrintOf`,
+`gateProblems`, `labelledWithoutNot`, `trainingLabelPrint`, `noteLabelsChanged`, `labelPrintOf`,
 `cachedRowCount`, `rowCap`, `planFolds`, `trainingRowsComputed`,
 `trainBehaviorClassifiers`, `trainBehaviorClassifier`, `topFeatures`,
 `evaluateAt`, `modelProblems`, `predictModels`, `predictModelsAtFrame`,
@@ -12699,7 +12705,8 @@ undo step; a stale banner says why, with Detect again; the This frame readout,
 each condition against its threshold, "tracking broken here: skipped" when the
 frame is skipped for that animal; a classifier's row shows its score against its
 threshold), Classifiers (each behavior's labelled bouts present / "not" against
-the gate, its classifier — trained, imported, or its detector — and the
+the gate, "needs more" with who in its tooltip also when someone is labelled
+present with no "not" frames, its classifier — trained, imported, or its detector — and the
 cross-validated F1 on frames · bouts; Train… (`ui/behavior-train-modal.js`),
 Predict all frames, This frame, All sessions, Export…, Import…; the active-learning queue:
 Teach <behavior>, Next uncertain ▸, Next disagreement ▸, and the stretch shown
@@ -12777,7 +12784,9 @@ also takes a BORIS project's ethogram through `import-export/behavior-io.js`,
 exclusions as groups where they form cliques; files read through
 `readBlobArrayBuffer`). Mark
 Range Reviewed turns unlabelled frames of a range into "not" labels for the
-chosen animals and behaviors. Both close on Esc; one scroller (the modal).
+chosen animals and behaviors, with every animal ticked to start (the selected
+animal alone left the animal with the labels unreviewed, with no sign of it).
+Both close on Esc; one scroller (the modal).
 
 **Exports.** `showEthogramModal`, `showMarkReviewedModal`.
 
@@ -12785,7 +12794,7 @@ chosen animals and behaviors. Both close on Esc; one scroller (the modal).
 `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
 `../import-export/behavior-io.js`, `../import-export/save-load.js`,
 `../loading/cold-read-guard.js`. **Imported by** `ui/behavior-panel.js`.
-**Tests.** `tests/e2e/behavior-labelling.mjs` §4, `tests/e2e/behavior-import-export.mjs` §6.
+**Tests.** `tests/e2e/behavior-labelling.mjs` §4, §9, `tests/e2e/behavior-import-export.mjs` §6.
 
 ### ui/behavior-io-modal.js
 
@@ -12889,7 +12898,9 @@ save-load are safe. **Imported by** `ui/behavior-panel.js`, `ui/behavior-coding.
 ### ui/behavior-train.js
 
 **Purpose.** Behavior classifiers in the app. `classifierStatus()`: per behavior
-its label counts over the project, what the gate still needs, its model.
+its label counts over the project, what the gate still needs, who is labelled
+present with no "not" frames (`unreviewed`, the session named when there are
+several), its model.
 `trainClassifiers(ids)`: trains on every session (the active one from the
 cached context, the others built one at a time — `getCtx`; a lazy project's
 other sessions from their cached rows, or named as left out) behind a progress
@@ -12930,8 +12941,10 @@ next training can read its poses.
 
 **Purpose.** Behavior ▸ Train Classifiers…: a table of every behavior with its
 labelled frames · bouts per class against the gate (ready ones ticked) and its
-classifier; Train trains the ticked ones; a card per classifier says how it was
-trained and cross-validated (scheme and folds, frames it never saw, sessions
+classifier, with a warning row naming who is labelled present with no "not"
+frames; Train trains the ticked ones; a card per classifier says how it was
+trained and cross-validated (scheme and folds, frames it never saw, that those
+are a sample when they are, sessions
 left out), shows frame and bout precision / recall / F1, the precision–recall
 curve with the current threshold as a dot, the threshold slider and shortest
 bout / gap inputs (live numbers from `evaluateAt` on input, applied with
@@ -12946,7 +12959,7 @@ all…; Esc or Close leave; one scroller (the dialog). Repaints on
 **Imports.** `./app-state.js`, `./behavior-train.js`, `./behavior-detect.js`,
 `./info-tip.js`, `./plane-definition.js` (`ICON_INFO`), `../pose/behavior-ethogram.js`,
 `../pose/behavior-classifier.js`, `../import-export/save-load.js`. **Imported by**
-`ui/behavior-panel.js`. **Tests.** `tests/e2e/behavior-classifier.mjs` §1, §3.
+`ui/behavior-panel.js`. **Tests.** `tests/e2e/behavior-classifier.mjs` §1, §3, §9.
 
 ### ui/behavior-rules-modal.js
 

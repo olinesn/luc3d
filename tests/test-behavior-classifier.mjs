@@ -37,7 +37,7 @@ import { catalogFor } from '../pose/behavior-features.js';
 import { resetEthogram, addBehavior, behaviorById, setBehaviorPost, updateBehavior } from '../pose/behavior-ethogram.js';
 import { labelRange, listBouts } from '../pose/behavior-labels.js';
 import {
-    labelClasses, labelCounts, gateProblems, planFolds, trainBehaviorClassifier, trainBehaviorClassifiers, predictModels,
+    labelClasses, labelCounts, gateProblems, labelledWithoutNot, planFolds, trainBehaviorClassifier, trainBehaviorClassifiers, predictModels,
     deriveBouts, modelBoutSettings, trainingLabelPrint, labelPrintOf, setBehaviorModel, modelHashOf, resetBehaviorModels,
     uncertainSegments, disagreementSegments, trainingRowsComputed, topFeatures, evaluateAt, GATE_FRAMES, GATE_BOUTS,
 } from '../pose/behavior-classifier.js';
@@ -156,6 +156,28 @@ console.log('\n-- 1. labels → classes, gate --');
     labelRange(s, rear.id, 'b', '', 300, 304, true);
     const g2 = gateProblems(labelCounts([s], rear.id));
     check(g2.length === 0 && GATE_FRAMES === 20 && GATE_BOUTS === 2, 'two present bouts, 25 frames: it trains');
+
+    // Labelled present with no "not" frames of their own.
+    check(eq(labelledWithoutNot([s], rear.id).map(u => u.who), ['b']), 'b is labelled present with no "not": named; a has both: not');
+    check(eq(labelledWithoutNot([s], walk.id), []), 'an exclusive peer\'s present frames count as "not"');
+    const who = new Session([], new Skeleton('m', NODES, EDGES), [], 'Who');
+    who.addIdentity('a'); who.addIdentity('b');
+    const lunge = addBehavior({ name: 'lunge' }).behavior;
+    const chase = addBehavior({ name: 'chase', social: true }).behavior;
+    const meet = addBehavior({ name: 'meet', social: true, mutual: true }).behavior;
+    labelRange(who, lunge.id, 'a', '', 0, 9, true);
+    labelRange(who, lunge.id, 'b', '', 0, 99, false);
+    labelRange(who, lunge.id, 'b', '', 200, 299, false);
+    labelRange(who, chase.id, 'b', 'a', 0, 9, true);
+    labelRange(who, meet.id, 'a', 'b', 0, 9, true);
+    const passes = labelledWithoutNot([who], lunge.id);
+    check(eq(passes.map(u => u.who), ['a']) && passes[0].session === who && !gateProblems({ present: { frames: 20, bouts: 2 }, absent: labelCounts([who], lunge.id).absent }).length,
+        '"not" frames on another animal pass the gate, and the animal labelled present is still named');
+    check(eq(labelledWithoutNot([who], chase.id).map(u => u.who), ['b → a']) && eq(labelledWithoutNot([who], meet.id).map(u => u.who), ['a ↔ b']),
+        'a social behavior names the pair: actor → target, or a ↔ b when mutual');
+    labelRange(who, lunge.id, 'a', '', 20, 29, false);
+    check(eq(labelledWithoutNot([who], lunge.id), []) && eq(labelledWithoutNot([], lunge.id), []) && eq(labelledWithoutNot([who], 'nope'), []),
+        'a "not" frame of its own clears it');
 }
 
 // ---------------------------------------------------------------------------
