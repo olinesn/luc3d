@@ -35,9 +35,10 @@
  *     re-read of its that fails is.
  *  8. A range source (needs a cross-origin isolated page).
  *  9. A lazily opened embedded video.
- * 10. A multi-session save, whose second pass reads the source files again: one that has
- *     gone away stops it before anything is released, and a Save after a failed one
- *     refuses instead of writing an empty project.
+ * 10. A multi-session save. File ▸ Save reads nothing back from the source files, so one
+ *     that has gone away changes nothing. The evicting writer does read them: one that has
+ *     gone away stops it before anything is released, and a Save after it refuses instead
+ *     of writing an empty project.
  *
  * Run: node tests/e2e/slp-failed-read.mjs   (starts its own server, on a free port)
  */
@@ -863,25 +864,56 @@ for (var i = 0; i < early.length; i++) self.onmessage(early[i]);`
         return out;
     }, plan);
 
+    // The writer File ▸ Save does not use: it drops each session and reads the files back.
+    const evictingSave = (plan) => page.evaluate(async (plan) => {
+        const sl = await import('/import-export/save-load.js');
+        const AS = await import('/ui/app-state.js');
+        window.__plan = plan; window.__probes = [];
+        const out = { wrote: false, err: null };
+        try {
+            const bytes = await sl.saveAllSessionsStreaming(AS.state.sessions);
+            const labels = await window.SleapIO.readSlpStreaming(new File([bytes], 'saved.slp'), { openVideos: false, h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href });
+            out.wrote = true;
+            out.frames = labels.labeledFrames.length;
+            out.sessions = labels.sessions.length;
+        } catch (e) {
+            out.err = String((e && e.message) || e);
+        } finally {
+            window.__plan = null;
+        }
+        out.probes = window.__probes.slice();
+        return out;
+    }, plan);
+
     let p10 = await twoLazySessions();
     fs.renameSync(p10.camA, p10.camA + '.away');
     let s10 = await multiSave(null);
-    check(!s10.wrote && /^Save failed/.test(s10.status) && looksLikeAFailedRead(s10.status), 'a source file gone: Save says so and writes nothing', s10);
+    check(s10.wrote && s10.frames === 50 && s10.sessions === 2, 'a source file gone: File ▸ Save writes every frame all the same', s10);
     let held = await sessionsHeld();
-    check(held.every(Boolean), 'nothing was released: the project is still there', held);
+    check(held.every(Boolean), 'and the project is still there', held);
+    s10 = await multiSave(null);
+    check(s10.wrote && s10.frames === 50 && s10.sessions === 2, 'so the next Save works too', s10);
     fs.renameSync(p10.camA + '.away', p10.camA);
-    s10 = await multiSave(null);
-    check(s10.wrote && s10.frames === 50 && s10.sessions === 2, 'the file back, the same Save works, with every frame', s10);
-    held = await sessionsHeld();
-    check(held.every(h => !h), 'precondition: a multi-session save leaves every session released', held);
-    s10 = await multiSave(null);
-    check(!s10.wrote && /Cannot save/.test(s10.status), 'a second Save refuses, instead of writing an empty project over the first', s10);
 
     p10 = await twoLazySessions();
-    s10 = await multiSave({ request: { type: V, path: 'frames' }, hiccup: true, file: p10.camA });
-    check(!s10.wrote && /^Save failed/.test(s10.status) && s10.probes.some(p => p.failed), 'a read that fails in the second pass, after the check: Save fails and writes nothing', s10);
+    fs.renameSync(p10.camA, p10.camA + '.away');
+    s10 = await evictingSave(null);
+    check(!s10.wrote && looksLikeAFailedRead(s10.err), 'the evicting writer, a source file gone: it says so and writes nothing', s10);
+    held = await sessionsHeld();
+    check(held.every(Boolean), 'nothing was released: the project is still there', held);
+    fs.renameSync(p10.camA + '.away', p10.camA);
+    s10 = await evictingSave(null);
+    check(s10.wrote && s10.frames === 50 && s10.sessions === 2, 'the file back, the same save works, with every frame', s10);
+    held = await sessionsHeld();
+    check(held.every(h => !h), 'precondition: the evicting writer leaves every session released', held);
     s10 = await multiSave(null);
-    check(!s10.wrote && /Cannot save/.test(s10.status), 'and the next Save refuses, instead of writing an empty project', s10);
+    check(!s10.wrote && /Cannot save/.test(s10.status), 'File ▸ Save then refuses, instead of writing an empty project over the first', s10);
+
+    p10 = await twoLazySessions();
+    s10 = await evictingSave({ request: { type: V, path: 'frames' }, hiccup: true, file: p10.camA });
+    check(!s10.wrote && s10.probes.some(p => p.failed), 'a read that fails in the second pass, after the check: it says so and writes nothing', s10);
+    s10 = await multiSave(null);
+    check(!s10.wrote && /Cannot save/.test(s10.status), 'and File ▸ Save then refuses, instead of writing an empty project', s10);
 
     check(pageErrors.length === 0, 'no page errors', pageErrors.slice(0, 3));
 } catch (e) {

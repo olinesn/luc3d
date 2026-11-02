@@ -558,15 +558,17 @@ try {
     }
 
     console.log('\nC. A lazy multi-session save');
-    for (const [name, camCFile, what] of [
+    // File ▸ Save keeps every session loaded; the evicting writer reads the files back.
+    for (const keepLoaded of [true, false]) for (const [name, camCFile, whatFiles] of [
         ['first', 'camC_alone', 'first + a second session'],
         ['all_outside', 'camC_alone', 'all_outside + a second session'],
         ['first', 'camC_two_videos', 'first + a second session whose file holds another video'],
     ]) {
+        const what = whatFiles + (keepLoaded ? '' : ', evicting writer');
         const page = await open('lazy', readFile(name));
         await putBytes(page, '__camC', readFile(camCFile));
         await putBytes(page, '__camD', readFile('camD_alone'));
-        const err = await page.evaluate(async () => {
+        const err = await page.evaluate(async (keepLoaded) => {
             const pd = await import('/pose/pose-data.js');
             const { SioLazyLoader } = await import('/loading/sio-lazy-loader.js');
             const AS = await import('/ui/app-state.js');
@@ -597,10 +599,10 @@ try {
             }
             AS.state.sessions.push(second);
             try {
-                window.__saved = await sl.saveAllSessionsStreaming(AS.state.sessions.slice());
+                window.__saved = await sl.saveAllSessionsStreaming(AS.state.sessions.slice(), { keepLoaded });
                 return null;
             } catch (e) { return String(e && e.stack || e); }
-        });
+        }, keepLoaded);
         check(!err, what + ': the two-pass save runs', err);
         if (err) { await page.close(); continue; }
         const read = await page.evaluate(readInPage);
