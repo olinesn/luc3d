@@ -56,6 +56,7 @@
 import { _buildSioPoints } from './file-io.js';
 import { points3dNodeCount } from '../pose/pose-data.js';
 import { headerVideoForOutsideFrames } from './outside-frames.js';
+import { suggestionsForSave, suggestionsInFileOrder } from './kept-suggestions.js';
 import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { identityCatalogFinder, storeRowLabels, writeFileLabels } from './detection-labels.js';
@@ -868,53 +869,15 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         'via trackIdx fallback (', _refStats.ambiguous, 'of those genuinely ambiguous — >1 raw instance, no track match; would have silently defaulted to instIndex=0 before this fix)');
 
     // ---- Suggestions (SLEAP's frames to label next) ----
-    // Each points at the reader's Video. The writer finds it in the header by object,
-    // and writes -1 for one the header lacks, which Python reads as the LAST video. So
-    // each goes to the header's video for its id: a camera's is a fresh object above,
-    // and a video with neither a camera nor poses gets its place here. This has to be
-    // pass 1: `openSlpWriter` writes them before pass 2 re-reads any file.
-    function addSuggestionsOf(labels) {
-        var suggestions = (labels && labels.suggestions) || [];
-        for (var sui = 0; sui < suggestions.length; sui++) {
-            var sug = suggestions[sui];
-            var place = placeOfVideo.get(sug.video);
-            if (place === undefined) {
-                var sugVideoIdx = labels.videos.indexOf(sug.video);
-                var onlySuggested = headerVideoForOutsideFrames(SIO, sug.video, sugVideoIdx);
-                // Two embedded records can share one source video.
-                place = ctx.allVideos.indexOf(onlySuggested);
-                if (place < 0) { place = ctx.allVideos.length; ctx.allVideos.push(onlySuggested); }
-                placeOfVideo.set(sug.video, place);
-                // This session's bouts on it go on the same entry.
-                if (keptRecords.has(sugVideoIdx)) listedVideos.set(keptRecords.get(sugVideoIdx), onlySuggested);
-            }
-            var sugGroup = sug.metadata ? sug.metadata.group : null;
-            ctx.allSuggestions.push(new SIO.SuggestionFrame({
-                video: ctx.allVideos[place],
-                frameIdx: sug.frameIdx,
-                // As the file holds it (the reader's `.group` is a string). A file with
-                // none reads as 0 in Python; left out, the writer would write "default".
-                group: sugGroup != null ? sugGroup : 0,
-            }));
-        }
-    }
-    if (sharedLabels) {
-        var sharedVideos = sharedLabels.videos || [];
-        for (var suc = 0; suc < session.cameras.length; suc++) {
-            var sharedOwn = loader.videoIdByCam ? sharedVideos[loader.videoIdByCam.get(session.cameras[suc].name)] : null;
-            if (sharedOwn) placeOfVideo.set(sharedOwn, sessionVideoIndices[suc]);
-        }
-        addSuggestionsOf(sharedLabels);
-    } else if (!_sharedStore) {
-        for (var sup = 0; sup < cam.length; sup++) {
-            var camLabels = loader.labelsByCam.get(cam[sup].name);
-            // The video `SioLazyLoader.open` calls this camera's.
-            var ownPosition = cam[sup].ownVideo !== undefined ? camLabels._lazyDataStore.videoIndexFor(cam[sup].ownVideo) : 0;
-            var camOwn = (camLabels.videos || [])[ownPosition];
-            if (camOwn) placeOfVideo.set(camOwn, cam[sup].videoIndex);
-            addSuggestionsOf(camLabels);
-        }
-    }
+    // Each goes to this header's video for it (kept-suggestions.js). A video with neither
+    // a camera nor poses gets its place here, and this session's bouts on it share that
+    // entry (`listedVideos`, read at `openProjectWriter`). This has to be pass 1:
+    // `openSlpWriter` writes them before pass 2 re-reads any file.
+    var suggestedPlaces = new Map();
+    placeOfVideo.forEach(function (place, video) { suggestedPlaces.set(video, ctx.allVideos[place]); });
+    var sessionSuggestions = suggestionsForSave(session, { videos: ctx.allVideos, listedVideos: listedVideos, placedVideos: suggestedPlaces });
+    ctx.allSuggestions = ctx.allSuggestions.concat(suggestionsInFileOrder(
+        sessionSuggestions(sessionVideoIndices.map(function (i) { return ctx.allVideos[i]; }))));
 
     // Returned `cam` is intentionally slim — no `framesData`/`instancesData`/
     // `rowMap` references, so the caller's eviction of `session.lazyLoader`

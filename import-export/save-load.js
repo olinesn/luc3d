@@ -43,6 +43,7 @@ import { fitTimelineToData } from '../ui/timeline-controller.js';
 import { slpHasEmbeddedImages } from './slp-import.js';
 import { handleLoadSlpFile } from './slp-import.js';
 import { outsideFramesForSave } from './outside-frames.js';
+import { suggestionsForSave, suggestionsInFileOrder } from './kept-suggestions.js';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
@@ -699,6 +700,7 @@ async function buildSlpBytes(opts) {
     var allEvents = [];
     var seenSkeletonNames = new Set();
     var seenTrackNames = new Set();
+    var allSuggestions = [];
 
     var sessionsToExport = sessionsToSave();
 
@@ -846,7 +848,11 @@ async function buildSlpBytes(opts) {
         // Poses on a video no session names go back on their own video, and the
         // session's events on that video on the same entry.
         var sessOutside = outsideFramesForSave(sess);
-        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessOutside);
+        // A video only a suggestion names joins this list, and the session's bouts on it
+        // share its entry, so this goes before the Labels are built.
+        var sessListed = sessOutside || { videos: [], listedVideos: new Map(), placedVideos: new Map() };
+        var sessSuggestions = suggestionsForSave(sess, sessListed);
+        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessListed);
 
         // Merge into combined Labels
         allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFramesFor(sessLabels.skeletons[0], sessLabels.identities) : []);
@@ -870,6 +876,8 @@ async function buildSlpBytes(opts) {
         allSessions = allSessions.concat(sessLabels.sessions || []);
         allEventTypes = allEventTypes.concat(sessLabels.eventTypes || []);
         allEvents = allEvents.concat(sessLabels.events || []);
+        // SLEAP's frames to label next, each on this header's video for it.
+        allSuggestions = allSuggestions.concat(sessSuggestions(sessLabels.videos));
     }
 
     // Re-point every instance's track to the canonical (deduped) Track object
@@ -906,6 +914,7 @@ async function buildSlpBytes(opts) {
         videos: allVideos,
         skeletons: allSkeletons,
         tracks: allTracks,
+        suggestions: suggestionsInFileOrder(allSuggestions),
         identities: allIdentities,
         sessions: allSessions,
         // Keeps the loaded files' provenance (slp-provenance.js).

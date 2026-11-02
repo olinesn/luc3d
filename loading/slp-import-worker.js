@@ -14,7 +14,7 @@
  *
  * Messages OUT:
  *   { type: 'progress', message: string }
- *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions, provenance } }
+ *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions, suggestions, provenance } }
  *   { type: 'metadata', data: { skeleton, trackNames, nodeNames, nFrames, nTracks, nNodes, videos } }
  *   { type: 'frameData', frameIdx, requestId, instances }
  *   { type: 'framesData', startIdx, endIdx, requestId, frames }
@@ -329,6 +329,29 @@ async function parseSlp(file) {
 
         progress('Videos: ' + videos.length);
 
+        // --- Suggestions (SLEAP's frames to label next) ---
+        // Not shown; a save keeps them (import-export/kept-suggestions.js). As the
+        // typed reader: `parseSuggestions`, and a row on no listed video is dropped.
+        var suggestions = [];
+        try {
+            var suggestionsDs = f.get('suggestions_json');
+            if (suggestionsDs && suggestionsDs.shape[0] > 0) {
+                var suggestionsVal = suggestionsDs.value;
+                for (var sgi = 0; sgi < suggestionsDs.shape[0]; sgi++) {
+                    try {
+                        var sg = JSON.parse(suggestionsVal[sgi]);
+                        var sgVideo = Number(sg.video != null ? sg.video : 0);
+                        if (!videos[sgVideo]) continue;
+                        suggestions.push({
+                            videoIdx: sgVideo,
+                            frameIdx: sg.frame_idx != null ? sg.frame_idx : (sg.frameIdx != null ? sg.frameIdx : 0),
+                            group: sg.group,
+                        });
+                    } catch (e2) { /* skip bad entry */ }
+                }
+            }
+        } catch (e) { /* no suggestions */ }
+
         // --- Frames dataset ---
         progress('Reading frames & instances...');
         var framesData = readColumnar(f, 'frames',
@@ -533,6 +556,7 @@ async function parseSlp(file) {
             videos: videos,
             sessions: sessionsArr,
             identities: identitiesArr,
+            suggestions: suggestions,
             // The file's provenance dict, kept through a save (import-export/slp-provenance.js).
             provenance: metadataJson.provenance || null,
             hasDetectionLabels: hasDetectionLabels,
