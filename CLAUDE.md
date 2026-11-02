@@ -264,6 +264,8 @@ A `.slp` can hold frames on a video no session's camera map lists, and a loader 
 
 Test: `tests/e2e/poses-outside-session.mjs`.
 
+A file's suggestions (`suggestions_json`) stay on their own videos the same way, `import-export/kept-suggestions.js`. A new loader that builds a Session from a `.slp` must call `keepSuggestions`, or they silently go. Never hand a reader's `SuggestionFrame` to a writer: `writeSuggestions` finds its video by object and writes -1 for one the header lacks, which Python reads as the LAST video, with no error. Go through `suggestionsForSave`. Tests: e2e `eager-save-keeps-suggestions`, `lazy-save-keeps-suggestions`.
+
 ### The sessions a loader leaves closed
 
 `handleLoadProjectSlpLazy` and `handleLoadSessionFolderSingleSlp` open a file's first session. The others stay whole: a save writes back their cameras, groups, 3D, calibration, identities and every key LUC3D does not read (`import-export/unopened-sessions.js`). Their poses are outside frames, above.
@@ -281,7 +283,7 @@ After the folder loader's eager read (`kept.eager`). Only a read with typed sess
 - **A node edit reaches them,** because it re-shapes their poses (`Session.propagateNodeAdded`/`propagateNodeRemoved` → `kept.eager`): 3D rows, hidden-node lists, and at save the session's `metadata.lucid.skeleton` copy (`skeletonFollowsFirst`), which an eager open builds that session from. `countSkeletonEditImpact` counts their groups and 3D. A lazy open does none of this: its poses stay in the store's layout.
 - **A first session with no camera reads like a plain file,** one camera per video, as on the lazy route. Those videos are the closed sessions' too, so their members follow the poses as above.
 - **Adding to an open project:** when `planeMetadataConflict` finds the file's planes are another project's, the closed sessions keep theirs (`keepOwnPlanes`), so their 2D stays with their own node ids.
-- **One video, one entry:** a closed session's video has its entry in `outsideFramesForSave` even with no frame (`listClosedSessionVideos`), and a kept bout on a video a camera here has too goes on that camera's entry (`recordOfCamera`, `kept.eager.videoRecords`).
+- **One video, one entry:** a closed session's video has its entry in `outsideFramesForSave` even with no frame (`listClosedSessionVideos`), so a bout or suggestion on it goes there, and a kept bout on a video a camera here has too goes on that camera's entry (`recordOfCamera`).
 
 Tests: `tests/test-unopened-sessions.mjs`, `tests/e2e/lazy-keeps-other-sessions.mjs` (`ROUTE=folder` runs only this loader's sections).
 

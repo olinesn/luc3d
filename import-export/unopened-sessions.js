@@ -414,9 +414,11 @@ export async function keepUnopenedSessionsOfRead(slpData, opts) {
         // File row -> the open session's pose at each place in that row, for rows a
         // closed session's member names on a video the open session has too.
         posesOfRows: new Map(),
-        // What the file's events know each video by (`fileEventsOf`), by its place in the
-        // file: a kept bout goes on the entry its video has (`outsideFramesForSave`).
-        videoRecords: slpData.behaviorEvents ? slpData.behaviorEvents.videos : null,
+        // What the file's events and this read know each video by, by its place in the
+        // file: a kept bout or suggestion goes on the entry its video has
+        // (`outsideFramesForSave`).
+        eventRecords: slpData.behaviorEvents ? slpData.behaviorEvents.videos : null,
+        readRecords: slpData.videos || null,
         // For `Session.propagateNodeAdded`/`propagateNodeRemoved` (`pose-data.js` imports nothing).
         addNode: function () { addNodeToUnopenedSessions(kept); },
         removeNode: function (nodeIdx) { removeNodeFromUnopenedSessions(kept, nodeIdx); },
