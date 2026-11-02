@@ -52,8 +52,8 @@ function newHeaderVideo(SIO, filename, shape) {
 /**
  * The video a header lists for frames outside a session. The file's own record when
  * it has a usable one, so the filename, shape and everything else LUC3D does not
- * read survive. A save does not copy embedded images, so such a video is replaced by
- * its source video. A video the file does not list at all (`id` past the end of
+ * read survive. A save copies the images of a session's cameras only (`slp-image-save.js`),
+ * so such a video is replaced by its source video. A video the file does not list at all (`id` past the end of
  * `videos_json`, as older LUC3D saves left it) gets a placeholder, so the poses stay
  * apart from every other video's and Python can open the file.
  *

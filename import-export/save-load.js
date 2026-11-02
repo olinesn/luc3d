@@ -14,7 +14,7 @@ import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
 } from '../pose/triangulation.js';
-import { OnDemandVideoDecoder, hasEmbeddedVideos, closeEmbeddedFrames } from '../loading/video.js';
+import { OnDemandVideoDecoder, closeEmbeddedFrames } from '../loading/video.js';
 import { readBlobRange } from '../loading/cold-read-guard.js';
 import { createDemoSkeleton } from '../demo-data.js';
 import {
@@ -60,6 +60,8 @@ import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-
 import { writeBehaviorMetadata, readBehaviorMetadata, resetBehaviorState } from './behavior-metadata.js';
 import { buildSaveProvenance } from './slp-provenance.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
+import { readImagesFromSavedFile } from './slp-import.js';
+import { anyEmbeddedVideo, noteEmbeddedVideos, adoptEmbeddedVideos, addImagesToSlp } from './slp-image-save.js';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -632,6 +634,7 @@ var SAVE_STEP_LABELS = {
     refs: 'Collecting 3D groups',          // counted, over grouped frames
     header: 'Writing 3D groups and points',
     frames: 'Writing 2D poses',
+    images: 'Copying images',              // counted, over images
     finish: 'Finishing the file',
     eager: 'Writing the file',
     download: 'Opening the save dialog',
@@ -639,12 +642,29 @@ var SAVE_STEP_LABELS = {
 
 /**
  * The step list a save will report, in order: the streaming path's four stages
- * or the eager path's one, plus Brave's download hand-off.
+ * or the eager path's one, then copying a project's embedded images into the file,
+ * plus Brave's download hand-off.
  */
-function saveSteps(streaming, download) {
-    var steps = streaming ? ['refs', 'header', 'frames', 'finish'] : ['eager'];
+function saveSteps(streaming, download, images) {
+    var steps = streaming ? ['refs', 'header', 'frames'] : ['eager'];
+    if (images) steps.push('images');
+    if (streaming || images) steps.push('finish');
     if (download) steps.push('download');
     return steps;
+}
+
+/** Whether the project being saved holds embedded images, which a save copies into the file. */
+function projectHasImages() {
+    return sessionsToSave().some(function (s) { return s && anyEmbeddedVideo(sessionVideoFilesForSave(s)); });
+}
+
+/** A file name for a save: SLEAP's name for a file with its images in it, when this one has them. */
+function suggestedSaveName() {
+    var stem = 'project';
+    if (state.sessions.length === 1 && state.session.name) {
+        stem = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+    }
+    return stem + (projectHasImages() ? '.pkg.slp' : '.slp');
 }
 
 /**
@@ -737,6 +757,27 @@ async function buildSlpBytes(opts) {
         }
     }
 
+    // A project with embedded images: each path below writes the labels as usual, to
+    // bytes rather than the sink, then the images go in (`slp-image-save.js`). The plan
+    // is left in `opts.images`: the caller has the project read them from the saved file.
+    var hasImages = projectHasImages();
+    var imagePlan = opts.images || [];
+    var withImages = function (labelsBytes) {
+        return addImagesToSlp(labelsBytes, imagePlan, {
+            sink: opts.sink, onProgress: onProgress, scratch: globalThis.__lucidSaveScratch || null,
+        });
+    };
+    // The labels' own last step: finishing comes after the images.
+    var labelsProgress = hasImages && onProgress
+        ? function (stage, done, total, unit) { return stage === 'finish' ? null : onProgress(stage, done, total, unit); }
+        : onProgress;
+    var noteStreamedImages = function (ctx, written) {
+        written.forEach(function (w) {
+            noteEmbeddedVideos(w.refGraph.sioSession, sessionVideoFilesForSave(w.session), imagePlan);
+        });
+        adoptEmbeddedVideos(SIO, imagePlan, ctx.allVideos);
+    };
+
     // Large lazy prediction sessions: build the file INCREMENTALLY via sleap-io.js's
     // streaming writer so the whole ~108k×N-frame graph is never resident and no
     // unvisited frame is dropped (the eager path below iterates only the resident
@@ -778,10 +819,20 @@ async function buildSlpBytes(opts) {
             });
             console.log('[save-slp] lazy session → streaming writer (', lazySess.lazyLoader.nFrames, 'frames ×',
                 lazySess.cameras.length, 'cameras )');
-            return await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles,
-                { sink: opts.sink || undefined, provenance: buildSaveProvenance([lazySess]), onProgress: onProgress });
+            var streamedOne = await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles, {
+                sink: hasImages ? undefined : (opts.sink || undefined),
+                provenance: buildSaveProvenance([lazySess]),
+                onProgress: labelsProgress,
+                beforeWriting: hasImages ? noteStreamedImages : undefined,
+            });
+            return imagePlan.length > 0 ? await withImages(streamedOne) : streamedOne;
         }
-        return await saveAllSessionsStreaming(sessionsToExport, { sink: opts.sink, onProgress: onProgress });
+        var streamed = await saveAllSessionsStreaming(sessionsToExport, {
+            sink: hasImages ? undefined : opts.sink,
+            onProgress: labelsProgress,
+            beforeWriting: hasImages ? noteStreamedImages : undefined,
+        });
+        return imagePlan.length > 0 ? await withImages(streamed) : streamed;
     }
 
     // MIXED PROJECT GUARD. The eager builder below iterates only the RESIDENT
@@ -857,6 +908,7 @@ async function buildSlpBytes(opts) {
         // Merge into combined Labels
         allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFramesFor(sessLabels.skeletons[0], sessLabels.identities) : []);
         allVideos = allVideos.concat(sessLabels.videos || []);
+        if (hasImages) noteEmbeddedVideos(sessLabels.sessions[0], sessionVideoFilesForSave(sess), imagePlan);
         for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
             var skel = sessLabels.skeletons[sk];
             if (!seenSkeletonNames.has(skel.name)) {
@@ -909,6 +961,8 @@ async function buildSlpBytes(opts) {
         if (ev.target instanceof SIO.Track && canonicalTrackByName[ev.target.name]) ev.target = canonicalTrackByName[ev.target.name];
     });
 
+    adoptEmbeddedVideos(SIO, imagePlan, allVideos);
+
     var labels = new SIO.Labels({
         labeledFrames: allLabeledFrames,
         videos: allVideos,
@@ -931,7 +985,8 @@ async function buildSlpBytes(opts) {
     // typed importer round-trips. The old v0.6-compat post-pass (hand-rolled
     // sessions_json + flat→compound rewrite + format_id 1.4) is gone; SLEAP >=
     // 1.6 (sleap-io >= 0.7) reads the raw flat-matrix output natively.
-    return await SIO.saveSlpToBytes(labels);
+    var labelsBytes = await SIO.saveSlpToBytes(labels);
+    return imagePlan.length > 0 ? await withImages(labelsBytes) : labelsBytes;
 }
 
 /**
@@ -1150,6 +1205,9 @@ export async function finalizeMultiSessionSave(handle, opts) {
     // The Save progress card's hook (see `buildSessionSlpBytesStreaming`): the
     // same stages, with the 2D step counted over sessions.
     var onProgress = (opts && opts.onProgress) || null;
+    if (opts && opts.beforeWriting) {
+        opts.beforeWriting(handle.ctx, handle.pending.map(function (p) { return { session: p.session, refGraph: p.refGraph }; }));
+    }
     if (onProgress) await onProgress('header');
     var writer = await openProjectWriter(handle.ctx, handle.pending.map(function (p) { return p.refGraph.sioSession; }),
         buildSaveProvenance(handle.pending.map(function (p) { return p.session; })));
@@ -1209,14 +1267,30 @@ export async function saveAllSessionsStreaming(sessions, opts) {
 }
 
 /**
- * What a save leaves out of a project with images embedded in its `.slp`. A save
- * writes the poses and each video's name, not the images, so the menus never make
- * that `.slp` the save target (`ui/ui-wiring.js`), and the status says so here.
+ * What a save leaves out: images in the opened `.slp` that no session holds. The menus
+ * do not make that file the save target (`ui/ui-wiring.js`), so they are still in it.
  */
-function embeddedImagesSaveNote() {
-    return hasEmbeddedVideos(state)
-        ? '. Labels only: the images are still in the file you opened, not in this one'
+function imagesLeftOutNote() {
+    var n = state.embeddedImagesLeftOut;
+    return n > 0
+        ? '. Not in this file: ' + n.toLocaleString('en-US') + ' video(s) in the file you opened that are in no session'
         : '';
+}
+
+/**
+ * Have the project read its images from the file just saved, which may have replaced the
+ * one they were read from. The save itself is done either way: returns what to tell the user.
+ */
+async function readImagesFromSaved(fileHandle, plan) {
+    try {
+        await readImagesFromSavedFile(await fileHandle.getFile(), plan);
+        // A frame on its way when the workers changed came back empty.
+        if (videoController && !state.isPlaying) await videoController.seekToFrame(state.currentFrame);
+        return '';
+    } catch (err) {
+        console.error('Could not read the images back from the saved file:', err);
+        return '. Its images could not be read back from it: ' + err.message;
+    }
 }
 
 export async function quickSave() {
@@ -1237,13 +1311,9 @@ export async function quickSave() {
                 await saveProjectSlp();
                 return;
             }
-            var filename = 'project.slp';
-            if (state.sessions.length === 1 && state.session.name) {
-                filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
-            }
             try {
                 state.slpFileHandle = await window.showSaveFilePicker({
-                    suggestedName: filename,
+                    suggestedName: suggestedSaveName(),
                     types: [{
                         description: 'SLEAP Labels',
                         accept: { 'application/x-hdf5': ['.slp'] }
@@ -1263,7 +1333,7 @@ export async function quickSave() {
         // The progress card goes up only AFTER the picker: it needs the click's
         // user activation, which an awaited paint first could lose.
         await ensureSleapIO();
-        var progress = createSaveProgress(saveSteps(isStreamingSave(sessionsToSave(), window.SleapIO), false));
+        var progress = createSaveProgress(saveSteps(isStreamingSave(sessionsToSave(), window.SleapIO), false, projectHasImages()));
         showLoading('Preparing to save…', { title: 'Save' });
 
         // Stream straight to the file handle when the streaming path is used
@@ -1276,14 +1346,16 @@ export async function quickSave() {
         var writable = await state.slpFileHandle.createWritable();
         var bytesWritten = 0;
         var sink = {
+            // A chunk is bytes, or a Blob when a project's images come from a file on disk.
             write: function (chunk) {
-                bytesWritten += chunk.byteLength;
+                bytesWritten += chunk.byteLength !== undefined ? chunk.byteLength : chunk.size;
                 progress.disk(bytesWritten);
                 return writable.write(chunk);
             },
             close: function () { return writable.close(); },
         };
-        var bytes = await buildSlpBytes({ sink: sink, onProgress: progress });
+        var savedImages = [];
+        var bytes = await buildSlpBytes({ sink: sink, onProgress: progress, images: savedImages });
         if (bytes) {
             // Eager (non-streaming) path returned bytes directly instead of
             // using the sink — write them out now.
@@ -1291,23 +1363,25 @@ export async function quickSave() {
             await writable.close();
             bytesWritten = bytes.byteLength;
         }
+        var imagesNote = savedImages.length > 0 ? await readImagesFromSaved(state.slpFileHandle, savedImages) : '';
+        imagesNote += imagesLeftOutNote();
 
         state.isSaving = false;
         hideLoading();
         clearDirty();
         var sizeMB = (bytesWritten / 1024 / 1024).toFixed(1);
-        setStatus('Saved (' + sizeMB + ' MB)' + embeddedImagesSaveNote(), hasEmbeddedVideos(state) ? 'warning' : 'success');
+        setStatus('Saved (' + sizeMB + ' MB)' + imagesNote, imagesNote ? 'warning' : 'success');
     } catch (err) {
         state.isSaving = false;
         hideLoading();
+        // `writable` (if it got that far) already has an open swap file — abort()
+        // discards it WITHOUT touching the original file at `state.slpFileHandle`,
+        // unlike close(), which would overwrite it. The file the images are read
+        // from is that original, so it must stay as it is.
+        if (typeof writable !== 'undefined' && writable && typeof writable.abort === 'function') {
+            try { await writable.abort(); } catch (e) { /* best effort; already closed */ }
+        }
         if (err && err.name === 'SaveCancelledError') {
-            // `writable` (if it got that far) already has an open swap file —
-            // abort() discards it WITHOUT touching the original file at
-            // `state.slpFileHandle`, unlike close(), which would overwrite it
-            // with zero bytes.
-            if (typeof writable !== 'undefined' && writable && typeof writable.abort === 'function') {
-                try { await writable.abort(); } catch (e) { /* best effort */ }
-            }
             setStatus('Save cancelled', 'warning');
             return;
         }
@@ -1344,30 +1418,26 @@ export async function saveProjectSlp() {
             : 'Building SLP...', 'warning');
         showLoading('Preparing to save…', { title: 'Save' });
         await ensureSleapIO();
-        var progress = createSaveProgress(saveSteps(isStreamingSave(sessionsToSave(), window.SleapIO), true));
+        var progress = createSaveProgress(saveSteps(isStreamingSave(sessionsToSave(), window.SleapIO), true, projectHasImages()));
 
         var bytes = await buildSlpBytes({ onProgress: progress });
         await progress('download');
         var blob = new Blob([bytes], { type: 'application/x-hdf5' });
         bytes = null;   // the Blob holds its own copy: let this one go before the download
 
-        var filename = 'project.slp';
-        if (state.sessions.length === 1 && state.session.name) {
-            filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
-        }
-
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url;
-        a.download = filename;
+        a.download = suggestedSaveName();
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 
+        var leftOut = imagesLeftOutNote();
         setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)' +
-            (fsaHint ? ' — downloaded, not saved in place. ' + fsaHint : '') + embeddedImagesSaveNote(),
-            hasEmbeddedVideos(state) ? 'warning' : 'success');
+            (fsaHint ? ' — downloaded, not saved in place. ' + fsaHint : '') + leftOut,
+            leftOut ? 'warning' : 'success');
     } catch (err) {
         if (err && err.name === 'SaveCancelledError') {
             setStatus('Save cancelled', 'warning');

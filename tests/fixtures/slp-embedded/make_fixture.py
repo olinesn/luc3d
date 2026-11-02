@@ -21,6 +21,11 @@ exactly which video and frame it is looking at.
                             (`spilled_source_video.pkg.slp`).
     colors.pkg.slp          colour images, one video stored BGR and one RGB (says so).
     colors_old_format.pkg.slp  colour images, format 1.2: BGR, and does not say so.
+    video_in_no_session.pkg.slp  a session of two cameras, and a third video with images
+                            that no session names.
+    same_camera_names.pkg.slp  two sessions whose cameras have the same names, as a real
+                            rig's do, with different images. One source video's name is
+                            not plain ASCII.
 
 The other two files here are copies from sleap-io.js `tests/data/slp`:
 `minimal_instance.pkg.slp` is a real SLEAP package (variable-length int8 rows, the
@@ -348,6 +353,37 @@ def colors() -> None:
         tables(f, [])
 
 
+def video_in_no_session() -> None:
+    with h5py.File(HERE / "video_in_no_session.pkg.slp", "w") as f:
+        begin(f)
+        videos = [
+            embed(f, "video0", {1: 100}, None),
+            embed(f, "video1", {1: 101}, None),
+            embed(f, "video2", {1: 102}, None),
+        ]
+        strings(f, "videos_json", videos)
+        strings(f, "tracks_json", [])
+        strings(f, "suggestions_json", [])
+        strings(f, "sessions_json", [session(["north", "south"], [0, 1])])
+        tables(f, [(0, 1), (1, 1)])
+
+
+def same_camera_names() -> None:
+    with h5py.File(HERE / "same_camera_names.pkg.slp", "w") as f:
+        begin(f)
+        videos = [
+            embed(f, "video0", {1: 110}, "jour1_n\u00f6rd.mp4"),
+            embed(f, "video1", {1: 111}, "day1_south.mp4"),
+            embed(f, "video2", {1: 120, 2: 122}, "day2_north.mp4"),
+            embed(f, "video3", {1: 121}, "day2_south.mp4"),
+        ]
+        strings(f, "videos_json", videos)
+        strings(f, "tracks_json", [])
+        strings(f, "suggestions_json", [])
+        strings(f, "sessions_json", [session(["north", "south"], [0, 1]), session(["north", "south"], [2, 3])])
+        tables(f, [(0, 1), (1, 1), (2, 1), (3, 1)])
+
+
 def check() -> None:
     import sleap_io as sio
 
@@ -388,6 +424,14 @@ def check() -> None:
     video = sio.load_slp(str(HERE / "colors_old_format.pkg.slp")).videos
     assert np.asarray(video[0][0])[0, 0].tolist() == [30, 20, 10], "format 1.2 with no attribute: BGR"
 
+    labels = sio.load_slp(str(HERE / "video_in_no_session.pkg.slp"))
+    assert len(labels.videos) == 3 and len(labels.sessions[0].cameras) == 2
+    assert int(np.asarray(labels.videos[2][1]).ravel()[0]) == 102
+
+    labels = sio.load_slp(str(HERE / "same_camera_names.pkg.slp"))
+    assert [c.name for c in labels.sessions[1].cameras] == ["north", "south"]
+    assert int(np.asarray(labels.videos[2][2]).ravel()[0]) == 122
+
 
 if __name__ == "__main__":
     two_sessions()
@@ -397,6 +441,8 @@ if __name__ == "__main__":
     image_sequence()
     colors()
     raw_pixels()
+    video_in_no_session()
+    same_camera_names()
     check()
     for path in sorted(HERE.glob("*.slp")):
         print(path.name, path.stat().st_size, "bytes")

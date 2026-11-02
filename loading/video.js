@@ -1884,6 +1884,7 @@ export class EmbeddedVideoDecoder {
      * @param {Object} options
      * @param {Worker} options.worker - frame-worker.js Worker instance
      * @param {Object} options.videoInfo - Video metadata from SLPPackageReader.getVideos()
+     * @param {File} options.sourceFile - The file holding the images, which a save copies them from
      * @param {number} [options.cacheSize=60] - Number of decoded ImageBitmaps to cache
      * @param {number} [options.minFrames=0] - Frames to count even past the last image:
      *   the labeled frames, or those after it could not be reached
@@ -1891,6 +1892,7 @@ export class EmbeddedVideoDecoder {
     constructor(options) {
         this._worker = options.worker;
         this._videoInfo = options.videoInfo;
+        this.sourceFile = options.sourceFile || null;
         this.cacheSize = options.cacheSize || 60;
         this.cache = new Map();
         this._pending = new Map();
@@ -1940,7 +1942,7 @@ export class EmbeddedVideoDecoder {
         // Listen for frame responses from the worker
         var self = this;
         this._messageHandler = function (e) {
-            if (e.data.type === 'frame' && e.data.videoKey === info.key) {
+            if (e.data.type === 'frame' && e.data.videoKey === self._videoInfo.key) {
                 self._handleFrameResult(e.data);
             }
         };
@@ -1948,6 +1950,31 @@ export class EmbeddedVideoDecoder {
 
         videoLog("EmbeddedVideoDecoder: " + info.frameCount + " embedded frames, " +
             width + "x" + height + ", videoKey=" + info.key);
+    }
+
+    /** What the file says about this video (`SLPPackageReader.getVideos`). */
+    get videoInfo() {
+        return this._videoInfo;
+    }
+
+    /**
+     * Read these same images from another file: one a save has just written them to,
+     * same frames in the same order. A frame still on its way from the old worker comes
+     * back empty, and the decoded frames stay, being the same pictures.
+     *
+     * @param {Worker} worker - frame-worker.js, open on `sourceFile`
+     * @param {Object} videoInfo - this video's entry there
+     * @param {File} sourceFile
+     */
+    readFrom(worker, videoInfo, sourceFile) {
+        if (this._closed) return;
+        this._worker.removeEventListener('message', this._messageHandler);
+        for (var p of this._pending.values()) p.resolve(null);
+        this._pending.clear();
+        this._worker = worker;
+        this._videoInfo = videoInfo;
+        this.sourceFile = sourceFile;
+        this._worker.addEventListener('message', this._messageHandler);
     }
 
     /** @private */
@@ -2086,13 +2113,6 @@ export class EmbeddedVideoDecoder {
     }
 }
 
-/** Whether any of the project's videos is embedded in a `.slp` it was opened from. */
-export function hasEmbeddedVideos(state) {
-    return (state.videoFiles || []).some(function (vf) {
-        return vf.decoder instanceof EmbeddedVideoDecoder;
-    });
-}
-
 /**
  * Close a project's embedded images before it is replaced. Their decoders are
  * not in the decoder pool, each keeps its decoded frames, and its worker's
@@ -2104,6 +2124,7 @@ export function closeEmbeddedFrames(state) {
     });
     (state.frameWorkers || []).forEach(function (worker) { worker.terminate(); });
     state.frameWorkers = [];
+    state.embeddedImagesLeftOut = 0;
 }
 
 // ---------------------------------------------------------------------------
