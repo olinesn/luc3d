@@ -39,8 +39,13 @@ import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
 import { renameAnimal } from '../pose/behavior-labels.js';
+import { renamePredictedAnimal } from '../pose/behavior-predictions.js';
+import { renameStateAnimal } from '../pose/behavior-states.js';
+import { renameDiscoveryAnimal } from '../pose/behavior-discovery.js';
 import { behaviors } from '../pose/behavior-ethogram.js';
 import { setupBehaviorUi, updateBehaviorFrame } from './behavior-panel.js';
+import { detectAllFrames, detectThisFrame } from './behavior-detect.js';
+import { showBehaviorRulesModal } from './behavior-rules-modal.js';
 import { confirmRetrackWithBehaviorLabels } from './behavior-confirm.js';
 // View ▸ Define Planes — "Defining Plane Mode".
 import { togglePlaneMode, syncPlanes3D } from './plane-definition.js';
@@ -61,6 +66,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 // The toolbar's Animals field, beside Track Frame / Track All.
 import { wireAnimalCountField } from './animal-count-field.js';
 import { wireReprojThresholdField } from './reproj-threshold-field.js';
+import { wireToolbarMenuKeys, returnFocusTo } from './toolbar-menu-keys.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -227,6 +233,9 @@ function showRenameModal(kind) {
             idObj.name = newName;
             renameHiddenIdentity(state.session, oldIdName, newName);
             renameAnimal(state.session, oldIdName, newName);   // behavior labels are keyed by name
+            renamePredictedAnimal(state.session, oldIdName, newName);   // and so are predictions
+            renameStateAnimal(state.session, oldIdName, newName);   // and behavioral states
+            renameDiscoveryAnimal(state.session, oldIdName, newName);
             setStatus('Renamed identity to: ' + newName, 'success');
         }
         drawAllOverlays(state.currentFrame);
@@ -899,7 +908,7 @@ export function setupMenus() {
     // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
     setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
     // Behavior labelling: the Behavior menu, toolbar button, tab and mode.
-    setupBehaviorUi({ closeMenus: closeMenus, navigate: navigateToFrame });
+    setupBehaviorUi({ closeMenus: closeMenus, navigate: navigateToFrame, switchSession: switchSession });
     setTrackSummaryNavigator(navigateToFrame);   // the Track All summary's Identities samples and maps
     // After the tab fixes (or un-fixes) a switch, repaint everything that shows identities.
     setIdSwitchRefresher(function () {
@@ -1098,11 +1107,15 @@ export function setupMenus() {
         menu.appendChild(group);
         return group;
     }
-    function addTrailItems(menu, className, idPrefix, onPick) {
+    // `itemTag`: the toolbar's items are <button>s like the rest of its menus, so
+    // Tab reaches them and Enter and Space pick them without also reaching the
+    // shortcuts (ui/keyboard-target.js). The menu bar's stay <div>s, like every
+    // other item there: nothing opens those menus by keyboard.
+    function addTrailItems(menu, itemTag, className, idPrefix, onPick) {
         if (!menu) return;
         var lengths = addTrailGroup(menu, 'Length', 'Trail length');
         TRAIL_PRESETS.concat([null]).forEach(function (p) {
-            var item = document.createElement('div');
+            var item = document.createElement(itemTag);
             item.className = className;
             if (idPrefix) item.id = idPrefix + (p ? p.key : 'Custom');
             item.setAttribute('role', 'menuitemradio');
@@ -1127,7 +1140,7 @@ export function setupMenus() {
         var sample = TRACK_COLORS[0];
         var shades = addTrailGroup(menu, 'Shade', 'Trail shade');
         TRAIL_SHADES.forEach(function (shade) {
-            var item = document.createElement('div');
+            var item = document.createElement(itemTag);
             item.className = className;
             if (idPrefix) item.id = idPrefix + 'Shade' + shade.key.charAt(0).toUpperCase() + shade.key.slice(1);
             item.setAttribute('role', 'menuitemradio');
@@ -1146,8 +1159,8 @@ export function setupMenus() {
             shadeItems.push({ shade: shade, el: item });
         });
     }
-    addTrailItems(trailsMenu, 'tri-dropdown-item', '', function () {});
-    addTrailItems(trailsSubmenu, 'menu-dropdown-item', 'menuTrails', closeMenus);
+    addTrailItems(trailsMenu, 'button', 'tri-dropdown-item', '', function () {});
+    addTrailItems(trailsSubmenu, 'div', 'menu-dropdown-item', 'menuTrails', closeMenus);
     // Opening either menu (or hovering the button, whose tooltip names the
     // frame count) re-reads state.fps.
     [trailsDropdown, trailsParent].forEach(function (el) {
@@ -1165,6 +1178,10 @@ export function setupMenus() {
     // the frames typed). Enter applies, Esc cancels.
     function showCustomTrailModal() {
         if (document.getElementById('trailCustomModal')) return;
+        // Keyboard focus comes back to the item that opened the dialog, or the
+        // next Tab would start over at the top of the page. A pointer's was released.
+        var opener = document.activeElement;
+        var returnFocus = opener && opener.matches(':focus-visible') ? opener : null;
         var rate = trailRate(state.fps);
         var overlay = document.createElement('div');
         overlay.className = 'multi-frame-modal-overlay';
@@ -1227,6 +1244,7 @@ export function setupMenus() {
         function close() {
             document.removeEventListener('keydown', onKey, true);
             overlay.remove();
+            if (returnFocus) returnFocusTo(returnFocus);
         }
         function apply() {
             if (seconds == null) return;
@@ -3167,8 +3185,20 @@ export function setupUI() {
         settings: function () { showSettingsModal('wizard'); },
     });
 
+    // Behavior: the button (All frames) detects behaviors with each behavior's
+    // detector; This frame says what they find on the playhead's frame (the
+    // Behavior tab shows why). Label Behaviors mode, also in this menu, is
+    // wired by ui/behavior-panel.js. Blue while predictions stand
+    // (ui/run-buttons.js).
+    wireActionMenu('behaviorDropdown', {
+        all: function () { detectAllFrames(); },
+        frame: function () { detectThisFrame(); },
+        settings: function () { showBehaviorRulesModal(); },
+    });
+
     wireAnimalCountField();
     wireReprojThresholdField();
+    wireToolbarMenuKeys();
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
@@ -3772,6 +3802,7 @@ export function seekToLabeledFrame(direction) {
             var num = parseFloat(raw);
             if (raw !== '' && !isNaN(num) && num > 0 && num <= 1000) {
                 state.fps = num;
+                if (state.session) state.session.typedFps = num;   // said, not a default (`detectionEnv`)
                 applyPlaybackRate();
                 if (videoController && state.isPlaying) {
                     videoController.stopPlayback();

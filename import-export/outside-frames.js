@@ -19,7 +19,8 @@
  * The lazy path keeps both where they already are, in its columnar store:
  * `buildSessionRefGraph` gives each such video and skeleton a place in the header,
  * and `SioLazyLoader.remapTracksFromIdentity` keeps their track names when the
- * session's track list changes.
+ * session's track list changes. File ▸ Add SLP puts its own there too
+ * (`SioLazyLoader.commitAddedRows`, loading/lazy-store-rows.js).
  *
  * The eager path has no store, so this module holds them for it, on
  * `session.outsideFrames`:
@@ -34,11 +35,17 @@
  *    is lost. Node edits and track edits do not touch them.
  * `outsideFramesForSave` hands both to `buildSlpBytes`.
  *
+ * A behavior event kept on such a video goes on the entry its poses have, so the
+ * file's `frames` and `events` name one place. Both paths say which entry that is by
+ * the file's own record of the video (`listedVideos`, `buildBehaviorEvents`), never by
+ * its filename: campy names every video `0.mp4`.
+ *
  * Nothing here is written to `metadata.lucid`, and a file with no such frames saves
  * byte-identically (`tests/e2e/save-golden-digest.mjs`).
  */
 
 import { Instance } from '../pose/pose-data.js';
+import { keptVideoRecords } from './behavior-events.js';
 import { makePooledSioInstances } from './file-io.js';
 import { identityCatalogFinder, writeFileLabels } from './detection-labels.js';
 
@@ -70,6 +77,22 @@ export function headerVideoForOutsideFrames(SIO, video, id) {
     if (video && !video.hasEmbeddedImages) return video;
     if (video && video.sourceVideo) return video.sourceVideo;
     return newHeaderVideo(SIO, 'unknown_video_' + id + '.mp4', video && video.shape);
+}
+
+/**
+ * `headerVideoForOutsideFrames` for a `slpData.videos` record. Only the raw worker's
+ * records have no typed video to keep: they get a new one under the file's name.
+ *
+ * @param {Object} SIO - window.SleapIO
+ * @param {Object|null|undefined} record
+ * @param {number} id - the video's id in the file's `frames` table
+ * @returns {Object} a `SIO.Video`
+ */
+export function headerVideoOfRecord(SIO, record, id) {
+    if (record && !record._typedVideo && record.filename && !record.embedded) {
+        return newHeaderVideo(SIO, record.filename, record.shape);
+    }
+    return headerVideoForOutsideFrames(SIO, record && record._typedVideo, id);
 }
 
 /**
@@ -214,6 +237,11 @@ function keptVideoSlot(kept, slpData, videoIdx, camera) {
             filename: record && !record.embedded ? record.filename : null,
             shape: record ? record.shape : null,
             camera: camera,
+            // What this file's events know the video by (`fileEventsOf`): the very
+            // object a kept event of this file holds. A video File ▸ Add SLP brought
+            // has another file's record, so even at the same place in its own list
+            // it is never taken for theirs.
+            eventRecord: slpData.behaviorEvents ? slpData.behaviorEvents.videos[videoIdx] : null,
         });
     }
     return places.get(videoIdx);
@@ -473,98 +501,134 @@ export function keepOutsideColumnarFrames(session, slpData, own, camName) {
 }
 
 /**
- * Eager save: `session`'s kept frames as sleap-io.js objects. There is one row per
- * video and frame, because a lazy reopen's save keeps only the first row of each: a
- * kept pose on a camera's video goes into the frame `labels` already has there, so
- * this adds to `labels.labeledFrames`. What the camera's video is called follows the
- * camera, like the session's own poses. A camera the session has since lost leaves
- * the pose on the file's own record of that video.
+ * Eager save: `session`'s kept frames as sleap-io.js objects. Called before the
+ * session's Labels are built, because its events must go on these videos
+ * (`buildSlpLabelsAllViews`), and the frames need those Labels.
  *
- * `new SIO.Labels` lists a kept pose's skeleton after the session's, by itself.
+ * There is one row per video and frame, because a lazy reopen's save keeps only the
+ * first row of each: a kept pose on a camera's video goes into the frame the Labels
+ * already have there. What the camera's video is called follows the camera, like the
+ * session's own poses. A camera the session has since lost leaves the pose on the
+ * file's own record of that video. `new SIO.Labels` lists a kept pose's skeleton after
+ * the session's, by itself.
  *
  * @param {Session} session
- * @param {Object} labels - this session's `buildSlpLabelsAllViews` result. An identity
- *   only kept poses name is added to its `identities`.
- * @returns {{videos: Array, tracks: Array, labeledFrames: Array}|null} only what
- *   `labels` does not list yet
+ * @returns {{videos: Array, tracks: Array, listedVideos: Map<Object, Object>, labeledFramesFor: function(Object): Array}|null}
+ *   `videos`: those no camera of the session has, for the Labels to list after its
+ *   cameras; `listedVideos`: the file's record of a video (`fileEventsOf`) -> its entry
+ *   here; `labeledFramesFor(labels)`: the frames the session's Labels lack. An identity
+ *   only these poses name is added to `labels.identities`.
  */
-export function outsideFramesForSave(session, labels) {
+export function outsideFramesForSave(session) {
     var SIO = window.SleapIO;
-    var findIdentity = identityCatalogFinder(SIO, labels.identities);
     // A lazy session on this path (a project mixing lazy and eager sessions): its
     // store holds them, and the eager writer would otherwise leave them behind.
     var loader = session.lazyLoader;
-    if (loader && typeof loader.forEachOutsideRow === 'function') return lazyOutsideFramesForSave(SIO, loader, findIdentity);
+    if (loader && typeof loader.forEachOutsideRow === 'function') return lazyOutsideFramesForSave(SIO, session, loader);
     var kept = session.outsideFrames;
     if (!kept) return null;
+    var listedVideos = new Map();
     var videos = [];
-    var videoOfSlot = kept.videos.map(function (v) {
-        var camIdx = v.camera != null ? session.cameras.findIndex(function (c) { return c.name === v.camera; }) : -1;
-        if (camIdx >= 0 && labels.videos[camIdx]) return labels.videos[camIdx];
+    // Each place's own entry; null for one a camera of this session has.
+    var entryOfSlot = kept.videos.map(function (v) {
+        if (v.camera != null && session.cameras.some(function (c) { return c.name === v.camera; })) return null;
         var video = !v.typed && v.filename ? newHeaderVideo(SIO, v.filename, v.shape)
             : headerVideoForOutsideFrames(SIO, v.typed, v.id);
+        if (v.eventRecord) listedVideos.set(v.eventRecord, video);
         videos.push(video);
         return video;
     });
     var tracks = kept.tracks.map(function (name) { return new SIO.Track(name); });
-    var newSioInstance = makePooledSioInstances(SIO, labels.skeletons[0], session.skeleton.nodes.length);
-    var labeledFrames = kept.frames.map(function (f) {
-        return new SIO.LabeledFrame({
-            video: videoOfSlot[f.video],
-            frameIdx: f.frameIdx,
-            instances: f.instances.map(function (inst) {
-                var sioInst = newSioInstance(inst, inst.trackIdx >= 0 ? tracks[inst.trackIdx] : null);
-                writeFileLabels(sioInst, inst, findIdentity);
-                return sioInst;
-            }),
+    var trackNames = new Set(kept.tracks);
+    kept.otherSkeletonFrames.forEach(function (f) {
+        f.instances.forEach(function (inst) {
+            if (inst.track && !trackNames.has(inst.track.name)) {
+                trackNames.add(inst.track.name);
+                tracks.push(inst.track);
+            }
         });
     });
-    if (kept.otherSkeletonFrames.length > 0) {
-        var frameAt = new Map();    // video -> (frameIdx -> LabeledFrame)
-        function frameMap(video) {
-            if (!frameAt.has(video)) frameAt.set(video, new Map());
-            return frameAt.get(video);
-        }
-        labels.labeledFrames.concat(labeledFrames).forEach(function (lf) { frameMap(lf.video).set(lf.frameIdx, lf); });
-        var trackNames = new Set(kept.tracks);
-        kept.otherSkeletonFrames.forEach(function (f) {
-            var video = videoOfSlot[f.video];
-            var lf = frameMap(video).get(f.frameIdx);
-            if (!lf) {
-                lf = new SIO.LabeledFrame({ video: video, frameIdx: f.frameIdx, instances: [] });
-                frameMap(video).set(f.frameIdx, lf);
-                labeledFrames.push(lf);
-            }
-            f.instances.forEach(function (inst) {
-                lf.instances.push(inst);
-                if (inst.track && !trackNames.has(inst.track.name)) {
-                    trackNames.add(inst.track.name);
-                    tracks.push(inst.track);
-                }
-                // The writer resolves a pose's identity by object, in this save's list.
-                if (inst.identity) inst.identity = findIdentity(inst.identity);
+    return {
+        videos: videos, tracks: tracks, listedVideos: listedVideos,
+        labeledFramesFor: function (labels) {
+            var findIdentity = identityCatalogFinder(SIO, labels.identities);
+            var newSioInstance = makePooledSioInstances(SIO, labels.skeletons[0], session.skeleton.nodes.length);
+            var videoOfSlot = kept.videos.map(function (v, slot) {
+                return entryOfSlot[slot] || labels.videos[session.cameras.findIndex(function (c) { return c.name === v.camera; })];
             });
-        });
-    }
-    return { videos: videos, tracks: tracks, labeledFrames: labeledFrames };
+            var labeledFrames = kept.frames.map(function (f) {
+                return new SIO.LabeledFrame({
+                    video: videoOfSlot[f.video],
+                    frameIdx: f.frameIdx,
+                    instances: f.instances.map(function (inst) {
+                        var sioInst = newSioInstance(inst, inst.trackIdx >= 0 ? tracks[inst.trackIdx] : null);
+                        writeFileLabels(sioInst, inst, findIdentity);
+                        return sioInst;
+                    }),
+                });
+            });
+            if (kept.otherSkeletonFrames.length > 0) {
+                var frameAt = new Map();    // video -> (frameIdx -> LabeledFrame)
+                function frameMap(video) {
+                    if (!frameAt.has(video)) frameAt.set(video, new Map());
+                    return frameAt.get(video);
+                }
+                labels.labeledFrames.concat(labeledFrames).forEach(function (lf) { frameMap(lf.video).set(lf.frameIdx, lf); });
+                kept.otherSkeletonFrames.forEach(function (f) {
+                    var video = videoOfSlot[f.video];
+                    var lf = frameMap(video).get(f.frameIdx);
+                    if (!lf) {
+                        lf = new SIO.LabeledFrame({ video: video, frameIdx: f.frameIdx, instances: [] });
+                        frameMap(video).set(f.frameIdx, lf);
+                        labeledFrames.push(lf);
+                    }
+                    f.instances.forEach(function (inst) {
+                        lf.instances.push(inst);
+                        // The writer resolves a pose's identity by object, in this save's list.
+                        if (inst.identity) inst.identity = findIdentity(inst.identity);
+                    });
+                });
+            }
+            return labeledFrames;
+        },
+    };
 }
 
-function lazyOutsideFramesForSave(SIO, loader, findIdentity) {
+function lazyOutsideFramesForSave(SIO, session, loader) {
+    // A project file's store lists its videos as the file does, which is where this
+    // session's kept events come from. A per-camera store is another file: no events.
+    var records = loader._sharedStore ? keptVideoRecords(session) : new Map();
+    var listedVideos = new Map();
     var headerVideoOf = new Map();
     var trackByName = new Map();
     var labeledFrames = [];
     loader.forEachOutsideRow(function (store, row, id) {
         var lf = store.materializeFrame(row);
         if (!lf) return;
-        if (!headerVideoOf.has(lf.video)) headerVideoOf.set(lf.video, headerVideoForOutsideFrames(SIO, lf.video, id));
+        if (!headerVideoOf.has(lf.video)) {
+            var headerVideo = headerVideoForOutsideFrames(SIO, lf.video, id);
+            headerVideoOf.set(lf.video, headerVideo);
+            var record = records.get(store.videos.indexOf(lf.video));
+            if (record) listedVideos.set(record, headerVideo);
+        }
         lf.instances.forEach(function (inst) {
             if (inst.track && !trackByName.has(inst.track.name)) trackByName.set(inst.track.name, inst.track);
-            if (inst.identity) inst.identity = findIdentity(inst.identity);
         });
         labeledFrames.push(new SIO.LabeledFrame({ video: headerVideoOf.get(lf.video), frameIdx: lf.frameIdx, instances: lf.instances }));
     });
     if (labeledFrames.length === 0) return null;
-    return { videos: Array.from(headerVideoOf.values()), tracks: Array.from(trackByName.values()), labeledFrames: labeledFrames };
+    return {
+        videos: Array.from(headerVideoOf.values()), tracks: Array.from(trackByName.values()), listedVideos: listedVideos,
+        labeledFramesFor: function (labels) {
+            var findIdentity = identityCatalogFinder(SIO, labels.identities);
+            labeledFrames.forEach(function (lf) {
+                lf.instances.forEach(function (inst) {
+                    if (inst.identity) inst.identity = findIdentity(inst.identity);
+                });
+            });
+            return labeledFrames;
+        },
+    };
 }
 
 /**
