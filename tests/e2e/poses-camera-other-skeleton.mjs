@@ -115,6 +115,7 @@ def read(path):
         "error": None, "videos": [v.filename for v in labels.videos], "tracks": sorted(t.name for t in labels.tracks),
         "skeletons": [[s.name or "skeleton", s.node_names] for s in labels.skeletons],
         "sessions": sessions, "poses": sorted(poses), "detail": sorted(detail), "labeled": sorted(labeled), "groups": sorted(groups),
+        "suggestions": sorted(s.video.filename + "|" + str(s.frame_idx) for s in labels.suggestions),
         "repeatedFrames": len(keys) - len(set(keys)),
     }
 `;
@@ -199,6 +200,12 @@ for name, skeleton, base in (("camB_other_labeled", sk2, 210), ("camB_reversed_l
     fb = frames(b, skeleton, base)
     fb[1].instances[0].identity = beta
     sio.Labels(labeled_frames=fb, videos=[b], skeletons=[skeleton], tracks=[T1, T2], identities=[beta]).save(os.path.join(out, name + ".slp"), embed=False)
+
+# SLEAP's suggested frames in a camera's file: on other nodes, and with no pose at all.
+b = video("camB.mp4")
+sio.Labels(labeled_frames=frames(b, sk2, 210), videos=[b], skeletons=[sk2], tracks=[T1, T2], suggestions=[sio.SuggestionFrame(video=b, frame_idx=7)]).save(os.path.join(out, "camB_other_suggested.slp"), embed=False)
+b = video("camB.mp4")
+sio.Labels(labeled_frames=[], videos=[b], skeletons=[sk2], tracks=[], suggestions=[sio.SuggestionFrame(video=b, frame_idx=9)]).save(os.path.join(out, "camB_empty_suggested.slp"), embed=False)
 
 # Hand labels on the reversed skeleton, one node not visible, one missing.
 b = video("camB.mp4")
@@ -508,6 +515,7 @@ function compare(what, got, want) {
     check(got.repeatedFrames === 0, what + ': one row per video and frame', got.repeatedFrames);
     if (want.detail) check(eq(got.detail, want.detail), what + ': what a kept pose also carries', diff(got.detail || [], want.detail));
     if (want.labeled) check(eq(got.labeled, want.labeled), what + ': the identity on each detection', got.labeled);
+    if (want.suggestions) check(eq(got.suggestions, want.suggestions), what + ': the suggested frames', got.suggestions);
     if (want.groups) check(eq(got.groups, want.groups), what + ': groups point at the right poses', diff(got.groups || [], want.groups));
     if (want.sessions) check(eq(got.sessions, want.sessions), what + ': cameras and their videos', got.sessions);
     if (want.videos) check(eq([...got.videos].sort(), [...want.videos].sort()), what + ': video list', got.videos);
@@ -546,7 +554,7 @@ async function saveEveryWay(page, what, want, reopenRoutes = ROUTES) {
 try {
     uv(PY_WRITE, [tmp]);
     const NAMES = ['camA_main', 'camB_main', 'camC_main', 'camD_main', 'camF_main', 'camA_other', 'camB_other', 'camC_other', 'camD_other', 'camB_reversed', 'camC_reversed', 'camA_reversed',
-        'camC_main_abc', 'camD_main_abc', 'camC_main_rev', 'camD_main_rev', 'camB_edged', 'camB_twin', 'camB_kinds', 'camB_other_labeled', 'camB_reversed_labeled', 'camB_reversed_hand', 'camB_other_first', 'camB_main_first', 'camB_stale', 'camB_two_videos', 'camB_reversed_two_videos', 'camB_later_video', 'camB_empty'];
+        'camC_main_abc', 'camD_main_abc', 'camC_main_rev', 'camD_main_rev', 'camB_edged', 'camB_twin', 'camB_kinds', 'camB_other_labeled', 'camB_reversed_labeled', 'camB_other_suggested', 'camB_empty_suggested', 'camB_reversed_hand', 'camB_other_first', 'camB_main_first', 'camB_stale', 'camB_two_videos', 'camB_reversed_two_videos', 'camB_later_video', 'camB_empty'];
     const sourcePaths = NAMES.map(n => path.join(tmp, n + '.slp'));
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
     const sources = {};
@@ -832,6 +840,22 @@ try {
         savedForPython(await saveBytes(page), what, {
             poses: onMain([...sources.camA_main.poses, ...sources.camB_reversed_labeled.poses]), labeled: sources.camB_reversed_labeled.labeled, skeletons: [MAIN],
         });
+        await page.close();
+    }
+
+    for (const route of ROUTES) {
+        const what = `suggested frames in a hidden camera's file, ${route}`;
+        const { page, status } = await openFolder({ camA: 'camA_main', camB: 'camB_other_suggested' }, { route });
+        check(/camB shows no poses/.test(status), what + ': the status names the camera', status);
+        savedForPython(await saveBytes(page), what, {
+            poses: [...sources.camA_main.poses, ...sources.camB_other_suggested.poses].sort(), suggestions: ['camB.mp4|7'], skeletons: [MAIN, OTHER],
+        });
+        await page.close();
+    }
+    for (const route of ROUTES) {
+        const what = `suggested frames in a camera's file with no pose, ${route}`;
+        const { page } = await openFolder({ camA: 'camA_main', camB: 'camB_empty_suggested' }, { route });
+        savedForPython(await saveBytes(page), what, { poses: sources.camA_main.poses, suggestions: ['camB.mp4|9'] });
         await page.close();
     }
 

@@ -52,6 +52,7 @@ import {
 import {
     camerasOnOtherNodesNote, camerasRefusedNote, cameraSkeletonFit, chooseFolderSkeleton, readCameraPosesByName,
 } from './folder-skeleton.js';
+import { keepSuggestions } from '../import-export/kept-suggestions.js';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
@@ -2423,6 +2424,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         var singleReaders = new Map();
         noteVideoReaders(singleReaders, session, singleEntry, new Set(Object.keys(videoIdxToCameraName).map(Number)), videoIdxToCameraName, cameras);
         keepOtherSkeletonFrames(slpData, singleReaders, session, singleEntry);
+        keepSuggestions(slpData, [{ session: session, cameraByVideo: videoIdxToCameraName }]);
 
         // Restore the project's saved state from the SLP's sessions_json —
         // InstanceGroup grouping, per-instance nulledNodes/occlusion,
@@ -3856,6 +3858,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 if (!state.session.fileVideos) state.session.fileVideos = new Map();
                 state.session.fileVideos.set(camName, ownFileVideo);
             }
+
+            // A file with no frames is read as its first video (`SioLazyLoader.open`).
+            keepSuggestions(slpData, [{ session: state.session, cameraByVideo: { [ownVideo === undefined ? 0 : ownVideo]: camName } }]);
 
             var cameraFit = cameraFits[pri];
             if (cameraFit.onOtherNodes) {
