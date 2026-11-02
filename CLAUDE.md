@@ -384,6 +384,7 @@ A `.slp` can hold its own images (`/video{N}/video`, usually `.pkg.slp`): `Embed
 - **Most frames have no image.** Clear the view (`seekToFrame`), count frames up to the last labeled one (`minFrames`), and open on a frame with an image (`session.lastFrame`, which `switchSession` goes to).
 - **A save writes poses and video names, not images, so it must never write over the file they are in.** The menus don't record that file's handle (`hasEmbeddedVideos`), the next Save asks where to save, and its status says what is in the new file. This is why a large one must not take the lazy route (`slpHasEmbeddedImages`): no decoder there, so no way to tell.
 - **The decoder is not in the pool.** `switchSession` keeps it and drops only its frames, and a loader that replaces the project calls `closeEmbeddedFrames`, or its frames stay alive through the worker's listener.
+- **After a failed read the frame worker reads nothing more** (`FS.read` wrapped; HDF5 is stopped mid-call). Measured without this: every later read comes back as all zeros with no error, also once the file is back, so raw pixels show as a black picture and an encoded image fails to decode with no reason given. Its images stay blank (`fileUnreadable`, and the status bar says so) until the project is opened again.
 - A frame that fails to read still answers (`{type:'frame', error}`), or the seek and the load behind it wait forever.
 Tests: `tests/test-slp-package-reader.mjs`, e2e `slp-embedded-images` (fixtures: `tests/fixtures/slp-embedded/`, `make_fixture.py`).
 
@@ -395,6 +396,17 @@ In Google Drive for desktop (macOS File Provider), a Blob read of a not-yet-down
 - mp4box's index scan reads through it too (`readChunk`).
 - Not covered: `<video>` blob-URL playback and small JSON/TOML `.text()` reads. `.slp` reads go through h5wasm's own `cold-read` patch.
 - Tests: `tests/test-cold-read-guard.mjs`, `tests/e2e/video-cold-read.mjs`.
+
+## A video file that has gone away
+
+A file that was moved, or whose share dropped, fails like a cloud file still downloading, but for good. `createReadWatch` (`loading/cold-read-guard.js`) tells them apart, per open file; `OnDemandVideoDecoder.fileUnreadable` is its answer, and `ui/video-read-status.js` (the status bar, pausing playback, redrawing on return) acts on it.
+- **Never return another frame's picture as frame N.** `_getFrameHTML5` returns null unless the `<video>` landed (`seeked`) AND the file reads (`check()`). Measured on a real file moved away: in Chrome 156 a seek it can't serve hangs with no event and no error, in WebKit 26.6 `seeked` fires at once anyway, in Firefox 155 `error` (code 3) does; in all three, drawing it gives the picture it last showed. A view with no picture for a frame it has goes blank under its poses (`seekToFrame`).
+- **The retries stay for a file downloading:** every read keeps all of them until one has used them up, and while a file is being opened always (the watch is `arm()`ed at the end of `init` / `switchSource`). After that each read gets one try, with no second decode and no `<video>` fallback, so a step costs almost nothing. Any read that works ends it; the failed read is tried again every `FILE_RECHECK_MS`, so it ends by itself (not byte 0: a cloud file can be readable in parts).
+- **A read that hangs counts as failed** at `READ_STALL_MS` (a dropped share can leave one unanswered for minutes), and while one is unanswered no more are started.
+- **A `<video>` gives no signal in time:** playing, it plays on from what it has read, and in Chrome only ~64 s later fires `error`. So while playing each decoder asks the file every `FILE_RECHECK_MS` (`_checkWhilePlaying`), and playback stops on failure and is refused while a shown view's file is gone.
+- **Never draw a `<video>` with `.error` set:** in Chrome after ~30 s of failed reads it fires `error` (code 2), stays dead until `load()` (`_reviveVideoEl`), and taints any canvas it is drawn on, for good.
+- Any new path to a frame of a File must read through the decoder's watch, or check `fileUnreadable`.
+Tests: `tests/test-cold-read-guard.mjs` §6, `tests/e2e/video-file-gone.mjs`.
 
 ## Native resolution (1:1)
 

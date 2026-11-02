@@ -35,6 +35,16 @@
  *     are checked again the same way, at most three re-reads deep. Bytes that
  *     really are zero cost one small re-read.
  *
+ * A file that has GONE AWAY (moved, or on a share that dropped) fails the same
+ * way, but for good, and retrying every read then costs 4.2 s each, for nothing.
+ * `createReadWatch` tells the two apart for one open file: a read goes on being
+ * retried until one has used up every retry; from then on the file is `failing`,
+ * every read gets one try, and the failed read is tried again every
+ * FILE_RECHECK_MS until a read works, which ends it. Reads of a file still
+ * downloading keep all their retries, since nearly all of them work when read
+ * again (above). A dropped share can also leave a read unanswered for minutes
+ * rather than failing it, so under a watch a read has a deadline as well.
+ *
  * No imports, so a Node test can load it (tests/test-cold-read-guard.mjs).
  */
 
@@ -42,6 +52,27 @@ export const COLD_READ_BLOCK = 4096;
 
 /** Delays before each retry of a read that threw; the error stands after the last. */
 export const COLD_READ_RETRY_MS = [200, 1000, 3000];
+
+/** While a file is failing (createReadWatch): how often its failed read is tried again, to notice it is back. */
+export const FILE_RECHECK_MS = 2000;
+
+/**
+ * Under a watch, a read still unanswered after this long counts as failed, with
+ * no retry. Generous: a read is at most a 1 MiB window, and a read that answers
+ * later still ends the failure.
+ */
+export const READ_STALL_MS = 15000;
+
+/** The same deadline once the file is already failing, when nobody should wait on it. */
+export const READ_STALL_FAILING_MS = 2000;
+
+/** The errors of reads that failed under an armed watch (isWatchedReadFailure). */
+var watchedFailures = new WeakSet();
+
+/** Is this the error of a read a watch has already seen fail? */
+export function isWatchedReadFailure(err) {
+    return err !== null && typeof err === 'object' && watchedFailures.has(err);
+}
 
 /** Page-wide counts (for the console and tests): zero runs re-read / repaired, reads retried / rescued. */
 export const coldReadStats = { rereads: 0, recovered: 0, retries: 0, rescued: 0 };
@@ -80,19 +111,61 @@ function nameOf(blob) {
     return (blob && blob.name) || 'file';
 }
 
-/** `[start, end)` of `blob` as bytes, trying again when the read throws. */
-async function readRetrying(blob, start, end) {
+/**
+ * One Blob read. Under an armed watch it has a deadline, and a read of a failing
+ * file with an earlier read still unanswered fails at once: on a hung share each
+ * new read would only hang as well, and they would pile up.
+ */
+function readOnce(blob, start, end, watch) {
+    if (!watch || !watch.armed) return blob.slice(start, end).arrayBuffer();
+    if (watch.failing && watch.stalled > 0) {
+        return Promise.reject(new Error(nameOf(blob) + ' is not answering reads'));
+    }
+    return new Promise(function (resolve, reject) {
+        var read = blob.slice(start, end).arrayBuffer();
+        var ms = watch.failing ? watch.stallFailingMs : watch.stallMs;
+        var late = false;
+        var timer = setTimeout(function () {
+            late = true;
+            watch.stalled++;
+            var err = new Error(nameOf(blob) + ' did not answer a read in ' + ms + ' ms');
+            watch.noteFailed(start, end, err);
+            reject(err);
+        }, ms);
+        read.then(function (ab) {
+            clearTimeout(timer);
+            if (!late) { resolve(ab); return; }
+            // nobody is waiting for these bytes any more, but it did answer
+            watch.stalled--;
+            watch.noteRead();
+        }, function (e) {
+            clearTimeout(timer);
+            if (!late) reject(e);
+            else watch.stalled--;
+        });
+    });
+}
+
+/**
+ * `[start, end)` of `blob` as bytes, trying again when the read throws. Under a
+ * watch of a file already failing there is only the one try.
+ */
+async function readRetrying(blob, start, end, watch) {
     for (var attempt = 0; ; attempt++) {
         try {
-            var bytes = new Uint8Array(await blob.slice(start, end).arrayBuffer());
+            var bytes = new Uint8Array(await readOnce(blob, start, end, watch));
             if (attempt > 0) {
                 coldReadStats.rescued++;
                 console.warn('[cold-read] ' + nameOf(blob) + ' bytes ' + start + '-' + end + ' read on try '
                     + (attempt + 1) + ' (file still downloading?)');
             }
+            if (watch) watch.noteRead();
             return bytes;
         } catch (e) {
-            if (attempt >= COLD_READ_RETRY_MS.length) throw e;
+            if (attempt >= COLD_READ_RETRY_MS.length || (watch && watch.failing)) {
+                if (watch) watch.noteFailed(start, end, e);
+                throw e;
+            }
             coldReadStats.retries++;
             await sleep(COLD_READ_RETRY_MS[attempt]);
         }
@@ -107,9 +180,10 @@ async function readRetrying(blob, start, end) {
  * @param {Uint8Array} bytes
  * @param {number} position
  * @param {number} [depth]
+ * @param {Object} [watch] - createReadWatch's, for the re-reads
  * @returns {Promise<Uint8Array>} `bytes`
  */
-export async function repairZeroRuns(blob, bytes, position, depth) {
+export async function repairZeroRuns(blob, bytes, position, depth, watch) {
     depth = depth || 0;
     var end = position + bytes.length;
     var runs = zeroRuns(bytes, position);
@@ -118,7 +192,7 @@ export async function repairZeroRuns(blob, bytes, position, depth) {
         // block on each side is read again with it.
         var from = Math.max(position, runs[i][0] - COLD_READ_BLOCK);
         var to = Math.min(end, runs[i][1] + COLD_READ_BLOCK);
-        var again = await readRetrying(blob, from, to);
+        var again = await readRetrying(blob, from, to, watch);
         coldReadStats.rereads++;
         var fixed = 0;
         for (var k = 0, at = from - position, n = Math.min(again.length, to - from); k < n; k++, at++) {
@@ -129,7 +203,7 @@ export async function repairZeroRuns(blob, bytes, position, depth) {
         console.warn('[cold-read] ' + nameOf(blob) + ' bytes ' + from + '-' + to
             + ' first read as zeros were read again (file still downloading?)');
         // The re-read can carry a hole of its own.
-        if (depth < 2) await repairZeroRuns(blob, bytes.subarray(from - position, to - position), from, depth + 1);
+        if (depth < 2) await repairZeroRuns(blob, bytes.subarray(from - position, to - position), from, depth + 1, watch);
     }
     return bytes;
 }
@@ -140,11 +214,12 @@ export async function repairZeroRuns(blob, bytes, position, depth) {
  * @param {Blob} blob
  * @param {number} start
  * @param {number} end
+ * @param {Object} [watch] - createReadWatch's, when `blob` is a file kept open
  * @returns {Promise<Uint8Array>}
  */
-export async function readBlobRange(blob, start, end) {
-    var bytes = await readRetrying(blob, start, end);
-    return repairZeroRuns(blob, bytes, start);
+export async function readBlobRange(blob, start, end, watch) {
+    var bytes = await readRetrying(blob, start, end, watch);
+    return repairZeroRuns(blob, bytes, start, 0, watch);
 }
 
 /**
@@ -155,6 +230,88 @@ export async function readBlobRange(blob, start, end) {
  */
 export async function readBlobArrayBuffer(blob) {
     return (await readBlobRange(blob, 0, blob.size)).buffer;
+}
+
+/**
+ * Whether one open file can be read right now, learned from the reads made with
+ * this watch (`readBlobRange`, `guardedRangeSource`) and from `check()`.
+ *
+ * It does nothing until `arm()`: while a file is being opened every read keeps all
+ * its retries, as a failed read there costs a camera its frame-accurate decoder
+ * for the whole session. Armed, a read that fails for good (or passes its
+ * deadline) makes the file `failing`, and `onChange(true, err)` is called; any
+ * read that works ends that, and `onChange(false)` is called.
+ *
+ * Any read, not only the failed part: a cloud file can be readable in the parts
+ * downloaded and not in the others. The recheck reads what failed, though, since
+ * reading byte 0 would call such a file back when it is not.
+ *
+ * @param {Blob} blob
+ * @param {{ onChange?: function(boolean, Error=): void, recheckMs?: number, stallMs?: number, stallFailingMs?: number }} [opts]
+ */
+export function createReadWatch(blob, opts) {
+    var onChange = (opts && opts.onChange) || null;
+    var recheckMs = (opts && opts.recheckMs) || FILE_RECHECK_MS;
+    var timer = null, lastFailed = null, checking = null;
+
+    function recheck() {
+        timer = null;
+        if (watch.failing) watch.check();
+    }
+
+    var watch = {
+        armed: false,
+        failing: false,
+        stalled: 0,   // reads past their deadline and still unanswered
+        stallMs: (opts && opts.stallMs) || READ_STALL_MS,
+        stallFailingMs: (opts && opts.stallFailingMs) || READ_STALL_FAILING_MS,
+
+        arm: function () { watch.armed = true; },
+
+        /** For good: no more rechecks and no more `onChange`. */
+        stop: function () {
+            watch.armed = false;
+            watch.failing = false;
+            lastFailed = null;
+            onChange = null;
+            if (timer) { clearTimeout(timer); timer = null; }
+        },
+
+        noteRead: function () {
+            lastFailed = null;
+            if (!watch.failing) return;
+            watch.failing = false;
+            if (timer) { clearTimeout(timer); timer = null; }
+            if (onChange) onChange(false);
+        },
+
+        noteFailed: function (start, end, err) {
+            if (!watch.armed) return;
+            if (err !== null && typeof err === 'object') watchedFailures.add(err);
+            lastFailed = [start, end];
+            if (!timer) timer = setTimeout(recheck, recheckMs);
+            if (watch.failing) return;
+            watch.failing = true;
+            if (onChange) onChange(true, err);
+        },
+
+        /**
+         * Read the file now, for what the watch can't see (a `<video>` reads it
+         * natively): what failed last, else its first byte, with the same retries
+         * as any other read. Resolves to whether it could be read.
+         * @returns {Promise<boolean>}
+         */
+        check: function () {
+            if (!checking) {
+                var range = lastFailed || [0, Math.min(1, blob.size)];
+                checking = readRetrying(blob, range[0], range[1], watch).then(
+                    function () { checking = null; return true; },
+                    function () { checking = null; return false; });
+            }
+            return checking;
+        },
+    };
+    return watch;
 }
 
 /** guardedRangeSource reads whole aligned windows of this size ... */
@@ -177,11 +334,12 @@ export const RANGE_CACHE_BYTES = 4 << 20;
  * A request is answered with a copy, so mediabunny's own cache never pins a
  * whole window.
  * @param {Blob} blob
- * @param {{ windowBytes?: number, cacheBytes?: number }} [opts]
+ * @param {{ windowBytes?: number, cacheBytes?: number, watch?: Object }} [opts] - `watch`: createReadWatch's
  */
 export function guardedRangeSource(blob, opts) {
     var W = (opts && opts.windowBytes) || RANGE_WINDOW_BYTES;
     var cap = (opts && opts.cacheBytes) || RANGE_CACHE_BYTES;
+    var readWatch = (opts && opts.watch) || undefined;
     var size = blob.size;
     var windows = [];   // { start, end, bytes: Promise<Uint8Array> }, most recently used last
 
@@ -198,7 +356,7 @@ export function guardedRangeSource(blob, opts) {
 
     function load(start, end) {
         var w = { start: Math.floor(start / W) * W, end: Math.min(size, Math.ceil(end / W) * W), bytes: null };
-        w.bytes = readBlobRange(blob, w.start, w.end);
+        w.bytes = readBlobRange(blob, w.start, w.end, readWatch);
         // a failed read must not stay cached: the next request reads again
         w.bytes.catch(function () { var i = windows.indexOf(w); if (i >= 0) windows.splice(i, 1); });
         windows.push(w);
