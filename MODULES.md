@@ -7270,8 +7270,9 @@ and `tests/test-visibility-metadata.js`.
 
 ### ui/toolbar-menu-keys.js
 
-**Purpose.** The keyboard's side of the toolbar's hover menus (`.tri-dropdown`,
-pure CSS in `styles.css`): which of two open menus paints on top, and Esc.
+**Purpose.** The keyboard's side of the hover menus (`.tri-dropdown`, pure CSS in
+`styles.css`), the toolbar's and each pane's zoom badge: which of two open menus
+paints on top, Esc, and where a dialog opened from a menu gives focus back to.
 
 **Which menu paints on top.** Focus and hover can each hold a menu open, so two
 can overlap. Tab sets `.keyboard-nav` on the toolbar and the pointer moving over
@@ -7296,20 +7297,47 @@ It closes the innermost thing first. The listener is on `window` in the capture
 phase, ahead of everything on `document`, and stops the event: the first Esc closes
 the menu, the next cancels Edit Group or leaves Label Behaviors mode (whose Esc also
 ends running behaviors). Dialogs keep their Esc: several take no focus from the
-toolbar (Settings…, Calibration Required), so `underDialog` hit-tests the focused
-control, because the dialogs share no class but every one covers the window.
+menu (Settings…, Calibration Required), so `underDialog` hit-tests the menu's button,
+because the dialogs share no class but every one covers the window. The button, not
+the focused item: a pane can clip the items of its zoom badge.
+
+**A dialog that takes focus** notes where it was (`keyboardFocus`) and gives it back
+as it closes, or the next Tab starts over at the top of the page. Cancel gives back
+the focus (`returnFocusTo`). A Continue that starts a run gives back only the place
+(`returnPlaceTo`): the keys go to the app and the menu shuts, as after Esc. Nothing
+stops a second tracking pass starting on top of the first (Track pressed again gave
+6 identities for 2 animals), so focus must not sit on the control that starts one,
+where an extra Enter or a held one would press it. A pointer's focus is never noted,
+and nothing comes back if a pointer closes the dialog: focus would hold a menu open
+with the pointer elsewhere.
 
 **Key exports.**
 - `wireToolbarMenuKeys()` — called once from `setupUI` (`ui/ui-wiring.js`).
-- `returnFocusTo(el)` — give focus back after a dialog that took it closes. The
-  menu has closed by then and a closed menu's item cannot take focus, so the
-  menu is opened (`.open`) for that one call. Used by Custom…'s dialog.
+- `wireMenuReturn(dropdown)` — clear `.menu-dismissed` when the user comes back to
+  that menu. For the toolbar's menus (above) and each zoom badge
+  (`ui/sessions-panes.js`).
+- `keyboardFocus()` — the element keyboard focus is on, or null. A dialog calls it
+  before taking focus.
+- `returnFocusTo(el)` — give focus back as a dialog closes with nothing started. Call
+  it BEFORE removing the dialog (it tells a pointer's close by where focus is then);
+  null does nothing. The menu has closed by then and a closed menu's item cannot take
+  focus, so the menu is opened (`.open`) for that one call. The selection moves too:
+  once nothing has focus, Firefox starts the next Tab from the selection, which a
+  script's `focus()` does not move.
+- `returnPlaceTo(el)` — the same for a Continue that starts what `el` runs: focus goes
+  to the page and the next Tab carries on from `el` (WebKit's starts over at the top
+  of the page).
+
+Used by Frame range… (`ui/track-range-modal.js`), the first-use Track dialog
+(`ui/track-setup-modal.js`) and Custom… (`ui/ui-wiring.js`).
 
 **Imports from project modules.** `./keyboard-target.js` (`isTextEntryTarget`).
 
-**Imported by.** `ui/ui-wiring.js`.
+**Imported by.** `ui/ui-wiring.js`, `ui/sessions-panes.js`, `ui/track-range-modal.js`,
+`ui/track-setup-modal.js`.
 
-Test: `tests/e2e/toolbar-menu-keyboard.mjs` (`BROWSER=firefox|webkit` to switch).
+Tests: `tests/e2e/toolbar-menu-keyboard.mjs`, `tests/e2e/track-dialogs-keyboard.mjs`,
+`tests/e2e/zoom-badge-keyboard.mjs` (`BROWSER=firefox|webkit` to switch).
 
 ### ui/plane-toolbar-lock.js
 
@@ -9018,7 +9046,12 @@ multi-video docking layout.
   `ZOOM_PRESET_PERCENTS` and Fit for THAT pane's view (`setZoomPercent` /
   `resetZoom`; items carry `data-zoom-pct` / `data-zoom-fit`). 100% is ticked
   only when the view is AT 1:1 (`zoom.native`). The badge stops `mousedown` so a
-  click on it never starts the cell's pan / box zoom.
+  click on it never starts the cell's pan / box zoom. The items are `<button>`s, so
+  Tab reaches them (at 5 more stops per zoomed pane) and Enter and Space pick them, and
+  Esc closes the menu (`ui/toolbar-menu-keys.js`, `wireMenuReturn`). A short pane clips
+  the menu, so `.video-cell.zoomed` is `overflow: clip`: with `hidden`, Tab onto a
+  clipped item scrolled the pane and it stayed shifted. Covered by
+  `tests/e2e/zoom-badge-keyboard.mjs`.
 - `multiSelectViews`, `clearMultiSelect`.
 - `refreshPaneInteractions()` — after any pane rebuild: re-attach the
   interaction manager, give a view a zoom state the FIRST time it is docked
@@ -9104,6 +9137,7 @@ multi-video docking layout.
 - `./info-panel.js` — `updateInfoPanel`, `populateTimelineVisibility`.
 - `./loading-progress-modal.js` — `getLoadingProgressModal` (`switchSession`'s
   "Loading videos" progress).
+- `./toolbar-menu-keys.js` — `wireMenuReturn`, for each pane's zoom badge.
 - `./frame-readout.js` — `clearReadout` (session removed),
   `refreshReadoutTotals` (`switchSession` restoring a cached frame count / fps).
 - `../pose/initialization.js` — `setup3DViewport`.
@@ -10635,10 +10669,14 @@ window (e.g. around a known ID switch) while iterating on settings.
   inline, and on **Continue** calls `trackFrameRange(start, end)`
   (`pose/tracker.js`), which owns the loading overlay and the status line from
   there. Cancel, `Esc` and a backdrop click all close it with no side effects.
+  `Enter` on the Cancel button is Cancel, and a held `Enter`'s repeats answer nothing.
+  Cancel gives keyboard focus back to the item that opened it (`returnFocusTo`);
+  Continue only its place (`returnPlaceTo`), since the run has started.
   `opts.onTracked(frameIdx)` is called with the last frame tracked on success.
 
 **Imports from project modules.** `ui/app-state.js` (`state`,
-`getActiveSession`), `import-export/save-load.js` (`setStatus`),
+`getActiveSession`), `ui/toolbar-menu-keys.js` (`keyboardFocus`, `returnFocusTo`,
+`returnPlaceTo`), `import-export/save-load.js` (`setStatus`),
 `pose/tracker.js` (`trackFrameRange`, `trackableFrameBounds`,
 `getTrackerNumAnimals`, `setTrackerNumAnimals`), `pose/placeholder-cameras.js`
 (`hasRealCalibration` — with placeholder cameras only, the dialog does not open
@@ -10691,7 +10729,8 @@ Cancel. On success the viewer is parked on the **last frame tracked**.
 - **`--accent-color` must stay defined.** `:root` aliases
   `--accent-color: var(--accent)`; without it `.range-slider-fill` and every
   `.multi-frame-modal button.primary` resolve to `transparent`.
-- Covered by `tests/e2e/track-frame-range.mjs` (phases 4–5).
+- Covered by `tests/e2e/track-frame-range.mjs` (phases 4–5) and, for the keyboard,
+  `tests/e2e/track-dialogs-keyboard.mjs`.
 
 ---
 
@@ -10730,7 +10769,10 @@ frame is never checked); Track Frame Range shows the same section.
   `{animals: number|null, nodeWeights: {name: w}, thresholds: {id: v}}` (every
   node and setting shown, edited or not; `{}` thresholds when none were) on
   Continue / Enter, and `null` on Cancel / Esc / a backdrop click. A second
-  call while one is open resolves `null` at once.
+  call while one is open resolves `null` at once. A held `Enter`'s repeats answer
+  nothing. Cancel gives keyboard focus back to what opened it (`returnFocusTo`: the
+  Track button or a menu item); Continue only its place (`returnPlaceTo`), since
+  the run starts now and focus must not sit on the control that starts it.
 - `IMAGE_CHECK_IDS` — the image check's settings in dialog order, the switch
   first.
 - `buildImageCheckFields(defs)` → `{element, read, refresh}` — the image-check
@@ -10742,8 +10784,9 @@ frame is never checked); Track Frame Range shows the same section.
   the switch "…after `after`" (default "Track All"); Track Frame Range passes
   "tracking the range".
 
-**Imports from project modules.** None — a LEAF on purpose. It commits
-nothing: `pose/tracker.js` (`askTrackSetup`) writes the count through
+**Imports from project modules.** Only `ui/toolbar-menu-keys.js` (`keyboardFocus`,
+`returnFocusTo`, `returnPlaceTo`), itself import-free but for `keyboard-target.js`;
+otherwise a LEAF on purpose. It commits nothing: `pose/tracker.js` (`askTrackSetup`) writes the count through
 `setTrackerNumAnimals`, the weights through `updateNodeWeights` and the image
 check through `updateTrackingThresholds` — the settings the toolbar's Animals
 field and the Tracking Wizard edit, so there is no second copy of any of them
@@ -11516,7 +11559,7 @@ dropdown item),
 field),
 `reproj-threshold-field.js` (`wireReprojThresholdField`, the Triangulate menu's
 Reprojection error field),
-`toolbar-menu-keys.js` (`wireToolbarMenuKeys`, `returnFocusTo`),
+`toolbar-menu-keys.js` (`wireToolbarMenuKeys`, `keyboardFocus`, `returnFocusTo`),
 `view-align-modal.js` (`showAlignViewsModal`, View ▸ "Align Views to
 References…"),
 `seekbar-tooltip.js` (`installSeekbarTooltip`),
