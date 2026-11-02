@@ -254,11 +254,12 @@ for (let i = 0; i < 60; i++) {
 }
 const browser = await chromium.launch();
 // `page.evaluate` has no timeout, so a step waiting on a click nobody makes would sit
-// silent for good. Closing the browser fails that step.
+// silent for good. Closing the browser fails that step. STALL_MINUTES= for a busy machine.
+const STALL_MINUTES = Number(process.env.STALL_MINUTES || 5);
 const stallGuard = setTimeout(() => {
-    console.log('\nStuck: no check for 5 minutes');
+    console.log('\nStuck: no check for ' + STALL_MINUTES + ' minutes');
     browser.close();
-}, 5 * 60 * 1000);
+}, STALL_MINUTES * 60 * 1000);
 stallGuard.unref();
 
 async function newAppPage() {
