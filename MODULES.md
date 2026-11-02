@@ -7265,6 +7265,49 @@ RIGHT edge, or the closed menu runs past the window as scroll overflow.
 Covered by `tests/e2e/toolbar-animal-count.mjs` and, for the file format, `tests/e2e/visibility-settings-roundtrip.mjs`
 and `tests/test-visibility-metadata.js`.
 
+### ui/toolbar-menu-keys.js
+
+**Purpose.** The keyboard's side of the toolbar's hover menus (`.tri-dropdown`,
+pure CSS in `styles.css`): which of two open menus paints on top, and Esc.
+
+**Which menu paints on top.** Focus and hover can each hold a menu open, so two
+can overlap. Tab sets `.keyboard-nav` on the toolbar and the pointer moving over
+the toolbar drops it. With it, the menu holding focus is on top; without it, the
+one under the pointer is (`z-index` 202 and 201 over the menus' 200). Plain
+`:focus-within` is not enough: a number field keeps focus after a click, and its
+menu would then cover the next menu's items, right where the pointer has to pass
+to reach them.
+
+**Esc** on a menu's button or item closes the menu and blurs the control: the
+keys go back to the app. Focus does not go to the menu's button, where the next
+Space or Enter would run Track, Triangulate or Smooth on all frames, and that
+matches the menus' number fields, whose own handlers revert and blur on Esc (they
+are left to it: there Esc means "drop what I typed", so a pointer on the menu keeps
+it open). `.menu-dismissed` shuts the menu at once, without the 0.35 s hover grace
+period (so the next Tab skips its items), and beats `:hover` (so a pointer resting
+on it does not hold it open); it lasts until `mouseenter` or `focusin` on that
+dropdown. Chromium and Firefox keep the place after the blur, so Tab carries on at
+the next control. WebKit does not: its next Tab starts over at the top of the page.
+
+It closes the innermost thing first. The listener is on `window` in the capture
+phase, ahead of everything on `document`, and stops the event: the first Esc closes
+the menu, the next cancels Edit Group or leaves Label Behaviors mode (whose Esc also
+ends running behaviors). Dialogs keep their Esc: several take no focus from the
+toolbar (Settings…, Calibration Required), so `underDialog` hit-tests the focused
+control, because the dialogs share no class but every one covers the window.
+
+**Key exports.**
+- `wireToolbarMenuKeys()` — called once from `setupUI` (`ui/ui-wiring.js`).
+- `returnFocusTo(el)` — give focus back after a dialog that took it closes. The
+  menu has closed by then and a closed menu's item cannot take focus, so the
+  menu is opened (`.open`) for that one call. Used by Custom…'s dialog.
+
+**Imports from project modules.** `./keyboard-target.js` (`isTextEntryTarget`).
+
+**Imported by.** `ui/ui-wiring.js`.
+
+Test: `tests/e2e/toolbar-menu-keyboard.mjs` (`BROWSER=firefox|webkit` to switch).
+
 ### ui/plane-toolbar-lock.js
 
 **Purpose.** Disable the pose-annotation toolbar while Defining Plane Mode is
@@ -7294,7 +7337,10 @@ Remove/Restore smoothing toggle, `tbSmoothToggle`, is one; Behavior's are
 `tbBehavior`, `tbBehaviorFrame`, `tbBehaviorAllFrames` — its Label Behaviors
 mode item stays live, since entering that mode leaves Defining Plane Mode). A disabled
 button still opens its menu on hover (`tests/e2e/plane-mode-toolbar-lock.mjs`
-§4b).
+§4b). Nothing opens those four by keyboard, so what is in them is mouse-only in
+the mode (Label Behaviors mode keeps its shortcut), on purpose: planes are placed
+by dragging, only runs read those settings, and the mode blocks runs. Making the
+menus Tab stops works, but takes Sessions to the User checkbox from 1 press to 13.
 
 **Imports** `planeState` from `ui/plane-definition.js` — circular, and safe only
 because the binding is read INSIDE the function body. **Imported by**
@@ -11226,9 +11272,17 @@ environment file is too new, rather than triangulating from the readable cameras
   button's tooltip, and gives the button `.active` while any trail is on. The
   FPS pill's commit redraws when trails are on. The label stays a bare
   "Trails ▾" to save toolbar width. The button is a `.tri-dropdown` (CSS hover
-  menu; clicking the button does nothing). Display state, never saved; not in
+  menu; clicking the button does nothing). `addTrailItems` builds the toolbar's
+  items as `<button>`s, so Tab reaches them and Enter and Space pick them, and
+  the menu bar's as `<div>`s, like every other item there (nothing opens those
+  menus by keyboard). A click on a `<button>` item must land on the button itself,
+  or focus release misses it and the menu stays open, so its children are
+  `pointer-events: none` (`styles.css`, also the toolbar buttons' carets). Keyboard
+  focus comes back to Custom… when its dialog closes
+  (`returnFocusTo`, `ui/toolbar-menu-keys.js`). Display state, never saved; not in
   the Defining Plane Mode toolbar lock. Covered by
-  `tests/e2e/node-trails-toolbar.mjs` and `tests/test-trail-presets.mjs`.
+  `tests/e2e/node-trails-toolbar.mjs`, `tests/e2e/toolbar-menu-keyboard.mjs` and
+  `tests/test-trail-presets.mjs`.
   **Trail shade.** Both menus hold two radio groups (`.trail-menu-heading`,
   `role="group"`): **Length** and **Shade** — one item per `TRAIL_SHADES` entry
   (`data-trail-shade`, ids `menuTrailsShade<Key>`) with a `.trail-shade-swatch`.
@@ -11457,6 +11511,7 @@ dropdown item),
 field),
 `reproj-threshold-field.js` (`wireReprojThresholdField`, the Triangulate menu's
 Reprojection error field),
+`toolbar-menu-keys.js` (`wireToolbarMenuKeys`, `returnFocusTo`),
 `view-align-modal.js` (`showAlignViewsModal`, View ▸ "Align Views to
 References…"),
 `seekbar-tooltip.js` (`installSeekbarTooltip`),
