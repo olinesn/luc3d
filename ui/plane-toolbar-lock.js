@@ -62,6 +62,12 @@ const PLANE_LOCKED_TOOLBAR_IDS = [
  * menus must be a `<button>` and go in that list. (Behavior's Label Behaviors
  * mode item stays live: entering that mode leaves Defining Plane Mode.)
  *
+ * Nothing opens those four by keyboard, because their buttons are disabled, so
+ * what is in them is mouse-only in the mode (Label Behaviors mode keeps its
+ * shortcut). That is on purpose: planes are placed by dragging, only runs read those
+ * settings, and the mode blocks runs. Making the menus Tab stops works, but takes
+ * Sessions to the User checkbox from 1 press to 13.
+ *
  * @type {string[]}
  */
 const PLANE_LOCKED_DROPDOWN_IDS = ['instanceDropdown', 'groupDropdown'];

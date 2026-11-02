@@ -40,7 +40,8 @@
 //   - a video in no recording session of the file. The file's first session keeps these,
 //     and a save writes the video back too, from what the file said about it (the
 //     writers themselves write one video per camera). LUC3D does not open the poses on
-//     such a video.
+//     such a video, and a save keeps them on it (import-export/outside-frames.js): one
+//     video, one entry of the file's list, holding its poses and its events.
 //   - another session's video, when a loader opens only one session of the file.
 //   - another video of a file with no recording session, or of a session whose cameras are
 //     all placeholders. With no calibration to say so, its videos need not be cameras of
@@ -99,14 +100,15 @@ function notTypeName(b) {
  * its bytes do not move.
  *
  * @param {Object} SIO sleap-io classes: EventType, UserEvent, PredictedEvent, Identity, Video
- * @param {Array<{session: Session, video: ?Object, videos: ?Object[], identities: ?Object[], tracks: ?Object[]}>} items
+ * @param {Array<{session: Session, video: ?Object, videos: ?Object[], listedVideos: ?Map<Object, Object>, identities: ?Object[], tracks: ?Object[]}>} items
  *   each session with its first camera's video, all its cameras' videos in order
  *   (without it, kept events of other videos are left out, as in a one-camera export),
- *   and the catalogs its animals are looked up in. An animal in neither (a deleted
- *   identity's bouts) becomes a new Identity, added to `identities`.
+ *   the other videos the writer lists already, for their poses, by the file's record of
+ *   each (`fileEventsOf`), and the catalogs its animals are looked up in. An animal in
+ *   neither (a deleted identity's bouts) becomes a new Identity, added to `identities`.
  * @returns {{eventTypes: Object[], events: Object[]}} an event on a video that is not in
- *   `videos` brings it along: `new SIO.Labels` and `openSlpWriter` add an event's video
- *   to the file's list
+ *   `videos` or `listedVideos` brings it along: `new SIO.Labels` and `openSlpWriter` add
+ *   an event's video to the file's list
  */
 export function buildBehaviorEvents(SIO, items) {
     var typeByName = new Map();
@@ -126,6 +128,8 @@ export function buildBehaviorEvents(SIO, items) {
     function ownVideoOf(row, item) {
         if (!item.videos) return null;
         if (row.ownCamera !== undefined && item.videos[row.ownCamera]) return item.videos[row.ownCamera];
+        var listed = item.listedVideos && item.listedVideos.get(row.ownVideo);
+        if (listed) return listed;
         var made = madeVideos.get(row.ownVideo);
         if (!made) {
             made = new SIO.Video({
@@ -465,4 +469,19 @@ export function setKeptEventRows(session, rows) {
     if (!session) return;
     if (rows && rows.length) _keptRows.set(session, rows);
     else _keptRows.delete(session);
+}
+
+/**
+ * The videos a session keeps events on, by their place in the list of the file it read
+ * them from: how a lazy writer, which holds that file's store, finds the record
+ * `buildBehaviorEvents` knows a video by (`listedVideos`).
+ *
+ * @returns {Map<number, Object>} a video's place in the file -> `fileEventsOf`'s record of it
+ */
+export function keptVideoRecords(session) {
+    var records = new Map();
+    keptRowsOf(session).forEach(function (row) {
+        if (row.ownVideo) records.set(row.video, row.ownVideo);
+    });
+    return records;
 }

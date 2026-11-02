@@ -62,7 +62,7 @@ import { identityCatalogFinder, storeRowLabels, writeFileLabels } from './detect
 import { writePlaneMetadata } from './plane-metadata.js';
 import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js';
 import { writeBehaviorSlpMetadata } from './behavior-metadata.js';
-import { buildBehaviorEvents } from './behavior-events.js';
+import { buildBehaviorEvents, keptVideoRecords } from './behavior-events.js';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -480,6 +480,11 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     // the file) or at a camera's index (first write wins, so its poses replace
     // that camera's). See outside-frames.js.
     var outsideVideos = [];        // { native, videoIndex }: slim, outlives the loader's eviction
+    // This session's events on such a video go on the same entry. They come from the
+    // project file (only its loader reads them), and a shared store lists its videos
+    // as that file does. A per-camera store is another file.
+    var keptRecords = _sharedStore ? keptVideoRecords(session) : new Map();
+    var listedVideos = new Map();  // the file's record of a video -> its entry in the header
     var placeOfVideo = new Map();  // the reader's Video -> its place in `ctx.allVideos`
     function addOutsideVideos(store, claimed) {
         var added = [];
@@ -488,9 +493,11 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             if (claimed.has(used[uvi])) continue;
             var storeVideoIdx = typeof store.videoIndexFor === 'function' ? store.videoIndexFor(used[uvi]) : used[uvi];
             var outsideVideo = (store.videos || [])[storeVideoIdx];
+            var headerVideo = headerVideoForOutsideFrames(SIO, outsideVideo, used[uvi]);
             added.push({ native: used[uvi], videoIndex: ctx.allVideos.length });
             if (outsideVideo) placeOfVideo.set(outsideVideo, ctx.allVideos.length);
-            ctx.allVideos.push(headerVideoForOutsideFrames(SIO, outsideVideo, used[uvi]));
+            ctx.allVideos.push(headerVideo);
+            if (keptRecords.has(storeVideoIdx)) listedVideos.set(keptRecords.get(storeVideoIdx), headerVideo);
         }
         return added;
     }
@@ -578,6 +585,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     ctx.behaviorItems.push({
         session: session, video: sessionVideoIndices.length ? ctx.allVideos[sessionVideoIndices[0]] : null,
         videos: sessionVideoIndices.map(function (vi) { return ctx.allVideos[vi]; }),
+        listedVideos: listedVideos,
         identities: Array.from(lucidIdToSioId.values()),
     });
     for (var av = 0; av < sioCameras.length; av++) sioSession.addVideo(ctx.allVideos[sessionVideoIndices[av]], sioCameras[av]);
@@ -871,11 +879,14 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             var sug = suggestions[sui];
             var place = placeOfVideo.get(sug.video);
             if (place === undefined) {
-                var onlySuggested = headerVideoForOutsideFrames(SIO, sug.video, labels.videos.indexOf(sug.video));
+                var sugVideoIdx = labels.videos.indexOf(sug.video);
+                var onlySuggested = headerVideoForOutsideFrames(SIO, sug.video, sugVideoIdx);
                 // Two embedded records can share one source video.
                 place = ctx.allVideos.indexOf(onlySuggested);
                 if (place < 0) { place = ctx.allVideos.length; ctx.allVideos.push(onlySuggested); }
                 placeOfVideo.set(sug.video, place);
+                // This session's bouts on it go on the same entry.
+                if (keptRecords.has(sugVideoIdx)) listedVideos.set(keptRecords.get(sugVideoIdx), onlySuggested);
             }
             var sugGroup = sug.metadata ? sug.metadata.group : null;
             ctx.allSuggestions.push(new SIO.SuggestionFrame({
