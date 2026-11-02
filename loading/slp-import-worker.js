@@ -38,6 +38,10 @@ var wantColumnar = false;
 // empty result, for a loader that must know before it changes anything
 // (`checkSlpFileFormat` in import-export/file-io.js).
 var formatOnly = false;
+// `{ type: 'parse', poseDetail: true }` also gives each pose on the file's first
+// skeleton what a save writes back besides the pose, for a caller keeping them aside
+// (import-export/outside-frames.js). The poses on its other skeletons always have it.
+var wantPoseDetail = false;
 var pendingMessages = [];
 
 // --- Lazy H5 data service state ---
@@ -92,6 +96,7 @@ async function handleMessage(data) {
         slowCompound = !!data.slowCompound;
         wantColumnar = !!data.columnar;
         formatOnly = !!data.formatOnly;
+        wantPoseDetail = !!data.poseDetail;
         await parseSlp(data.file);
     } else if (data.type === 'open' && data.file) {
         openH5Lazy(data.file);
@@ -463,9 +468,7 @@ async function parseSlp(file) {
                         occluded: occludedFlags,
                         pointScores: ptScores,
                     };
-                    if (onFirst) {
-                        instances.push(instRecord);
-                    } else {
+                    if (!onFirst || wantPoseDetail) {
                         // What a save writes back besides the pose (outside-frames.js).
                         var rowFrom = instancesData.from_predicted ? Number(instancesData.from_predicted[ji]) : -1;
                         var rowTracking = instancesData.tracking_score ? Number(instancesData.tracking_score[ji]) : 0;
@@ -473,6 +476,10 @@ async function parseSlp(file) {
                         instRecord.fromPredicted = rowFrom === rowFrom ? rowFrom : -1;
                         instRecord.trackingScore = rowTracking === rowTracking ? rowTracking : 0;
                         if (pts.complete) instRecord.complete = Array.prototype.slice.call(pts.complete, ptStart, ptStart + rowNodes).map(Boolean);
+                    }
+                    if (onFirst) {
+                        instances.push(instRecord);
+                    } else {
                         if (!otherInstances) otherInstances = new Map();
                         if (!otherInstances.has(rowEntry)) otherInstances.set(rowEntry, []);
                         otherInstances.get(rowEntry).push(instRecord);

@@ -231,7 +231,7 @@ function headerTrackNames(session, labels, loader, camName) {
 export function createProjectWriterContext() {
     return {
         runningOut: 0,
-        allSkeletons: [],          // SIO.Skeleton[], deduped by name across sessions
+        allSkeletons: [],          // SIO.Skeleton[], deduped by name and nodes across sessions
         skeletonByName: new Map(),
         allVideos: [],             // SIO.Video[], global index = videoIndexOffset for appendStore
         allTracks: [],             // SIO.Track[], global index = trackOffset for appendStore
@@ -323,19 +323,22 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     console.log('[slp-streaming-write] session', session.name || '(unnamed)', '- freed', _prunedCount,
         'non-edited resident frames before building its ref graph');
 
-    // ---- Skeleton (dedup by name — sessions in one project typically share one) ----
+    // ---- Skeleton (dedup — sessions in one project typically share one). By name AND
+    // nodes: two sessions on one name with other nodes would otherwise write the second's
+    // rows under the first's nodes, which Python cannot open or reads swapped. ----
     var skelName = session.skeleton.name || 'skeleton';
-    var skeleton = ctx.skeletonByName.get(skelName);
+    var nodeNames = session.skeleton.nodes.map(function (n) {
+        return typeof n === 'string' ? n : (n.name || '');
+    });
+    var skelKey = JSON.stringify([skelName, nodeNames]);
+    var skeleton = ctx.skeletonByName.get(skelKey);
     if (!skeleton) {
-        var nodeNames = session.skeleton.nodes.map(function (n) {
-            return typeof n === 'string' ? n : (n.name || '');
-        });
         var sioNodes = nodeNames.map(function (name) { return new SIO.Node(name); });
         var sioEdges = (session.skeleton.edges || []).map(function (e) {
             return new SIO.Edge(sioNodes[e[0]], sioNodes[e[1]]);
         });
         skeleton = new SIO.Skeleton({ nodes: sioNodes, edges: sioEdges, name: skelName });
-        ctx.skeletonByName.set(skelName, skeleton);
+        ctx.skeletonByName.set(skelKey, skeleton);
         ctx.allSkeletons.push(skeleton);
     }
     var numNodes = session.skeleton.nodes.length;
@@ -449,6 +452,8 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         var trackBase;
         if (_sharedStore) {
             trackBase = sharedTrackBaseOf(labels);
+        } else if (loader.hiddenCameras.has(c.name)) {
+            trackBase = 0;   // its rows go by `trackHeader`, below
         } else {
             var camTracks = headerTrackNames(session, labels, loader, c.name);
             // Name-list signature ('|~|'-joined — a track/identity name
@@ -474,9 +479,25 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
 
         cam.push({
             name: c.name, sioCam: sioCam, videoIndex: videoIndex, framesData: framesData, instancesData: instancesData,
-            rowMap: rowMap, nFrames: nFrames, trackBase: trackBase, skeletonPairs: null, identityByName: storeIdentityMap(store),
+            rowMap: rowMap, nFrames: nFrames, trackBase: trackBase, skeletonPairs: null, hidden: !_sharedStore && loader.hiddenCameras.has(c.name),
+            identityByName: storeIdentityMap(store),
         });
     }
+
+    // A hidden camera's store keeps its file's own track list, so its names may repeat the
+    // session's. Each goes on the header's entry of that name: `trackHeader[store id]`.
+    // After every shown camera, so which camera comes first makes no difference.
+    cam.forEach(function (info) {
+        if (!info.hidden) return;
+        info.trackHeader = (loader.labelsByCam.get(info.name).tracks || []).map(function (t) {
+            var at = ctx.allTracks.findIndex(function (h) { return h.name === t.name; });
+            if (at < 0) {
+                at = ctx.allTracks.length;
+                ctx.allTracks.push(new SIO.Track(t.name));
+            }
+            return at;
+        });
+    });
 
     // ---- Frames on a video no camera of this session names ----
     // `appendStore` writes a WHOLE store, and a project file can hold frames on a
@@ -676,7 +697,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             var inst = pose.inst;
             inst.skeleton = ctx.allSkeletons[headerSkeleton.get(numAt(camInfo.instancesData.skeleton, pose.instanceRow))];
             var trk = numAt(camInfo.instancesData.track, pose.instanceRow, -1);
-            inst.track = trk >= 0 ? ctx.allTracks[camInfo.trackBase + trk] : null;
+            inst.track = trk >= 0 ? ctx.allTracks[camInfo.trackHeader ? camInfo.trackHeader[trk] : camInfo.trackBase + trk] : null;
             if (inst.identity) inst.identity = findDetectionIdentity(inst.identity);
             landed.set(pose.offset, sioInsts.length);
             sioInsts.push(inst);
@@ -697,6 +718,20 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         return landed;
     }
 
+    // The header's place for the session's track list, for a pose drawn on a hidden
+    // camera: its trackIdx indexes this list, not the camera's store's.
+    function sessionTrackBase() {
+        var shownCam = cam.find(function (info) { return !info.hidden; });
+        if (shownCam) return shownCam.trackBase;
+        var names = session.tracks || [];
+        var sig = names.join('|~|');
+        if (!ctx.trackBaseByNameSig.has(sig)) {
+            ctx.trackBaseByNameSig.set(sig, ctx.allTracks.length);
+            names.forEach(function (name) { ctx.allTracks.push(new SIO.Track(name)); });
+        }
+        return ctx.trackBaseByNameSig.get(sig);
+    }
+
     for (var [fgIdx, fg] of session.frameGroups) {
         for (var oc = 0; oc < cam.length; oc++) {
             var ocInfo = cam[oc];
@@ -712,7 +747,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             var byTrack = new Map();
             for (var lii = 0; lii < lucidInsts.length; lii++) {
                 var linst = lucidInsts[lii];
-                sioInsts.push(buildOverlayInstance(linst, ocInfo.trackBase, ocInfo.name, fgIdx));
+                sioInsts.push(buildOverlayInstance(linst, ocInfo.hidden ? sessionTrackBase() : ocInfo.trackBase, ocInfo.name, fgIdx));
                 byInst.set(linst, lii);
                 var lt = (linst.trackIdx != null && linst.trackIdx >= 0) ? linst.trackIdx : -1;
                 if (lt >= 0 && !byTrack.has(lt)) byTrack.set(lt, lii);
@@ -977,6 +1012,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         return {
             name: c.name, videoIndex: c.videoIndex, trackBase: c.trackBase,
             nativeToHeader: c.nativeToHeader || null, skeletonPairs: c.skeletonPairs || null,
+            trackHeader: c.trackHeader || null,
         };
     });
 
@@ -1101,6 +1137,22 @@ function _remapStoreVideos(store, headerByNative) {
 }
 
 /**
+ * A store with its track ids already the header's (`trackHeader[store id]`), through a
+ * copy of that one column. The caller writes it with `trackOffset: 0`.
+ */
+function _withHeaderTracks(target, trackHeader) {
+    var col = target.instancesData.track || [];
+    var remapped = new Float64Array(col.length);
+    for (var j = 0; j < col.length; j++) {
+        var id = Number(col[j]);
+        remapped[j] = id >= 0 && id < trackHeader.length ? trackHeader[id] : -1;
+    }
+    var out = Object.create(target);
+    out.instancesData = Object.assign({}, target.instancesData, { track: remapped });
+    return out;
+}
+
+/**
  * One `appends` entry, with the store's skeleton ids onto the header's. `pairs` is
  * [store skeleton id, header index] (`buildSessionRefGraph`). The usual store uses
  * one skeleton and needs only `appendStore`'s offset; one using more gets a copy of
@@ -1195,11 +1247,10 @@ export async function streamSessionIntoWriter(writer, session, refGraphResult, o
             var labels = loader.labelsByCam.get(camInfo.name);
             var store = labels && labels._lazyDataStore;
             if (!store) continue;
-            appends.push(camInfo.nativeToHeader
-                ? _appendWithHeaderSkeletons(_remapStoreVideos(store, _headerMapFor(store, camInfo.nativeToHeader)),
-                    { videoIndexOffset: 0, trackOffset: camInfo.trackBase, identityByName: camInfo.identityByName }, camInfo.skeletonPairs)
-                : _appendWithHeaderSkeletons(store,
-                    { videoIndexOffset: camInfo.videoIndex, trackOffset: camInfo.trackBase, identityByName: camInfo.identityByName }, camInfo.skeletonPairs));
+            var camStore = camInfo.nativeToHeader ? _remapStoreVideos(store, _headerMapFor(store, camInfo.nativeToHeader)) : store;
+            if (camInfo.trackHeader) camStore = _withHeaderTracks(camStore, camInfo.trackHeader);
+            appends.push(_appendWithHeaderSkeletons(camStore,
+                { videoIndexOffset: camInfo.nativeToHeader ? 0 : camInfo.videoIndex, trackOffset: camInfo.trackBase, identityByName: camInfo.identityByName }, camInfo.skeletonPairs));
         }
     }
     if (!onProgress || typeof writer.appendStoreAsync !== 'function') {

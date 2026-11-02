@@ -2852,6 +2852,7 @@ export function parseSlpH5(file, onProgress, opts) {
             type: 'parse', file: file,
             columnar: !!(opts && opts.columnar),
             formatOnly: !!(opts && opts.formatOnly),
+            poseDetail: !!(opts && opts.poseDetail),
         });
     });
 }
@@ -2914,9 +2915,11 @@ export async function checkSlpFileFormat(file) {
  *
  * @param {File} file - The .slp file
  * @param {Function} [onProgress] - Optional progress callback `(msg) => void`
- * @param {{lazy?: boolean}} [opts] - `lazy`: read the poses as columns and build no
- *   frames (`frames` is empty, `store` is the file's `LazyDataStore`), for a file whose
- *   poses go straight into a lazy project's store
+ * @param {{poseDetail?: boolean, lazy?: boolean}} [opts] - `poseDetail`: every pose keeps its
+ *   reader's instance as `_typed`, for a caller keeping them all aside (outside-frames.js).
+ *   A file with more than one skeleton always does. `lazy`: read the poses as columns and
+ *   build no frames (`frames` is empty, `store` is the file's `LazyDataStore`), for a file
+ *   whose poses go straight into a lazy project's store
  * @returns {Promise<Object>} `slpData` matching parseSlpH5's result shape
  */
 export async function parseSlpViaSleapIO(file, onProgress, opts) {
@@ -2982,7 +2985,7 @@ export async function parseSlpViaSleapIO(file, onProgress, opts) {
                 var instData = _typedInstanceToSlpData(lfInsts[ii], typedTracks, skelEntry.nodes.length, PredictedInstance);
                 // The record itself: a save writes it back untouched if the session
                 // does not show this skeleton (outside-frames.js).
-                if (manySkeletons) instData._typed = lfInsts[ii];
+                if (manySkeletons || (opts && opts.poseDetail)) instData._typed = lfInsts[ii];
                 instances.push(instData);
             }
             if (instances.length > 0) skelEntry.frames.push({ frameIdx: lf.frameIdx, videoIdx: videoIdx, instances: instances });
@@ -3118,16 +3121,17 @@ async function rawWorkerCanStandIn(file) {
  *
  * @param {File} file
  * @param {(msg:string)=>void} [onProgress]
+ * @param {{poseDetail?: boolean}} [opts] - see `parseSlpViaSleapIO`
  * @returns {Promise<Object>} slpData
  */
-export async function parseSlpWithRawFallback(file, onProgress) {
+export async function parseSlpWithRawFallback(file, onProgress, opts) {
     try {
-        return await parseSlpViaSleapIO(file, onProgress);
+        return await parseSlpViaSleapIO(file, onProgress, opts);
     } catch (err) {
         // Too new for this reader is too new for the raw worker as well.
         if (isNewerSlpFormatError(err) || (err && err.failedRead) || !(await rawWorkerCanStandIn(file))) throw err;
         console.warn('[slp-read] sleap-io.js streaming read failed — falling back to the raw h5wasm worker:', err);
-        return await parseSlpH5(file, onProgress);
+        return await parseSlpH5(file, onProgress, opts);
     }
 }
 

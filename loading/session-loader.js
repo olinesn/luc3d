@@ -44,10 +44,14 @@ import {
 
 import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
 import {
-    groupsAcrossSkeletonsRefusal, keepCameraOtherSkeletonFrames, keepOtherSkeletonFrames, keepOutsideFrames,
+    fileSkeletons, groupsAcrossSkeletonsRefusal, keepCameraOnOtherNodes, keepCameraOtherSkeletonFrames, keepOtherSkeletonFrames, keepOutsideFrames,
     keepOutsideColumnarFrames, keptOutsideCounts, noteVideoReaders, outsideFramesNote, outsideGroupCount, ownVideoOfColumnar,
     ownVideoOfFrames, sessionSkeletonEntry,
 } from '../import-export/outside-frames.js';
+// Which skeleton a per-camera folder shows, on either route.
+import {
+    camerasOnOtherNodesNote, camerasRefusedNote, cameraSkeletonFit, chooseFolderSkeleton, readCameraPosesByName,
+} from './folder-skeleton.js';
 import { keepSuggestions } from '../import-export/kept-suggestions.js';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
@@ -57,7 +61,7 @@ import { isNewerSlpFormatError, slpReadErrorStatus } from './slp-format-check.js
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups, handleLoadSlpFile } from '../import-export/slp-import.js';
+import { parseSlpForImport, restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups, handleLoadSlpFile } from '../import-export/slp-import.js';
 import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js';
 import {
     applyMovedGroupIdentities, lazyTrackSlotMap, reconcileSessionIdentities,
@@ -1618,8 +1622,20 @@ export async function handleLoadMultiSession() {
         showLoading('Loading ' + sessionDirs.length + ' sessions...');
         console.log('[multi-session] Found sessions:', sessionDirs.map(function (d) { return d.name; }));
 
+        // Read first: it is what every session must show, so it decides which cameras do.
+        var parentSk = null;
+        if (parentSkeletonHandle) {
+            try {
+                parentSk = parseSkeletonJSON(await (await parentSkeletonHandle.getFile()).text());
+                if (parentSk && parentSk.nodes.length === 0) parentSk = null;
+            } catch (e) {
+                console.warn('[multi-session] parent skeleton auto-load failed:', e);
+            }
+        }
+
         // Load each session — first gets full video init, rest defer decoders
         var unreadSlps = [];
+        var refusedNotes = new Set();   // one camera refused in every session reads once
         for (var si = 0; si < sessionDirs.length; si++) {
             var sess = sessionDirs[si];
             showLoading('Loading session ' + (si + 1) + '/' + sessionDirs.length + ': ' + sess.name + '...');
@@ -1631,15 +1647,22 @@ export async function handleLoadMultiSession() {
 
             var sessionFiles = await enumerateDirectoryHandle(sess.handle, sess.name, null);
             console.log('[multi-session] Session', sess.name, '— files:', sessionFiles.length);
-            var loadedSession = await handleLoadSessionFolderPerCamera(sessionFiles, si > 0);
-            if (loadedSession) unreadSlps = unreadSlps.concat(loadedSession.slpFailures);
+            var loadedSession = await handleLoadSessionFolderPerCamera(sessionFiles, si > 0, { declaredSkeleton: parentSk });
+            if (loadedSession) {
+                unreadSlps = unreadSlps.concat(loadedSession.slpFailures);
+                if (loadedSession.refusedNote) refusedNotes.add(loadedSession.refusedNote);
+            }
         }
 
         hideLoading();
-        // Each session's own status named its unreadable files, but only until the
-        // next session's replaced it.
-        var sessionsStatus = 'Loaded ' + sessionDirs.length + ' sessions' + slpFailuresStatus(unreadSlps);
-        setStatus(sessionsStatus, unreadSlps.length > 0 ? 'error' : 'success');
+        // Each session's own status named its unreadable files and what it hid, but
+        // only until the next session's replaced it.
+        var multiOutsideNote = outsideFramesNote(keptOutsideCounts(state.sessions));
+        var sessionsStatus = 'Loaded ' + sessionDirs.length + ' sessions' + slpFailuresStatus(unreadSlps)
+            + Array.from(refusedNotes).map(function (note) { return ' — ' + note; }).join('')
+            + (multiOutsideNote ? ' — ' + multiOutsideNote : '');
+        var sessionsKind = unreadSlps.length > 0 || refusedNotes.size > 0 ? 'error' : multiOutsideNote ? 'warning' : 'success';
+        setStatus(sessionsStatus, sessionsKind);
 
         // Display first session's grid (it has live decoders from eager load)
         if (state.sessions.length > 1) {
@@ -1663,26 +1686,18 @@ export async function handleLoadMultiSession() {
         var noteCalibrations = function () {
             noteSessionCalibrationDivergence(state.sessions);
             // Last, so the skeleton steps' own status can't replace it.
-            if (unreadSlps.length > 0) setStatus(sessionsStatus, 'error');
+            if (sessionsKind !== 'success') setStatus(sessionsStatus, sessionsKind);
         };
 
         if (state.sessions.length > 1) {
             var autoLoadedSkeleton = false;
-            if (parentSkeletonHandle) {
-                try {
-                    var skFile = await parentSkeletonHandle.getFile();
-                    var parentSk = parseSkeletonJSON(await skFile.text());
-                    if (parentSk && parentSk.nodes.length > 0) {
-                        setProjectSkeleton(parentSk);
-                        autoLoadedSkeleton = true;
-                        drawAllOverlays(state.currentFrame);
-                        updateInfoPanel();
-                        setStatus('Loaded skeleton from ' + parentSkeletonHandle.name +
-                            ' for all ' + state.sessions.length + ' sessions', 'success');
-                    }
-                } catch (e) {
-                    console.warn('[multi-session] parent skeleton auto-load failed:', e);
-                }
+            if (parentSk) {
+                setProjectSkeleton(parentSk);
+                autoLoadedSkeleton = true;
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+                setStatus('Loaded skeleton from ' + parentSkeletonHandle.name +
+                    ' for all ' + state.sessions.length + ' sessions', 'success');
             }
             if (autoLoadedSkeleton) noteCalibrations();
             else promptImportSkeletonForAllSessions(noteCalibrations);
@@ -3256,7 +3271,31 @@ function slpFailuresStatus(slpFailures) {
         + slpFailures.map(function (f) { return f.camName + ' (' + f.file.name + ')'; }).join(', ');
 }
 
-export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos) {
+/**
+ * A folder's skeleton becomes the project's: every session shares it, unless another
+ * session already shows other nodes. Re-pointing that one would put its poses under
+ * these names by position.
+ */
+function adoptFolderSkeleton(skeleton) {
+    var names = JSON.stringify(skeleton.nodes);
+    var others = state.sessions.filter(function (s) { return s && s !== state.session && s.skeleton && s.skeleton.nodes.length > 0; });
+    if (others.every(function (s) { return JSON.stringify(s.skeleton.nodes) === names; })) setProjectSkeleton(skeleton);
+    else state.session.skeleton = skeleton;
+}
+
+/** Does a worker's result hold a pose, on any of its skeletons? */
+function parsedHasPoses(slpData) {
+    if (slpData.columnar && slpData.columnar.nFrames > 0) return true;
+    return fileSkeletons(slpData).some(function (entry) { return entry.frames.length > 0; });
+}
+
+/**
+ * @param {File[]} [preloadedFiles]
+ * @param {boolean} [deferVideos]
+ * @param {{declaredSkeleton?: Skeleton}} [opts] - the skeleton this session must show,
+ *   from a parent folder's `skeleton.json`; it wins over one in this folder
+ */
+export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos, opts) {
     try {
         var allFiles;
         if (preloadedFiles) {
@@ -3578,9 +3617,22 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         var stripList = document.getElementById('viewStripList');
         if (stripList) stripList.innerHTML = '';
 
+        // What a `skeleton.json` declares decides which cameras show, so it comes first.
+        var declaredSkeleton = (opts && opts.declaredSkeleton) || null;
+        if (skeletonFile && !declaredSkeleton) {
+            try {
+                var loadedSkeleton = parseSkeletonJSON(await skeletonFile.text());
+                if (loadedSkeleton && loadedSkeleton.nodes.length > 0) declaredSkeleton = loadedSkeleton;
+            } catch (skelErr) {
+                console.error('[session-folder] Skeleton file parse error:', skelErr);
+            }
+        }
+
         var firstSession = null;
         var skeletonFromSlp = null;
         var slpVersionsLoaded = {}; // camName -> version number loaded
+        var camerasOnOtherNodes = [];   // their poses are kept, not shown (folder-skeleton.js)
+        var camerasRefused = [];        // no way to keep them: not read
 
         // Launch all SLP/H5 parses — use lazy loading for large H5 files
         showLoading('Parsing annotations (' + matchedCameraDirs.length + ' cameras)...');
@@ -3715,6 +3767,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 return /\.slp$/i.test(job.file.name);
             });
             lazyLoader = lazyAreSlp ? new SioLazyLoader() : new LazyFrameLoader();
+            lazyLoader.declareSkeleton(declaredSkeleton);
             try {
                 await Promise.all(lazyJobs.map(function (job) {
                     return lazyLoader.open(job.camName, job.file).then(function (r) {
@@ -3730,6 +3783,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     });
                 }));
                 if (lazyAreSlp && lazyLoader.labelsByCam.size === 0) lazyLoader = null;
+                if (lazyLoader && lazyLoader.settleCameraSkeletons) camerasRefused = lazyLoader.settleCameraSkeletons();
             } catch (lazyErr) {
                 // Do NOT fall back to eager parseSlpH5 — a 100+ MB file would OOM
                 // the tab (the very thing lazy mode avoids). Surface the error.
@@ -3751,14 +3805,27 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             showLoading('Building session data...');
         }
 
+        // The skeleton this session shows, and what each camera does about it
+        // (`loading/folder-skeleton.js`, the same rule `SioLazyLoader` applies).
+        skeletonFromSlp = chooseFolderSkeleton(parseJobs.map(function (job, j) {
+            var parsed = parseResults[j];
+            return { camName: job.camName, skeleton: parsed && parsed.skeleton, hasPoses: !!parsed && parsedHasPoses(parsed) };
+        }), declaredSkeleton);
+        var cameraFits = parseResults.map(function (parsed) {
+            var fit = parsed ? cameraSkeletonFit(skeletonFromSlp, parsed.skeleton) : { onOtherNodes: false, reorderMap: null };
+            // A file with no pose has nothing to keep aside.
+            if (fit.onOtherNodes && !parsedHasPoses(parsed)) fit = { onOtherNodes: false, reorderMap: null, empty: true };
+            return fit;
+        });
+
         // ONE session track list for the whole folder, built before any camera's
-        // instances: the union of every parsed camera's own track names, cameras
+        // instances: the union of every shown camera's own track names, cameras
         // in sorted name order (`loading/track-union.js` — the same rule both
         // lazy loaders apply, so a folder gives the same `session.tracks` on
         // either path). Each camera's own indices are mapped into it below.
         var trackUnion = unionTrackNames(parseJobs.map(function (job, j) {
             return { camName: job.camName, names: (parseResults[j] && parseResults[j].tracks) || [] };
-        }).filter(function (entry, j) { return !!parseResults[j]; }));
+        }).filter(function (entry, j) { return !!parseResults[j] && !cameraFits[j].onOtherNodes; }));
 
         for (var pri = 0; pri < parseJobs.length; pri++) {
             if (pri > 0 && buildPacer.due()) {
@@ -3768,10 +3835,6 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             var slpData = parseResults[pri];
             if (!slpData) continue;
             var camName = parseJobs[pri].camName;
-
-            if (slpData.skeleton && !skeletonFromSlp) {
-                skeletonFromSlp = slpData.skeleton;
-            }
 
             if (!state.session) {
                 var skeleton = new Skeleton('skeleton', [], []);
@@ -3785,8 +3848,6 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 }
             }
 
-            var trackRemap = trackUnion.remapByCam.get(camName) || new Int32Array(0);
-
             // A camera is one video, the first its file lists with frames.
             var ownVideo = slpData.columnar ? ownVideoOfColumnar(slpData.columnar, slpData)
                 : (slpData.frames ? ownVideoOfFrames(slpData.frames, slpData) : undefined);
@@ -3797,6 +3858,27 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 if (!state.session.fileVideos) state.session.fileVideos = new Map();
                 state.session.fileVideos.set(camName, ownFileVideo);
             }
+
+            // A file with no frames is read as its first video (`SioLazyLoader.open`).
+            keepSuggestions(slpData, [{ session: state.session, cameraByVideo: { [ownVideo === undefined ? 0 : ownVideo]: camName } }]);
+
+            var cameraFit = cameraFits[pri];
+            if (cameraFit.onOtherNodes) {
+                // Not shown, and a save keeps them. This read has what the fast one
+                // leaves out (a tracking score, `complete`, `from_predicted`).
+                try {
+                    keepCameraOnOtherNodes(state.session, await parseSlpForImport(parseJobs[pri].file, null, { poseDetail: true }), camName);
+                    camerasOnOtherNodes.push(camName);
+                } catch (keepErr) {
+                    slpFailures.push({ camName: camName, file: parseJobs[pri].file, message: (keepErr && keepErr.message) || String(keepErr) });
+                    console.error('[session-folder] ' + camName + ': failed to read "' + parseJobs[pri].file.name + '":', keepErr);
+                }
+                continue;
+            }
+            if (cameraFit.empty) continue;
+            if (cameraFit.reorderMap) readCameraPosesByName(slpData, cameraFit.reorderMap);
+
+            var trackRemap = trackUnion.remapByCam.get(camName) || new Int32Array(0);
 
             if (slpData.columnar) {
                 addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap, ownVideo);
@@ -3829,8 +3911,6 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     }
                 }
             }
-            // A file with no frames is read as its first video (`SioLazyLoader.open`).
-            keepSuggestions(slpData, [{ session: state.session, cameraByVideo: { [ownVideo === undefined ? 0 : ownVideo]: camName } }]);
         }
 
         // Integrate lazy loader metadata into session. The folder is routed as ONE
@@ -4089,9 +4169,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         }
 
         // 4. Apply skeleton from SLP if session has empty skeleton.
-        // One skeleton per project: propagate to ALL sessions (shared reference).
+        // One skeleton per project: propagate to ALL sessions (shared reference),
+        // unless another session already shows other nodes.
         if (state.session && skeletonFromSlp && state.session.skeleton.nodes.length === 0) {
-            setProjectSkeleton(new Skeleton(
+            adoptFolderSkeleton(new Skeleton(
                 skeletonFromSlp.name || 'skeleton',
                 skeletonFromSlp.nodes || [],
                 skeletonFromSlp.edges || []
@@ -4119,21 +4200,12 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             console.log('[session-folder] Prepared unlinked instances:', ulUserCount, 'user,', ulPredCount, 'predicted');
         }
 
-        // 5b. Load skeleton JSON override if found in session folder
-        if (skeletonFile && state.session) {
-            try {
-                showLoading('Loading skeleton file...');
-                var skelText = await skeletonFile.text();
-                var loadedSkeleton = parseSkeletonJSON(skelText);
-                if (loadedSkeleton && loadedSkeleton.nodes.length > 0) {
-                    setProjectSkeleton(loadedSkeleton); // one skeleton per project
-                    console.log('[session-folder] Overrode skeleton from ' + skeletonFile.name +
-                        ': ' + loadedSkeleton.nodes.length + ' nodes, ' + loadedSkeleton.edges.length + ' edges');
-                    setStatus('Loaded skeleton from ' + skeletonFile.name, 'success');
-                }
-            } catch (skelErr) {
-                console.error('[session-folder] Skeleton file parse error:', skelErr);
-            }
+        // 5b. The skeleton this folder declares (read above). One skeleton per
+        // project, unless another session already shows other nodes.
+        if (declaredSkeleton && state.session) {
+            adoptFolderSkeleton(declaredSkeleton);
+            console.log('[session-folder] Skeleton from ' + (skeletonFile ? skeletonFile.name : 'the parent folder') +
+                ': ' + declaredSkeleton.nodes.length + ' nodes, ' + declaredSkeleton.edges.length + ' edges');
         }
 
         // 5c. The recording's details, before the frame count and fps are set
@@ -4254,15 +4326,21 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             statusMsg += ' — newer .slp present but not loaded: ' + staleWarnings.join('; ');
             statusKind = 'warning';
         }
-        var folderOutsideNote = state.session ? outsideFramesNote(state.session.lazyLoader && state.session.lazyLoader.outsideFrameCounts
-            ? state.session.lazyLoader.outsideFrameCounts() : keptOutsideCounts(state.session)) : '';
-        if (folderOutsideNote) {
-            statusMsg += ' — ' + folderOutsideNote;
+        if (lazyLoader && lazyLoader.hiddenCameras) camerasOnOtherNodes = Array.from(lazyLoader.hiddenCameras).sort();
+        var refusedNote = camerasRefusedNote(camerasRefused, state.session && state.session.skeleton);
+        if (refusedNote) {
+            statusMsg += ' — ' + refusedNote;
+            statusKind = 'error';
+        }
+        var onOtherNodesNote = camerasOnOtherNodesNote(camerasOnOtherNodes, state.session && state.session.skeleton);
+        var folderOutsideNote = state.session ? outsideFramesNote(keptOutsideCounts(state.session)) : '';
+        if (onOtherNodesNote || folderOutsideNote) {
+            statusMsg += ' — ' + (onOtherNodesNote ? onOtherNodesNote + ' ' : '') + folderOutsideNote;
             if (statusKind === 'success') statusKind = 'warning';
         }
         var campyStatus = withCampyWarnings(statusMsg, statusKind, state.session && state.session.campyRecording);
         setStatus(campyStatus.message, campyStatus.kind);
-        return { slpFailures: slpFailures };
+        return { slpFailures: slpFailures, refusedNote: refusedNote };
 
     } catch (err) {
         console.error('[session-folder] Error:', err);

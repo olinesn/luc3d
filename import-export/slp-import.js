@@ -94,11 +94,12 @@ import { sessionEventScope } from './behavior-events.js';
  *
  * @param {File} file
  * @param {(msg:string)=>void} onProgress
+ * @param {{poseDetail?: boolean}} [opts] - see `parseSlpViaSleapIO`
  * @returns {Promise<Object>} slpData
  */
-async function parseSlpForImport(file, onProgress) {
-    if (/\.slp$/i.test(file.name || '')) return await parseSlpWithRawFallback(file, onProgress);
-    return await parseSlpH5(file, onProgress);
+export async function parseSlpForImport(file, onProgress, opts) {
+    if (/\.slp$/i.test(file.name || '')) return await parseSlpWithRawFallback(file, onProgress, opts);
+    return await parseSlpH5(file, onProgress, opts);
 }
 
 /**
