@@ -1300,14 +1300,15 @@ export async function quickSave() {
     } catch (err) {
         state.isSaving = false;
         hideLoading();
+        // `writable` (if it got that far) already has an open swap file —
+        // abort() discards it WITHOUT touching the original file at
+        // `state.slpFileHandle`, unlike close(), which would overwrite it
+        // with zero bytes. On a failed save too: a disk that filled up stays
+        // full of the swap file until the page closes otherwise.
+        if (typeof writable !== 'undefined' && writable && typeof writable.abort === 'function') {
+            try { await writable.abort(); } catch (e) { /* best effort */ }
+        }
         if (err && err.name === 'SaveCancelledError') {
-            // `writable` (if it got that far) already has an open swap file —
-            // abort() discards it WITHOUT touching the original file at
-            // `state.slpFileHandle`, unlike close(), which would overwrite it
-            // with zero bytes.
-            if (typeof writable !== 'undefined' && writable && typeof writable.abort === 'function') {
-                try { await writable.abort(); } catch (e) { /* best effort */ }
-            }
             setStatus('Save cancelled', 'warning');
             return;
         }

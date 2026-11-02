@@ -305,3 +305,42 @@ after a failed read HDF5 is stopped mid-call and the same read tried again succe
 with wrong data. Not reported on talmolab yet. LUC3D's copy adds `failedRead` to the
 worker's error answer and to the Error, so a caller can tell "this file could not be
 read" from "this reader can't make sense of this file".
+
+---
+
+## 9. A damaged chunk reads as leftovers, and a failed write looks done (data loss)
+
+**Marker:** `failed status`
+**Files:** `chunk-X76PRJK6.js` (`guardH5Status`, `H5_WORKER_CODE`'s `guardH5StatusWorker`,
+`SlpStreamWriter`, `saveSlpToBytes`, `writeLabelsToBytes`, `readVideoCrops`,
+`readSourceVideoGroupJson`, `inflateStored`)
+**Severity:** a project opens with wrong values and no error, and the next save writes that
+to disk. A save reports success with its file wrong, or unreadable, over the user's file.
+
+h5wasm's C++ returns HDF5's status and its JS drops it. Flipping one gzip chunk of a real
+saved project: "SLP loaded", then Save wrote 3,726,030 values in `/instances` where there
+are 498,000. A write HDF5 couldn't finish: `saveSlpToBytes`, `SlpStreamWriter.close` and
+`writeToSink` all resolved, and File > Save said "Saved".
+
+**Fix:** written against the current reader on the fork, `olinesn/sleap-io.js` branch
+`fix/damaged-chunks-and-failed-closes`. Not reported on talmolab yet. LUC3D's copy differs
+in three ways, all worth taking upstream:
+
+1. **Status alone doesn't cover writes.** What `create_dataset` and `create_attribute`
+   return is their last cleanup's status, and `set_dataset_data`'s leaves out the H5Dclose
+   that writes the chunks it has cached, so a chunk that fails there is gone with a success
+   status. With only the fork's guard on LUC3D's main-thread writer, 32 of 120 single failed
+   device writes and 41 of 135 saves on a nearly full h5wasm heap still resolved with wrong
+   values. HDF5 prints the error stack of any API call that fails, to fd 2 and only then, so
+   LUC3D's write calls also fail if `FS.write` saw fd 2 during the call: 0 of 120, 0 of 135.
+   (The fork's worker also watches device writes, which covers those but not a failure with
+   no device write in it, such as a full heap.)
+2. **`reclaim_vlen_memory_count`.** h5wasm 0.10.3's `Dataset.slice` frees through this, not
+   `reclaim_vlen_memory`. The fork is on 0.10.2, where it doesn't exist; a bump needs it in
+   the guard, or a failed hyperslab read of strings frees garbage.
+3. **`failedRead` on the error,** as in section 8.
+
+Separately, worth reporting to h5wasm: embind's std::string `toWireType` doesn't check its
+`_malloc`, so with the heap full a string is written from address 0, over HDF5's static data
+(`LUCID local patch (full heap)`, `lib/h5wasm/PROVENANCE.txt`). The same gap is in every
+Emscripten build of this age, and on the fork's h5wasm too.

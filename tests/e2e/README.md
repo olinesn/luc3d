@@ -52,6 +52,17 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   source, the h5wasm cold-read patch, a multi-session save. (Fails against the
   unpatched reader: File ▸ Open said "SLP loaded" with every group and all the 3D
   gone, and a Save wrote that.)
+- **`slp-damaged-chunk.mjs`** — a damaged part of a compressed table is an error, never a
+  project with what was in memory in its place. Flips the bytes of every gzip chunk of a
+  real saved project on disk (it starts its own server): the reader, File ▸ Open, the raw
+  worker, the analysis `.h5` paths, the frame worker, Load 3D Points. (Fails against the
+  code without `LUCID local patch (failed status)`: "SLP loaded", then Save wrote 3,726,030
+  values in `/instances` where there are 498,000.)
+- **`slp-failed-write.mjs`** — a save whose write fails is an error, never a success with the
+  file wrong. h5wasm's heap really filled, every write of a save failing in turn, every write
+  from the file's close on; File ▸ Save on a real file handle (the file stays as it was), a
+  real storage quota, a multi-session save. (Fails against the code without the same patch:
+  "Saved", over the user's file, with a file that doesn't open.)
 - **`session-video-scoping.mjs`** — regression guard for the multi-session
   "second session shows both videos" bug. Verifies that loading a video into one
   session never leaks its view / camera / `videoFileIndices` into another
