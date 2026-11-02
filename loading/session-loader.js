@@ -43,6 +43,9 @@ import {
 } from '../import-export/file-io.js';
 
 import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
+import {
+    keepOutsideFrames, keepOutsideColumnarFrames, keptOutsideCounts, outsideFramesNote, ownVideoOfColumnar, ownVideoOfFrames,
+} from '../import-export/outside-frames.js';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
@@ -111,6 +114,7 @@ import { readVisibilityMetadata } from '../import-export/visibility-metadata.js'
 import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js';
 import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
 import { readBehaviorMetadata, resetBehaviorState } from '../import-export/behavior-metadata.js';
+import { fileEventsOf, sessionEventScope } from '../import-export/behavior-events.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2282,14 +2286,18 @@ export async function handleLoadSessionFolderSingleSlp() {
                     if (cameras[camIdx]) videoIdxToCameraName[camMap[cmk]] = cameras[camIdx].name;
                 }
             }
-            // Fallback: match by video filename
+            // Fallback: match by video filename. Only to a camera no video has:
+            // a second video would merge its poses into that camera's.
+            var camsWithVideo = new Set(Object.values(videoIdxToCameraName));
             for (var vi = 0; vi < slpData.videos.length; vi++) {
                 if (videoIdxToCameraName[vi]) continue;
                 var vfn = slpData.videos[vi] ? (slpData.videos[vi].sourceFilename || slpData.videos[vi].filename || '') : '';
                 var vStem = vfn.replace(/\.[^.]+$/, '').split('/').pop().split('\\').pop().toLowerCase();
                 for (var ci = 0; ci < cameras.length; ci++) {
+                    if (camsWithVideo.has(cameras[ci].name)) continue;
                     if (vStem.indexOf(cameras[ci].name.toLowerCase()) >= 0) {
                         videoIdxToCameraName[vi] = cameras[ci].name;
+                        camsWithVideo.add(cameras[ci].name);
                         break;
                     }
                 }
@@ -2336,7 +2344,16 @@ export async function handleLoadSessionFolderSingleSlp() {
         readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         // Behavior labels. Into an open project the file's ethogram is merged
         // by behavior name and its bouts remapped onto the project's ids.
-        readBehaviorMetadata(session, sessLucid);
+        var eventScope = sessionEventScope(slpData.sessions, slpData.videos.length, 0, true);
+        // The filename fallback above can make a camera of a video no session names.
+        // Its poses are on that camera's video now, so its kept events go there too.
+        eventScope.keep.forEach(function (keptVideo) {
+            var place = cameras.findIndex(function (c) { return c.name === videoIdxToCameraName[keptVideo]; });
+            if (place < 0 || (eventScope.cameras && eventScope.cameras.has(keptVideo))) return;
+            if (!eventScope.cameras) eventScope.cameras = new Map();
+            eventScope.cameras.set(keptVideo, place);
+        });
+        readBehaviorMetadata(session, sessLucid, slpData.behaviorEvents, eventScope);
         var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
         if (planeConflict) {
             console.warn('[single-slp] not reading the plane state in ' + slpFile.name +
@@ -2350,6 +2367,9 @@ export async function handleLoadSessionFolderSingleSlp() {
         showLoading('Building session...');
         for (var fri = 0; fri < slpData.frames.length; fri++) {
             var fd = slpData.frames[fri];
+            // A video no camera has (kept aside below) would sit under a camera
+            // key the session does not have, and the writer drops those.
+            if (cameras.length > 0 && !videoIdxToCameraName[fd.videoIdx]) continue;
             var camName = videoIdxToCameraName[fd.videoIdx] || ('cam_' + fd.videoIdx);
             var fg = session.frameGroups.get(fd.frameIdx);
             if (!fg) { fg = new FrameGroup(fd.frameIdx); session.addFrameGroup(fg); }
@@ -2369,6 +2389,12 @@ export async function handleLoadSessionFolderSingleSlp() {
                 if (_nn) inst.nulledNodes = _nn;
                 fg.addInstance(camName, inst);
             }
+        }
+        // Poses on a video no camera has (a video in no session, or a later
+        // session of the file, which this loader does not open): not shown, kept
+        // for the save.
+        if (cameras.length > 0) {
+            keepOutsideFrames(session, slpData, new Set(Object.keys(videoIdxToCameraName).map(Number)));
         }
 
         // Restore the project's saved state from the SLP's sessions_json —
@@ -2563,6 +2589,12 @@ export async function handleLoadSessionFolderSingleSlp() {
         } else {
             finalMsg = 'Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)';
             finalKind = 'success';
+        }
+        var singleOutsideNote = outsideFramesNote(keptOutsideCounts(session),
+            slpData.sessions ? slpData.sessions.length : 0);
+        if (singleOutsideNote) {
+            finalMsg += ' — ' + singleOutsideNote;
+            if (finalKind === 'success') finalKind = 'warning';
         }
         var campyFinal = withCampyWarnings(finalMsg, finalKind, session.campyRecording);
         setStatus(campyFinal.message, campyFinal.kind);
@@ -2909,8 +2941,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
             loader.close();
             loader = opened = null;
             if (await handleLoadSlpFile(slpFile)) {
+                var inFullNote = outsideFramesNote(keptOutsideCounts(state.sessions[0]));
                 setStatus('Opened ' + slpFile.name + ' in full, not on demand: ' + eagerReason
-                    + '. A file this large can run out of memory.', 'warning');
+                    + '. A file this large can run out of memory.' + (inFullNote ? ' ' + inFullNote : ''), 'warning');
             }
             return;
         }
@@ -2994,7 +3027,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // eager read in import-export/slp-import.js.
         readVisibilityMetadata(session, lucid);
         readSmoothingMetadata(session, lucid);   // Temporal Smoothing's last run
-        readBehaviorMetadata(session, lucid);    // ethogram + behavior bouts
+        // Ethogram + behavior bouts. Only this file's first session opens here.
+        readBehaviorMetadata(session, lucid, fileEventsOf(labels),
+            sessionEventScope(labels.rawSessionsJson, (labels.videos || []).length, 0, true));
         // Define Planes state — the lazy-reopen mirror of the eager read in
         // `import-export/slp-import.js`.
         readPlaneMetadata(session, lucid);
@@ -3111,14 +3146,18 @@ export async function handleLoadProjectSlpLazy(slpFile) {
             hideLoading();
         }
         updateInfoPanel();
+        // This loader opens a file's first session only; the store holds every frame.
+        var lazyOutsideNote = outsideFramesNote(loader.outsideFrameCounts(), (labels.sessions || []).length);
         if (videosAttached) {
             var lazyStatus = withCampyWarnings('Reopened ' + slpFile.name + ' — '
                 + session.instanceGroups.size.toLocaleString('en-US')
-                + ' grouped frames, ' + state.views.length + ' videos', 'success', session.campyRecording);
+                + ' grouped frames, ' + state.views.length + ' videos'
+                + (lazyOutsideNote ? ' — ' + lazyOutsideNote : ''), lazyOutsideNote ? 'warning' : 'success', session.campyRecording);
             setStatus(lazyStatus.message, lazyStatus.kind);
         } else {
             setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
-                + ' grouped frames, ' + loader.nFrames.toLocaleString('en-US') + ' frames. File → Load Videos to show images.', 'success');
+                + ' grouped frames, ' + loader.nFrames.toLocaleString('en-US') + ' frames. File → Load Videos to show images.'
+                + (lazyOutsideNote ? ' ' + lazyOutsideNote : ''), lazyOutsideNote ? 'warning' : 'success');
         }
         if (!typedSession) {
             // A plain SLEAP file: nothing was reopened, and nothing is grouped yet.
@@ -3153,11 +3192,16 @@ export async function handleLoadProjectSlpLazy(slpFile) {
  * (`unionTrackNames`, `loading/track-union.js`); an index it does not cover is
  * trackless (`remapTrackIdx`), never kept raw — a raw index would name
  * whichever session track happens to sit there.
+ *
+ * `ownVideo` (optional): only that video's frames are this camera's
+ * (`ownVideoOfColumnar`, import-export/outside-frames.js).
  */
-export function addColumnarFramesToSession(session, camName, col, trackRemap) {
+export function addColumnarFramesToSession(session, camName, col, trackRemap, ownVideo) {
     var nn = col.numNodes;
     var stride = nn * 2;
     for (var f = 0; f < col.nFrames; f++) {
+        // Another video's frame in this camera's file is not this camera's.
+        if (ownVideo !== undefined && col.videoIdx && col.videoIdx[f] !== ownVideo) continue;
         var frameIdx = col.frameIdx[f];
         if (!session.frameGroups.has(frameIdx)) {
             session.addFrameGroup(new FrameGroup(frameIdx));
@@ -3726,17 +3770,25 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
             var trackRemap = trackUnion.remapByCam.get(camName) || new Int32Array(0);
 
+            // A camera is one video, the first its file lists with frames.
+            var ownVideo = slpData.columnar ? ownVideoOfColumnar(slpData.columnar)
+                : (slpData.frames ? ownVideoOfFrames(slpData.frames) : undefined);
+
             // What this camera's file says about its video, for a save with none loaded.
-            if (slpData.videos && slpData.videos[0] && !slpData.videos[0].embedded) {
+            var ownFileVideo = slpData.videos && slpData.videos[ownVideo !== undefined ? ownVideo : 0];
+            if (ownFileVideo && !ownFileVideo.embedded) {
                 if (!state.session.fileVideos) state.session.fileVideos = new Map();
-                state.session.fileVideos.set(camName, slpData.videos[0]);
+                state.session.fileVideos.set(camName, ownFileVideo);
             }
 
             if (slpData.columnar) {
-                addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap);
+                addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap, ownVideo);
+                keepOutsideColumnarFrames(state.session, slpData, ownVideo);
             } else if (slpData.frames) {
+                keepOutsideFrames(state.session, slpData, new Set([ownVideo]));
                 for (var fri = 0; fri < slpData.frames.length; fri++) {
                     var frameData = slpData.frames[fri];
+                    if (frameData.videoIdx !== ownVideo) continue;
                     var frameIdx = frameData.frameIdx !== undefined ? frameData.frameIdx : (frameData.frame_idx !== undefined ? frameData.frame_idx : fri);
                     if (!state.session.frameGroups.has(frameIdx)) {
                         state.session.addFrameGroup(new FrameGroup(frameIdx));
@@ -4181,6 +4233,12 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         } else if (slpFailures.length === 0 && staleWarnings.length > 0) {
             statusMsg += ' — newer .slp present but not loaded: ' + staleWarnings.join('; ');
             statusKind = 'warning';
+        }
+        var folderOutsideNote = state.session ? outsideFramesNote(state.session.lazyLoader && state.session.lazyLoader.outsideFrameCounts
+            ? state.session.lazyLoader.outsideFrameCounts() : keptOutsideCounts(state.session)) : '';
+        if (folderOutsideNote) {
+            statusMsg += ' — ' + folderOutsideNote;
+            if (statusKind === 'success') statusKind = 'warning';
         }
         var campyStatus = withCampyWarnings(statusMsg, statusKind, state.session && state.session.campyRecording);
         setStatus(campyStatus.message, campyStatus.kind);

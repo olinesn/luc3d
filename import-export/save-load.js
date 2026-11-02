@@ -42,6 +42,7 @@ import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js
 import { fitTimelineToData } from '../ui/timeline-controller.js';
 import { slpHasEmbeddedImages } from './slp-import.js';
 import { handleLoadSlpFile } from './slp-import.js';
+import { outsideFramesForSave } from './outside-frames.js';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
@@ -373,7 +374,25 @@ async function ensureSleapIO() {
     return mod;
 }
 
+// No initializer: a hook registered while this module is still being
+// evaluated (an import cycle) must not be reset when its body runs.
+var _markDirtyHooks;
+
+/**
+ * Be told on every `markDirty` (an edit happened somewhere). Hooks run on
+ * every edit, so they must be cheap: behavior predictions use it only to
+ * note that the poses they read may have changed (ui/behavior-detect.js).
+ * @param {function(): void} fn
+ */
+export function onMarkDirty(fn) {
+    if (typeof fn === 'function') (_markDirtyHooks = _markDirtyHooks || []).push(fn);
+}
+
 export function markDirty() {
+    var hooks = _markDirtyHooks || [];
+    for (var i = 0; i < hooks.length; i++) {
+        try { hooks[i](); } catch (e) { console.error('[markDirty] hook failed', e); }
+    }
     // Per-session dirty (active-session memory model): the switch-away save
     // prompt and safe lazy-eviction key off THIS flag, so it must be set even
     // when the global flag is already true from another session.
@@ -676,6 +695,8 @@ async function buildSlpBytes(opts) {
     var allSkeletons = [];
     var allTracks = [];
     var allIdentities = [];
+    var allEventTypes = [];
+    var allEvents = [];
     var seenSkeletonNames = new Set();
     var seenTrackNames = new Set();
 
@@ -822,10 +843,13 @@ async function buildSlpBytes(opts) {
             return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
         });
 
-        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
+        // Poses on a video no session names go back on their own video, and the
+        // session's events on that video on the same entry.
+        var sessOutside = outsideFramesForSave(sess);
+        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessOutside);
 
         // Merge into combined Labels
-        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
+        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFramesFor(sessLabels.skeletons[0], sessLabels.identities) : []);
         allVideos = allVideos.concat(sessLabels.videos || []);
         for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
             var skel = sessLabels.skeletons[sk];
@@ -834,8 +858,9 @@ async function buildSlpBytes(opts) {
                 seenSkeletonNames.add(skel.name);
             }
         }
-        for (var ti = 0; ti < (sessLabels.tracks || []).length; ti++) {
-            var trk = sessLabels.tracks[ti];
+        var sessAllTracks = (sessLabels.tracks || []).concat(sessOutside ? sessOutside.tracks : []);
+        for (var ti = 0; ti < sessAllTracks.length; ti++) {
+            var trk = sessAllTracks[ti];
             if (!seenTrackNames.has(trk.name)) {
                 allTracks.push(trk);
                 seenTrackNames.add(trk.name);
@@ -843,6 +868,8 @@ async function buildSlpBytes(opts) {
         }
         allIdentities = allIdentities.concat(sessLabels.identities || []);
         allSessions = allSessions.concat(sessLabels.sessions || []);
+        allEventTypes = allEventTypes.concat(sessLabels.eventTypes || []);
+        allEvents = allEvents.concat(sessLabels.events || []);
     }
 
     // Re-point every instance's track to the canonical (deduped) Track object
@@ -868,6 +895,11 @@ async function buildSlpBytes(opts) {
             }
         }
     }
+    // Events name their animals the same way: a track stays the canonical object.
+    allEvents.forEach(function (ev) {
+        if (ev.subject instanceof SIO.Track && canonicalTrackByName[ev.subject.name]) ev.subject = canonicalTrackByName[ev.subject.name];
+        if (ev.target instanceof SIO.Track && canonicalTrackByName[ev.target.name]) ev.target = canonicalTrackByName[ev.target.name];
+    });
 
     var labels = new SIO.Labels({
         labeledFrames: allLabeledFrames,
@@ -878,6 +910,9 @@ async function buildSlpBytes(opts) {
         sessions: allSessions,
         // Keeps the loaded files' provenance (slp-provenance.js).
         provenance: buildSaveProvenance(sessionsToExport),
+        // The catalog collapses to one entry per name when Labels is built.
+        eventTypes: allEventTypes,
+        events: allEvents,
     });
 
     // PR 5.2: export sleap-io.js's canonical bytes directly. The typed graph
@@ -1051,19 +1086,27 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
     var cameraRenames = session.lazyLoader.cameraRenames;
     var wasSharedStore = !!session.lazyLoader._sharedStore;
+    // A project file with no frame on any of this session's cameras has no
+    // per-camera entry, and pass 2 still has to read its frames back.
+    if (wasSharedStore && sourceFiles.length === 0 && session.lazyLoader._projectFile) {
+        sourceFiles = [['', session.lazyLoader._projectFile]];
+    }
     var refGraph = await buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx, onProgress);
     // A store edited in memory is not what pass 2 will read back from the
     // files: keep its frame + instance columns (`keepEditedStoreColumns`).
     var editedColumns = keepEditedStoreColumns(session.lazyLoader);
+    // Rows File ▸ Add SLP put in a store are in no file, so pass 2 cannot read them
+    // back: it gets this loader as it is, at the cost of keeping it till then.
+    var keptLoader = session.lazyLoader.rowsAddedInMemory ? session.lazyLoader : null;
     handle.pending.push({
         session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore,
-        editedColumns: editedColumns, cameraRenames: cameraRenames,
+        editedColumns: keptLoader ? null : editedColumns, cameraRenames: cameraRenames, keptLoader: keptLoader,
     });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
     // ref-only RecordingSession + the materialized user-edit overlay
     // instances) — the lazy loader and per-frame LUCID state can go.
-    session.lazyLoader.close();
+    if (!keptLoader) session.lazyLoader.close();
     session.lazyLoader = null;
     session.frameGroups = new Map();
     session.instanceGroups = new Map();
@@ -1106,7 +1149,8 @@ export async function finalizeMultiSessionSave(handle, opts) {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
             if (onProgress) await onProgress('frames', j, handle.pending.length, 'sessions');
-            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.cameraRenames);
+            if (p.keptLoader) p.session.lazyLoader = p.keptLoader;
+            else await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.cameraRenames);
             if (p.editedColumns) restoreEditedStoreColumns(p.session.lazyLoader, p.editedColumns);
             await streamSessionIntoWriter(writer, p.session, p.refGraph);
             p.session.lazyLoader.close();

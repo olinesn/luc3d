@@ -178,6 +178,14 @@ export function countSkeletonEditImpact(sessions) {
                     }
                 }
             }
+            // Poses on a video no session names are re-shaped too.
+            var outside = sess.outsideFrames ? sess.outsideFrames.frames : [];
+            for (var oi = 0; oi < outside.length; oi++) {
+                for (var oj = 0; oj < outside[oi].instances.length; oj++) {
+                    if (outside[oi].instances[oj].type === 'predicted') ps.predictedInstances++;
+                    else ps.userInstances++;
+                }
+            }
         }
         ps.instances = ps.userInstances + ps.predictedInstances;
     }

@@ -167,6 +167,31 @@ describe('SLP Merge Helpers', function () {
             assertEqual(sideInsts5.length, 1, 'Frame 5 should have 1 side instance');
         });
 
+        it('should not merge a video with no camera into a camera', function () {
+            var skeleton = new Skeleton('test', ['nose', 'tail'], [[0, 1]]);
+            var mtx = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+            var camA = new Camera('camA', mtx, [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
+            var camB = new Camera('camB', mtx, [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
+            var frame = function (videoIdx) {
+                return { frameIdx: 0, videoIdx: videoIdx, instances: [{ points: [[videoIdx, 0], [videoIdx, 1]], trackIdx: 0, type: 'predicted', score: 0.9 }] };
+            };
+            var slpData = { frames: [frame(0), frame(1), frame(2)] };
+            var trackRemap = new Map([[0, 0]]);
+
+            // The file maps its videos: an unmapped one is no camera's.
+            var mapped = new Session([camA, camB], skeleton, ['track_0']);
+            mergeSlpFramesIntoSession(mapped, slpData, { 0: 'camA', 1: 'camB' }, [camA, camB], trackRemap, null);
+            assertEqual(mapped.frameGroups.get(0).getInstances('camA').length, 1, 'Video 2 is not merged into camA');
+            assertEqual(mapped.frameGroups.get(0).getInstances('camB').length, 1, 'camB holds its own');
+
+            // The file maps no video: each camera reads the video at its index, and
+            // the one past the last camera does not wrap round to camA.
+            var unmapped = new Session([camA, camB], skeleton, ['track_0']);
+            mergeSlpFramesIntoSession(unmapped, slpData, {}, [camA, camB], trackRemap, null);
+            assertEqual(unmapped.frameGroups.get(0).getInstances('camA').length, 1, 'Video 2 does not wrap round onto camA');
+            assertDeepEqual(unmapped.frameGroups.get(0).getInstances('camB')[0].getPoint(0), [1, 0], 'camB reads video 1');
+        });
+
         it('should reorder points when nodeReorderMap is provided', function () {
             // Existing skeleton: ['A', 'B', 'C']
             // Incoming skeleton: ['C', 'A', 'B'] -> reorderMap = [2, 0, 1]
