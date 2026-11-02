@@ -241,6 +241,7 @@ export function createProjectWriterContext() {
         // `skeletonByName` dedup above already guards against for skeletons.
         trackBaseByNameSig: new Map(),
         allIdentities: [],         // SIO.Identity[], concatenated across sessions
+        allSuggestions: [],        // SIO.SuggestionFrame[], each on an entry of allVideos
         behaviorItems: [],         // per session, for its behavior events (`openProjectWriter`)
     };
 }
@@ -484,14 +485,17 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     // as that file does. A per-camera store is another file.
     var keptRecords = _sharedStore ? keptVideoRecords(session) : new Map();
     var listedVideos = new Map();  // the file's record of a video -> its entry in the header
+    var placeOfVideo = new Map();  // the reader's Video -> its place in `ctx.allVideos`
     function addOutsideVideos(store, claimed) {
         var added = [];
         var used = storeVideoIds(store);
         for (var uvi = 0; uvi < used.length; uvi++) {
             if (claimed.has(used[uvi])) continue;
             var storeVideoIdx = typeof store.videoIndexFor === 'function' ? store.videoIndexFor(used[uvi]) : used[uvi];
-            var headerVideo = headerVideoForOutsideFrames(SIO, (store.videos || [])[storeVideoIdx], used[uvi]);
+            var outsideVideo = (store.videos || [])[storeVideoIdx];
+            var headerVideo = headerVideoForOutsideFrames(SIO, outsideVideo, used[uvi]);
             added.push({ native: used[uvi], videoIndex: ctx.allVideos.length });
+            if (outsideVideo) placeOfVideo.set(outsideVideo, ctx.allVideos.length);
             ctx.allVideos.push(headerVideo);
             if (keptRecords.has(storeVideoIdx)) listedVideos.set(keptRecords.get(storeVideoIdx), headerVideo);
         }
@@ -863,6 +867,55 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         _refStats.total, 'refs,', _refStats.tagged, 'via _rawInstIndex,', _refStats.fallback,
         'via trackIdx fallback (', _refStats.ambiguous, 'of those genuinely ambiguous — >1 raw instance, no track match; would have silently defaulted to instIndex=0 before this fix)');
 
+    // ---- Suggestions (SLEAP's frames to label next) ----
+    // Each points at the reader's Video. The writer finds it in the header by object,
+    // and writes -1 for one the header lacks, which Python reads as the LAST video. So
+    // each goes to the header's video for its id: a camera's is a fresh object above,
+    // and a video with neither a camera nor poses gets its place here. This has to be
+    // pass 1: `openSlpWriter` writes them before pass 2 re-reads any file.
+    function addSuggestionsOf(labels) {
+        var suggestions = (labels && labels.suggestions) || [];
+        for (var sui = 0; sui < suggestions.length; sui++) {
+            var sug = suggestions[sui];
+            var place = placeOfVideo.get(sug.video);
+            if (place === undefined) {
+                var sugVideoIdx = labels.videos.indexOf(sug.video);
+                var onlySuggested = headerVideoForOutsideFrames(SIO, sug.video, sugVideoIdx);
+                // Two embedded records can share one source video.
+                place = ctx.allVideos.indexOf(onlySuggested);
+                if (place < 0) { place = ctx.allVideos.length; ctx.allVideos.push(onlySuggested); }
+                placeOfVideo.set(sug.video, place);
+                // This session's bouts on it go on the same entry.
+                if (keptRecords.has(sugVideoIdx)) listedVideos.set(keptRecords.get(sugVideoIdx), onlySuggested);
+            }
+            var sugGroup = sug.metadata ? sug.metadata.group : null;
+            ctx.allSuggestions.push(new SIO.SuggestionFrame({
+                video: ctx.allVideos[place],
+                frameIdx: sug.frameIdx,
+                // As the file holds it (the reader's `.group` is a string). A file with
+                // none reads as 0 in Python; left out, the writer would write "default".
+                group: sugGroup != null ? sugGroup : 0,
+            }));
+        }
+    }
+    if (sharedLabels) {
+        var sharedVideos = sharedLabels.videos || [];
+        for (var suc = 0; suc < session.cameras.length; suc++) {
+            var sharedOwn = loader.videoIdByCam ? sharedVideos[loader.videoIdByCam.get(session.cameras[suc].name)] : null;
+            if (sharedOwn) placeOfVideo.set(sharedOwn, sessionVideoIndices[suc]);
+        }
+        addSuggestionsOf(sharedLabels);
+    } else if (!_sharedStore) {
+        for (var sup = 0; sup < cam.length; sup++) {
+            var camLabels = loader.labelsByCam.get(cam[sup].name);
+            // The video `SioLazyLoader.open` calls this camera's.
+            var ownPosition = cam[sup].ownVideo !== undefined ? camLabels._lazyDataStore.videoIndexFor(cam[sup].ownVideo) : 0;
+            var camOwn = (camLabels.videos || [])[ownPosition];
+            if (camOwn) placeOfVideo.set(camOwn, cam[sup].videoIndex);
+            addSuggestionsOf(camLabels);
+        }
+    }
+
     // Returned `cam` is intentionally slim — no `framesData`/`instancesData`/
     // `rowMap` references, so the caller's eviction of `session.lazyLoader`
     // actually frees that memory instead of it surviving via this result.
@@ -904,6 +957,7 @@ export async function openProjectWriter(ctx, allSioSessions, provenance) {
         skeletons: ctx.allSkeletons,
         videos: ctx.allVideos,
         tracks: ctx.allTracks,
+        suggestions: ctx.allSuggestions,
         identities: ctx.allIdentities,
         sessions: allSioSessions,
         provenance: provenance || { source: 'lucid', exported_at: new Date().toISOString() },
