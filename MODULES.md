@@ -13751,6 +13751,41 @@ skeleton-only 3D-points import prompts before discarding it.
 
 **Behavior labels.** `handleLoadProjectSlpLazy` resets and reads behavior metadata like the eager reader; `handleLoadSessionFolderSingleSlp` resets only when it starts a project, and otherwise merges the file's ethogram by name (its bouts remapped). When its filename fallback makes a camera of a video no session names, the events it keeps on that video go back on that camera's entry, with the poses (`eventScope.cameras`).
 
+### loading/lazy-store-rows.js
+
+**Purpose.** Another file's poses, added to a lazy project's columnar store (File ▸
+Add SLP). On a lazy project the store is the project: frames hydrate from it, a save
+writes it whole, and everything holding frames in memory may drop one with no user
+instance (`evictLazyFrameGroups`, `sweepLazyFrameWindows`, `buildSessionRefGraph`'s
+pruning). So an added pose must be a store row, or it is gone the next time one of those
+runs. Rows are only ever APPENDED: no existing row moves or changes, so `frameRowByCam`,
+`_rawInstIndex` and the file-wide group refs stay right. All or nothing:
+`allocateStoreRows` allocates every column and changes nothing, then `commitStoreRows`
+only fills what is allocated and swaps it in, without a break. Import-free and DOM-free.
+
+**Key exports.**
+- `sourceRowsByVideo(source)` — a store's frame rows by video, in ascending id. A frame
+  listed twice joins its first row (the writer keeps one row per `video:frame`).
+- `allocateStoreRows(store, blocks, source)`, `commitStoreRows(plan, source, rules)` —
+  `rules` has `trackMap` (the file's track id → the store's; a value outside it has no
+  track) and `skeletons` (per file skeleton: the store's id and, when its nodes are in
+  another order, `order[fileNode] = storeNode`). Each block gets `rowMap`. A file older
+  than format 1.1 is shifted to today's coordinates, as `materializeFrame` would read it.
+  What detections carry outside the columns (a model's identity, category, embeddings,
+  `import-export/detection-labels.js`) follows its rows, into the store's catalogs by name.
+- `firstFreeVideoId(store)` — past every row's, annotation's and negative frame's id and
+  the store's own list (`videoIndexFor` falls back to a raw id as an index).
+- `storeFromParsedFrames(slpData)` — an eagerly parsed file's poses (an analysis `.h5`)
+  in a store's columns.
+- `ADDED_STORE_FORMAT`, `OLDEST_STORE_FORMAT`.
+
+**Imports from project modules.** None.
+
+**Imported by.** `loading/sio-lazy-loader.js`, `import-export/slp-import.js`
+(`storeFromParsedFrames`).
+
+**Tests.** `tests/test-lazy-store-rows.mjs`, `tests/e2e/add-slp-lazy-project.mjs`.
+
 ### loading/sio-lazy-loader.js
 
 **Purpose.** Main-thread lazy frame loader for large prediction `.slp` files,
@@ -13797,6 +13832,19 @@ synchronous.
   `store.tracks`, and `_tracksPastSession` keeps them out of the timeline's count.
   `tracksPastSession(labels, sessionTracks, camName)` — how many such names a save
   lists after the session's tracks, moving those rows past any track added since.
+- `prepareAddedRows(source, opts)`, `commitAddedRows(prepared, opts)`,
+  `addedRowsRefusal()` — File ▸ Add SLP (`loading/lazy-store-rows.js`). Prepare works out
+  where each row goes and allocates, changing nothing; commit cannot run out of memory
+  half way. A video the file gives a camera becomes that camera's, so its rows hydrate,
+  evict, count and save like any other; every other video stays on its own, like any
+  video no camera names. A shared store takes every row under new video ids
+  (`videoIdByCam`); per-camera stores get one new `Labels` + `LazyDataStore` per added
+  camera, and the other videos' rows go in the first added camera's (`_ownVideoByCam`).
+  `_followSessionTracks` gives every store the session's grown list
+  (`_installStoreTrackList`, shared with `remapTracksFromIdentity`): a camera's rows keep
+  their ids because that list only grew at its end. Sets `rowsAddedInMemory`, which no
+  re-read can restore, so the multi-session save keeps the loader itself. Refuses a store
+  older than format 1.1, whose rows `materializeFrame` shifts by half a pixel.
 - `getFrame` / `getFrameSync` — typed instances → `{trackIdx (-1 = none, as in
   the store; hydration maps it to `null`), score, type, points, occluded}`,
   LRU-cached. `prefetch`, `close` (also clears `videoIdByCam` and `_projectLabels`).
@@ -13946,7 +13994,7 @@ no score. NaN for a user row, an offset outside the frame's rows, a missing
 frame/camera, or a NaN score. Pinned by `tests/test-node-scores.mjs` and
 `tests/e2e/node-score-tooltip.mjs`.
 
-**Imports.** `./track-union.js` (`unionTrackNames`);
+**Imports.** `./track-union.js` (`unionTrackNames`), `./lazy-store-rows.js` (File ▸ Add SLP);
 `window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
 bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 `h5wasmUrl`).
@@ -15326,7 +15374,8 @@ incl. `planeMetadataConflict`).
 
 **Purpose.** Poses on a video no recording session names: not shown, and kept by
 every save on their own video. The lazy path keeps them in its store
-(`buildSessionRefGraph`); this module holds them for the eager path, on
+(`buildSessionRefGraph`; File ▸ Add SLP adds its own there,
+`SioLazyLoader.commitAddedRows`); this module holds them for the eager path, on
 `session.outsideFrames`, and has the rules both share.
 
 **Key exports.**
@@ -15334,6 +15383,8 @@ every save on their own video. The lazy path keeps them in its store
   such frames: the file's own record, its source video when the record has embedded
   images (a save does not copy them), else a placeholder `unknown_video_<id>.mp4` (an
   id `videos_json` does not hold, as older LUC3D saves left it).
+- `headerVideoOfRecord(SIO, record, id)` — the same for a `slpData.videos` record (the
+  raw worker's have no typed video to keep). File ▸ Add SLP on a lazy project.
 - `keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap)` — eager load;
   adds to what `session.outsideFrames` already holds. Each kept video remembers the
   record its file's events name it by (`eventRecord`, `fileEventsOf`).
@@ -15586,7 +15637,9 @@ session's resident/total) rather than truncate silently. Covered by
   failure resolves and is left to the real read. For a loader that clears the open
   project before its read (`handleLoadProjectSlpLazy`). Costs a worker start, so
   the loaders that change nothing before they read don't use it.
-- SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress)` —
+- SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress, opts)` — with
+  `opts.lazy`, reads the poses as columns and builds no frames (`frames` is empty,
+  `store` is the file's `LazyDataStore`), for File ▸ Add SLP on a lazy project. Otherwise
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` and adapts
   the typed `Labels` into the `slpData` shape (a video's names as one string: an
   image sequence's is a list of its images, of which it takes the first) via the private
@@ -15974,6 +16027,12 @@ eager path shows them.
   save streams from the live loader and never needs this. Covered by
   `tests/e2e/multi-session-save-store-edits.mjs`.
 
+  **Rows no file holds.** After File ▸ Add SLP (`SioLazyLoader.rowsAddedInMemory`) a
+  re-read cannot give pass 2 what pass 1 saw, so `commitSessionForMultiSessionSave`
+  keeps the loader itself (`keptLoader` on `handle.pending`), unclosed, and
+  `finalizeMultiSessionSave` streams from it. Covered by
+  `tests/e2e/add-slp-lazy-project.mjs`.
+
   **GC between sessions.** Dereferencing a session's heavy state makes it
   only *eligible* for GC, so the multi-session flow streams to `opts.sink`
   (no extra whole-output buffer) and calls the private `encourageGC(totalMB)`
@@ -16082,6 +16141,18 @@ was picked loads only that video, views follow campy's camera order, the frame
 rate is session.json's, and the final status gains each session's warnings
 (`campyRecordingWarnings`). No calibration hash check here: the calibration
 came from the `.slp`.
+
+**File ▸ Add SLP on a lazy project** (`handleAddSlp`) puts the poses in the columnar
+store, because everything else that holds a frame may drop it and a save writes only the
+store and the user's edits (`loading/lazy-store-rows.js`). A `.slp` is read lazily, as
+columns, so it costs no frame objects and keeps every field a row holds; an analysis
+`.h5` goes through `storeFromParsedFrames`. `prepareAddedRows` runs before tracks or
+cameras change, so a failure there changes nothing. The poses arrive ungrouped, like any
+row no group names, and Track All groups them: `rebuildInstanceGroupsForFrames` is not
+called, because it would replace those frames' groups, 3D included. Frames already in
+memory take the new cameras' rows at once. Refused, with a status saying why, on a
+worker-backed loader (analysis `.h5` per camera: no store) or a store older than format
+1.1. Every Add SLP marks the project dirty.
 
 **Embedded images.** One frame worker per file (`openEmbeddedFrames`). Each session
 takes the videos its frames went to, in list order, each matched to its images by
@@ -16296,7 +16367,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
   session keeps its part of the file's provenance),
   `./outside-frames.js` (`keepOutsideFrames`, `keptOutsideCounts`,
-  `outsideFramesNote` — poses on a video no session reads),
+  `outsideFramesNote`, `headerVideoOfRecord` — poses on a video no session reads),
+  `../loading/lazy-store-rows.js` (`storeFromParsedFrames`),
   `../loading/video-file-pick.js` (`preferNonCalibrationVideos`),
   `../ui/loading-progress-modal.js` (`getLoadingProgressModal`),
   `../loading/cold-read-guard.js`
@@ -16393,7 +16465,9 @@ compatibility check, track merging, frame merging, group rebuild.
 (`validateSkeletonCompatibility`).
 
 **User-facing features.** Backs File ▸ Load SLP's merge path (`handleAddSlp`) — merging an SLP into
-an existing session without overwriting it.
+an existing session without overwriting it. On a lazy project `handleAddSlp` uses
+only the skeleton check, the track merge and `videosClaimedBy`: its poses go in the
+store instead (`loading/lazy-store-rows.js`).
 
 ---
 

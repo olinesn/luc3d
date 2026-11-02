@@ -12,7 +12,8 @@
  * The lazy path keeps them where they already are, in its columnar store:
  * `buildSessionRefGraph` gives each such video a place in the header, after the
  * session's cameras, and `SioLazyLoader.remapTracksFromIdentity` keeps their track
- * names when the session's track list changes.
+ * names when the session's track list changes. File ▸ Add SLP puts its own there too
+ * (`SioLazyLoader.commitAddedRows`, loading/lazy-store-rows.js).
  *
  * The eager path has no store, so this module holds them for it:
  *  - `keepOutsideFrames` at load, on one session (`session.outsideFrames`);
@@ -65,6 +66,22 @@ export function headerVideoForOutsideFrames(SIO, video, id) {
     if (video && !video.hasEmbeddedImages) return video;
     if (video && video.sourceVideo) return video.sourceVideo;
     return newHeaderVideo(SIO, 'unknown_video_' + id + '.mp4', video && video.shape);
+}
+
+/**
+ * `headerVideoForOutsideFrames` for a `slpData.videos` record. Only the raw worker's
+ * records have no typed video to keep: they get a new one under the file's name.
+ *
+ * @param {Object} SIO - window.SleapIO
+ * @param {Object|null|undefined} record
+ * @param {number} id - the video's id in the file's `frames` table
+ * @returns {Object} a `SIO.Video`
+ */
+export function headerVideoOfRecord(SIO, record, id) {
+    if (record && !record._typedVideo && record.filename && !record.embedded) {
+        return newHeaderVideo(SIO, record.filename, record.shape);
+    }
+    return headerVideoForOutsideFrames(SIO, record && record._typedVideo, id);
 }
 
 /**

@@ -2914,9 +2914,12 @@ export async function checkSlpFileFormat(file) {
  *
  * @param {File} file - The .slp file
  * @param {Function} [onProgress] - Optional progress callback `(msg) => void`
+ * @param {{lazy?: boolean}} [opts] - `lazy`: read the poses as columns and build no
+ *   frames (`frames` is empty, `store` is the file's `LazyDataStore`), for a file whose
+ *   poses go straight into a lazy project's store
  * @returns {Promise<Object>} `slpData` matching parseSlpH5's result shape
  */
-export async function parseSlpViaSleapIO(file, onProgress) {
+export async function parseSlpViaSleapIO(file, onProgress, opts) {
     var SIO = window.SleapIO;
     if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
         throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
@@ -2926,7 +2929,9 @@ export async function parseSlpViaSleapIO(file, onProgress) {
     var report = function (msg) { if (onProgress) onProgress(msg); };
     report('Reading SLP (streaming)...');
 
+    var lazy = !!(opts && opts.lazy);
     var labels = await SIO.readSlpStreaming(file, {
+        lazy: lazy,
         openVideos: false,
         rawSessions: true, // capture verbatim sessions_json (legacy-identity fallback)
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
@@ -2953,7 +2958,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
     // Only frames that carry at least one pose instance, matching the worker
     // (SI-worker only emits frames with >=1 instance).
     var frames = [];
-    var lfs = labels.labeledFrames || [];
+    var lfs = lazy ? [] : (labels.labeledFrames || []);
     for (var li = 0; li < lfs.length; li++) {
         var lf = lfs[li];
         var lfInsts = lf.instances || [];
@@ -3040,6 +3045,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // The file's whole provenance dict (slp-provenance.js picks each
         // session's part).
         provenance: labels.provenance || null,
+        store: lazy ? labels._lazyDataStore : undefined,
         behaviorEvents: behaviorEvents,
     };
 }
