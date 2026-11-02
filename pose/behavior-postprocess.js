@@ -83,32 +83,37 @@ function prf(tp, fp, fn) {
 /**
  * Frame-level precision, recall and F1 at a threshold, the decision
  * `scoresToBouts` makes (score ≥ threshold; an unscored frame is not
- * detected).
+ * detected). When the frames are a sample, `weights` says how many frames one
+ * frame of each class stands for, so P/R/F1 read as on every frame; the counts
+ * stay the frames given.
  * @param {ArrayLike<number>} scores
  * @param {ArrayLike<number>} truth 1 = present, 0 = absent
+ * @param {number} threshold
+ * @param {number[]} [weights] [absent, present] (default 1 each)
  * @returns {{tp, fp, fn, tn, precision, recall, f1}}
  */
-export function framePrf(scores, truth, threshold) {
+export function framePrf(scores, truth, threshold, weights) {
     var tp = 0, fp = 0, fn = 0, tn = 0;
+    var w0 = weights ? weights[0] : 1, w1 = weights ? weights[1] : 1;
     for (var i = 0; i < scores.length; i++) {
         var on = scores[i] >= threshold;
         if (truth[i]) { if (on) tp++; else fn++; } else if (on) fp++; else tn++;
     }
-    return Object.assign({ tp: tp, fp: fp, fn: fn, tn: tn }, prf(tp, fp, fn));
+    return Object.assign({ tp: tp, fp: fp, fn: fn, tn: tn }, prf(tp * w1, fp * w0, fn * w1));
 }
 
 /**
  * A precision–recall curve: frame-level P, R and F1 at thresholds 0, 1/steps,
  * …, 1 (default 100 steps), and the threshold with the best F1 (the lowest
- * of equal ones).
+ * of equal ones). `weights` as for `framePrf`.
  * @returns {{points: Array<{threshold, precision, recall, f1}>, best: {threshold, precision, recall, f1}|null}}
  */
-export function prCurve(scores, truth, steps) {
+export function prCurve(scores, truth, steps, weights) {
     var k = Math.max(1, steps || 100);
     var points = [], best = null;
     for (var i = 0; i <= k; i++) {
         var thr = i / k;
-        var m = framePrf(scores, truth, thr);
+        var m = framePrf(scores, truth, thr, weights);
         var pt = { threshold: thr, precision: m.precision, recall: m.recall, f1: m.f1 };
         points.push(pt);
         if (m.f1 === m.f1 && (!best || m.f1 > best.f1)) best = pt;

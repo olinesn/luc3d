@@ -3228,7 +3228,11 @@ animal (pair), else 5 contiguous time blocks whose training leaves out the rows
 within the features' reach (`featurePadFrames`) — never random frames. Pooled
 out-of-fold scores give frame P/R/F1, a PR curve and bout P/R/F1 after the
 behavior's post-processing (`evaluate`; a sampled row's score is held to the
-next tested frame of its interval); they are kept (`cv.oof`) so `evaluateAt`
+next tested frame of its interval). Frame P/R/F1 and the curve weigh each class
+by the labelled frames its rows stand for (`pickSamples`' `standFor`); without
+that, a false alarm on a sampled "not" row counts once for the several frames it
+stands for (0.95 shown, 0.72 measured on every frame of a real recording). They
+are kept (`cv.oof`, with its `weights`) so `evaluateAt`
 recomputes them at another threshold or durations without retraining. The
 model: `{behaviorId, hash, features, forest, importance, params, versions,
 mode, nodes, body, training, cv, labelPrint}` — in memory only (the registry:

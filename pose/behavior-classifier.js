@@ -39,7 +39,11 @@
 // it never saw; pooled over folds: frame-level precision, recall and F1, a
 // precision–recall curve over thresholds, and bout-level precision, recall and
 // F1 (`boutPrf`, after the behavior's post-processing). Bin edges are fitted on
-// all rows (they read no label).
+// all rows (they read no label). Rows over the cap are a sample, usually of the
+// "not" frames, so the frame numbers weigh each class by the labelled frames
+// its rows stand for: unweighted, a false alarm on a "not" row counts once for
+// the several frames it stands for, and precision reads far too high (0.95
+// shown, 0.72 measured on every frame of a 10-minute recording).
 //
 // ## Predictions
 //
@@ -482,7 +486,8 @@ export function rowCap(F, social) {
 /**
  * Pick the samples: everything under the cap, else per class the frames whose
  * seeded hash is under 2^-k, plus one frame of every bout left without any.
- * @returns {{samples: Array<[srcIndex, seriesIndex, frame, y, boutId]>, counts, rates: number[]}}
+ * @returns {{samples: Array<[srcIndex, seriesIndex, frame, y, boutId]>, counts, rates: number[], standFor: number[]}}
+ *   `standFor`: the labelled frames one sample stands for, [absent, present]
  */
 function pickSamples(candidates, cap, seed) {
     var n = [0, 0], bouts = [0, 0];
@@ -523,7 +528,10 @@ function pickSamples(candidates, cap, seed) {
         });
     });
     samples.sort(function (x, y) { return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]; });
-    return { samples: samples, counts: { present: { frames: n[1], bouts: bouts[1] }, absent: { frames: n[0], bouts: bouts[0] } }, rates: rates };
+    var taken = [0, 0];
+    samples.forEach(function (sm) { taken[sm[3]]++; });
+    return { samples: samples, counts: { present: { frames: n[1], bouts: bouts[1] }, absent: { frames: n[0], bouts: bouts[0] } }, rates: rates,
+             standFor: [taken[0] ? n[0] / taken[0] : 1, taken[1] ? n[1] / taken[1] : 1] };
 }
 
 // ----------------------------------------------------------------------------
@@ -780,7 +788,7 @@ export async function trainBehaviorClassifiers(opts) {
             if (b.social && b.mutual) rowsMeta.push([w.si, se, sm[2], sm[3], sm[4], 1]);
         });
         report.rows = rowsMeta.length;
-        return { b: b, kind: kind, rowsMeta: rowsMeta, report: report };
+        return { b: b, kind: kind, rowsMeta: rowsMeta, report: report, standFor: picked.standFor };
     });
     var keyOfRow = function (m) { return m[5] ? rowKey(m[2], m[1].target, m[1].actor) : rowKey(m[2], m[1].actor, m[1].target); };
     // Phase C: the rows, session by session (each session's poses read once more).
@@ -936,7 +944,7 @@ async function fitBehavior(plan, set, blocksOf, keyOfRow, refCtx, sources, param
     var post = behaviorPost(b);
     var fps = refCtx.fps || refCtx.spec.fps;
     if (folds.length) {
-        report.cv = evaluate(oof, y, rowsMeta, rowSeries, mutual, post, fps, b.kind === 'point');
+        report.cv = evaluate(oof, y, rowsMeta, rowSeries, mutual, post, fps, b.kind === 'point', plan.standFor);
         report.cv.scheme = folding.scheme;
         report.cv.folds = folds.map(function (fd) { return fd.label; });
         report.cv.trees = params.trees;
@@ -978,11 +986,13 @@ export function topFeatures(model, k) {
 /**
  * Pooled cross-validation metrics from out-of-fold scores: per sample (a
  * mutual pair-frame's two rows averaged), frame-level P/R/F1 at the
- * behavior's threshold and over a threshold curve; bout-level P/R/F1 from
- * each series' tested frames (a row's score held until the next tested frame
- * of its labelled interval, so rows sampled from long bouts still make bouts).
+ * behavior's threshold and over a threshold curve, each class weighed by the
+ * labelled frames its rows stand for (`weights`, `pickSamples`' `standFor`);
+ * bout-level P/R/F1 from each series' tested frames (a row's score held until
+ * the next tested frame of its labelled interval, so rows sampled from long
+ * bouts still make bouts).
  */
-function evaluate(oof, y, rowsMeta, rowSeries, mutual, post, fps, point) {
+function evaluate(oof, y, rowsMeta, rowSeries, mutual, post, fps, point, weights) {
     var units = [];   // [score, y, seriesIdx, frame, bout]
     for (var r = 0; r < oof.length; r++) {
         var m = rowsMeta[r];
@@ -995,8 +1005,8 @@ function evaluate(oof, y, rowsMeta, rowSeries, mutual, post, fps, point) {
     }
     var scores = Float32Array.from(units.map(function (u) { return u[0]; }));
     var truth = Uint8Array.from(units.map(function (u) { return u[1]; }));
-    var frame = framePrf(scores, truth, post.threshold);
-    var curve = prCurve(scores, truth, 50);
+    var frame = framePrf(scores, truth, post.threshold, weights);
+    var curve = prCurve(scores, truth, 50, weights);
     // Bouts, per series.
     var bySeries = new Map();
     units.forEach(function (u) { if (!bySeries.has(u[2])) bySeries.set(u[2], []); bySeries.get(u[2]).push(u); });
@@ -1031,7 +1041,8 @@ function evaluate(oof, y, rowsMeta, rowSeries, mutual, post, fps, point) {
         curve: curve.points, best: curve.best,
         // Kept so the threshold dialog can recompute bout metrics without retraining.
         oof: { scores: scores, truth: truth, series: Int32Array.from(units.map(function (u) { return u[2]; })),
-               frames: Int32Array.from(units.map(function (u) { return u[3]; })), bouts: Int32Array.from(units.map(function (u) { return u[4]; })) },
+               frames: Int32Array.from(units.map(function (u) { return u[3]; })), bouts: Int32Array.from(units.map(function (u) { return u[4]; })),
+               weights: weights },
     };
 }
 
@@ -1043,7 +1054,7 @@ function evaluate(oof, y, rowsMeta, rowSeries, mutual, post, fps, point) {
 export function evaluateAt(cv, post, fps, point) {
     if (!cv || !cv.oof) return null;
     var o = cv.oof;
-    var frame = framePrf(o.scores, o.truth, post.threshold);
+    var frame = framePrf(o.scores, o.truth, post.threshold, o.weights);
     var bySeries = new Map();
     for (var i = 0; i < o.scores.length; i++) {
         if (!bySeries.has(o.series[i])) bySeries.set(o.series[i], []);

@@ -16,7 +16,8 @@
  *   5. training rows are cached: retraining computes none again, new labels
  *      compute only theirs;
  *   6. the cap: above it, rows are sampled (the same rows every time), with
- *      every bout represented;
+ *      every bout represented, and precision weighs each class by the frames
+ *      its rows stand for;
  *   7. a social (mutual) behavior trains on pair samples in both directions
  *      and cross-validates by time blocks (one pair);
  *   8. post-processing: exclusive groups keep the top behavior per frame;
@@ -196,6 +197,16 @@ console.log('\n-- 3. metrics --');
     check(c.points.length === 11 && c.best.f1 === 1 && c.best.threshold > 0.3 && c.best.threshold <= 0.8, 'PR curve: the best F1 (1) between the classes (' + c.best.threshold + ')');
     const b = boutPrf([[0, 5], [20, 25], [40, 41]], [[3, 10], [22, 23], [60, 70]]);
     check(b.hits === 2 && b.found === 2 && Math.abs(b.precision - 2 / 3) < 1e-12 && Math.abs(b.recall - 2 / 3) < 1e-12, 'bouts: overlap counts as found (2 of 3 each way)');
+    // Sampled frames: each class counts for the frames it stands for.
+    const sc = [0.9, 0.9, 0.6, 0.6, 0.2, 0.2], tr = [1, 1, 0, 0, 1, 0];
+    const plain = framePrf(sc, tr, 0.5), weighed = framePrf(sc, tr, 0.5, [8, 2]);
+    check(Math.abs(plain.precision - 2 / 4) < 1e-12 && Math.abs(weighed.precision - 4 / 20) < 1e-12, 'a false alarm on a sampled "not" frame counts for the frames it stands for (precision 2/4 → 4/20)');
+    check(Math.abs(weighed.recall - plain.recall) < 1e-12 && Math.abs(weighed.f1 - 2 * 4 / (2 * 4 + 16 + 2)) < 1e-12, 'recall stays, F1 follows');
+    check(weighed.tp === 2 && weighed.fp === 2 && weighed.fn === 1 && weighed.tn === 1, 'the counts stay the frames given');
+    check(eq(framePrf(sc, tr, 0.5, [1, 1]), plain), 'weights of 1 change nothing');
+    const unweighedBest = prCurve([0.9, 0.4, 0.4, 0.4, 0.1], [1, 1, 0, 0, 0], 10).best;
+    const weighedBest = prCurve([0.9, 0.4, 0.4, 0.4, 0.1], [1, 1, 0, 0, 0], 10, [8, 1]).best;
+    check(unweighedBest.threshold <= 0.4 && weighedBest.threshold > 0.4, 'the best threshold moves up once false alarms count fully (' + unweighedBest.threshold + ' → ' + weighedBest.threshold + ')');
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +288,23 @@ console.log('\n-- 6. the cap --');
     check(a.report.sampled && a.report.rows <= 2000 + bouts && a.report.rows > 900, 'over the cap: sampled to ' + a.report.rows + ' rows (cap 2,000 plus at most one per bout)');
     check(a.model.hash === b.model.hash, 'the same rows every time (same forest)');
     check(a.report.cv.frame.f1 > 0.85, 'and still learns it (cross-validated F1 ' + a.report.cv.frame.f1.toFixed(3) + ')');
+
+    // Its frame numbers read as on every labelled frame, not on the sample.
+    const cv = a.report.cv, w = cv.oof.weights;
+    const kept = cv.frame.tp + cv.frame.fp + cv.frame.fn + cv.frame.tn;
+    const labelled = a.report.counts.present.frames + a.report.counts.absent.frames;
+    check(w[0] > 2 && w[1] > 1 && kept < labelled, 'each tested frame stands for several: "not" ' + w[0].toFixed(1) + ', present ' + w[1].toFixed(1) + ' (' + kept + ' tested of ' + labelled + ')');
+    const rawP = cv.frame.tp / (cv.frame.tp + cv.frame.fp);
+    const weighedP = cv.frame.tp * w[1] / (cv.frame.tp * w[1] + cv.frame.fp * w[0]);
+    check(Math.abs(cv.frame.precision - weighedP) < 1e-12, 'precision weighs them: ' + rawP.toFixed(3) + ' on the sample → ' + weighedP.toFixed(3));
+    check(evaluateAt(cv, { threshold: cv.threshold, minBout: 0, maxGap: 0 }, FPS, false).frame.precision === cv.frame.precision, 'the threshold dialog\'s live numbers weigh them too');
+    // Under the cap nothing changes.
+    const whole = await trainBehaviorClassifier({ behaviorId: dart.id, sources: src(), params: { trees: 20 } });
+    const wf = whole.report.cv.frame;
+    check(!whole.report.sampled && eq(whole.report.cv.oof.weights, [1, 1]) && wf.precision === wf.tp / (wf.tp + wf.fp), 'not sampled: weights of 1, precision as counted');
+    // Tested on every labelled frame, with forests from every row: a forest from a sample cannot honestly claim more.
+    console.log('       every row, every frame tested: precision ' + wf.precision.toFixed(3) + '; a sample of them: ' + rawP.toFixed(3) + ' as counted, ' + weighedP.toFixed(3) + ' weighed');
+    check(rawP > wf.precision && weighedP <= wf.precision, 'as counted, the sample claims more than every row gets; weighed, it does not');
 }
 
 // ---------------------------------------------------------------------------
