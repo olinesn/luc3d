@@ -178,6 +178,33 @@
                             class="shortcut-hint">Ctrl/Cmd+Shift+L</span></div>
                     <div class="menu-dropdown-item" id="menuBehaviorEthogram">Edit Ethogram…</div>
                     <div class="menu-dropdown-item" id="menuBehaviorReviewed">Mark Range Reviewed…</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuBehaviorDetect"
+                        title="Detect every behavior on all frames, for review: with its classifier when it has one, else its detector">Detect Behaviors</div>
+                    <div class="menu-dropdown-item" id="menuBehaviorDetectAll"
+                        title="Detect Behaviors on every session whose poses are loaded">Detect in All Sessions</div>
+                    <div class="menu-dropdown-item" id="menuBehaviorRules"
+                        title="The body and floor the detectors measure against, and each behavior's detector">Detection Settings…</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuBehaviorTrain"
+                        title="Learn behaviors from your labels (a random forest per behavior), and see how well each does on labels it never saw">Train Classifiers…</div>
+                    <div class="menu-dropdown-item" id="menuBehaviorExportModels"
+                        title="Save the trained classifiers to a .lucid-behavior.json file, to use in another project">Export Classifiers…</div>
+                    <div class="menu-dropdown-item" id="menuBehaviorImportModels"
+                        title="Use classifiers saved from another project (same skeleton and body)">Import Classifiers…</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuBehaviorImport"
+                        title="Bring in labels from BORIS (a project or its event tables) or a LUC3D bouts table">Import Labels…</div>
+                    <div class="menu-dropdown-item" id="menuBehaviorExport"
+                        title="Bouts, per-frame tables, a time budget, or BORIS's event layouts, as CSV or TSV">Export Labels…</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuBehaviorKpmsExport"
+                        title="Write the poses and settings keypoint-MoSeq needs to find behavioral syllables, with the calls to run in Python">Export for keypoint-MoSeq…</div>
+                    <div class="menu-dropdown-item" id="menuBehaviorKpmsImport"
+                        title="Bring keypoint-MoSeq's syllables back as states: results.h5 or its CSV results">Import keypoint-MoSeq Results…</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuBehaviorDiscover"
+                        title="Find clusters in the poses with no labels (B-SOiD's steps), or split a labelled behavior into candidate sub-behaviors, to look at and name">Discover Behaviors…</div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
@@ -340,11 +367,27 @@
                      the group's divider (ui/info-panel.js updateTriangulationBadge). -->
                 <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
-            <!-- Behavior labelling, after proofreading: toggles Label Behaviors
-                 mode (ui/behavior-mode.js); blue while it is on. -->
-            <div class="toolbar-group" id="tbBehaviorGroup" role="group" aria-label="Behavior labelling">
-                <button class="toolbar-btn" id="tbBehaviorMode" aria-pressed="false"
-                    title="Label Behaviors mode (Mod+Shift+L): behavior keys code the selected animal, 1–9 pick it, Esc leaves">Behavior</button>
+            <!-- Behavior, after proofreading, in the action-menu shape: a click
+                 detects behaviors on ALL frames (their detectors, ui/behavior-detect.js);
+                 the hover menu has This frame / All frames, Label Behaviors mode
+                 (lit while on, ui/behavior-mode.js) and Settings…. Blue while
+                 predictions stand (ui/run-buttons.js). -->
+            <div class="toolbar-group" id="tbBehaviorGroup" role="group" aria-label="Behavior">
+                <div class="tri-dropdown action-menu" id="behaviorDropdown">
+                    <button class="toolbar-btn" id="tbBehavior" aria-haspopup="menu"
+                        title="Detect behaviors on all frames, with each behavior's detector, for review in the Behavior tab">Behavior <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu" role="menu">
+                        <button class="tri-dropdown-item" id="tbBehaviorFrame" data-scope="frame" role="menuitem"
+                            title="Which behaviors the detectors find on the current frame, and why (Behavior tab ▸ Predictions)">This frame</button>
+                        <button class="tri-dropdown-item" id="tbBehaviorAllFrames" data-scope="all" role="menuitem"
+                            title="Detect behaviors on all frames">All frames</button>
+                        <div class="tri-dropdown-sep"></div>
+                        <button class="tri-dropdown-item" id="tbBehaviorMode" role="menuitem" aria-pressed="false"
+                            title="Label Behaviors mode (Mod+Shift+L): behavior keys code the selected animal, 1–9 pick it, Esc leaves">Label Behaviors mode</button>
+                        <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
+                            title="Behavior ▸ Detection Settings…: the body, the floor and each behavior's detector">Settings…</button>
+                    </div>
+                </div>
             </div>
             <div class="toolbar-group toolbar-checkboxes">
                 <label><input type="checkbox" id="visUser" checked> User</label>
@@ -1080,6 +1123,29 @@
                         <summary><h3>Bouts</h3><span class="info-collapsible-count" id="behaviorBoutsCount">0</span></summary>
                         <div id="behaviorBoutsBody"></div>
                     </details>
+                    <!-- Predicted bouts to review (Accept / Reject label them), and
+                         the This frame readout; ui/behavior-panel.js. -->
+                    <details class="info-section info-collapsible" id="behaviorPredictionsSection" open>
+                        <summary><h3>Predictions</h3><button type="button" class="plane-section-info" id="behaviorPredictionsInfo"
+                            aria-label="About predictions"></button><span class="info-collapsible-count" id="behaviorPredictionsCount">0</span></summary>
+                        <div id="behaviorPredictionsBody"></div>
+                    </details>
+                    <!-- Classifiers learned from the labels: what each needs and how well
+                         it does, and the active-learning queue (Next uncertain ▸ /
+                         Next disagreement ▸); ui/behavior-panel.js. -->
+                    <details class="info-section info-collapsible" id="behaviorClassifiersSection" open>
+                        <summary><h3>Classifiers</h3><button type="button" class="plane-section-info" id="behaviorClassifiersInfo"
+                            aria-label="About classifiers"></button><span class="info-collapsible-count" id="behaviorClassifiersCount">0</span></summary>
+                        <div id="behaviorClassifiersBody"></div>
+                    </details>
+                    <!-- Behavioral states (keypoint-MoSeq's syllables): usage, how the
+                         labels fall in each, names, promoting to predictions;
+                         ui/behavior-states.js. -->
+                    <details class="info-section info-collapsible" id="behaviorStatesSection" open>
+                        <summary><h3>States</h3><button type="button" class="plane-section-info" id="behaviorStatesInfo"
+                            aria-label="About states"></button><span class="info-collapsible-count" id="behaviorStatesCount">0</span></summary>
+                        <div id="behaviorStatesBody"></div>
+                    </details>
                     <details class="info-section info-collapsible" id="behaviorSummarySection">
                         <summary><h3>Summary</h3></summary>
                         <div id="behaviorSummaryBody"></div>
@@ -1551,21 +1617,23 @@
         import {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
-            readSlpStreaming, openH5Worker,
+            readSlpStreaming, openH5Worker, LazyDataStore, LazyFrameList,
             openSlpWriter, saveSlpMergedFromStores, saveSlpMergedToSink, SlpStreamWriter,
             Camera as SioCamera, CameraGroup, RecordingSession,
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
             Identity as SioIdentity, Instance3D, PredictedInstance3D,
+            EventType, UserEvent, PredictedEvent,
             MediaBunnyVideoBackend
         } from './lib/sleap-io/index.browser.js';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
-            readSlpStreaming, openH5Worker,
+            readSlpStreaming, openH5Worker, LazyDataStore, LazyFrameList,
             openSlpWriter, saveSlpMergedFromStores, saveSlpMergedToSink, SlpStreamWriter,
             Camera: SioCamera, CameraGroup, RecordingSession,
             InstanceGroup: SioInstanceGroup, FrameGroup: SioFrameGroup,
             Identity: SioIdentity, Instance3D, PredictedInstance3D,
+            EventType, UserEvent, PredictedEvent,
             MediaBunnyVideoBackend
         };
         window.dispatchEvent(new Event('sleapio-ready'));
