@@ -515,6 +515,14 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             closedVideoIds = unopenedVideoIds(unopenedSessions).filter(function (id) { return !cameraVideoIds.has(id); });
         }
         outsideVideos = addOutsideVideos(sharedStoreData, new Set(cam.map(function (c) { return nativeVideoId(loader, c); })), closedVideoIds);
+        // A bout kept on a video a closed session names and this session's cameras have too
+        // goes on that camera's entry.
+        if (unopenedSessions) {
+            session.cameras.forEach(function (c, i) {
+                var cameraVideo = loader.videoIdByCam ? loader.videoIdByCam.get(c.name) : undefined;
+                if (keptRecords.has(cameraVideo)) listedVideos.set(keptRecords.get(cameraVideo), ctx.allVideos[sessionVideoIndices[i]]);
+            });
+        }
         // No camera has a row, so none of them added the tracks these rows name.
         if (outsideVideos.length > 0) sharedTrackBaseOf(sharedLabels);
     }

@@ -133,11 +133,9 @@ def read(path):
             for ig in fg.instance_groups:
                 if ig.identity is not None:
                     shared.setdefault(str(labels.identities.index(ig.identity)), set()).add(si)
-    def session_of(video):
-        for si, s in enumerate(labels.sessions):
-            if any(v is video for v in s.videos):
-                return "s" + str(si)
-        return "no session"
+    def session_of(video):  # the last naming it: a first session with no camera gains one per video
+        named = [si for si, s in enumerate(labels.sessions) if any(v is video for v in s.videos)]
+        return "s" + str(named[-1]) if named else "no session"
     events = sorted("|".join([e.video.filename if e.video is not None else "", session_of(e.video), e.type.name, str(e.start_frame), str(e.end_frame)]) for e in labels.events)
     return {
         "error": None, "videos": [v.filename for v in labels.videos], "tracks": [t.name for t in labels.tracks],
