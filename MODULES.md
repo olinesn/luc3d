@@ -15803,7 +15803,7 @@ lazy sessions that can never all be resident at once, this forces two passes,
 each holding only one session's data at a time:
 - **`createProjectWriterContext()`** — a fresh shared context
   (`{ runningOut, allSkeletons, allVideos, allTracks, allIdentities,
-  trackBaseByNameSig }`) threaded through every session so refs stay
+  allSuggestions, trackBaseByNameSig }`) threaded through every session so refs stay
   file-global (never reset per session).
 - **`buildSessionRefGraph(session, views, videoFiles, ctx)`** — **`async`** (both
   call sites must `await`: `buildSessionSlpBytesStreaming` here and
@@ -15831,6 +15831,21 @@ each holding only one session's data at a time:
   `addOutsideVideos` fills the session's `listedVideos` for `buildBehaviorEvents`.
   `skeletonPairsFor` does the same for skeletons: rows on one but the session's find
   it in the header (`_appendWithHeaderSkeletons`).
+  **Suggestions** (`suggestions_json`, SLEAP's frames to label next; LUC3D has no UI
+  for them, it only keeps them): `addSuggestionsOf` sends each of the reader's to this
+  header's video for its id, into `ctx.allSuggestions`, which `openProjectWriter`
+  passes on. The vendored `writeSuggestions` finds a suggestion's video in the header
+  by object and the header holds fresh objects for the cameras, so one passed through
+  as read writes video -1, which Python reads as the LAST video. A video with neither
+  a camera nor poses gets a header place after those that have, through
+  `headerVideoForOutsideFrames` (so the order is cameras, videos with poses, videos
+  only a suggestion names), and this session's bouts on it share that entry
+  (`listedVideos`). They are resolved in
+  pass 1, so pass 2's re-read of each file plays no part. A group stays as the file
+  holds it (the reader's `.group` is a string), and no group is written as 0, what
+  Python reads a missing one as. No suggestions, no change to the file. An eager save
+  (`buildSlpBytes`) still drops them. Test:
+  `tests/e2e/lazy-save-keeps-suggestions.mjs`.
   **Non-shared-store track dedup:** for separate per-camera prediction files
   (session-folder load, `loader._sharedStore` false), each camera's
   `labels.tracks` is appended onto `ctx.allTracks` under a growing
