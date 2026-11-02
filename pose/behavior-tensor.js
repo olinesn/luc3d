@@ -46,7 +46,8 @@
 // — a used node far off the body, or the body jumping faster than an animal
 // can move — and the features skip them (`sliceChunkData`'s masks: those
 // frames read as missing). Without it a 3D point triangulated from the wrong
-// detections reads as a rear, and a jump to another animal as a run.
+// detections reads as a rear, and a jump to another animal as a run. The tail
+// past its base is not judged, even when the features use it.
 //
 // DOM-free.
 //
@@ -434,7 +435,7 @@ export function bodyLengths(input, body) {
  * Bumped whenever what `brokenPoseFrames` skips changes: a run records it
  * (pose/behavior-predictions.js `runConfigPrint`), so runs made before go stale.
  */
-export var POSE_CHECK_VERSION = 1;
+export var POSE_CHECK_VERSION = 2;
 
 /**
  * A used node farther than this from the body's middle, in body lengths, is
@@ -476,6 +477,9 @@ function medianFirst(vals, n) {
  * `BROKEN_SPEED_BL_S`, from the last frame that had one. Around a jump, every
  * frame a speed's central difference (± `SPEED_HALF_SECONDS`) could span
  * across it is skipped too, so no speed straddles it.
+ * Used nodes here leave out the tail past its base (`body.defaultExcluded`),
+ * features or not: a healthy tail tip swings past `BROKEN_NODE_BL`, and judging
+ * it skipped 41% of a real recording's animal-frames.
  * @param {Object} input from `collectBehaviorInput`
  * @param {Object} body from `resolveBody`
  * @param {number[]} bodyLength per animal, in data units (`bodyLengths`)
@@ -486,7 +490,8 @@ function medianFirst(vals, n) {
  */
 export function brokenPoseFrames(input, body, bodyLength, fps) {
     var N = input.nodeNames.length, D = input.dim, T = input.numFrames;
-    var used = (body && body.used) || [];
+    var tailPast = (body && body.defaultExcluded) || [];
+    var used = ((body && body.used) || []).filter(function (i) { return tailPast.indexOf(i) < 0; });
     var rate = fps > 0 ? fps : 30;
     var k = halfFrames(SPEED_HALF_SECONDS, rate);
     var maxGap = Math.max(1, Math.round(BROKEN_GAP_S * rate));

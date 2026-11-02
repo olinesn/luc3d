@@ -2729,6 +2729,9 @@ half of them present), or when that middle jumps more than `BROKEN_STEP_BL`
 (0.5) BL and faster than `BROKEN_SPEED_BL_S` (20 BL/s) from the last frame that
 had one (not across a gap over 1 s); around a jump it skips every frame a
 central-difference speed could span across it, so no speed straddles it. The
+tail past its base (`body.defaultExcluded`) is never judged, even when the
+features use it: a healthy tail tip swings past the limit, and judging it
+skipped 41% of a real recording's animal-frames. The
 features skip masked frames (`sliceChunkData`'s `skip`). On four real
 recordings: 0.8–1.7% of tracked animal-frames, and most of the 100%-score
 locomotion bouts (tracking errors) go. `POSE_CHECK_VERSION` is in every run's
