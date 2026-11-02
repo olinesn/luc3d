@@ -178,4 +178,32 @@ for (const [copy, guard] of WRITE_COPIES) {
     assert.strictEqual(told.length, 1, 'only failed reads');
 }
 
+// Every h5wasm instance in LUC3D's own code goes through the guard: a module that imports
+// the build calls guardH5Status, and the global (the IIFE's) is reached through initH5wasm,
+// which guards it. A new way in, unguarded, would read damaged files as what was in memory.
+{
+    const root = join(here, '..');
+    const OWNS_THE_GLOBAL = 'import-export/file-io.js';
+    // Handed its h5wasm by frame-worker.js; the name in it is a fallback for that.
+    const HANDED_ONE = 'loading/slp-package-reader.js';
+    const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const files = ['app.js'];
+    for (const dir of ['ui', 'import-export', 'loading', 'pose']) {
+        for (const f of fs.readdirSync(join(root, dir))) if (f.endsWith('.js')) files.push(`${dir}/${f}`);
+    }
+    let importers = 0;
+    for (const f of files) {
+        const src = code(fs.readFileSync(join(root, f), 'utf8'));
+        if (/from\s+'[^']*hdf5_hl\.js'/.test(src)) {
+            importers++;
+            assert.ok(/guardH5Status\(/.test(src), `${f} imports h5wasm, and must call guardH5Status`);
+        }
+        if (f !== OWNS_THE_GLOBAL && f !== HANDED_ONE) {
+            assert.ok(!/(^|[^\w.])h5wasm\.(ready|File|FS|Module)\b/.test(src) || /from\s+'[^']*hdf5_hl\.js'/.test(src),
+                `${f} uses the global h5wasm: go through initH5wasm (import-export/file-io.js)`);
+        }
+    }
+    assert.strictEqual(importers, 2, 'the raw worker and the frame worker');
+}
+
 console.log('test-h5-status-guard: all passed');

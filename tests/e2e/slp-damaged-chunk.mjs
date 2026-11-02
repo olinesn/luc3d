@@ -610,6 +610,31 @@ try {
     const ptsBad = await parsePts(flipped(pts, zlibStreams(pts)[0]));
     check(saysDamaged(ptsBad.threw, 'points_3d'), 'Load 3D Points: a damaged chunk is an error, not 3D points from what was in memory', ptsBad);
 
+    // A keypoint-MoSeq results.h5: the same h5wasm, through the same door.
+    const results = Buffer.from(await page.evaluate(async () => {
+        const h5 = await (await import('/import-export/file-io.js')).initH5wasm();
+        const p = '/kpms-' + Math.random().toString(16).slice(2) + '.h5';
+        const f = new h5.File(p, 'w');
+        const rec = f.create_group('recording_one');
+        rec.create_dataset({ name: 'syllable', data: new Int32Array(4000).map((_, i) => (i * 7) % 23), shape: [4000], dtype: '<i', chunks: [4000], compression: 'gzip', compression_opts: 1 });
+        f.close();
+        const out = h5.FS.readFile(p); h5.FS.unlink(p);
+        return window.__b64(out);
+    }), 'base64');
+    const readResults = (buf) => guarded(() => page.evaluate(async (b) => {
+        const h5 = await (await import('/import-export/file-io.js')).initH5wasm();
+        const { readResultsH5 } = await import('/import-export/kpms-io.js');
+        const p = '/kpms-' + Math.random().toString(16).slice(2) + '.h5';
+        h5.FS.writeFile(p, Uint8Array.from(atob(b), c => c.charCodeAt(0)));
+        try { const r = readResultsH5(h5, p); return { n: r.recordings[0].syllables.length, sum: r.recordings[0].syllables.reduce((a, x) => a + x, 0) }; }
+        catch (e) { return { threw: String(e.message).slice(0, 200) }; }
+        finally { h5.FS.unlink(p); }
+    }, buf.toString('base64')));
+    const resultsFine = await readResults(results);
+    check(resultsFine.n === 4000 && resultsFine.sum > 0, 'keypoint-MoSeq results.h5: healthy', resultsFine);
+    const resultsBad = await readResults(flipped(results, zlibStreams(results)[0]));
+    check(saysDamaged(resultsBad.threw, 'recording_one/syllable'), 'keypoint-MoSeq results.h5: a damaged chunk is an error, not syllables from what was in memory', resultsBad);
+
     // The worker that serves a .pkg.slp's frames.
     const frameWorker = (buf) => guarded(async () => {
         await pick(buf, 'mice.pkg.slp');

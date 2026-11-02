@@ -13084,7 +13084,7 @@ closes both.
 `./behavior-io-modal.js` (`behaviorSessionInfo`), `./loading-overlay.js`,
 `../pose/behavior-states.js`, `../pose/behavior-tensor.js`, `../pose/behavior-ethogram.js`,
 `../import-export/kpms-io.js`, `../import-export/save-load.js`,
-`../loading/cold-read-guard.js`; the h5wasm IIFE global. **Imported by**
+`../import-export/file-io.js` (`initH5wasm`), `../loading/cold-read-guard.js`. **Imported by**
 `ui/behavior-panel.js`, `ui/behavior-states.js`. **Tests.**
 `tests/e2e/behavior-kpms-roundtrip.mjs` §1–2; real data
 `tests/e2e/_real-kpms-roundtrip.mjs`.
@@ -14197,7 +14197,8 @@ status or if HDF5 printed an error during the call (`FS.write` to fd 2): what
 **Imports from project modules.** None, so workers and Node tests can load it.
 
 **Imported by.** `loading/slp-import-worker.js`, `loading/frame-worker.js`,
-`import-export/file-io.js` (`initH5wasm`).
+`import-export/file-io.js` (`initH5wasm`, the one way to `window.h5wasm`, which
+`ui/behavior-kpms-modal.js` also uses to read a keypoint-MoSeq `results.h5`).
 
 **User-facing features.** Nothing while files are healthy. Tests:
 `tests/test-h5-status-guard.mjs` (the three copies on the same cases),
@@ -15699,7 +15700,7 @@ session's resident/total) rather than truncate silently. Covered by
   `import-export/slp-provenance.js`.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
   `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`. These use `window.h5wasm`
-  through the private `initH5wasm`, which guards it once (`loading/h5-status-guard.js`):
+  through the exported `initH5wasm`, which guards it once (`loading/h5-status-guard.js`):
   a damaged table or a failed write rejects. `buildReprojH5`
   (Save Reprojections) projects a group's stored 3D into each camera when it has
   no `reprojections` — they are derived, kept only for frames that have been

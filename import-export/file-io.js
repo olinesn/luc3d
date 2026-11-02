@@ -878,10 +878,11 @@ export function downloadTOML(tomlContent, filename) {
 let _h5wasmReady = null;
 
 /**
- * Initialize h5wasm (loads WASM binary once).
+ * Initialize h5wasm (loads WASM binary once). The one way to `window.h5wasm`, because
+ * it is what guards it (`loading/h5-status-guard.js`).
  * @returns {Promise<Object>} The h5wasm module
  */
-async function initH5wasm() {
+export async function initH5wasm() {
     if (typeof h5wasm === 'undefined') {
         throw new Error('h5wasm script not loaded — check CDN script tag');
     }
