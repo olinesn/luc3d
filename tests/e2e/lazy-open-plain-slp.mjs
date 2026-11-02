@@ -602,8 +602,11 @@ try {
 
     r = await load('twoskel', 'route');
     const twoSkel = await summary();
-    check(twoSkel && !twoSkel.lazy && twoSkel.total === 2, 'two skeletons: the eager path, both instances', twoSkel);
+    check(twoSkel && !twoSkel.lazy && twoSkel.total === 1, 'two skeletons: the eager path, showing the pose on the session\'s skeleton', twoSkel);
     check(/in full, not on demand: it does not have exactly one skeleton/.test(r.status), 'the status says so', r.status);
+    check(/1 pose on a camera's video is on another skeleton \("other"\)/.test(r.status), 'and that the other pose is not shown', r.status);
+    const twoSave = await page.evaluate(async () => (await window.__posesOf(await window.__saveBytes())).lines);
+    check(twoSave.length === 2 && twoSave.some(l => /\|500,500,v.* 502,502,v/.test(l)), 'a save keeps both, the other with all its nodes', twoSave);
 
     // When the eager path itself fails, its error stands.
     await page.evaluate(() => {

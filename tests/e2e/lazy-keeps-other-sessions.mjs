@@ -42,7 +42,8 @@
  *     do not stay on the closed session and never land on this project's nodes. Beside a
  *     lazy session.
  *  N. Per-session provenance.
- *  O. The raw worker's read, which has no typed sessions: the old sentence, the poses kept.
+ *  O. The raw worker's read, which has no typed sessions, and poses on two skeletons: the
+ *     old sentence, the poses kept.
  *  P. A LUC3D project: what LUC3D keeps per session, and project-scoped planes.
  *  Q. What is resident after the load.
  *  R. File ▸ Add SLP: another file's rows and video ids are not taken for this one's.
@@ -383,6 +384,14 @@ for fg in s1.frame_groups.values():
     del fg.instance_groups[0]
 s2 = session([("camC", b, fb), ("camD", d, fd)], 7.0)
 save("shared_reordered.slp", fa + fb + fd, [a, b, d], [s1, s2])
+
+# Two sessions and poses on two skeletons: a member's place in its frame does not hold once
+# the read sorts a frame's poses by skeleton, so the folder route keeps only the poses.
+other_sk = sio.Skeleton(nodes=["head", "mid", "end"], edges=[("head", "mid")], name="other")
+a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
+fd_other = [sio.LabeledFrame(video=d, frame_idx=f, instances=[sio.Instance.from_numpy(np.array([[400.0 + f, 1.0], [401.0, 2.0], [402.0, 3.0]]), skeleton=other_sk)]) for f in range(3)]
+sio.Labels(labeled_frames=fa + fb + fc + fd_other, videos=[a, b, c, d], skeletons=[sk, other_sk], tracks=[T1, T2],
+           sessions=[session([("camA", a, fa), ("camB", b, fb)]), session([("camC", c, fc), ("camD", d, [])], 7.0)]).save(os.path.join(out, "two_skeletons.slp"), embed=False)
 
 # A project of its own, to add a folder to.
 p, q = video("camP.mp4"), video("camQ.mp4")
@@ -1601,7 +1610,7 @@ async function folderProvenance() {
 }
 
 async function folderRawWorker() {
-    console.log('\nO. The raw worker\'s read');
+    console.log('\nO. The raw worker\'s read, and poses on two skeletons');
     {
         const page = await newAppPage();
         await page.evaluate(() => {
@@ -1617,6 +1626,17 @@ async function folderRawWorker() {
         const saved = await saveAndRead(page);
         const noScores = list => list.map(r => r.split('|').slice(0, 5).join('|')).sort();
         check(eq(noScores(saved.read.poses), noScores(sources.old_two_sessions.poses)), 'raw worker: every pose on its own video', diff(noScores(saved.read.poses), noScores(sources.old_two_sessions.poses)));
+    }
+    {
+        // Poses on two skeletons: the other way this route keeps only the poses, and says so.
+        const page = await open('folder', readFile('two_skeletons'));
+        const status = await statusOf(page);
+        check(/Only the first of 2 sessions.*not their cameras or 3D/.test(status), 'two skeletons: the status says what a save keeps', status);
+        const kept = await page.evaluate(() => window.__lucid.state.session.unopenedSessions);
+        check(kept === null, 'two skeletons: nothing kept as columns', kept);
+        const saved = await saveAndRead(page);
+        const src = sources.two_skeletons;
+        savedForPython(saved.bytes, 'two skeletons, folder, Python', { poses: src.poses });
     }
 }
 
@@ -1739,7 +1759,7 @@ async function folderResident() {
 
 try {
     uv(PY_WRITE, [tmp]);
-    const sourcePaths = [...FILES, 'first_no_cameras', 'first_no_map', 'bouts', 'bouts_no_cameras', 'provenance', 'one_session', 'camF_alone', 'camG_alone', 'other_project', 'add_no_map', 'old_two_sessions'].map(n => path.join(tmp, n + '.slp'));
+    const sourcePaths = [...FILES, 'first_no_cameras', 'first_no_map', 'bouts', 'bouts_no_cameras', 'provenance', 'one_session', 'camF_alone', 'camG_alone', 'other_project', 'add_no_map', 'old_two_sessions', 'two_skeletons'].map(n => path.join(tmp, n + '.slp'));
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths).trim().split('\n').pop());
     for (const p of sourcePaths) sources[path.basename(p, '.slp')] = rawSources[p];
 

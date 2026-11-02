@@ -367,13 +367,16 @@ export async function keepUnopenedSessions(labels, opts) {
 
 /**
  * Can an eager read keep its later sessions whole? Only the typed reader gives them: the
- * raw worker (`parseSlpH5`) has no `_typedSession`.
+ * raw worker (`parseSlpH5`) has no `_typedSession`. And only with its poses on one
+ * skeleton: a member names a pose by its place in the file's frame, and the read sorts a
+ * frame's poses by skeleton, so those places do not hold.
  * @param {Object} slpData - `parseSlpViaSleapIO` / `parseSlpH5` result
  * @returns {boolean}
  */
 export function readKeepsUnopenedSessions(slpData) {
     var dicts = (slpData && slpData.sessions) || [];
-    return dicts.length > 1 && dicts.every(function (d) { return !!d._typedSession; });
+    if (dicts.length < 2 || !dicts.every(function (d) { return !!d._typedSession; })) return false;
+    return (slpData.skeletons || []).filter(function (s) { return s.frames.length > 0; }).length <= 1;
 }
 
 /**

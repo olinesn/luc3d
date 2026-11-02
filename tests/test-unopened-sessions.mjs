@@ -284,6 +284,8 @@ console.log('10. An eager read');
     check(!readKeepsUnopenedSessions(eagerRead({ sessions: [{ _typedSession: {} }] })), 'one session: nothing to keep');
     check(!readKeepsUnopenedSessions(eagerRead({ sessions: [{ calibration: {} }, { calibration: {} }] })), 'the raw worker\'s read has no typed sessions');
     check(readKeepsUnopenedSessions(eagerRead()), 'the typed reader\'s has');
+    check(readKeepsUnopenedSessions(eagerRead({ skeletons: [{ frames: [{}] }, { frames: [] }] })), 'poses on one of two skeletons: still has');
+    check(!readKeepsUnopenedSessions(eagerRead({ skeletons: [{ frames: [{}] }, { frames: [{}] }] })), 'poses on two skeletons: a member\'s place in its frame does not hold');
 
     const read = eagerRead();
     const k = await keepUnopenedSessionsOfRead(read, { videoIdByCam: new Map([['a', 0]]) });
