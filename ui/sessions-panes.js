@@ -44,6 +44,8 @@ import {
 } from '../loading/session-loader.js';
 import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel, closeEmbeddedFrames } from '../loading/video.js';
 import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js';
+import { moveKeptSuggestions } from '../import-export/kept-suggestions.js';
+import { moveKeptCameraPoses } from '../import-export/outside-frames.js';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -1523,6 +1525,8 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
             fg.instances.delete(viewName);
             if (fg.unlinkedInstances) fg.unlinkedInstances.delete(viewName);
         }
+        moveKeptSuggestions(fromSession, toSession, viewName);
+        moveKeptCameraPoses(fromSession, toSession, viewName);
 
         // 2. Remove view from InstanceGroups and re-triangulate
         for (var [frameIdx2, groups] of fromSession.instanceGroups) {
