@@ -2199,9 +2199,12 @@ export function makePooledSioInstances(SIO, skeleton, numNodes) {
  * @param {Session} session
  * @param {Array} views - Array of view objects with .name, .videoWidth, .videoHeight, .frameCount
  * @param {Array} videoFiles - Array of videoFile objects
+ * @param {?{videos: Array, listedVideos: Map}} [outside] - the session's poses on videos
+ *   no camera has (`outsideFramesForSave`): their videos go in the list after the cameras,
+ *   and the session's events on them on those entries
  * @returns {Object} sleap-io.js Labels instance
  */
-export function buildSlpLabelsAllViews(session, views, videoFiles) {
+export function buildSlpLabelsAllViews(session, views, videoFiles, outside) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -2521,11 +2524,12 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     }
 
     var behaviorEvents = buildBehaviorEvents(SIO, [{
-        session: session, video: sioVideos[0] || null, videos: sioVideos, identities: sioIdentities, tracks: tracks,
+        session: session, video: sioVideos[0] || null, videos: sioVideos, listedVideos: outside ? outside.listedVideos : null,
+        identities: sioIdentities, tracks: tracks,
     }]);
     return new SIO.Labels({
         labeledFrames: labeledFrames,
-        videos: sioVideos,
+        videos: outside ? sioVideos.concat(outside.videos) : sioVideos,
         skeletons: [skeleton],
         tracks: tracks,
         identities: sioIdentities,

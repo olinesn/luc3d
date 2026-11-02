@@ -843,13 +843,14 @@ async function buildSlpBytes(opts) {
             return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
         });
 
-        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
-        // Poses on a video no session names go back on their own video.
-        var sessOutside = outsideFramesForSave(sess, sessLabels.skeletons[0], sessLabels.identities);
+        // Poses on a video no session names go back on their own video, and the
+        // session's events on that video on the same entry.
+        var sessOutside = outsideFramesForSave(sess);
+        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessOutside);
 
         // Merge into combined Labels
-        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFrames : []);
-        allVideos = allVideos.concat(sessLabels.videos || [], sessOutside ? sessOutside.videos : []);
+        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFramesFor(sessLabels.skeletons[0], sessLabels.identities) : []);
+        allVideos = allVideos.concat(sessLabels.videos || []);
         for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
             var skel = sessLabels.skeletons[sk];
             if (!seenSkeletonNames.has(skel.name)) {
