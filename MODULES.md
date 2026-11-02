@@ -13756,7 +13756,7 @@ skeleton-only 3D-points import prompts before discarding it.
 
 ---
 
-**Behavior labels.** `handleLoadProjectSlpLazy` resets and reads behavior metadata like the eager reader; `handleLoadSessionFolderSingleSlp` resets only when it starts a project, and otherwise merges the file's ethogram by name (its bouts remapped). When its filename fallback makes a camera of a video no session names, the events it keeps on that video go back on that camera's entry, with the poses (`eventScope.cameras`).
+**Behavior labels.** `handleLoadProjectSlpLazy` resets and reads behavior metadata like the eager reader; `handleLoadSessionFolderSingleSlp` resets only when it starts a project, and otherwise merges the file's ethogram by name (its bouts remapped). It tells `sessionEventScope` which camera each video is (`cameraPlaces`, from `videoIdxToCameraName`): in a file with no session a calibration beside the `.slp` decides the first camera, not the file's order, and when the filename fallback makes a camera of a video no session names, the events it keeps on that video go back on that camera's entry, with the poses.
 
 ### loading/lazy-store-rows.js
 
@@ -15122,7 +15122,9 @@ back from what the file said about it), another session's video when a loader op
 only one session, another video of a file with no recording session or of a session
 with only placeholder cameras. Those two read alike, since no calibration says the videos
 are cameras of one recording and a save gives a file with no session that session: only
-the first camera's events are labels, and each other stays on its camera. DOM-free.
+the first camera's events are labels, and each other stays on its camera. The first camera
+of a file with no session is its first video, unless the loader matched the videos to
+cameras of its own (`cameraPlaces`). DOM-free.
 
 **Exports.** `buildBehaviorEvents(SIO, items)` → `{eventTypes, events}` (an event on a
 video outside `items[].videos` brings it along: `new SIO.Labels` and `openSlpWriter`
@@ -15132,10 +15134,14 @@ for its poses, and then it goes on that entry),
 for the videos the session keeps events on (a lazy writer's way to `listedVideos`),
 `fileEventsOf(labels)` → plain `{types, rows, videos}` or null,
 `sessionVideoIdxs(rawSession)` → `Set<number>` or null,
-`sessionEventScope(rawSessions, nVideos, idx, onlyThisSession?)` → `{videos, keep, cameras, noVideo}`
+`sessionEventScope(rawSessions, nVideos, idx, onlyThisSession?, cameraPlaces?)` → `{videos, keep, cameras, noVideo}`
 (what one session reads and what it only keeps; each event goes to one session; `cameras`
 is a `Map` from a video to its camera's place in the session when no calibration names them,
-else null: a place, never the file's video number, so a save finds that camera's video),
+else null: a place, never the file's video number, so a save finds that camera's video;
+`cameraPlaces` is the same kind of `Map` from a loader that matched a file's videos to cameras
+of its own: with no session it replaces the file's order, so its first camera's video is the
+labels and a video it leaves out has no camera; with a session it places the kept videos the
+session has no place for),
 `eventsToBehaviorData(fileEvents, lucid, scope?)` → `{ethogram, labelRows, runs, kept}`
 (ids are the file's), `setKeptEventRows(session, rows)`.
 
@@ -15147,7 +15153,7 @@ file's raw cameras). **Imported by** `import-export/behavior-metadata.js`,
 `loading/session-loader.js`. **Tests.** `tests/test-behavior-events.mjs`, e2e
 `behavior-label-roundtrip` (with files sleap-app and Python wrote,
 `tests/fixtures/behavior-events/`), `behavior-events-outside-session` (the three loaders and
-both writers, on files with a video outside their sessions or with no calibration), `behavior-cross-app` (the two real apps, both ways,
+both writers, on files with a video outside their sessions, with no calibration, or with a calibration file beside them in another order), `behavior-cross-app` (the two real apps, both ways,
 with Python reading the result; needs a sleap-app checkout, skips without one).
 
 ### import-export/behavior-metadata.js

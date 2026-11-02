@@ -2345,16 +2345,19 @@ export async function handleLoadSessionFolderSingleSlp() {
         readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         // Behavior labels. Into an open project the file's ethogram is merged
         // by behavior name and its bouts remapped onto the project's ids.
-        var eventScope = sessionEventScope(slpData.sessions, slpData.videos.length, 0, true);
-        // The filename fallback above can make a camera of a video no session names.
-        // Its poses are on that camera's video now, so its kept events go there too.
-        eventScope.keep.forEach(function (keptVideo) {
-            var place = cameras.findIndex(function (c) { return c.name === videoIdxToCameraName[keptVideo]; });
-            if (place < 0 || (eventScope.cameras && eventScope.cameras.has(keptVideo))) return;
-            if (!eventScope.cameras) eventScope.cameras = new Map();
-            eventScope.cameras.set(keptVideo, place);
-        });
-        readBehaviorMetadata(session, sessLucid, slpData.behaviorEvents, eventScope);
+        // The filename fallback above can make a camera of a video no session names, in
+        // any order: its poses are on that camera now, so its events go by that camera.
+        // With no calibration it has no cameras yet (placeholders come later): the file's order.
+        var videoCameraPlaces = null;
+        if (cameras.length > 0) {
+            videoCameraPlaces = new Map();
+            Object.keys(videoIdxToCameraName).forEach(function (v) {
+                var place = cameras.findIndex(function (c) { return c.name === videoIdxToCameraName[v]; });
+                if (place >= 0) videoCameraPlaces.set(Number(v), place);
+            });
+        }
+        readBehaviorMetadata(session, sessLucid, slpData.behaviorEvents,
+            sessionEventScope(slpData.sessions, slpData.videos.length, 0, true, videoCameraPlaces));
         var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
         if (planeConflict) {
             console.warn('[single-slp] not reading the plane state in ' + slpFile.name +
