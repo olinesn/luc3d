@@ -15,7 +15,7 @@
  *     no frame, a (video, frame) listed twice, every kind of thing a session can hold,
  *     identities on poses, the same as an old file holds it inline, a video two sessions
  *     share. A first session with no camera or no video map, where the route differs.
- *     Behavior bouts on a closed session's video.
+ *     Behavior bouts and suggestions on a closed session's video.
  *  B. The real route: File ▸ Open on a file over 200 MB.
  *  C. Edits on the open session: a corrected frame goes first in the file (every other
  *     frame's position moves), a deleted pose compacts the store, a deleted track
@@ -140,6 +140,7 @@ def read(path):
     return {
         "error": None, "videos": [v.filename for v in labels.videos], "tracks": [t.name for t in labels.tracks],
         "events": events,
+        "suggestions": sorted("|".join([g.video.filename, session_of(g.video), str(g.frame_idx)]) for g in labels.suggestions),
         "videoShapes": {v.filename: list(v.backend_metadata.get("shape") or []) for v in labels.videos},
         "identities": [i.name for i in labels.identities],
         "identityOwners": sorted(sorted(v) for v in shared.values()),
@@ -238,7 +239,8 @@ save("bouts.slp", fa + fb + fc + fd, [a, b, c, d, quiet],
      [session([("camA", a, fa), ("camB", b, fb)]), session([("camC", c, fc), ("camD", d, fd), ("camQ", quiet, [])], 7.0)],
      events=[sio.UserEvent(type=rear, video=a, start_frame=0, end_frame=1, source="manual"),
              sio.UserEvent(type=attack, video=c, start_frame=1, end_frame=2, source="manual"),
-             sio.UserEvent(type=attack, video=quiet, start_frame=3, end_frame=4, source="manual")])
+             sio.UserEvent(type=attack, video=quiet, start_frame=3, end_frame=4, source="manual")],
+     suggestions=[sio.SuggestionFrame(video=a, frame_idx=9), sio.SuggestionFrame(video=d, frame_idx=8), sio.SuggestionFrame(video=quiet, frame_idx=7)])
 a, b, c, d, x, fa, fb, fc, fd, fx = two_sessions_parts()
 save("bouts_no_cameras.slp", fc + fd, [c, d],
      [sio.RecordingSession(camera_group=sio.CameraGroup(cameras=[])), session([("camC", c, fc), ("camD", d, fd)], 7.0)],
@@ -534,6 +536,7 @@ function compare(what, got, want) {
     if (want.identityOwners && got.identityOwners) check(eq(got.identityOwners, want.identityOwners), what + ': sessions that shared an identity still do', got.identityOwners);
     if (want.poseIdentities && got.poseIdentities) check(eq(got.poseIdentities, want.poseIdentities), what + ': identities on poses', diff(got.poseIdentities, want.poseIdentities));
     if (want.events && got.events) check(eq(got.events, want.events), what + ': behavior bouts on their own videos', diff(got.events, want.events));
+    if (want.suggestions && got.suggestions) check(eq(got.suggestions, want.suggestions), what + ': suggestions on their own videos', diff(got.suggestions, want.suggestions));
     if (want.videos && got.videos) check(eq(got.videos.slice().sort(), want.videos), what + ': each video listed once', got.videos);
     if (want.provenance && got.provenance) check(eq(got.provenance, want.provenance), what + ': provenance', got.provenance);
 }
@@ -627,14 +630,14 @@ try {
         }
     }
 
-    console.log('\nA3. Behavior bouts');
+    console.log('\nA3. Behavior bouts and suggestions');
     for (const name of ['bouts', 'bouts_no_cameras']) {
         let bytes = readFile(name);
         const src = sources[name];
         check(src.events.length > 0, name + ' holds bouts', src.events);
         for (let gen = 1; gen <= 2; gen++) {
             const saved = await saveAndRead(await open('lazy', bytes));
-            savedForPython(saved.bytes, `${name}, save ${gen}, Python`, { poses: src.poses, events: src.events, videos: src.videos.slice().sort() });
+            savedForPython(saved.bytes, `${name}, save ${gen}, Python`, { poses: src.poses, events: src.events, suggestions: src.suggestions, videos: src.videos.slice().sort() });
             bytes = saved.bytes;
         }
     }

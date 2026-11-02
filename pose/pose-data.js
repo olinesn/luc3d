@@ -1882,6 +1882,15 @@ export class Session {
          * @type {{sessions: Array, identities: Array}|null}
          */
         this.unopenedSessions = null;
+        /**
+         * Eager loads only: suggestions of the loaded .slp (`suggestions_json`, SLEAP's
+         * frames to label next). Not shown; a save writes them back on their own video
+         * (`import-export/kept-suggestions.js`). `camera` is the camera whose video it
+         * is on, null for a video no camera of this session reads. Null when there are
+         * none.
+         * @type {Array<{camera: string|null, video: Object, frameIdx: number, group: *, order: number}>|null}
+         */
+        this.keptSuggestions = null;
     }
 
     addIdentity(name, color) {
@@ -3504,6 +3513,11 @@ export class Session {
         // A lazy project's other frames are under this name in its loader.
         if (this.lazyLoader && typeof this.lazyLoader.renameCamera === 'function') {
             this.lazyLoader.renameCamera(oldName, newName);
+        }
+
+        // Suggestions on this camera's video
+        for (const row of this.keptSuggestions || []) {
+            if (row.camera === oldName) row.camera = newName;
         }
     }
 

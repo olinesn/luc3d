@@ -264,6 +264,8 @@ A `.slp` can hold frames on a video no session's camera map lists, and a loader 
 
 Test: `tests/e2e/poses-outside-session.mjs`.
 
+A file's suggestions (`suggestions_json`) stay on their own videos the same way, `import-export/kept-suggestions.js`. A new loader that builds a Session from a `.slp` must call `keepSuggestions`, or they silently go. Never hand a reader's `SuggestionFrame` to a writer: `writeSuggestions` finds its video by object and writes -1 for one the header lacks, which Python reads as the LAST video, with no error. Go through `suggestionsForSave`. Tests: e2e `eager-save-keeps-suggestions`, `lazy-save-keeps-suggestions`.
+
 ### The sessions a lazy open leaves closed
 
 `handleLoadProjectSlpLazy` opens a file's first session. The others stay whole: a save writes back their cameras, groups, 3D, calibration, identities and every key LUC3D does not read (`import-export/unopened-sessions.js`). Their poses are outside frames, above.
