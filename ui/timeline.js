@@ -98,6 +98,13 @@ export class Timeline {
         /** Pending `requestAnimationFrame` id of a coalesced redraw (`_requestRedraw`). */
         this._redrawRaf = 0;
 
+        /**
+         * The `live` behavior segments (running states, drawn to the playhead)
+         * the last redraw drew, each with its device-pixel extent then
+         * (`_liveBarsMoved`): [{seg, at}].
+         */
+        this._liveDrawn = [];
+
         /** Horizontal zoom level (1 = all frames fit in view) */
         this._zoom = 1;
 
@@ -293,7 +300,9 @@ export class Timeline {
         // The playhead is the ONLY frame-dependent thing on the timeline, so it
         // is not painted into the canvas: it is this element, laid over the
         // canvas inside the scroll wrapper (so it scrolls with the rows) and
-        // moved with a CSS transform. Changing frame repaints nothing.
+        // moved with a CSS transform. Changing frame repaints nothing — but
+        // for a running behavior state's bar, which ends at the playhead and
+        // is repainted only when it grows by a device pixel (`_liveBarsMoved`).
         //
         // It used to be painted, and every frame step redrew the whole canvas
         // to move it. On a 17-camera, 561-row project that canvas is
@@ -527,7 +536,9 @@ export class Timeline {
      * element rather than part of the canvas (see the constructor), so this
      * moves it and repaints nothing — unless following the frame scrolls the
      * visible window (zoomed in, frame off screen), which moves the track bars
-     * and markers too and so redraws the canvas.
+     * and markers too and so redraws the canvas, or a running behavior
+     * state's bar (drawn to the playhead) grows by a device pixel
+     * (`_showCurrentFrame`).
      *
      * `opts.playback` (passed by `ui/rendering.js` while video plays) is
      * accepted and no longer changes anything: playback used to need its own
@@ -543,7 +554,21 @@ export class Timeline {
         var prevScroll = this._scrollFrame;
         this._ensureFrameVisible(frameIdx);
         if (this._scrollFrame !== prevScroll) { this.redraw(); return; }
-        this._positionPlayhead();
+        this._showCurrentFrame();
+    }
+
+    /**
+     * Show a new `_currentFrame` in an unchanged view: move the playhead, or
+     * redraw when that grew a running behavior state's bar by a device pixel
+     * (`_liveBarsMoved`). Zoomed out on an hour at 60 fps a device pixel is
+     * some 80–170 frames, so playback with a state running redraws every
+     * second or two instead of on every frame; zoomed in to pixels a frame it
+     * still redraws as the bar grows.
+     * @private
+     */
+    _showCurrentFrame() {
+        if (this._liveBarsMoved()) this.redraw();
+        else this._positionPlayhead();
     }
 
     /**
@@ -819,6 +844,7 @@ export class Timeline {
         const ctx = this._ctx;
         const W = this._cssWidth;
         const H = this._cssHeight;
+        this._liveDrawn.length = 0;
         if (!W || !H) return;
 
         // --- Background (the band; everything below draws in content
@@ -2347,7 +2373,7 @@ export class Timeline {
         for (let t = 0; t < this._trackSegments.length; t++) {
             const track = this._trackSegments[t];
             for (let s = 0; s < track.segments.length; s++) {
-                const seg = track.segments[s];
+                const seg = track.segments[s].live ? this._liveExtent(track.segments[s]) : track.segments[s];
 
                 // Candidate = the frame in [seg.start, seg.end] whose center
                 // pixel is closest to clickX. Frame N's center lives at
@@ -2859,7 +2885,7 @@ export class Timeline {
                 this._currentFrame = frame;
                 this._emitFrameChange(frame);
                 if (this._onDragEnd) this._onDragEnd(frame);
-                this._positionPlayhead();
+                this._showCurrentFrame();
             }
         }
     }
@@ -2981,7 +3007,7 @@ export class Timeline {
         const frame = this._clampFrame(this._xToFrame(x));
         this._currentFrame = frame;
         this._emitFrameChange(frame);
-        this._positionPlayhead();
+        this._showCurrentFrame();
     }
 
     /**
@@ -3000,7 +3026,7 @@ export class Timeline {
         if (frame !== this._currentFrame) {
             this._currentFrame = frame;
             this._emitFrameChange(frame);
-            this._positionPlayhead();
+            this._showCurrentFrame();
         }
     }
 
@@ -3108,7 +3134,8 @@ export class Timeline {
      * Supply the behavior rows (ui/behavior-timeline.js). They are synthetic
      * groups after the track / identity rows — "Behavior", or the row's own
      * `group` ("States": ui/behavior-states.js) — one row per animal, hidden
-     * with their identity, drawn with each segment's own color.
+     * with their identity, drawn with each segment's own color. A `live`
+     * segment (a running state) ends at the playhead, whatever its `end`.
      * @param {function(Session): Array|null} fn
      */
     setBehaviorRowsProvider(fn) {
@@ -3166,7 +3193,8 @@ export class Timeline {
      * (a row showing several behaviors stacks them as thin lanes), over the
      * part of the lane its `band` gives ([from, to] fractions of the lane's
      * height: predicted bouts sit in a band under the labels). Same
-     * minimum-width rule as the track bars, one fill per color.
+     * minimum-width rule as the track bars, one fill per color. A `live`
+     * segment is drawn to the playhead, and noted in `_liveDrawn`.
      * @private
      */
     _drawBehaviorSegments(ctx, track, rowY) {
@@ -3175,7 +3203,8 @@ export class Timeline {
         var byStyle = new Map();
         for (var s = 0; s < track.segments.length; s++) {
             var seg = track.segments[s];
-            var rect = this._computeSegmentDrawRect(seg);
+            var rect = this._computeSegmentDrawRect(seg.live ? this._liveExtent(seg) : seg);
+            if (seg.live) this._liveDrawn.push({ seg: seg, at: this._pixelExtent(rect) });
             if (!rect) continue;
             var key = (seg.color || '#888888') + '|' + (seg.alpha != null ? seg.alpha : 0.85);
             var list = byStyle.get(key);
@@ -3194,6 +3223,44 @@ export class Timeline {
             ctx.fill();
         });
         ctx.globalAlpha = 1.0;
+    }
+
+    /**
+     * The frames a `live` segment covers now: from its start to the playhead
+     * (just its start while the playhead is before it, as the provider does).
+     * @private
+     */
+    _liveExtent(seg) {
+        return { start: seg.start, end: Math.max(seg.start, this._currentFrame) };
+    }
+
+    /**
+     * A draw rect's left and right edges in device pixels ('' when nothing
+     * is drawn): what `_liveBarsMoved` compares.
+     * @private
+     */
+    _pixelExtent(rect) {
+        if (!rect) return '';
+        var d = this._effDpr || 1;
+        return Math.round(rect.x * d) + ':' + Math.round((rect.x + rect.width) * d);
+    }
+
+    /**
+     * Whether a running behavior state's bar, drawn to the playhead, now
+     * covers other device pixels than the last redraw drew. Never while the
+     * timeline is collapsed: opening it resizes, and so redraws, the canvas.
+     * Only the bars the last redraw drew count — a row outside the canvas band
+     * is drawn when a scroll brings the band to it.
+     * @private
+     */
+    _liveBarsMoved() {
+        var drawn = this._liveDrawn;
+        if (!drawn.length) return false;
+        if (this._container.classList && this._container.classList.contains('collapsed')) return false;
+        for (var i = 0; i < drawn.length; i++) {
+            if (this._pixelExtent(this._computeSegmentDrawRect(this._liveExtent(drawn[i].seg))) !== drawn[i].at) return true;
+        }
+        return false;
     }
 
     /**
