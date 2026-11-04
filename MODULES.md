@@ -10275,6 +10275,14 @@ selection, or a scroll of the visible window (including one `setCurrentFrame`
 makes following a frame out of a zoomed window). Painting it per step hit
 Chrome's 2D-canvas GPU backpressure and capped held-arrow stepping (~19 vs 33
 frames/s). `opts.playback` is still accepted and changes nothing.
+The one frame-dependent paint is a running behavior state's bar (a `live`
+segment, drawn to `_currentFrame`): a new frame — `setCurrentFrame`, or a
+click or touch on the canvas — goes through `_showCurrentFrame`, which redraws
+only when `_liveBarsMoved` (the bars the last redraw drew, `_liveDrawn`, now
+cover other DEVICE pixels) and never while the container is `.collapsed`
+(opening it resizes, which redraws). Zoomed out on an hour that is a redraw
+every second or two of playback; it used to be every frame, rows rebuilt,
+collapsed or not (8 views: about 43 instead of 60 fps).
 
 `setFrameModified` asks for a repaint (`_requestRedraw`: coalesced to one
 `requestAnimationFrame`, synchronous without rAF) when the flag actually
@@ -10471,7 +10479,7 @@ the no-data placeholder.
 
 ---
 
-**Behavior labels.** A synthetic "Behavior" row group (`BEHAVIOR_GROUP_NAME`) after the mode's rows — or the group a row names (`group`: "States", keypoint-MoSeq's syllables) — from the `behaviorRows` constructor option / `setBehaviorRowsProvider(fn)` (ui/behavior-timeline.js): rows tagged `_isBehavior`, hidden with their identity, drawn per segment color and lane (`_drawBehaviorSegments`; a segment's optional `band: [from, to]` draws it over that fraction of its lane's height — predicted bouts sit in a band under the labels), outside the per-camera row cap. `refreshBehaviorRows()` swaps their segments without walking frames (full `refreshTracks` only when which rows show changes — by animal and group). `onRangeSelect(start, end, {animal})` now also names the behavior row a Shift+drag began on (`_rowAtY`).
+**Behavior labels.** A synthetic "Behavior" row group (`BEHAVIOR_GROUP_NAME`) after the mode's rows — or the group a row names (`group`: "States", keypoint-MoSeq's syllables) — from the `behaviorRows` constructor option / `setBehaviorRowsProvider(fn)` (ui/behavior-timeline.js): rows tagged `_isBehavior`, hidden with their identity, drawn per segment color and lane (`_drawBehaviorSegments`; a segment's optional `band: [from, to]` draws it over that fraction of its lane's height — predicted bouts sit in a band under the labels), outside the per-camera row cap. `refreshBehaviorRows()` swaps their segments without walking frames (full `refreshTracks` only when which rows show changes — by animal and group). A segment with `live: true` (a running state) is drawn from its start to the playhead whatever its `end` (`_liveExtent`; `_findSnapFrame` too), see "The playhead is an element" above; `tests/e2e/behavior-running-timeline.mjs` counts the redraws. `onRangeSelect(start, end, {animal})` now also names the behavior row a Shift+drag began on (`_rowAtY`).
 
 ### ui/timeline-controller.js
 
@@ -12756,7 +12764,10 @@ in a synthetic "Behavior" group, showing the selected behavior or every
 behavior with bouts or predictions as stacked lanes (at most 5; a mutual bout on both
 animals' rows); present in the behavior's
 color, "not" as faint gray (`ABSENT_COLOR`), a running state growing to the
-playhead; PREDICTED bouts (pose/behavior-predictions.js) in a band under the
+playhead (a `live` segment: the Timeline draws it to its own playhead and
+redraws for it only when it grows a device pixel, so the repainter here
+ignores a frame-only `requestBehaviorRepaint` — `tests/e2e/behavior-running-timeline.mjs`);
+PREDICTED bouts (pose/behavior-predictions.js) in a band under the
 lane's labels (`PREDICTION_BAND`; the labels then take `LABEL_BAND`), alpha
 following the bout's score in steps of 0.05, fainter while stale (for a
 classifier's run also when its training labels changed or its model was

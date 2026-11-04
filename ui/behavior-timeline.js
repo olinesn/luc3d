@@ -8,10 +8,13 @@
 // selected — every behavior that has bouts or predictions, as thin stacked
 // lanes. Present bouts are drawn in the behavior's color, explicit "not"
 // labels as a faint gray (that is what was reviewed), and a running state
-// grows to the playhead. PREDICTED bouts (pose/behavior-predictions.js) sit in
-// a band under their lane's labels, as opaque as they are confident (alpha
-// follows the bout's score), fainter still while stale. Projects with no
-// ethogram and no bouts get no Behavior group at all.
+// grows to the playhead: its segment is `live`, which the Timeline draws to
+// its own playhead, repainting only when the bar grows by a device pixel and
+// never while collapsed (ui/timeline.js `_liveBarsMoved`), so a frame change
+// alone repaints nothing here. PREDICTED bouts (pose/behavior-predictions.js)
+// sit in a band under their lane's labels, as opaque as they are confident
+// (alpha follows the bout's score), fainter still while stale. Projects with
+// no ethogram and no bouts get no Behavior group at all.
 //
 // Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-detect.js,
 //             pose/behavior-ethogram.js, pose/behavior-labels.js,
@@ -118,7 +121,7 @@ function labelTimelineRows(session) {
         rowsOf(b, r.animal, r.target).forEach(function (a) {
             if (byAnimal.has(a)) {
                 byAnimal.get(a).push({ start: r.start, end: Math.max(r.start, cursor), lane: laneOf.get(r.behaviorId), color: b.color, alpha: 1,
-                                       band: bandFor(a, laneOf.get(r.behaviorId)) });
+                                       band: bandFor(a, laneOf.get(r.behaviorId)), live: true });
             }
         });
     });
@@ -127,11 +130,11 @@ function labelTimelineRows(session) {
     });
 }
 
-// Repaint the rows after any label or selection change, and every frame while
-// a state runs (its bar grows with the playhead).
+// Repaint the rows after any label or selection change. Not on a frame change
+// alone: a running state's bar is `live`, and the Timeline grows it itself.
 registerBehaviorRepaint(function (info) {
     if (!timeline) return;
-    if (info.frame && !info.labels && !info.ui && !info.ethogram && !info.predictions && !info.states && !runningStates(state.session).length) return;
+    if (info.frame && !info.labels && !info.ui && !info.ethogram && !info.predictions && !info.states) return;
     timeline.refreshBehaviorRows();
 });
 
