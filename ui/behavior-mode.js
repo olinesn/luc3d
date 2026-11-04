@@ -93,9 +93,9 @@ function syncToolbarButton() {
     }
 }
 
-/** Is a dialog up? The mode's keys must not reach the app behind it. */
+/** Is a dialog or the range menu up? The mode's keys must not reach the app behind it, and Esc closes it first. */
 function modalOpen() {
-    return !!document.querySelector('.plane-confirm-overlay, .multi-frame-modal-overlay, .behavior-modal-overlay');
+    return !!document.querySelector('.plane-confirm-overlay, .multi-frame-modal-overlay, .behavior-modal-overlay, .behavior-range-menu');
 }
 
 function consume(e) {
