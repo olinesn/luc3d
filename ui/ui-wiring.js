@@ -44,6 +44,7 @@ import { renameStateAnimal } from '../pose/behavior-states.js';
 import { renameDiscoveryAnimal } from '../pose/behavior-discovery.js';
 import { behaviors } from '../pose/behavior-ethogram.js';
 import { setupBehaviorUi, updateBehaviorFrame } from './behavior-panel.js';
+import { refreshBehaviorStrip } from './behavior-strip.js';
 import { detectAllFrames, detectThisFrame } from './behavior-detect.js';
 import { showBehaviorRulesModal } from './behavior-rules-modal.js';
 import { confirmRetrackWithBehaviorLabels } from './behavior-confirm.js';
@@ -908,7 +909,8 @@ export function setupMenus() {
     // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
     setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
     // Behavior labelling: the Behavior menu, toolbar button, tab and mode.
-    setupBehaviorUi({ closeMenus: closeMenus, navigate: navigateToFrame, switchSession: switchSession });
+    setupBehaviorUi({ closeMenus: closeMenus, navigate: navigateToFrame, switchSession: switchSession,
+                      seekKeepingPlayback: seekKeepingPlayback, pausePlayback: pausePlayback });
     setTrackSummaryNavigator(navigateToFrame);   // the Track All summary's Identities samples and maps
     // After the tab fixes (or un-fixes) a switch, repaint everything that shows identities.
     setIdSwitchRefresher(function () {
@@ -1879,6 +1881,33 @@ function toggleNoVideoPlayback() {
     startNoVideoPlayback();
 }
 
+// A lazy project hydrates the frames ahead before playing again, as Play does.
+function prepareResume(frame) {
+    if (state.session && state.session.lazyLoader) {
+        return batchLoadLazyFrames(frame, LAZY_PLAYBACK_AHEAD);
+    }
+}
+
+// One click on the seekbar's scale: the video stays playing or paused, as it
+// was (the seekbar's own press and release do the same). For the bouts strip.
+function seekKeepingPlayback(frame) {
+    var resume = state.isPlaying || !!(videoController && videoController.resumePending);
+    if (!hasRealVideo()) {
+        if (state.isPlaying) stopNoVideoPlayback();
+        navigateToFrame(frame);
+        if (resume) startNoVideoPlayback();
+        return;
+    }
+    updateSeekbarVisual(frame);
+    videoController.scrubToFrame(frame);
+    if (resume) videoController.resumeAfterScrub(prepareResume);
+}
+
+function pausePlayback() {
+    if (!hasRealVideo()) { if (state.isPlaying) stopNoVideoPlayback(); return; }
+    if (state.isPlaying || videoController.resumePending) videoController.stopPlayback();
+}
+
 // --- Instance copy / paste (Cmd/Ctrl+C / Cmd/Ctrl+V) -------------------------
 // Copy the selected UserInstance in the focused view to the in-app clipboard as
 // a skeleton-agnostic, name-keyed snapshot. Works on either a grouped selection
@@ -2095,12 +2124,7 @@ export function setupUI() {
                 if (resumeOnRelease) {
                     resumeOnRelease = false;
                     if (!hasRealVideo()) startNoVideoPlayback();
-                    else if (videoController) videoController.resumeAfterScrub(function (frame) {
-                        // A lazy project hydrates the frames ahead first, as Play does.
-                        if (state.session && state.session.lazyLoader) {
-                            return batchLoadLazyFrames(frame, LAZY_PLAYBACK_AHEAD);
-                        }
-                    });
+                    else if (videoController) videoController.resumeAfterScrub(prepareResume);
                 }
             }
         });
@@ -3811,6 +3835,7 @@ export function seekToLabeledFrame(direction) {
             }
             fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
             refreshReadoutTotals();   // the times are frame / fps
+            refreshBehaviorStrip();   // and so is the strip's window
             if (state.trailSeconds > 0) drawAllOverlays(state.currentFrame);   // trail frames are seconds × fps
         }
 
