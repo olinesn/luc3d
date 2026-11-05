@@ -21,6 +21,7 @@ import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
 } from './file-io.js';
 import { STORE_ROW_KEYED_FIELDS } from './detection-labels.js';
+import { holdsNotKept, clearNotKept, notKeptNote } from './slp-not-kept.js';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
@@ -1231,8 +1232,9 @@ export async function quickSave(previousFile) {
     }
 
     try {
-        // If no file handle yet, prompt for one
-        if (!state.slpFileHandle) {
+        // If no file handle yet, prompt for one. Nor over a file holding what a save leaves
+        // out: it would destroy that (import-export/slp-not-kept.js).
+        if (!state.slpFileHandle || holdsNotKept(state.sessions)) {
             if (!window.showSaveFilePicker) {
                 // Fallback: use old download-based save
                 await saveProjectSlp();
@@ -1302,6 +1304,7 @@ export async function quickSave(previousFile) {
         state.isSaving = false;
         hideLoading();
         clearDirty();
+        clearNotKept(state.sessions);
         var sizeMB = (bytesWritten / 1024 / 1024).toFixed(1);
         setStatus('Saved (' + sizeMB + ' MB)' + embeddedImagesSaveNote(), hasEmbeddedVideos(state) ? 'warning' : 'success');
     } catch (err) {
@@ -2462,4 +2465,15 @@ export function setStatus(text, type) {
     if (type === 'error') dot.classList.add('error');
     else if (type === 'warning') dot.classList.add('warning');
     else if (type === 'success') dot.classList.add('success');
+}
+
+/**
+ * Add to the status a load just set what a save leaves out of that file, if anything
+ * (./slp-not-kept.js). So a loader calls this right after its own last status.
+ *
+ * @param {Array<Object>} sessions - what the load opened
+ */
+export function noteNotKept(sessions) {
+    var note = notKeptNote(sessions);
+    if (note) setStatus(document.getElementById('statusText').textContent.replace(/\.?$/, '. ') + note + '.', 'warning');
 }

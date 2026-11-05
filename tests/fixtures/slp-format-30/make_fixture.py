@@ -1,10 +1,10 @@
 """Build `py_written_30_columnar.slp`: a real file in SLP format 3.0.
 
 Python sleap-io 0.10 writes format 3.0 by default: every table is a group of
-columns instead of a compound dataset. LUC3D cannot read that layout yet and must
-refuse it (`tests/e2e/slp-newer-format.mjs`), because read with the 2.x code it
-opens as 0 frames with no error. The file holds one frame with one instance, so a
-reader that reports 0 frames is wrong about it.
+columns instead of a compound dataset. `tests/e2e/slp-format-30.mjs` reads it, and
+`tests/e2e/slp-newer-format.mjs` marks a copy as the next format, which must be refused.
+The file holds one frame with one instance, so a reader that reports 0 frames is wrong
+about it. `make_project_fixture.py` makes the other files here.
 
 Run from this folder:
 

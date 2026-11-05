@@ -45,6 +45,14 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   frame — no group may keep its stale 3D, and the members must be placeholders
   again afterwards. (Fails against `moveVideosToSession` without the hydration:
   0/10 non-resident groups re-solved, all 10 kept their stale 3D.)
+- **`slp-format-30.mjs`** — a `.slp` in SLP format 3.0, what Python sleap-io 0.10 saves
+  by default, opens and saves without loss. A real project trimmed to 12 frames, and
+  files Python wrote, each with its 2.x twin: both loaders read them the same (every 3D
+  group, pose, identity, bout, prediction and setting), a save keeps every row by value
+  (3.0 column by 2.x row), every other reader and loader, the Open card's byte count, lzf
+  refused everywhere (`format_id` is no help there) and tables that contradict each other
+  refused. The same checks on the whole real projects, with h5py: `_real-slp3.mjs` and
+  `_real-slp3-compare.py`. (Fails against the refusal: nothing opens.)
 - **`slp-failed-read.mjs`** — a read of a `.slp` that fails is an error, never a
   project with data missing. Moves a real picked file away at a chosen request or
   read (no fake readers; it starts its own server for that): every kind of read on
