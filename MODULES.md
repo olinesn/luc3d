@@ -13322,6 +13322,39 @@ the wording (`LUCID local patch (luc3d newer-format)`), and
 
 **Tests.** `tests/test-slp-format-check.mjs`, `tests/e2e/slp-newer-format.mjs`.
 
+### loading/recording-folder.js
+
+**Purpose.** Remember the folder a recording was opened from, so File ▸ Save
+opens there. A folder picked with `<input webkitdirectory>` gives File objects
+only, never the folder, so the session folder loaders pick with
+`showDirectoryPicker` when the browser has it and keep the handle on the
+session (`session._recordingFolder`, in memory only, never written to the
+`.slp`). Firefox, Safari, Brave with the File System Access API off and
+Playwright's headless shell have no `showDirectoryPicker`: they pick through the
+input, and Save opens where the browser chooses. A project opened from a `.slp`
+has no recording folder: Save writes that file, Save As opens beside it.
+
+**Key exports.**
+- `RECORDING_FOLDER_PICKER_ID` (`'lucid-recording-folder'`): the folder
+  picker's own memory, so the next recording's pick opens beside the last one.
+- `pickRecordingFolder(fallbackPick)` → `{files, dirHandle}`: files as
+  `pickFolder` gives them (`webkitRelativePath` = `<folder>/…`); a cancel gives
+  no files; without `showDirectoryPicker`, `fallbackPick()`'s files and no handle.
+  An automated browser (`navigator.webdriver`) keeps the input while its
+  `showDirectoryPicker` is native code (Playwright cannot answer the native
+  dialog; the e2e suites fill the input); a stubbed picker takes the picker path.
+- `enumerateDirectoryHandle(dirHandle, rootName, prefix)`: every file under a
+  directory handle, wrapped with `webkitRelativePath` (moved here from
+  `session-loader.js`, which re-exports it).
+- `saveStartFolder(state, previousFile)`: the save picker's `startIn` — the
+  active session's `_recordingFolder`, else `previousFile` if it is a file
+  handle, else null.
+
+**Imported by.** `loading/session-loader.js`, `import-export/save-load.js`.
+Imports nothing.
+
+**Tests.** `tests/e2e/save-opens-in-recording-folder.mjs`.
+
 ### loading/campy-session.js
 
 **Purpose.** What a campy recording folder says about itself. campy (2.1.1+)
@@ -13567,7 +13600,16 @@ filesystem enumeration, decoder rebuild.
   removing the solo'd view itself falls back to the clamp AND re-renders the
   dock (`updateVideoGridDisplay`). Covered by `tests/e2e/videos-panel-buttons.mjs`.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
-- Filesystem: `enumerateDirectoryHandle`.
+- Filesystem: `enumerateDirectoryHandle` (re-exported from `./recording-folder.js`).
+- **Recording folder for Save.** The per-camera and single-SLP folder loaders
+  pick through `pickRecordingFolder` (`./recording-folder.js`):
+  `showDirectoryPicker` when the browser has it, else `<input webkitdirectory>`
+  (`pickFolder`). With a handle, the new session keeps it as
+  `session._recordingFolder` (in memory only, never in the `.slp`), and
+  File ▸ Save / Save As open there. `handleLoadSessionFolderPerCamera(files,
+  deferVideos, folderHandle)` takes the handle as its third argument, which
+  `handleLoadMultiSession` passes for each session subfolder. Test:
+  `tests/e2e/save-opens-in-recording-folder.mjs`.
 - **campy recordings** (`loading/campy-session.js`):
   `adoptCampyRecording(session, files, {record, calibFile, calibrationNames})`
   reads a picked folder's session.json (+ campy-live's manifests) onto
@@ -16141,6 +16183,14 @@ eager path shows them.
   `state.isSaving` and refuses a second save while one runs (two builds would
   hold two copies of the file in memory), and `quickSave` awaits it. Covered by
   `tests/e2e/save-progress-card.mjs`.
+- **Where the save picker opens.** `quickSave`'s `showSaveFilePicker` gets
+  `startIn` from `saveStartFolder` (`loading/recording-folder.js`): the active
+  session's recording folder, else (Save As, which passes the file it is
+  replacing as `quickSave(previousFile)`) that file's folder, else none (the
+  browser's own choice, as before). Without it Chromium opened wherever the last
+  save went, and one recording's labels were saved in another's folder. The
+  suggested name is the session's name when there is one session. Covered by
+  `tests/e2e/save-opens-in-recording-folder.mjs`.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
   is used by the 3D-import reset), `markDirty`, `onMarkDirty(fn)` (a cheap hook
   run on every `markDirty`; ui/behavior-detect.js notes there that the poses

@@ -35,6 +35,7 @@ import { OnDemandVideoDecoder, VideoController, releaseViewsFrames, closeEmbedde
 import { videoLoadFailureText } from './video-codec-diagnosis.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
+import { enumerateDirectoryHandle, pickRecordingFolder } from './recording-folder.js';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
@@ -1522,27 +1523,8 @@ export function adoptLabeledFrameCount() {
     return firstLabeled;
 }
 
-/**
- * Recursively enumerate all files under a FileSystemDirectoryHandle.
- * Returns File objects with webkitRelativePath set to rootName/relative/path.
- */
-export async function enumerateDirectoryHandle(dirHandle, rootName, prefix) {
-    var files = [];
-    for await (var [name, handle] of dirHandle) {
-        if (handle.kind === 'file') {
-            var file = await handle.getFile();
-            var relPath = prefix ? prefix + '/' + name : rootName + '/' + name;
-            var wrappedFile = new File([file], file.name, { type: file.type, lastModified: file.lastModified });
-            Object.defineProperty(wrappedFile, 'webkitRelativePath', { value: relPath });
-            files.push(wrappedFile);
-        } else if (handle.kind === 'directory') {
-            var subPrefix = prefix ? prefix + '/' + name : rootName + '/' + name;
-            var subFiles = await enumerateDirectoryHandle(handle, rootName, subPrefix);
-            files = files.concat(subFiles);
-        }
-    }
-    return files;
-}
+// `enumerateDirectoryHandle` moved to ./recording-folder.js; re-exported for existing importers.
+export { enumerateDirectoryHandle };
 
 export async function handleLoadMultiSession() {
     try {
@@ -1631,7 +1613,7 @@ export async function handleLoadMultiSession() {
 
             var sessionFiles = await enumerateDirectoryHandle(sess.handle, sess.name, null);
             console.log('[multi-session] Session', sess.name, '— files:', sessionFiles.length);
-            var loadedSession = await handleLoadSessionFolderPerCamera(sessionFiles, si > 0);
+            var loadedSession = await handleLoadSessionFolderPerCamera(sessionFiles, si > 0, sess.handle);
             if (loadedSession) unreadSlps = unreadSlps.concat(loadedSession.slpFailures);
         }
 
@@ -2100,7 +2082,9 @@ export async function handleLoadSessionFolderSingleSlp() {
             return;
         }
         setStatus('Pick session folder...', 'warning');
-        var allFiles = await pickFolder();
+        // With showDirectoryPicker the folder's handle comes too: Save opens there.
+        var picked = await pickRecordingFolder(pickFolder);
+        var allFiles = picked.files;
         if (allFiles.length === 0) {
             setStatus('No folder selected', 'warning');
             return;
@@ -2529,6 +2513,9 @@ export async function handleLoadSessionFolderSingleSlp() {
                 failedVideos.push(videoLoadFailureText(vFile.name, e));
             }
         }
+
+        // The folder Save opens in (in memory only; see loading/recording-folder.js).
+        if (picked.dirHandle) session._recordingFolder = picked.dirHandle;
 
         // The recording's details, before updateTotalFrames takes its fps.
         if (campyRec) {
@@ -3253,7 +3240,7 @@ function slpFailuresStatus(slpFailures) {
         + slpFailures.map(function (f) { return f.camName + ' (' + f.file.name + ')'; }).join(', ');
 }
 
-export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos) {
+export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos, folderHandle) {
     try {
         var allFiles;
         if (preloadedFiles) {
@@ -3264,7 +3251,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 return;
             }
             setStatus('Pick session folder...', 'warning');
-            allFiles = await pickFolder();
+            // With showDirectoryPicker the folder's handle comes too: Save opens there.
+            var picked = await pickRecordingFolder(pickFolder);
+            allFiles = picked.files;
+            folderHandle = picked.dirHandle;
             if (allFiles.length === 0) {
                 setStatus('No folder selected', 'warning');
                 return;
@@ -4132,6 +4122,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 console.error('[session-folder] Skeleton file parse error:', skelErr);
             }
         }
+
+        // The folder Save opens in (in memory only; see loading/recording-folder.js).
+        if (folderHandle && state.session) state.session._recordingFolder = folderHandle;
 
         // 5c. The recording's details, before the frame count and fps are set
         // (updateTotalFrames takes campy's frame rate from them).
