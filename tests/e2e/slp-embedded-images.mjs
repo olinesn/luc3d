@@ -28,8 +28,14 @@
  *     runs all a video's images together in one row of bytes, and an older one
  *     without `frame_sizes` to say where each ends.
  *  7. A frame that cannot be read gives no picture; it does not hang the load.
- *  8. A plain Save never writes over the file holding the images: a save writes
- *     poses and video names only. It asks for a new file, and says what is in it.
+ *  8. Save keeps the images. On real file handles (the browser's private storage, where a
+ *     handle behaves as one on disk does): the menus make the opened file the save target,
+ *     Save writes over it without asking, and the project goes on showing its images though
+ *     the File they were read from no longer reads. Reopened, the file has the same images
+ *     on the same cameras at the same frames and the edited label. Every layout, several
+ *     sessions, two files merged, Save As, a save that fails (the file untouched), images
+ *     in no session (not a save target), a download, the streaming writer. Python sleap-io
+ *     0.9.5 reads what was saved, when `uv` is there to run it (`compare_saved.py`).
  *  9. File ▸ Open above 200 MB: a package stays on this path, which is the only one
  *     that shows its images.
  * 10. Load SLP with a project open adds the file's videos, on their own cameras.
@@ -46,7 +52,9 @@
  * Run: node tests/e2e/slp-embedded-images.mjs   (spawns its own http.server; PORT=…)
  */
 import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -313,7 +321,7 @@ try {
         const s = await open(page, 'images_only.pkg.slp');
         check(/^SLP loaded/.test(s.status), 'loads', s.status);
         check(s.labeled.length === 0 && s.current === 10, 'with no labels, opens on its first image', s);
-        check(eq(s.views, ['images_only.pkg', 'images_only.pkg_1']), 'two videos with no source name get a camera each', s.views);
+        check(eq(s.views, ['images_only.pkg', 'images_only.pkg_2']), 'two videos with no source name get a camera each', s.views);
         const size = await page.evaluate(() => window.__lucid.state.views.map(v => [v.videoWidth, v.videoHeight]));
         check(eq(size[0], [2, 2]), 'the size is read from an image', size);
         check(size[1][0] > 0 && size[1][1] > 0, 'and a video with no images gets a size anyway, without hanging', size);
@@ -404,75 +412,575 @@ try {
         await page.close();
     }
 
-    console.log('\n8. Save never writes over the file holding the images');
+    console.log('\n8. Save keeps the images');
     {
-        const page = await freshPage();
-        await page.setInputFiles('#__pick', fixture('out_of_order_embedded.pkg.slp'));
-        // The real menus, with the file pickers answered here.
-        await page.evaluate(() => {
-            const fake = (name, tag) => ({
-                kind: 'file', name, __tag: tag, writes: 0, written: [],
-                getFile: async () => window.__pickedFile(),
-                createWritable: async function () {
-                    this.writes++;
-                    const self = this;
-                    self.written = [];
-                    return {
-                        write: async (c) => { self.written.push(new Uint8Array(c.buffer ? c.buffer.slice(c.byteOffset, c.byteOffset + c.byteLength) : c)); },
-                        close: async () => {},
-                        abort: async () => {},
-                    };
-                },
+        const savedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-embedded-save-'));
+        const pythonChecks = [];   // [what, source fixture or '-', saved path, extra args]
+
+        // A page with real file handles on the fixtures, and what to read them back with.
+        const handlePage = async () => {
+            const page = await freshPage();
+            await page.evaluate(async () => {
+                const root = await navigator.storage.getDirectory();
+                for await (const name of root.keys()) await root.removeEntry(name);
+                // A real handle holding a fixture, as if picked in the file dialog.
+                window.__onDisk = async (name, fixture) => {
+                    const handle = await root.getFileHandle(name, { create: true });
+                    const writable = await handle.createWritable();
+                    await writable.write(await (await fetch('/tests/fixtures/slp-embedded/' + fixture)).arrayBuffer());
+                    await writable.close();
+                    return handle;
+                };
+                window.__entries = async () => { const out = []; for await (const k of root.keys()) out.push(k); return out.sort(); };
+                window.__bytesOf = async (handle) => new Uint8Array(await (await handle.getFile()).arrayBuffer());
+                window.__save = async () => {
+                    const { quickSave } = await import('/import-export/save-load.js');
+                    await quickSave();
+                    return { status: document.getElementById('statusText').textContent, dirty: window.__lucid.state.isDirty };
+                };
+                window.__reopen = async (handle) => {
+                    const { handleLoadSlpFile } = await import('/import-export/slp-import.js');
+                    await handleLoadSlpFile(await handle.getFile());
+                    await new Promise(r => setTimeout(r, 100));
+                };
+                // What each camera shows at each frame, read from the file, not the decoded frames.
+                window.__showFresh = async (frames) => {
+                    const out = {};
+                    for (const f of frames) {
+                        window.__lucid.state.views.forEach(v => v.decoder.releaseFrames());
+                        out[f] = await window.__show(f);
+                    }
+                    return out;
+                };
+                window.__poseAt = (frame, camera) => {
+                    const fg = window.__lucid.state.session.frameGroups.get(frame);
+                    const linked = fg.getInstances(camera);
+                    const inst = linked.length ? linked[0] : fg.getUnlinkedInstances(camera)[0].instance;
+                    return inst.toPointsArray()[0];
+                };
+                window.__editAt = async (frame, camera, x, y) => {
+                    const fg = window.__lucid.state.session.frameGroups.get(frame);
+                    const linked = fg.getInstances(camera);
+                    const inst = linked.length ? linked[0] : fg.getUnlinkedInstances(camera)[0].instance;
+                    inst.setPoint(0, x, y);
+                    (await import('/import-export/save-load.js')).markDirty();
+                };
             });
-            window.__opened = fake('out_of_order_embedded.pkg.slp', 'opened');
-            window.__newFile = fake('labels.slp', 'new');
-            window.__asked = 0;
-            window.showOpenFilePicker = async () => [window.__opened];
-            window.showSaveFilePicker = async () => { window.__asked++; return window.__newFile; };
-        });
-        for (const menu of ['menuLoadSlp', 'menuLoadProject']) {
-            await page.evaluate(() => {
-                window.__lucid.state.session = null;
-                window.__lucid.state.sessions = [];
-                window.__lucid.state.slpFileHandle = window.__newFile;
-                window.__asked = 0; window.__opened.writes = 0; window.__newFile.writes = 0;
+            return page;
+        };
+        // A saved file on the real disk, for Python.
+        const keep = async (page, handleExpr, name, source, extra) => {
+            const b64 = await page.evaluate(async (expr) => {
+                const file = await (await eval(expr)).getFile();
+                return await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.readAsDataURL(file); });
+            }, handleExpr);
+            const to = path.join(savedDir, name);
+            fs.writeFileSync(to, Buffer.from(b64, 'base64'));
+            pythonChecks.push([name, source, to, extra || []]);
+        };
+
+        console.log('  -- saving over the opened file');
+        {
+            const page = await handlePage();
+            await page.evaluate(async () => {
+                window.__opened = await window.__onDisk('opened.pkg.slp', 'out_of_order_embedded.pkg.slp');
+                window.__asked = 0;
+                window.showOpenFilePicker = async () => [window.__opened];
+                window.showSaveFilePicker = async () => { window.__asked++; throw new Error('should not ask'); };
             });
-            await page.evaluate((id) => document.getElementById(id).click(), menu);
-            await page.waitForFunction(() => {
+            for (const menu of ['menuLoadSlp', 'menuLoadProject']) {
+                await page.evaluate(() => {
+                    window.__lucid.state.session = null;
+                    window.__lucid.state.sessions = [];
+                    window.__lucid.state.slpFileHandle = null;
+                });
+                await page.evaluate((id) => document.getElementById(id).click(), menu);
+                await page.waitForFunction(() => {
+                    const s = window.__lucid.state;
+                    return s.session && s.views.length === 3 && s.slpFileHandle;
+                }, null, { timeout: 15000 }).catch(() => {});
+                const opened = await page.evaluate(() => window.__lucid.state.slpFileHandle === window.__opened);
+                check(opened, `${menu}: the file with the images is the save target`);
+            }
+            await page.waitForTimeout(100);
+            const before = await page.evaluate(() => window.__showFresh([3, 5, 7, 9, 11, 6]));
+            await page.evaluate(() => window.__editAt(5, 'clip_a', 1.5, 1.25));
+
+            const first = await page.evaluate(async () => {
+                const file = await window.__opened.getFile();
+                const oldDecoder = window.__lucid.state.views[0].decoder;
+                const oldWorker = oldDecoder._worker;
+                const oldTerminate = oldWorker.terminate.bind(oldWorker);
+                let stopped = false;
+                oldWorker.terminate = () => { stopped = true; oldTerminate(); };
+                const saved = await window.__save();
+                let oldFileReads = true;
+                try { await file.slice(0, 16).arrayBuffer(); } catch (e) { oldFileReads = e.name; }
                 const s = window.__lucid.state;
-                return s.session && s.views.length === 3 && !s.slpFileHandle;
-            }, null, { timeout: 15000 }).catch(() => {});
-            const after = await page.evaluate(() => { const h = window.__lucid.state.slpFileHandle; return { handle: h ? h.__tag : null, views: window.__lucid.state.views.length }; });
-            check(after.views === 3 && after.handle === null, `${menu}: the file with the images is not the save target, and neither is the last project's`, after);
+                return {
+                    ...saved, asked: window.__asked, oldFileReads, stopped,
+                    handleKept: s.slpFileHandle === window.__opened,
+                    sameDecoder: s.views[0].decoder === oldDecoder,
+                    workers: s.frameWorkers.length,
+                    bytes: (await window.__bytesOf(window.__opened)).length,
+                    entries: await window.__entries(),
+                    saving: s.isSaving,
+                    card: !document.getElementById('loadingOverlay') || document.getElementById('loadingOverlay').classList.contains('hidden'),
+                };
+            });
+            check(first.asked === 0 && first.handleKept, 'Save writes to it without asking', first);
+            check(/^Saved \(/.test(first.status) && !/Labels only/.test(first.status), 'the status says saved, and nothing about labels only', first.status);
+            check(first.dirty === false, 'and the project counts as saved', first);
+            check(first.oldFileReads !== true, 'the File the images were read from no longer reads, as the file was replaced', first.oldFileReads);
+            check(first.stopped && first.workers === 1 && first.sameDecoder, 'the views keep their decoders, on a new worker reading the new file', first);
+            check(eq(first.entries, ['opened.pkg.slp']), 'no temporary file is left', first.entries);
+            check(!first.saving && first.card, 'the save is over, and its card gone', first);
+            check(eq(await page.evaluate(() => window.__showFresh([3, 5, 7, 9, 11, 6])), before), 'the project goes on showing the same images, from the new file');
+
+            await page.evaluate(() => window.__editAt(5, 'clip_a', 1.75, 1.25));
+            const second = await page.evaluate(() => window.__save());
+            check(/^Saved \(/.test(second.status), 'a second Save works, with the images now read from the file saved over', second.status);
+            check(eq(await page.evaluate(() => window.__showFresh([3, 5, 7, 9, 11, 6])), before), 'and still shows them');
+            await keep(page, 'window.__opened', 'over_itself.slp', 'out_of_order_embedded.pkg.slp', ['--edited', '5,1.75,1.25']);
+
+            await page.evaluate(() => window.__reopen(window.__opened));
+            const s = await page.evaluate(() => window.__summary());
+            check(/^SLP loaded/.test(s.status) && eq(s.views, ['clip_a', 'clip_b', 'clip_c']), 'reopened: the same cameras', s);
+            check(s.current === 5 && s.total === 12, 'on the same frame, with as many frames', s);
+            check(eq(await page.evaluate(() => window.__showFresh([3, 5, 7, 9, 11, 6])), before), 'the same images on the same cameras at the same frames');
+            check(eq(await page.evaluate(() => window.__poseAt(5, 'clip_a')), [1.75, 1.25]), 'and the edited label');
+            await page.close();
         }
-        const saved = await page.evaluate(async () => {
-            const { quickSave } = await import('/import-export/save-load.js');
-            await quickSave();
-            const status = (document.getElementById('statusText') || document.getElementById('status')).textContent;
-            const first = { asked: window.__asked, opened: window.__opened.writes, wrote: window.__newFile.writes, status, handle: window.__lucid.state.slpFileHandle.__tag };
-            await quickSave();
-            const n = window.__newFile.written.reduce((a, c) => a + c.length, 0);
-            const bytes = new Uint8Array(n);
-            let o = 0;
-            for (const c of window.__newFile.written) { bytes.set(c, o); o += c.length; }
-            const SIO = await import('/lib/sleap-io/index.browser.js');
-            const labels = await SIO.loadSlp(bytes.buffer, { openVideos: false });
-            return {
-                first,
-                askedAgain: window.__asked,
-                wroteAgain: window.__newFile.writes,
-                opened: window.__opened.writes,
-                poses: labels.labeledFrames.map(lf => lf.instances.length).reduce((a, b) => a + b, 0),
-                embedded: labels.videos.filter(v => v.hasEmbeddedImages).length,
-            };
-        });
-        check(saved.first.asked === 1, 'Save asks where to save', saved.first);
-        check(saved.first.opened === 0 && saved.opened === 0, 'the opened file is never written', saved);
-        check(saved.first.wrote === 1 && saved.first.handle === 'new', 'it writes the file chosen', saved.first);
-        check(/Labels only/.test(saved.first.status) && /still in the file you opened/.test(saved.first.status), 'the status says what is in it', saved.first.status);
-        check(saved.askedAgain === 1 && saved.wroteAgain === 2, 'the next Save goes to that file without asking', saved);
-        check(saved.poses === 2 && saved.embedded === 0, 'the saved file has the poses and no images', saved);
-        await page.close();
+
+        console.log('  -- several sessions');
+        {
+            const page = await handlePage();
+            await page.evaluate(async () => {
+                window.__target = await window.__onDisk('two.pkg.slp', 'two_sessions.pkg.slp');
+                await window.__reopen(window.__target);
+                window.__lucid.state.slpFileHandle = window.__target;
+                await (await import('/ui/sessions-panes.js')).switchSession(1);
+            });
+            await settlesOn(page, { east: 50, west: 51 });
+            const saved = await page.evaluate(() => window.__save());
+            check(/^Saved \(/.test(saved.status), 'saves with the second session on screen', saved.status);
+            const toSession = (i) => page.evaluate(async (idx) => { await (await import('/ui/sessions-panes.js')).switchSession(idx); }, i);
+            check(eq(await page.evaluate(() => window.__showFresh([6, 12])), { 6: { east: 50, west: 51 }, 12: { east: null, west: 52 } }), 'the session on screen still shows its images');
+            await toSession(0);
+            await settlesOn(page, { north: 31, south: 32 });
+            check(eq(await page.evaluate(() => window.__showFresh([3, 8])), { 3: { north: 30, south: null }, 8: { north: 31, south: 32 } }), 'and the session off screen when saved shows its own, cameras named as they were');
+            await page.evaluate(() => window.__reopen(window.__target));
+            const s = await page.evaluate(() => window.__summary());
+            check(s.sessions === 2 && eq(s.views, ['north', 'south']), 'reopened: two sessions', s);
+            check(eq(await page.evaluate(() => window.__lucid.state.sessions.map(x => x.videoFileIndices)), [[0, 1], [2, 3]]), 'each with its own videos');
+            check(eq(await page.evaluate(() => window.__showFresh([3, 8])), { 3: { north: 30, south: null }, 8: { north: 31, south: 32 } }), 'the first session\'s images');
+            await toSession(1);
+            await settlesOn(page, { east: 50, west: 51 });
+            check(eq(await page.evaluate(() => window.__showFresh([6, 12])), { 6: { east: 50, west: 51 }, 12: { east: null, west: 52 } }), 'the second session\'s images');
+            await keep(page, 'window.__target', 'two_sessions.slp', 'two_sessions.pkg.slp');
+            await page.close();
+
+            // A real rig: every session's cameras have the same names.
+            const same = await handlePage();
+            const toSameSession = (i) => same.evaluate(async (idx) => { await (await import('/ui/sessions-panes.js')).switchSession(idx); }, i);
+            const first = { 1: { north: 110, south: 111 } };
+            const second = { 1: { north: 120, south: 121 }, 2: { north: 122, south: null } };
+            await same.evaluate(async () => {
+                window.__target = await window.__onDisk('same.pkg.slp', 'same_camera_names.pkg.slp');
+                await window.__reopen(window.__target);
+                window.__lucid.state.slpFileHandle = window.__target;
+                await window.__save();
+                await window.__reopen(window.__target);
+            });
+            check(eq(await same.evaluate(() => window.__showFresh([1])), first), 'sessions with the same camera names: each keeps its own images, the first');
+            await toSameSession(1);
+            await settlesOn(same, second[1]);
+            check(eq(await same.evaluate(() => window.__showFresh([1, 2])), second), 'and the second');
+            await keep(same, 'window.__target', 'same_camera_names.slp', 'same_camera_names.pkg.slp');
+            await same.close();
+        }
+
+        console.log('  -- every layout');
+        const layouts = [
+            ['minimal_instance.pkg.slp', [0], true],
+            ['mixed_external.pkg.slp', [2, 4], true],
+            ['images_only.pkg.slp', [10, 20, 15], true],
+            ['flat_no_sizes.pkg.slp', [2, 5, 9, 6], false],   // Python can't read the source's layout
+            ['image_sequence.pkg.slp', [1], null],            // nor a source that is a list of images
+            ['colors.pkg.slp', [0], true],
+            ['colors_old_format.pkg.slp', [0], true],
+            ['raw_pixels.pkg.slp', [4], true],
+        ];
+        for (const [fixture, frames, python] of layouts) {
+            const page = await handlePage();
+            const r = await page.evaluate(async ([fixture, frames]) => {
+                window.__target = await window.__onDisk('saved.pkg.slp', fixture);
+                await window.__reopen(window.__target);
+                window.__lucid.state.slpFileHandle = window.__target;
+                const read = () => ({
+                    views: window.__lucid.state.views.map(v => v.name),
+                    sizes: window.__lucid.state.views.map(v => [v.videoWidth, v.videoHeight]),
+                });
+                const pixel = async (f) => {
+                    await window.__show(f);
+                    window.__lucid.state.views.forEach(v => v.decoder.releaseFrames());
+                    const out = {};
+                    await window.__show(f);
+                    for (const v of window.__lucid.state.views) out[v.name] = Array.from(v.ctx.getImageData(0, 0, 1, 1).data);
+                    return out;
+                };
+                const before = { ...read(), pixels: {} };
+                for (const f of frames) before.pixels[f] = await pixel(f);
+                const saved = await window.__save();
+                await window.__reopen(window.__target);
+                const after = { ...read(), pixels: {} };
+                for (const f of frames) after.pixels[f] = await pixel(f);
+                return { saved, before, after, status: document.getElementById('statusText').textContent };
+            }, [fixture, frames]);
+            check(/^Saved \(/.test(r.saved.status) && /^SLP loaded/.test(r.status), `${fixture}: saves and reopens`, r);
+            check(eq(r.after.views, r.before.views) && eq(r.after.sizes, r.before.sizes), `${fixture}: same cameras, same sizes`, r);
+            check(eq(r.after.pixels, r.before.pixels), `${fixture}: same pixels, red and blue included, same empty frames`, r);
+            if (python === true) await keep(page, 'window.__target', 'layout_' + fixture, fixture);
+            if (python === false) await keep(page, 'window.__target', 'layout_' + fixture, '-');
+            await page.close();
+        }
+
+        console.log('  -- two files in one project');
+        {
+            const page = await handlePage();
+            await page.setInputFiles('#__pick', fixture('out_of_order_embedded.pkg.slp'));
+            await page.evaluate(async () => {
+                window.__target = await window.__onDisk('first.pkg.slp', 'two_sessions.pkg.slp');
+                await window.__reopen(window.__target);
+                window.__lucid.state.slpFileHandle = window.__target;
+                await (await import('/ui/sessions-panes.js')).removeSession(1);
+            });
+            await page.waitForTimeout(100);
+            const chooser = page.waitForEvent('filechooser');
+            await page.evaluate(() => { window.__adding = import('/import-export/slp-import.js').then(m => m.handleAddSlp()); });
+            await (await chooser).setFiles(fixture('out_of_order_embedded.pkg.slp'));
+            await page.evaluate(() => window.__adding);
+            await page.waitForTimeout(100);
+            const added = await page.evaluate(async () => {
+                const { paneManager } = await import('/ui/app-state.js');
+                for (const name of ['clip_a', 'clip_b', 'clip_c']) paneManager.addVideoPanel(name);
+                await new Promise(r => setTimeout(r, 200));
+                return window.__summary();
+            });
+            check(added.workers === 2 && eq(added.views, ['north', 'south', 'clip_a', 'clip_b', 'clip_c']), 'a file added to the project: two sources', added);
+            const frames = [3, 5, 7, 8, 11];
+            const before = await page.evaluate((f) => window.__showFresh(f), frames);
+            const saved = await page.evaluate(async () => ({ ...(await window.__save()), workers: window.__lucid.state.frameWorkers.length }));
+            check(/^Saved \(/.test(saved.status) && saved.workers === 1, 'saved: one file holds them all, and one worker reads it', saved);
+            check(eq(await page.evaluate((f) => window.__showFresh(f), frames), before), 'every camera shows the same');
+            await page.evaluate(() => window.__reopen(window.__target));
+            const s = await page.evaluate(async () => {
+                const { paneManager } = await import('/ui/app-state.js');
+                for (const name of ['clip_a', 'clip_b', 'clip_c']) if (!paneManager.hasPanel || !paneManager.hasPanel(name)) paneManager.addVideoPanel(name);
+                await new Promise(r => setTimeout(r, 200));
+                return window.__summary();
+            });
+            check(eq(s.cameras, ['north', 'south', 'clip_a', 'clip_b', 'clip_c']), 'reopened: all five cameras', s);
+            check(eq(await page.evaluate((f) => window.__showFresh(f), frames), before), 'with their images');
+            await page.close();
+        }
+
+        console.log('  -- Save As');
+        {
+            const page = await handlePage();
+            const r = await page.evaluate(async () => {
+                window.__opened = await window.__onDisk('opened.pkg.slp', 'out_of_order_embedded.pkg.slp');
+                window.__copy = await window.__onDisk('copy.pkg.slp', 'minimal_instance.pkg.slp');
+                await window.__reopen(window.__opened);
+                window.__lucid.state.slpFileHandle = window.__opened;
+                const original = await window.__bytesOf(window.__opened);
+                let suggested = null;
+                window.showSaveFilePicker = async (o) => { suggested = o.suggestedName; return window.__copy; };
+                await window.__editAt(5, 'clip_a', 1.5, 1.25);
+                const { saveAs } = await import('/import-export/save-load.js');
+                await saveAs();
+                const afterOne = await window.__bytesOf(window.__opened);
+                const same = original.length === afterOne.length && original.every((b, i) => b === afterOne[i]);
+                const status = document.getElementById('statusText').textContent;
+                // The project no longer needs the file it came from: replace it.
+                const w = await window.__opened.createWritable();
+                await w.write(new Uint8Array(10));
+                await w.close();
+                window.__lucid.state.views.forEach(v => v.decoder.releaseFrames());
+                return { same, status, suggested, handle: window.__lucid.state.slpFileHandle === window.__copy, shown: await window.__showFresh([5, 7]) };
+            });
+            check(r.same, 'the opened file is left as it was', r);
+            check(r.handle && /^Saved \(/.test(r.status), 'the chosen file is the save target now', r);
+            check(/\.pkg\.slp$/.test(r.suggested), 'it is offered with SLEAP\'s name for a file holding its images', r.suggested);
+            check(eq(r.shown, { 5: { clip_a: 20, clip_b: null, clip_c: null }, 7: { clip_a: null, clip_b: 40, clip_c: null } }), 'and the project reads its images from there: the opened file can go', r.shown);
+            const again = await page.evaluate(() => window.__save());
+            check(/^Saved \(/.test(again.status), 'so it can save again, with the opened file gone', again.status);
+            await page.evaluate(() => window.__reopen(window.__copy));
+            check(eq(await page.evaluate(() => window.__poseAt(5, 'clip_a')), [1.5, 1.25]), 'with the edited label', 0);
+            await page.close();
+        }
+
+        console.log('  -- a save that fails');
+        {
+            const page = await handlePage();
+            const r = await page.evaluate(async () => {
+                window.__source = await window.__onDisk('source.pkg.slp', 'out_of_order_embedded.pkg.slp');
+                window.__target = await window.__onDisk('target.pkg.slp', 'minimal_instance.pkg.slp');
+                await window.__reopen(window.__source);
+                window.__lucid.state.slpFileHandle = window.__target;
+                const before = await window.__bytesOf(window.__target);
+                await window.__editAt(5, 'clip_a', 1.5, 1.25);
+                // The file holding the images changes after it was opened.
+                const w = await window.__source.createWritable();
+                await w.write(new Uint8Array(1000));
+                await w.close();
+                let aborted = false;
+                const open = window.__target.createWritable.bind(window.__target);
+                window.__target.createWritable = async () => {
+                    const writable = await open();
+                    const abort = writable.abort.bind(writable);
+                    writable.abort = () => { aborted = true; return abort(); };
+                    return writable;
+                };
+                const saved = await window.__save();
+                const after = await window.__bytesOf(window.__target);
+                return {
+                    ...saved,
+                    aborted,
+                    same: before.length === after.length && before.every((b, i) => b === after[i]),
+                    entries: await window.__entries(),
+                    saving: window.__lucid.state.isSaving,
+                    hidden: document.getElementById('loadingOverlay').classList.contains('hidden'),
+                };
+            });
+            check(/^Save failed/.test(r.status) && /could not read the images in source\.pkg\.slp/.test(r.status), 'it fails, and says which file it could not read', r.status);
+            check(r.aborted && r.same, 'the write in progress is dropped, and the file it was saving to is untouched', r);
+            check(r.dirty === true, 'the project still counts as unsaved', r);
+            check(eq(r.entries, ['source.pkg.slp', 'target.pkg.slp']) && !r.saving && r.hidden, 'nothing is left over, and the app is free again', r);
+            await page.close();
+
+            // No room for the temporary file: the write fails, and HDF5 does not hang.
+            const full = await handlePage();
+            const cdp = await full.context().newCDPSession(full);
+            await full.evaluate(async () => {
+                window.__target = await window.__onDisk('target.pkg.slp', 'out_of_order_embedded.pkg.slp');
+                await window.__reopen(window.__target);
+                window.__lucid.state.slpFileHandle = window.__target;
+                window.__original = await window.__bytesOf(window.__target);
+            });
+            const usage = await full.evaluate(async () => (await navigator.storage.estimate()).usage);
+            await cdp.send('Storage.overrideQuotaForOrigin', { origin: new URL(full.url()).origin, quotaSize: usage + 4096 });
+            const q = await full.evaluate(async () => {
+                window.__lucidSaveScratch = 'disk';
+                const saved = await Promise.race([window.__save(), new Promise(res => setTimeout(() => res({ status: 'timed out' }), 45000))]);
+                window.__lucidSaveScratch = null;
+                const after = await window.__bytesOf(window.__target);
+                return { ...saved, same: after.length === window.__original.length && after.every((b, i) => b === window.__original[i]) };
+            });
+            check(/^Save failed/.test(q.status), 'with no room for its temporary file, it fails rather than hangs', q.status);
+            check(q.same, 'and the file saved over is untouched', q);
+            await cdp.send('Storage.overrideQuotaForOrigin', { origin: new URL(full.url()).origin });
+            const retry = await full.evaluate(() => window.__save());
+            check(/^Saved \(/.test(retry.status), 'with room again, the same save works', retry.status);
+            await full.close();
+
+            // Told it cannot read back the file it saved: said, and the save is still done.
+            const noBack = await handlePage();
+            const n = await noBack.evaluate(async () => {
+                const real = await window.__onDisk('real.pkg.slp', 'out_of_order_embedded.pkg.slp');
+                await window.__reopen(real);
+                const getFile = real.getFile.bind(real);
+                const target = await window.__onDisk('target.pkg.slp', 'minimal_instance.pkg.slp');
+                const wrapped = { name: target.name, kind: 'file', createWritable: () => target.createWritable(), getFile: async () => { throw new Error('gone'); } };
+                window.__lucid.state.slpFileHandle = wrapped;
+                const saved = await window.__save();
+                const shown = await window.__show(5);
+                return { ...saved, shown, wrote: (await window.__bytesOf(target)).length, getFile: typeof getFile };
+            });
+            check(/^Saved \(/.test(n.status) && /could not be read back/.test(n.status), 'a saved file it can\'t read back: saved, and it says so', n.status);
+            check(n.dirty === false && n.shown.clip_a === 20, 'and the views go on from the file they had', n);
+            await noBack.close();
+        }
+
+        console.log('  -- images no session holds');
+        {
+            const page = await handlePage();
+            const r = await page.evaluate(async () => {
+                window.__opened = await window.__onDisk('opened.pkg.slp', 'video_in_no_session.pkg.slp');
+                window.__newFile = await window.__onDisk('new.pkg.slp', 'minimal_instance.pkg.slp');
+                window.__asked = 0;
+                window.showOpenFilePicker = async () => [window.__opened];
+                window.showSaveFilePicker = async () => { window.__asked++; return window.__newFile; };
+                document.getElementById('menuLoadSlp').click();
+                const s = window.__lucid.state;
+                for (let i = 0; i < 300 && !(s.session && s.views.length === 2); i++) await new Promise(res => setTimeout(res, 50));
+                await new Promise(res => setTimeout(res, 300));
+                const handle = s.slpFileHandle;
+                const original = await window.__bytesOf(window.__opened);
+                const saved = await window.__save();
+                const after = await window.__bytesOf(window.__opened);
+                return {
+                    handle: handle ? handle.name : null, leftOut: s.embeddedImagesLeftOut, asked: window.__asked, ...saved,
+                    same: original.length === after.length && original.every((b, i) => b === after[i]),
+                    shown: await window.__show(1),
+                };
+            });
+            check(r.leftOut === 1 && r.handle === null, 'a video in no session: that file is not the save target', r);
+            check(r.asked === 1 && r.same, 'Save asks where, and it is left as it was', r);
+            check(/Not in this file: 1 video\(s\)/.test(r.status), 'the status says what is not in the new file', r.status);
+            check(eq(r.shown, { north: 100, south: 101 }), 'the project keeps its own images', r.shown);
+            await keep(page, 'window.__newFile', 'no_session.slp', '-');
+            await page.close();
+        }
+
+        console.log('  -- a file that does not open');
+        {
+            const page = await handlePage();
+            const r = await page.evaluate(async () => {
+                const root = await navigator.storage.getDirectory();
+                const broken = await root.getFileHandle('broken.slp', { create: true });
+                const w = await broken.createWritable();
+                await w.write(new Uint8Array(4096).fill(7));
+                await w.close();
+                window.showOpenFilePicker = async () => [broken];
+                document.getElementById('menuLoadSlp').click();
+                for (let i = 0; i < 100 && !/error|failed/i.test(document.getElementById('statusText').textContent); i++) await new Promise(res => setTimeout(res, 50));
+                await new Promise(res => setTimeout(res, 100));
+                return { handle: !!window.__lucid.state.slpFileHandle, status: document.getElementById('statusText').textContent };
+            });
+            check(!r.handle, 'a file that cannot be read is not the save target', r);
+
+            // One that reads, and fails part way through opening, which logs that it did.
+            page.removeAllListeners('console');
+            const partWay = await page.evaluate(async () => {
+                const handle = await window.__onDisk('fails.pkg.slp', 'out_of_order_embedded.pkg.slp');
+                window.showOpenFilePicker = async () => [handle];
+                const RealWorker = window.Worker;
+                window.Worker = function (url, options) {
+                    if (String(url).includes('frame-worker')) throw new Error('no frame worker');
+                    return new RealWorker(url, options);
+                };
+                document.getElementById('menuLoadSlp').click();
+                const status = () => document.getElementById('statusText').textContent;
+                for (let i = 0; i < 200 && !/SLP load error/.test(status()); i++) await new Promise(res => setTimeout(res, 50));
+                await new Promise(res => setTimeout(res, 100));
+                window.Worker = RealWorker;
+                return { handle: !!window.__lucid.state.slpFileHandle, status: status() };
+            });
+            check(/SLP load error/.test(partWay.status) && !partWay.handle, 'nor is one that fails part way through opening', partWay);
+            await page.close();
+        }
+
+        console.log('  -- the download route, and a temporary file in memory');
+        {
+            const page = await handlePage();
+            await page.evaluate(async () => {
+                window.__opened = await window.__onDisk('opened.pkg.slp', 'out_of_order_embedded.pkg.slp');
+                await window.__reopen(window.__opened);
+                window.__lucidSaveScratch = 'memory';
+                window.showSaveFilePicker = undefined;
+                window.__lucid.state.slpFileHandle = null;
+                window.__worker = window.__lucid.state.views[0].decoder._worker;
+            });
+            const before = await page.evaluate(() => window.__showFresh([5, 7, 3]));
+            const downloading = page.waitForEvent('download');
+            await page.evaluate(async () => { (await import('/import-export/save-load.js')).saveProjectSlp(); });
+            const download = await downloading;
+            const to = path.join(savedDir, 'downloaded.slp');
+            await download.saveAs(to);
+            check(/\.pkg\.slp$/.test(download.suggestedFilename()), 'a download keeps SLEAP\'s name for it', download.suggestedFilename());
+            await page.waitForFunction(() => !window.__lucid.state.isSaving);
+            const s = await page.evaluate(() => ({ status: document.getElementById('statusText').textContent, same: window.__lucid.state.views[0].decoder._worker === window.__worker }));
+            check(/^Project saved as SLP/.test(s.status) && s.same, 'with no file handle: downloaded, and the project still reads the file it opened', s);
+            check(eq(await page.evaluate(() => window.__showFresh([5, 7, 3])), before), 'which it goes on showing');
+            await page.setInputFiles('#__pick', to);
+            await page.evaluate(async () => {
+                const { handleLoadSlpFile } = await import('/import-export/slp-import.js');
+                await handleLoadSlpFile(window.__pickedFile());
+                await new Promise(r => setTimeout(r, 100));
+            });
+            check(eq(await page.evaluate(() => window.__showFresh([5, 7, 3])), before), 'the downloaded file, built in memory, has the images');
+            pythonChecks.push(['downloaded', 'out_of_order_embedded.pkg.slp', to, []]);
+            await page.close();
+        }
+
+        console.log('  -- the progress card');
+        {
+            const page = await handlePage();
+            const states = await page.evaluate(async () => {
+                window.__target = await window.__onDisk('t.pkg.slp', 'two_sessions.pkg.slp');
+                await window.__reopen(window.__target);
+                window.__lucid.state.slpFileHandle = window.__target;
+                const seen = [];
+                const text = (id) => { const e = document.getElementById(id); return e && !e.classList.contains('hidden') ? e.textContent : ''; };
+                const observer = new MutationObserver(() => {
+                    const now = text('loadingStatus') + ' | ' + text('loadingSubstatus');
+                    if (seen[seen.length - 1] !== now) seen.push(now);
+                });
+                observer.observe(document.getElementById('loadingOverlay'), { subtree: true, childList: true, characterData: true, attributes: true });
+                await window.__save();
+                observer.disconnect();
+                return seen;
+            });
+            check(states.some(t => /^Writing the file… \| Step 1 of 3/.test(t)), 'the labels are step 1 of 3', states);
+            check(states.some(t => /^Copying images: 6\/6 images… \| Step 2 of 3/.test(t)), 'the images are step 2, counted', states);
+            check(states.some(t => /^Finishing the file… \| Step 3 of 3/.test(t) || /^Writing to disk: .* \| Step 3 of 3/.test(t)), 'and finishing the file step 3', states);
+            await page.close();
+        }
+
+        console.log('  -- the streaming writer');
+        {
+            const page = await handlePage();
+            const r = await page.evaluate(async () => {
+                window.__target = await window.__onDisk('stream.pkg.slp', 'out_of_order_embedded.pkg.slp');
+                await window.__reopen(window.__target);
+                const s = window.__lucid.state;
+                s.slpFileHandle = window.__target;
+                // Saved once, the file has a session saying which camera each video is on.
+                await window.__save();
+                await window.__reopen(window.__target);
+                s.slpFileHandle = window.__target;
+                // A session whose 2D comes from a store, with cameras whose images are embedded.
+                const lazyMod = await import('/loading/sio-lazy-loader.js');
+                const SioLazyLoader = lazyMod.SioLazyLoader || lazyMod.default;
+                const loader = new SioLazyLoader();
+                await loader.openProjectSlp(await window.__target.getFile());
+                s.session.lazyLoader = loader;
+                const shownBefore = await window.__showFresh([5, 7, 3]);
+                let streamed = false;
+                const log = console.log;
+                console.log = (...a) => { if (/streaming writer/.test(String(a[0]))) streamed = true; log(...a); };
+                const saved = await window.__save();
+                console.log = log;
+                const after = await window.__showFresh([5, 7, 3]);
+                return { ...saved, shownBefore, after, streamed };
+            });
+            check(r.streamed, 'a session with a store goes through it', r);
+            check(/^Saved \(/.test(r.status), 'saves through it', r);
+            check(eq(r.after, r.shownBefore), 'and the project goes on showing its images', r);
+            await page.evaluate(() => window.__reopen(window.__target));
+            check(eq(await page.evaluate(() => window.__showFresh([5, 7, 3])), r.shownBefore), 'reopened: the images are in the file');
+            await keep(page, 'window.__target', 'streamed.slp', 'out_of_order_embedded.pkg.slp');
+            await page.close();
+        }
+
+        console.log('  -- Python sleap-io 0.9.5 reads what was saved');
+        const uv = spawnSync('uv', ['--version'], { encoding: 'utf8' });
+        if (uv.status !== 0) {
+            console.log('  (skipped: no uv to run Python with)');
+        } else {
+            for (const [what, source, saved, extra] of pythonChecks) {
+                const sourcePath = source === '-' ? '-' : fixture(source);
+                const run = spawnSync('uv', ['run', '--no-project', '--python', '3.12', '--with', 'sleap-io==0.9.5', '--with', 'h5py', '--with', 'numpy',
+                    'python', '-I', path.join(FIXTURES, 'compare_saved.py'), sourcePath, saved, ...extra], { encoding: 'utf8', timeout: 180000 });
+                let out = null;
+                try { out = JSON.parse(run.stdout.trim().split('\n').pop()); } catch (e) { /* reported below */ }
+                check(out && out.ok, `${what}: opens, with the same images and poses`, out || (run.stderr || '').slice(-600));
+                if (what === 'layout_flat_no_sizes.pkg.slp' && out) check(eq(out.holds, [{ 2: 90, 5: 91, 9: 92 }]), 'a layout Python could not read in the source, it can now', out.holds);
+                if (what === 'no_session.slp' && out) check(eq(out.holds, [{ 1: 100 }, { 1: 101 }]), 'the session\'s two videos', out.holds);
+            }
+        }
+        fs.rmSync(savedDir, { recursive: true, force: true });
     }
 
     console.log('\n9. File ▸ Open above 200 MB');

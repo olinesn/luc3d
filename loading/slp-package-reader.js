@@ -32,12 +32,17 @@
  * @property {number} width - Frame width in pixels
  * @property {number} height - Frame height in pixels
  * @property {number} channels - Number of color channels (1=grayscale, 3=color)
+ * @property {number|null} fps - Frame rate, when the file says
  * @property {number} frameCount - Number of embedded frames
  * @property {number[]} frameNumbers - Mapping from embedded index to display frame index
  * @property {boolean} flat - All images run together in one row of bytes (the JS writer)
  *   instead of a row per frame
  * @property {number[]|null} frameOffsets - For a flat video: where each frame starts,
  *   then the end of the last. Null until read, when the file has no `frame_sizes`.
+ * @property {Object|null} listEntry - The file's video list entry naming this group, for
+ *   a save to say the same again
+ * @property {string|null} sourceVideoJson - The video these images came from, as the file
+ *   stores it
  */
 
 /**
@@ -100,6 +105,14 @@ function imageStartOffsets(bytes, format, count) {
     }
     offsets.push(bytes.length);
     return offsets;
+}
+
+/** The list entry naming one group, or null. */
+function listEntryFor(entries, key) {
+    return entries.find((entry) => {
+        const dataset = entry && entry.backend && entry.backend.dataset;
+        return dataset && String(dataset).replace(/^\/+/, '') === `${key}/video`;
+    }) || null;
 }
 
 export class SLPPackageReader {
@@ -295,6 +308,7 @@ export class SLPPackageReader {
         const keys = root.keys();
         const videos = [];
         const formatId = Number(this._file.get('metadata')?.attrs?.format_id?.value ?? 1);
+        const listEntries = this._videoListEntries();
 
         for (const key of keys) {
             // Match video{N} pattern
@@ -342,10 +356,13 @@ export class SLPPackageReader {
                 width: intAttr(attrs.width) || pixelShape[2] || null,
                 height: intAttr(attrs.height) || pixelShape[1] || null,
                 channels: intAttr(attrs.channels) || pixelShape[3] || null,
+                fps: Number(attrs.fps?.value) || null,
                 frameCount: flat ? stored : videoDataset.shape[0],
                 frameNumbers: frameNumbers,
                 flat: flat,
-                frameOffsets: frameOffsets
+                frameOffsets: frameOffsets,
+                listEntry: listEntryFor(listEntries, key),
+                sourceVideoJson: this._sourceVideoJson(key)
             };
 
             videos.push(info);
@@ -353,6 +370,41 @@ export class SLPPackageReader {
         }
 
         return videos.sort((a, b) => a.idx - b.idx);
+    }
+
+    /**
+     * The entries of the file's video list, or none when it has none it can read.
+     * Only a save wants these, so none of this stops the images opening.
+     * @private
+     */
+    _videoListEntries() {
+        const parsed = [];
+        try {
+            for (const text of this._file.get('videos_json')?.value ?? []) {
+                try { parsed.push(JSON.parse(text)); } catch (e) { parsed.push(null); }
+            }
+        } catch (e) {
+            return [];
+        }
+        return parsed;
+    }
+
+    /**
+     * The JSON a video's group holds about the video its images came from: an attribute,
+     * or a dataset when it is too long for one. Null when there is none.
+     * @private
+     */
+    _sourceVideoJson(key) {
+        try {
+            const group = this._file.get(`/${key}/source_video`);
+            if (!group) return null;
+            const dataset = this._file.get(`/${key}/source_video/json`);
+            const value = dataset ? dataset.value : group.attrs?.json?.value;
+            const text = Array.isArray(value) ? value[0] : value;
+            return typeof text === 'string' ? text : null;
+        } catch (e) {
+            return null;
+        }
     }
 
     /**
@@ -429,6 +481,19 @@ export class SLPPackageReader {
             embeddedIdx: embeddedIdx,
             displayFrame: info.frameNumbers[embeddedIdx] ?? embeddedIdx
         };
+    }
+
+    /**
+     * The dataset holding a video's images, as stored. For uncompressed pixels: a copy
+     * of them keeps their type, which `getFrame`'s bytes do not say.
+     *
+     * @param {string|number} videoKey - Video key or index
+     * @returns {Object} h5wasm Dataset
+     */
+    rawDataset(videoKey) {
+        const info = this.getVideoInfo(videoKey);
+        if (!info) throw new Error(`Video not found: ${videoKey}`);
+        return this._file.get(info.datasetPath);
     }
 
     /**
