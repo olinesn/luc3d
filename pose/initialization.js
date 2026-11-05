@@ -26,6 +26,7 @@ import { createDemoSession } from '../demo-data.js';
 import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js';
 import { installInfoTips } from '../ui/info-tip.js';
 import { installNodeTooltip } from '../ui/node-tooltip.js';
+import { installVideoReadStatus } from '../ui/video-read-status.js';
 import { refreshReadoutTotals } from '../ui/frame-readout.js';
 import { installTimelineShortcuts, setTimelineDisplayMode } from '../ui/timeline-controller.js';
 import { setupPanelTabs, setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js';
@@ -69,6 +70,7 @@ async function init() {
         // re-wire them (and cannot forget to).
         installInfoTips();
         installNodeTooltip();
+        installVideoReadStatus();
         setupEmptyVideoController();
         setupUI();
         setupPanelTabs();

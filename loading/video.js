@@ -10,7 +10,7 @@
 
 import { shouldIgnoreShortcut } from '../ui/keyboard-target.js';
 import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js';
-import { readBlobRange, guardedRangeSource } from './cold-read-guard.js';
+import { readBlobRange, guardedRangeSource, createReadWatch, isWatchedReadFailure, FILE_RECHECK_MS } from './cold-read-guard.js';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -28,6 +28,34 @@ export function videoLog(msg, level) {
             console.log("[video] " + msg);
         }
     }
+}
+
+var videoReadListener = null;
+
+/**
+ * Who to tell when a decoder's file stops being readable (`failing` true), when a
+ * frame or Play runs into that again, and when it can be read again (false).
+ * The app has one (ui/video-read-status.js), for the status bar.
+ * @param {?function(OnDemandVideoDecoder, boolean): void} fn
+ */
+export function setVideoReadListener(fn) {
+    videoReadListener = fn;
+}
+
+function notifyVideoRead(decoder, failing) {
+    if (!videoReadListener) return;
+    try { videoReadListener(decoder, failing); }
+    catch (e) { console.error('[video] read listener failed:', e); }
+}
+
+// mediabunny reads ahead, and rethrows a failed read-ahead nobody is waiting for "so it
+// doesn't get swallowed" (its ReadOrchestrator.runWorker). When a file goes away at the
+// wrong moment that is an uncaught error in the console, for a failure the file's watch
+// has already dealt with. Only those: anything else stays uncaught.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('unhandledrejection', function (ev) {
+        if (isWatchedReadFailure(ev.reason)) ev.preventDefault();
+    });
 }
 
 /** A paused-stepping decode stream with no request for this long is closed (OnDemandVideoDecoder._mbGetFrame). */
@@ -148,6 +176,13 @@ function mediaEvent(el, type, ms) {
 }
 
 /**
+ * How long `_getFrameHTML5` waits for a `<video>` to get to a frame while its file
+ * still reads, asking the file every HTML5_FILE_CHECK_MS (`_whileFileReads`).
+ */
+const HTML5_WAIT_LIMIT_MS = 20000;
+const HTML5_FILE_CHECK_MS = 5000;
+
+/**
  * Whether mp4box's `onReady` info describes a FRAGMENTED MP4, whose samples are
  * listed in the fragments still to come rather than in the moov. `isFragmented`
  * is mp4box's own answer (the moov has an `mvex`); a video track whose duration
@@ -225,6 +260,8 @@ export class OnDemandVideoDecoder {
         this._peekEl = null;     // peekFrame's own <video> (HTML5 path), never the playback one
         this._peekSource = null; // the File / URL _peekEl is loaded with (switchSource changes this.file)
         this._peekLock = null;   // serializes _peekHTML5's seeks of _peekEl
+        this._readWatch = null;  // whether this.file can be read right now (see fileUnreadable)
+        this._playCheck = null;  // interval asking the file while playing (_checkWhilePlaying)
 
         // Source reference for mp4box lazy init
         this._source = null;
@@ -285,6 +322,7 @@ export class OnDemandVideoDecoder {
         });
 
         // Now set the src (triggers loading)
+        this._watchFile(source);
         if (source instanceof Blob || source instanceof File) {
             this.file = source;
             this.sourceType = "file";
@@ -315,6 +353,8 @@ export class OnDemandVideoDecoder {
         this._emitProgress({ phase: 'canplay', ratio: 0 });
         await this._awaitPlayable(metadataPromise, source);
         this._emitProgress({ phase: 'canplay', ratio: 1 });
+        var self = this;
+        el.addEventListener("error", function () { self._onVideoElError(el); });
 
         var width = this._videoEl.videoWidth;
         var height = this._videoEl.videoHeight;
@@ -404,8 +444,130 @@ export class OnDemandVideoDecoder {
             }
         }
 
+        if (this._readWatch) this._readWatch.arm();
+
         videoLog("Video loaded: " + width + "x" + height + " " + this.samples.length + " frames @ " + this._fps.toFixed(2) + "fps (" + (this.fileSize / 1048576).toFixed(1) + " MB)"
             + (this._mbBackend ? " [mediabunny frame-accurate]" : ""));
+    }
+
+    /**
+     * True while this decoder's file can't be read: it was moved or changed, or its
+     * share dropped. A cloud file still downloading only gets here once a read has
+     * failed every retry (cold-read-guard.js `createReadWatch`).
+     *
+     * While it holds, `getFrame` and `peekFrame` give a picture only if they can
+     * give the right one: a decoded frame already held or still readable, and
+     * otherwise null at once, with no second decode and no `<video>` fallback. The
+     * `<video>` cannot help. Measured on a real file moved away: in Chrome 156 a seek
+     * it can't serve hangs, with `seeked` never fired and no error for ~30 s; in
+     * WebKit 26.6 `seeked` fires at once; in Firefox 155 `error` does (code 3). In
+     * all three, drawing it then gives the picture it last showed. A read that works
+     * ends it, by itself: rechecks run every FILE_RECHECK_MS.
+     */
+    get fileUnreadable() {
+        return !!(this._readWatch && this._readWatch.failing);
+    }
+
+    /** Watch `source` (a File) from now on. Not armed yet: reads made while opening it keep all their retries. */
+    _watchFile(source) {
+        this._checkWhilePlaying(false);
+        if (this._readWatch) this._readWatch.stop();
+        var self = this;
+        this._readWatch = source instanceof Blob ? createReadWatch(source, {
+            onChange: function (failing, err) { self._onFileReadChange(failing, err); },
+        }) : null;
+    }
+
+    _onFileReadChange(failing, err) {
+        var name = (this.file && this.file.name) || 'video';
+        if (failing) {
+            videoLog("Cannot read " + name + " (" + (err && err.message) + "): no picture for frames not already decoded", "error");
+        } else {
+            videoLog(name + " can be read again");
+            // Nothing here came from the time it was away, but start clean: from
+            // now on every frame comes from the file.
+            for (var entry of this.cache) {
+                if (entry[1] && typeof entry[1].close === "function") entry[1].close();
+            }
+            this.cache.clear();
+            // Whatever the `<video>`s were left doing, start them clean too: a seek
+            // hanging, given up (_reviveVideoEl), or parked on the old picture with
+            // `currentTime` at the frame asked for, where in WebKit seeking to that
+            // same frame again shows nothing new (measured).
+            this._html5Moved = true;
+            if (this._videoEl) this._videoEl.load();
+            this._releasePeek();
+        }
+        notifyVideoRead(this, failing);
+    }
+
+    /**
+     * A `<video>` that gave up reading stays dead, its seeks unanswered, until it
+     * is loaded again (measured in Chrome 156: after ~30 s of failed reads it fires
+     * `error`, code 2, PIPELINE_ERROR_READ; before that it comes back by itself).
+     * Never draw one: from then on it taints any canvas it touches, for good, and
+     * `new VideoFrame(el)` throws. `load()` cures that too.
+     */
+    _reviveVideoEl() {
+        var el = this._videoEl;
+        if (!el || !el.error) return;
+        this._html5Moved = true;
+        el.load();
+    }
+
+    /**
+     * The playback `<video>` failed: is the file why? If it is gone, the element
+     * comes back with it. If it reads and the element gave up reading (code 2), load
+     * it now. Any other code (a decode error could come straight back on loading)
+     * waits for whoever next needs the element.
+     */
+    _onVideoElError(el) {
+        var watch = this._readWatch;
+        if (el !== this._videoEl || !watch || !watch.armed || !el.error) return;
+        var code = el.error.code, self = this;
+        watch.check().then(function (readable) {
+            if (readable && code === 2 && el === self._videoEl) self._reviveVideoEl();
+        });
+    }
+
+    /**
+     * Wait for `waiting` (a `mediaEvent` of the `<video>`), giving up as soon as the
+     * file doesn't read. On a file that reads a slow seek is only slow (a busy machine,
+     * a share over a VPN), and to give up on it would leave the view blank until the
+     * next step, hence HTML5_WAIT_LIMIT_MS rather than the 5 s it was.
+     */
+    _whileFileReads(waiting) {
+        var watch = this._readWatch;
+        if (!watch) return waiting;
+        return new Promise(function (resolve, reject) {
+            var timer = null, done = false;
+            function finish(fn, value) { done = true; clearTimeout(timer); fn(value); }
+            function askLater() {
+                timer = setTimeout(function () {
+                    watch.check().then(function (readable) {
+                        if (done) return;
+                        if (readable) askLater();
+                        else finish(reject, new Error("its file can't be read"));
+                    });
+                }, HTML5_FILE_CHECK_MS);
+            }
+            waiting.then(function (v) { finish(resolve, v); }, function (e) { finish(reject, e); });
+            askLater();
+        });
+    }
+
+    /**
+     * While playing, ask the file itself every FILE_RECHECK_MS. Nothing else would
+     * tell: a `<video>` whose file is gone plays on from what it has read, with no
+     * event, and then stops short with nothing said (measured in Chrome 156: `error`
+     * only 64 s later).
+     */
+    _checkWhilePlaying(on) {
+        if (this._playCheck) { clearInterval(this._playCheck); this._playCheck = null; }
+        var watch = this._readWatch;
+        if (!on || !watch) return;
+        watch.check();
+        this._playCheck = setInterval(function () { watch.check(); }, FILE_RECHECK_MS);
     }
 
     /**
@@ -450,7 +612,7 @@ export class OnDemandVideoDecoder {
         // parts not downloaded yet as errors or zeros, and every seek into an
         // unvisited part of a video is such a read (see cold-read-guard.js).
         this._mbBackend = typeof Backend.fromRangeSource === 'function'
-            ? await Backend.fromRangeSource(guardedRangeSource(source), name, { cacheSize: this.cacheSize })
+            ? await Backend.fromRangeSource(guardedRangeSource(source, { watch: this._readWatch }), name, { cacheSize: this.cacheSize })
             : await Backend.fromBlob(source, name, { cacheSize: this.cacheSize });
 
         // Adopt mediabunny's authoritative frame count + fps. Keep `this.samples`
@@ -714,7 +876,7 @@ export class OnDemandVideoDecoder {
     async readChunk(offset, size) {
         if (this.sourceType === "file") {
             // cold-read guard: retries a failed read, re-reads zeroed pages (cold-read-guard.js)
-            return (await readBlobRange(this.file, offset, offset + size)).buffer;
+            return (await readBlobRange(this.file, offset, offset + size, this._readWatch)).buffer;
         }
 
         // URL source
@@ -838,6 +1000,7 @@ export class OnDemandVideoDecoder {
                 var chunkHit = await this._decodeBackChunk(frameIndex);
                 if (chunkHit) { this._prefetchBack(frameIndex); return chunkHit; }
             } catch (e) {
+                if (this.fileUnreadable) throw e;
                 videoLog("Back-step chunk failed for frame " + frameIndex + " (" + e.message + "), decoding it alone", "warn");
             }
         }
@@ -867,6 +1030,7 @@ export class OnDemandVideoDecoder {
             }
         } catch (e) {
             this._closeStepStream();
+            if (this.fileUnreadable) throw e;   // a second decode would read the same file
             videoLog("Step cursor failed for frame " + frameIndex + " (" + e.message + "), decoding it alone", "warn");
             return be.getFrame(frameIndex);
         }
@@ -977,7 +1141,7 @@ export class OnDemandVideoDecoder {
 
     _prefetchBack(f) {
         var be = this._mbBackend, n = this._backChunkSize();
-        if (this._backPrefetch || !be || !(n > 1)) return;
+        if (this._backPrefetch || !be || !(n > 1) || this.fileUnreadable) return;
         if (typeof window !== 'undefined' && window.LUCID_STEP_BACK_PREFETCH === 0) return;
         var low = f;
         while (low > 0 && be.cache.has(low - 1) && f - low < n) low--;
@@ -1115,9 +1279,9 @@ export class OnDemandVideoDecoder {
             try {
                 var mbFrame = await this._mbGetFrame(frameIndex);
                 if (mbFrame) return mbFrame;
-                videoLog("Mediabunny returned no frame for " + frameIndex + ", falling back to HTML5", "warn");
+                if (!this.fileUnreadable) videoLog("Mediabunny returned no frame for " + frameIndex + ", falling back to HTML5", "warn");
             } catch (e) {
-                videoLog("Mediabunny decode failed for frame " + frameIndex + ": " + e.message + ", falling back to HTML5", "warn");
+                if (!this.fileUnreadable) videoLog("Mediabunny decode failed for frame " + frameIndex + ": " + e.message + ", falling back to HTML5", "warn");
             } finally {
                 this._mbSeekLock = null;
                 resolveMbLock();
@@ -1132,6 +1296,9 @@ export class OnDemandVideoDecoder {
             this.cache.set(frameIndex, cached);
             return cached;
         }
+
+        // Nothing below can be trusted for this frame while the file can't be read (see fileUnreadable).
+        if (this.fileUnreadable) return null;
 
         // Try WebCodecs path if mp4box is initialized
         if (this._mp4Initialized) {
@@ -1173,10 +1340,10 @@ export class OnDemandVideoDecoder {
                 try { return await scaledBitmap(vf, width); }
                 finally { vf.close(); sample.close(); }
             } catch (e) {
-                videoLog("Preview decode failed for frame " + frameIndex + ": " + e.message + ", trying HTML5", "warn");
+                if (!this.fileUnreadable) videoLog("Preview decode failed for frame " + frameIndex + ": " + e.message + ", trying HTML5", "warn");
             }
         }
-        return this._peekHTML5(frameIndex, width);
+        return this.fileUnreadable ? null : this._peekHTML5(frameIndex, width);
     }
 
     /** peekFrame's `<video>` path: its own element (`_peekEl`), never the playback one. */
@@ -1187,6 +1354,7 @@ export class OnDemandVideoDecoder {
         var release;
         this._peekLock = new Promise(function (r) { release = r; });
         try {
+            if (this.fileUnreadable) return null;
             var el = this._peekEl;
             if (!el) {
                 el = this._peekEl = document.createElement("video");
@@ -1198,18 +1366,23 @@ export class OnDemandVideoDecoder {
                 if (el.src.startsWith("blob:")) URL.revokeObjectURL(el.src);
                 this._peekSource = source;
                 el.src = source instanceof Blob ? URL.createObjectURL(source) : source;
+            } else if (el.error) {
+                el.load();   // gave up while the file was away (_reviveVideoEl)
             }
             if (el.readyState < 1) await mediaEvent(el, "loadedmetadata");
             var t = this.html5SeekTime(frameIndex);
-            if (el.currentTime !== t || el.readyState < 2) {
+            if (el.seeking || el.currentTime !== t || el.readyState < 2) {
                 var seeked = mediaEvent(el, "seeked");
                 el.currentTime = t;
                 await seeked;
             }
             // close() / switchSource() may have run while we waited
-            if (el !== this._peekEl || this._peekSource !== source || el.readyState < 2) return null;
+            if (el !== this._peekEl || this._peekSource !== source || el.readyState < 2 || el.seeking || el.error) return null;
+            if (this._readWatch && !(await this._readWatch.check())) return null;   // as in _getFrameHTML5
             return await scaledBitmap(el, width);
         } catch (e) {
+            // It did not get there in time: if the file is why, say so.
+            if (this._readWatch) await this._readWatch.check();
             return null;
         } finally {
             this._peekLock = null;
@@ -1239,8 +1412,10 @@ export class OnDemandVideoDecoder {
     }
 
     /**
-     * Get a frame using the HTML5 <video> element (always works, slower than
-     * mediabunny; the path for codecs this browser's WebCodecs cannot decode).
+     * Get a frame using the HTML5 <video> element (slower than mediabunny; the
+     * path for codecs this browser's WebCodecs cannot decode). Null when the element
+     * does not get to the frame in time: what it would draw then is the picture it
+     * last showed, and nothing says so (see fileUnreadable).
      */
     async _getFrameHTML5(frameIndex) {
         if (!this._videoEl || !this._videoReady) return null;
@@ -1251,11 +1426,15 @@ export class OnDemandVideoDecoder {
             await this._html5SeekLock;
         }
 
-        var self = this;
         var resolveLock;
         this._html5SeekLock = new Promise(function (r) { resolveLock = r; });
 
         try {
+            if (this.fileUnreadable) return null;   // found out while this one waited its turn
+            var el = this._videoEl;
+            this._reviveVideoEl();
+            if (el.readyState < 1) await this._whileFileReads(mediaEvent(el, "loadedmetadata", HTML5_WAIT_LIMIT_MS));
+
             // Seek to the MIDDLE of the frame's interval, not its start. A seek
             // to exactly i/fps sits on the boundary with frame i-1, and browsers
             // round it either way: measured on barcode clips (verify/seek-probe.html,
@@ -1280,29 +1459,33 @@ export class OnDemandVideoDecoder {
             // in Firefox the +0 pause re-decode drew the frame AFTER the paused
             // one on 1 pause in 10 by skipping the seek (`_html5Moved`).
             var framePeriod = (this._fps > 0) ? (1 / this._fps) : (1 / 30);
-            var currentTime = this._videoEl.currentTime;
-            if (this._html5Moved || Math.abs(currentTime - time) > framePeriod / 2) {
-                var seekPromise = new Promise(function (resolve) {
-                    self._videoEl.addEventListener("seeked", function () { resolve(); }, { once: true });
-                    setTimeout(resolve, 5000);
-                });
-                this._videoEl.currentTime = time;
-                await seekPromise;
+            var currentTime = el.currentTime;
+            if (this._html5Moved || el.seeking || Math.abs(currentTime - time) > framePeriod / 2) {
+                var seeked = mediaEvent(el, "seeked", HTML5_WAIT_LIMIT_MS);
+                el.currentTime = time;
+                await this._whileFileReads(seeked);
                 this._html5Moved = false;
             }
 
             // Ensure the video has renderable data (readyState >= 2 = HAVE_CURRENT_DATA)
-            if (this._videoEl.readyState < 2) {
-                await new Promise(function (resolve) {
-                    self._videoEl.addEventListener("canplay", function () { resolve(); }, { once: true });
-                    setTimeout(resolve, 5000);
-                });
-            }
+            if (el.readyState < 2) await this._whileFileReads(mediaEvent(el, "canplay", HTML5_WAIT_LIMIT_MS));
 
-            this._offCtx.drawImage(this._videoEl, 0, 0);
+            // Getting there is no proof: with the file gone WebKit fires `seeked`
+            // at once and shows the old picture. Nothing else has read this file
+            // when there is no frame-accurate backend, so ask it.
+            if (this._readWatch && !(await this._readWatch.check())) throw new Error("its file can't be read");
+            if (el.error) throw new Error("the video element gave up");   // _reviveVideoEl
+            this._offCtx.drawImage(el, 0, 0);
             var bitmap = await createImageBitmap(this._offCanvas);
             this.addToCache(frameIndex, bitmap);
             return bitmap;
+        } catch (e) {
+            // Its currentTime says the target now and its picture does not (the
+            // next request must seek again). If the file is why, say so.
+            this._html5Moved = true;
+            videoLog("<video> did not get to frame " + frameIndex + " (" + e.message + ")", "warn");
+            if (this._readWatch) await this._readWatch.check();
+            return null;
         } finally {
             this._html5SeekLock = null;
             resolveLock();
@@ -1534,7 +1717,7 @@ export class OnDemandVideoDecoder {
      * Used during native playback to avoid the seek + createImageBitmap overhead.
      */
     drawCurrentFrame(ctx, width, height) {
-        if (this._videoEl && this._videoEl.readyState >= 2) {
+        if (this._videoEl && this._videoEl.readyState >= 2 && !this._videoEl.error) {   // _reviveVideoEl
             ctx.drawImage(this._videoEl, 0, 0, width, height);
             return true;
         }
@@ -1589,6 +1772,7 @@ export class OnDemandVideoDecoder {
         if (this._videoEl) {
             this._html5Moved = true;
             this._videoEl.play().catch(function () {});
+            this._checkWhilePlaying(true);
         }
     }
 
@@ -1596,6 +1780,7 @@ export class OnDemandVideoDecoder {
      * Pause native HTML5 video playback.
      */
     pauseNative() {
+        this._checkWhilePlaying(false);
         if (this._videoEl) {
             this._videoEl.pause();
         }
@@ -1629,6 +1814,7 @@ export class OnDemandVideoDecoder {
         return new Promise(function (resolve) {
             var el = self._videoEl;
             if (!el) return resolve();
+            self._reviveVideoEl();
             var time = frameIndex / self._fps;
             var framePeriod = (self._fps > 0) ? (1 / self._fps) : (1 / 30);
             // Also already there when _getFrameHTML5 parked the element on this
@@ -1686,6 +1872,7 @@ export class OnDemandVideoDecoder {
             this._mbBackend = null;
         }
 
+        this._watchFile(source);
         this._source = source;
         this.file = source;
         this.sourceType = "file";
@@ -1782,11 +1969,15 @@ export class OnDemandVideoDecoder {
             }
         }
 
+        if (this._readWatch) this._readWatch.arm();
+
         videoLog("Source switched: " + (source.name || "file") + " (" + width + "x" + height + ", ~" + totalFrames + " frames)"
             + (this._mbBackend ? " [mediabunny frame-accurate]" : ""));
     }
 
     close() {
+        this._watchFile(null);
+
         // Close all cached frames
         for (var entry of this.cache) {
             if (entry[1] && typeof entry[1].close === "function") {
@@ -1895,6 +2086,8 @@ export class EmbeddedVideoDecoder {
         this.cache = new Map();
         this._pending = new Map();
         this._closed = false;
+        /** A read of the `.slp` has failed: its worker reads nothing more, so frames not held stay blank until the project is opened again (frame-worker.js). */
+        this.fileUnreadable = false;
 
         var info = this._videoInfo;
         var width = info.width || 0;
@@ -1961,6 +2154,10 @@ export class EmbeddedVideoDecoder {
             videoLog("Could not read embedded frame " + embeddedIdx + " of " + data.videoKey + ": " + data.error, "error");
             pending.resolve(null);
             this._pending.delete(embeddedIdx);
+            if (data.failedRead && !this.fileUnreadable) {
+                this.fileUnreadable = true;
+                notifyVideoRead(this, true);
+            }
             return;
         }
 
@@ -2711,6 +2908,7 @@ export class VideoController {
         this._lastSeekPainted = seekNumber;
 
         // Render each frame to its canvas and clear/redraw overlays
+        var unreadable = null;
         for (var i = 0; i < views.length; i++) {
             var view = views[i];
             var videoFrame = frames[i];
@@ -2721,10 +2919,14 @@ export class VideoController {
                 // went off screen: `releaseFrames`) — skip it rather than throw.
                 try { view.ctx.drawImage(videoFrame, 0, 0, view.canvas.width, view.canvas.height); }
                 catch (e) { /* closed bitmap — the view is no longer shown */ }
-            } else if (view.decoder instanceof EmbeddedVideoDecoder && view.ctx && view.canvas) {
-                // A .slp's embedded images cover only some frames. Without this,
-                // the last picture stays up under this frame's poses.
+            } else if (view.ctx && view.canvas && (view.decoder instanceof EmbeddedVideoDecoder
+                    || (view.decoder.samples && frameIndex < view.decoder.samples.length))) {
+                // A frame with no picture to show: a video file that can't be read
+                // (fileUnreadable), or a .slp's embedded images, which cover only
+                // some frames. Without this, the last picture stays up under this
+                // frame's poses.
                 view.ctx.clearRect(0, 0, view.canvas.width, view.canvas.height);
+                if (view.decoder.fileUnreadable) unreadable = view.decoder;
             }
 
             // Clear the overlay canvas for fresh overlay drawing
@@ -2747,6 +2949,20 @@ export class VideoController {
         if (this.callbacks.updateSeekbar) {
             this.callbacks.updateSeekbar(frameIndex);
         }
+
+        // Said again each time: another message may have replaced it, and the blank picture needs its reason.
+        if (unreadable) notifyVideoRead(unreadable, true);
+    }
+
+    /**
+     * Decode and draw the current frame again, once anything in flight is done (a
+     * video file that could not be read is back). Never while playing, and never
+     * in place of a frame the user has asked for since.
+     */
+    redrawCurrentFrame() {
+        if (this.state.isPlaying || this._scrubTarget !== null) return;
+        this._scrubTarget = this.state.currentFrame;
+        if (!this._isSeeking) this._processScrub();
     }
 
     /**
@@ -3036,6 +3252,12 @@ export class VideoController {
      */
     startPlayback() {
         if (this.state.isPlaying) return;
+
+        // Each shown view plays its own <video>, and one whose file can't be read
+        // only hangs: it would hold the others up with nothing moving. Its file
+        // coming back, or taking it off screen, lets this start.
+        var gone = this._shownViews().find(function (v) { return v.decoder.fileUnreadable; });
+        if (gone) { notifyVideoRead(gone.decoder, true); return; }
 
         this.state.isPlaying = true;
         var self = this;

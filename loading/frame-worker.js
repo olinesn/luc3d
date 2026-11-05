@@ -10,11 +10,29 @@ import { SLPPackageReader } from './slp-package-reader.js';
 
 let h5wasmReady = false;
 let reader = null;
+let failedRead = null;   // the first read of the file that threw (see the init below)
 
 // Initialize h5wasm
 (async () => {
     try {
         await h5wasm.ready;
+        // Every read of the file passes through here. When one throws (the file was
+        // moved, a share dropped) HDF5 stops mid-call and does not recover: measured,
+        // every later read "succeeds" with all zeros and no error, also once the file
+        // is back. Raw pixels then show as a black picture, and an encoded image fails
+        // to decode with nothing to say why. So after one, nothing more is read on this
+        // worker and every answer is that error. Its images are blank until the project
+        // is opened again. The h5wasm `cold-read` patch sits below this: a hole it
+        // repairs never gets here, a re-read of its that throws does.
+        const fsRead = h5wasm.FS.read;
+        h5wasm.FS.read = function () {
+            try {
+                return fsRead.apply(this, arguments);
+            } catch (e) {
+                failedRead = failedRead || e;
+                throw e;
+            }
+        };
         h5wasmReady = true;
         reader = new SLPPackageReader({ FS: h5wasm.FS, h5wasm: h5wasm });
         postMessage({ type: 'ready' });
@@ -29,6 +47,17 @@ onmessage = async function(e) {
 
     if (!h5wasmReady) {
         postMessage({ type: 'error', error: 'h5wasm not ready' });
+        return;
+    }
+
+    if (failedRead) {
+        if (type === 'getFrame') {
+            postMessage({ type: 'frame', videoKey: data.videoKey, embeddedIdx: data.embeddedIdx, error: failedRead.message, failedRead: true });
+        } else if (type === 'close') {
+            postMessage({ type: 'closed' });
+        } else {
+            postMessage({ type: 'error', error: failedRead.message });
+        }
         return;
     }
 
@@ -134,7 +163,7 @@ function handleGetFrame(videoKey, embeddedIdx) {
         result = reader.getFrame(videoKey, embeddedIdx);
     } catch (err) {
         // Answer the request: whoever asked for this frame is waiting for it.
-        postMessage({ type: 'frame', videoKey, embeddedIdx, error: err.message });
+        postMessage({ type: 'frame', videoKey, embeddedIdx, error: err.message, failedRead: !!failedRead });
         return;
     }
 
