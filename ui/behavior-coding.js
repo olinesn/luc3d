@@ -41,8 +41,8 @@ export function behaviorUi() {
 }
 
 // ----------------------------------------------------------------------------
-// Repaint bus: the panel, the timeline rows, the overlays and the mode bar
-// each register one repainter; requests within a frame coalesce.
+// Repaint bus: the panel, the timeline rows, the overlays, the mode bar and the
+// bouts strip each register one repainter; requests within a frame coalesce.
 // ----------------------------------------------------------------------------
 
 var _repainters = [];

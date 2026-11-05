@@ -877,8 +877,9 @@ nothing is wrong is a warning nobody reads.
   DIFFERENT-shaped skeleton is not re-shaped by this edit and goes in `others`,
   so the dialog can say it exists rather than leaving the totals quietly short.
 - `countSkeletonEditImpact(sessions)` → the tally: `userInstances`,
-  `predictedInstances`, `instances` (an eager session's `outsideFrames` poses
-  included: the edit re-shapes them too), `reprojectedInstances`, `groups`,
+  `predictedInstances`, `instances` (an eager session's `outsideFrames.frames` poses
+  included: the edit re-shapes them too; its `otherSkeletonFrames` are on another
+  skeleton, so no), `reprojectedInstances`, `groups`,
   `keypoints3d`, the lazy fields above, and `perSession` — the same record once
   per session. Every total is a FOLD of `perSession`, so the dialog's by-session
   rows and its headline cannot be two different arithmetics.
@@ -1539,9 +1540,12 @@ session graph that holds them.
   - **`fileProvenance`** — the provenance of the `.slp` it was loaded from,
     without LUC3D's own keys (null when none); in memory only, written back on
     save by `import-export/slp-provenance.js`.
-  - **`outsideFrames`** — eager loads only: the file's poses on a video no session
-    names (null when none). Not shown; written back on save, and re-shaped by
-    `propagateNodeAdded`/`propagateNodeRemoved` (`import-export/outside-frames.js`).
+  - **`outsideFrames`** — eager loads only: the file's poses this session does not
+    show (null when none). `frames`, on a video no session names, are re-shaped by
+    `propagateNodeAdded`/`propagateNodeRemoved`. `otherSkeletonFrames`, on another
+    skeleton on any video, are the reader's own sleap-io.js instances and no edit
+    touches them, but `renameCameraInAllData` carries `videos[].camera` along. A save
+    writes both back (`import-export/outside-frames.js`).
   - **`keptSuggestions`** — eager loads only: the file's suggestions, each with the
     camera whose video it is on (null when none). Not shown; written back on save
     (`import-export/kept-suggestions.js`). `renameCameraInAllData` renames their camera.
@@ -2725,6 +2729,9 @@ half of them present), or when that middle jumps more than `BROKEN_STEP_BL`
 (0.5) BL and faster than `BROKEN_SPEED_BL_S` (20 BL/s) from the last frame that
 had one (not across a gap over 1 s); around a jump it skips every frame a
 central-difference speed could span across it, so no speed straddles it. The
+tail past its base (`body.defaultExcluded`) is never judged, even when the
+features use it: a healthy tail tip swings past the limit, and judging it
+skipped 41% of a real recording's animal-frames. The
 features skip masked frames (`sliceChunkData`'s `skip`). On four real
 recordings: 0.8–1.7% of tracked animal-frames, and most of the 100%-score
 locomotion bouts (tracking errors) go. `POSE_CHECK_VERSION` is in every run's
@@ -2801,8 +2808,11 @@ frames (not the gaps it bridged) number at least `minFrames`, so scattered
 one-frame detections never make a bout; a bout scores the mean of its finite
 frames; a point behavior keeps its peak frame.
 `secondsToFrames`. The classifiers' evaluation: `framePrf(scores, truth,
-threshold)` (the decision `scoresToBouts` makes; unscored = not detected),
-`prCurve(scores, truth, steps)` (P/R/F1 at thresholds 0…1 and the best F1),
+threshold, weights)` (the decision `scoresToBouts` makes; unscored = not
+detected; `weights` = the frames one sampled frame of each class stands for,
+[absent, present], so P/R/F1 read as on every frame while the counts stay the
+frames given), `prCurve(scores, truth, steps, weights)` (P/R/F1 at thresholds
+0…1 and the best F1),
 `boutPrf(predicted, truth)` (a predicted bout is right when it overlaps a true
 one, a true one found when a predicted one overlaps it), and
 `exclusiveScores(members)` (an exclusive group's per-frame choice: only the
@@ -3203,7 +3213,10 @@ a rare class, raw = binned, files, feature lists).
 end to end, inline). Classes per series (actor, target; a mutual pair in name
 order): the behavior's own labels plus "not" where an exclusive peer is present
 and its own labels say nothing (`labelClasses`); `labelCounts` and the gate
-(`gateProblems`: `GATE_FRAMES` 20 and `GATE_BOUTS` 2 per class). Samples are the
+(`gateProblems`: `GATE_FRAMES` 20 and `GATE_BOUTS` 2 per class);
+`labelledWithoutNot` names who is labelled present in a session with no "not"
+frame of their own there (their rows meet "not" only on other animals, so the
+classifier would learn the animal, not the behavior). Samples are the
 labelled frames where the animal (and target) have at least half the used nodes
 and are not skipped as broken tracking; a mutual pair gives a row in each
 direction. Over the cap (`rowCap`: `MAX_TRAINING_ROWS` 40,000 and rows × features
@@ -3224,7 +3237,11 @@ animal (pair), else 5 contiguous time blocks whose training leaves out the rows
 within the features' reach (`featurePadFrames`) — never random frames. Pooled
 out-of-fold scores give frame P/R/F1, a PR curve and bout P/R/F1 after the
 behavior's post-processing (`evaluate`; a sampled row's score is held to the
-next tested frame of its interval); they are kept (`cv.oof`) so `evaluateAt`
+next tested frame of its interval). Frame P/R/F1 and the curve weigh each class
+by the labelled frames its rows stand for (`pickSamples`' `standFor`); without
+that, a false alarm on a sampled "not" row counts once for the several frames it
+stands for (0.95 shown, 0.72 measured on every frame of a real recording). They
+are kept (`cv.oof`, with its `weights`) so `evaluateAt`
 recomputes them at another threshold or durations without retraining. The
 model: `{behaviorId, hash, features, forest, importance, params, versions,
 mode, nodes, body, training, cv, labelPrint}` — in memory only (the registry:
@@ -3246,7 +3263,7 @@ first). `topFeatures`, `trainingRowsComputed` (rows computed, not cached).
 `TRAIN_CHUNK_FRAMES`, `PREDICT_CHUNK_FRAMES`, `MAX_FOLDS`, `onModelsChange`,
 `setBehaviorModel`, `behaviorModelOf`, `behaviorModels`, `removeBehaviorModel`,
 `resetBehaviorModels`, `modelHashOf`, `labelClasses`, `labelCounts`,
-`gateProblems`, `trainingLabelPrint`, `noteLabelsChanged`, `labelPrintOf`,
+`gateProblems`, `labelledWithoutNot`, `trainingLabelPrint`, `noteLabelsChanged`, `labelPrintOf`,
 `cachedRowCount`, `rowCap`, `planFolds`, `trainingRowsComputed`,
 `trainBehaviorClassifiers`, `trainBehaviorClassifier`, `topFeatures`,
 `evaluateAt`, `modelProblems`, `predictModels`, `predictModelsAtFrame`,
@@ -5621,7 +5638,7 @@ Every static checkbox in the panel uses the `.toggle-switch` markup.
 
 ---
 
-**Behavior labels.** `updateInfoPanel` also calls `refreshBehaviorPanel()` (ui/behavior-panel.js), which skips itself while the Behavior tab is hidden.
+**Behavior labels.** `updateInfoPanel` also calls `refreshBehaviorPanel()` (ui/behavior-panel.js), which skips itself while the Behavior tab is hidden, and first of all `refreshBehaviorStrip()` (ui/behavior-strip.js), collapsed panel or not: a load does not notify, so this is how a reopened file's labels reach the strip.
 
 ### ui/interaction.js
 
@@ -8829,7 +8846,9 @@ hovering for the tooltip.
 (`mm:ss`, `h:mm:ss` from an hour up, rounded before splitting);
 `formatDurationLabel(seconds, decimals)` (the end tick's label: rounded to the
 millisecond like `formatTimestamp`, then TRUNCATED, so it is a prefix of the
-readout's total); `TICK_STEPS` and the spacing constants
+readout's total); `chooseTickSteps(pxPerSec, frameSec, labelPx)` and
+`stepDecimals(step)` (the step rule below, shared with the bouts strip's ruler);
+`TICK_STEPS` and the spacing constants
 (`MIN_LABEL_SPACING_PX`, `LABEL_SPACING_WIDTHS`, `MIN_MINOR_SPACING_PX`,
 `MAX_MINOR_PER_MAJOR`, `DEFAULT_CHAR_PX`); the DOM half,
 `installSeekbarTicks(layerEl, {getTotalFrames, getFps})` and
@@ -8874,7 +8893,7 @@ in Node).
 
 **Imported by.** `ui/ui-wiring.js` (installed in the seekbar-scrubbing IIFE in
 `setupUI`; refreshed by `updateSeekbarVisual`), `ui/frame-readout.js`
-(`refreshSeekbarTicks`).
+(`refreshSeekbarTicks`), `ui/behavior-strip-model.js` (the step rule and the labels).
 
 **Coverage.** `tests/test-seekbar-ticks.mjs` (label format and the step choice
 over a grid of frame rates × durations × widths, including the end tick and
@@ -9096,6 +9115,8 @@ multi-video docking layout.
   `hideLoading`, `quickSave`, `markDirty`.
 - `../import-export/kept-suggestions.js` — `moveKeptSuggestions` (a moved video's
   suggestions go with it).
+- `../import-export/outside-frames.js` — `moveKeptCameraPoses` (a moved video's
+  poses on another skeleton go with it).
 - `./video-filters.js` — the `CONTRAST_*` / `BRIGHTNESS_*` / `ROTATION_*`
   bounds, `clampContrast` / `clampBrightness` / `clampRotation` /
   `clampRotationSetting`, `buildVideoFilter`, and the three per-session
@@ -10257,6 +10278,14 @@ selection, or a scroll of the visible window (including one `setCurrentFrame`
 makes following a frame out of a zoomed window). Painting it per step hit
 Chrome's 2D-canvas GPU backpressure and capped held-arrow stepping (~19 vs 33
 frames/s). `opts.playback` is still accepted and changes nothing.
+The one frame-dependent paint is a running behavior state's bar (a `live`
+segment, drawn to `_currentFrame`): a new frame — `setCurrentFrame`, or a
+click or touch on the canvas — goes through `_showCurrentFrame`, which redraws
+only when `_liveBarsMoved` (the bars the last redraw drew, `_liveDrawn`, now
+cover other DEVICE pixels) and never while the container is `.collapsed`
+(opening it resizes, which redraws). Zoomed out on an hour that is a redraw
+every second or two of playback; it used to be every frame, rows rebuilt,
+collapsed or not (8 views: about 43 instead of 60 fps).
 
 `setFrameModified` asks for a repaint (`_requestRedraw`: coalesced to one
 `requestAnimationFrame`, synchronous without rAF) when the flag actually
@@ -10453,7 +10482,7 @@ the no-data placeholder.
 
 ---
 
-**Behavior labels.** A synthetic "Behavior" row group (`BEHAVIOR_GROUP_NAME`) after the mode's rows — or the group a row names (`group`: "States", keypoint-MoSeq's syllables) — from the `behaviorRows` constructor option / `setBehaviorRowsProvider(fn)` (ui/behavior-timeline.js): rows tagged `_isBehavior`, hidden with their identity, drawn per segment color and lane (`_drawBehaviorSegments`; a segment's optional `band: [from, to]` draws it over that fraction of its lane's height — predicted bouts sit in a band under the labels), outside the per-camera row cap. `refreshBehaviorRows()` swaps their segments without walking frames (full `refreshTracks` only when which rows show changes — by animal and group). `onRangeSelect(start, end, {animal})` now also names the behavior row a Shift+drag began on (`_rowAtY`).
+**Behavior labels.** A synthetic "Behavior" row group (`BEHAVIOR_GROUP_NAME`) after the mode's rows — or the group a row names (`group`: "States", keypoint-MoSeq's syllables) — from the `behaviorRows` constructor option / `setBehaviorRowsProvider(fn)` (ui/behavior-timeline.js): rows tagged `_isBehavior`, hidden with their identity, drawn per segment color and lane (`_drawBehaviorSegments`; a segment's optional `band: [from, to]` draws it over that fraction of its lane's height — predicted bouts sit in a band under the labels), outside the per-camera row cap. `refreshBehaviorRows()` swaps their segments without walking frames (full `refreshTracks` only when which rows show changes — by animal and group). A segment with `live: true` (a running state) is drawn from its start to the playhead whatever its `end` (`_liveExtent`; `_findSnapFrame` too), see "The playhead is an element" above; `tests/e2e/behavior-running-timeline.mjs` counts the redraws. `onRangeSelect(start, end, {animal})` now also names the behavior row a Shift+drag began on (`_rowAtY`).
 
 ### ui/timeline-controller.js
 
@@ -11719,7 +11748,7 @@ so a hidden entity stays hidden under its new name.
 
 ---
 
-**Behavior labels.** Behavior labels: `setupMenus` calls `setupBehaviorUi({closeMenus, navigate, switchSession})` (ui/behavior-panel.js; `switchSession` lets the Train Classifiers dialog open a session left out of training); `updateSeekbarVisual` calls `updateBehaviorFrame`; the toolbar's Behavior menu is a `wireActionMenu` (`behaviorDropdown`: the button / All frames → `detectAllFrames` (each behavior with its classifier when it has one, else its detector), This frame → `detectThisFrame`, Settings… → `showBehaviorRulesModal`); Rename Identity calls `renameAnimal`, `renamePredictedAnimal` and `renameStateAnimal` next to `renameHiddenIdentity`; Propagate Tracks → IDs asks first on a labelled session (`confirmRetrackWithBehaviorLabels`); Hot Keys help appends this project's ethogram keys.
+**Behavior labels.** Behavior labels: `setupMenus` calls `setupBehaviorUi({closeMenus, navigate, switchSession, seekKeepingPlayback, pausePlayback})` (ui/behavior-panel.js; `switchSession` lets the Train Classifiers dialog open a session left out of training; `seekKeepingPlayback(frame)` is one click on the seekbar's scale, leaving the video playing or paused, and `pausePlayback` is for the bouts strip's Shift+drag); the FPS box refreshes the bouts strip (`refreshBehaviorStrip`); `updateSeekbarVisual` calls `updateBehaviorFrame`; the toolbar's Behavior menu is a `wireActionMenu` (`behaviorDropdown`: the button / All frames → `detectAllFrames` (each behavior with its classifier when it has one, else its detector), This frame → `detectThisFrame`, Settings… → `showBehaviorRulesModal`); Rename Identity calls `renameAnimal`, `renamePredictedAnimal` and `renameStateAnimal` next to `renameHiddenIdentity`; Propagate Tracks → IDs asks first on a labelled session (`confirmRetrackWithBehaviorLabels`); Hot Keys help appends this project's ethogram keys.
 
 ### ui/viewport3d.js
 
@@ -12655,7 +12684,7 @@ records), `./id-switch-highlight.js` (`idSwitchBoxNodeMask`),
 `#tbBehaviorMode` — lit while on —, `Mod+Shift+L` = catalog
 `behaviorMode`); leaving closes running states at the playhead. Excludes
 Defining Plane Mode both ways. A capture-phase keydown listener (only while
-on, only outside text fields and dialogs) takes: behavior letters (Shift+letter
+on, only outside text fields, dialogs and the range menu) takes: behavior letters (Shift+letter
 = label the armed range "not"; without a range Shift+letter is left to the
 catalog), `1`–`9` (focal animal or pending target, instead of assigning an
 identity), `[` `]` (armed range; Option/AltGr allowed), `,` `.` (adjacent
@@ -12680,7 +12709,7 @@ wiring. Its three `<details>` sections are static in index.html (folds
 browser-local via `persistSectionStates`, key `lucid.behaviorSections`); the
 bodies are rendered here: Coding (animals, behavior buttons that code at the
 playhead with or without the mode, running states, armed range, target
-question, timeline behavior, Undo, Mark reviewed…, On video), Bouts
+question, timeline behavior, Undo, Mark reviewed…, On video, Bouts strip), Bouts
 (filterable list, capped at 500 rows; a click lands
 `BOUT_LEAD_IN_SECONDS` early; set start/end to the playhead, behavior,
 target, note, delete), Predictions (the detectors' bouts to review: filters,
@@ -12693,7 +12722,8 @@ undo step; a stale banner says why, with Detect again; the This frame readout,
 each condition against its threshold, "tracking broken here: skipped" when the
 frame is skipped for that animal; a classifier's row shows its score against its
 threshold), Classifiers (each behavior's labelled bouts present / "not" against
-the gate, its classifier — trained, imported, or its detector — and the
+the gate, "needs more" with who in its tooltip also when someone is labelled
+present with no "not" frames, its classifier — trained, imported, or its detector — and the
 cross-validated F1 on frames · bouts; Train… (`ui/behavior-train-modal.js`),
 Predict all frames, This frame, All sessions, Export…, Import…; the active-learning queue:
 Teach <behavior>, Next uncertain ▸, Next disagreement ▸, and the stretch shown
@@ -12711,14 +12741,15 @@ catalog handler, wires detection (`setupBehaviorDetection`) and states
 (`setupBehaviorStates`; a `{states}` repaint refreshes the tab), and makes every label edit `markDirty()` and repaint
 (predictions changes and the This frame readout repaint too, without marking dirty). The
 Summary's mean bout is `boutFrames / bouts`.
-`updateBehaviorFrame` (every frame, from `updateSeekbarVisual`) keeps the save
+`updateBehaviorFrame` (every frame, from `updateSeekbarVisual`) moves the bouts
+strip (`updateBehaviorStripFrame`), keeps the save
 cursor, grows running states, lights the buttons, and closes the running
 states of a session just left (so `switchSession` needs no hook).
 
 **Exports.** `refreshBehaviorPanel`, `updateBehaviorFrame`, `setupBehaviorUi`.
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-mode.js`,
-`./behavior-ethogram-modal.js`, `./behavior-io-modal.js`, `./behavior-timeline.js`,
+`./behavior-ethogram-modal.js`, `./behavior-io-modal.js`, `./behavior-timeline.js`, `./behavior-strip.js`,
 `./behavior-detect.js`, `./behavior-rules-modal.js`, `./behavior-confirm.js`,
 `./info-tip.js`, `./plane-definition.js` (`ICON_INFO`),
 `./panel-visibility.js`, `./section-state.js`, `./settings.js`,
@@ -12737,7 +12768,10 @@ in a synthetic "Behavior" group, showing the selected behavior or every
 behavior with bouts or predictions as stacked lanes (at most 5; a mutual bout on both
 animals' rows); present in the behavior's
 color, "not" as faint gray (`ABSENT_COLOR`), a running state growing to the
-playhead; PREDICTED bouts (pose/behavior-predictions.js) in a band under the
+playhead (a `live` segment: the Timeline draws it to its own playhead and
+redraws for it only when it grows a device pixel, so the repainter here
+ignores a frame-only `requestBehaviorRepaint` — `tests/e2e/behavior-running-timeline.mjs`);
+PREDICTED bouts (pose/behavior-predictions.js) in a band under the
 lane's labels (`PREDICTION_BAND`; the labels then take `LABEL_BAND`), alpha
 following the bout's score in steps of 0.05, fainter while stale (for a
 classifier's run also when its training labels changed or its model was
@@ -12747,15 +12781,78 @@ bouts or states.
 `onTimelineRangeSelect` is the timeline's `onRangeSelect`: with an ethogram
 and animals, a menu above the selection labels the range for the animal whose
 row the drag began on (Shift-click = "not"), arms it as the `[` `]` range, or
-clears it; otherwise it reports the range as before.
+clears it; otherwise it reports the range as before. The bouts strip
+(`ui/behavior-strip.js`) opens the same menu, passing `{anchor: {x, top}, onClose}`
+to place it over the strip and take its selection away with it.
 
 **Exports.** `ABSENT_COLOR`, `behaviorTimelineRows`, `onTimelineRangeSelect`.
 
 **Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js`
 (`detectionEnv`, `detectionFps`), `./behavior-states.js` (`stateTimelineRows`), `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
 `../pose/behavior-predictions.js`, `../import-export/save-load.js`. **Imported by** `pose/initialization.js`
-(`setupTimeline`), `ui/behavior-panel.js`. **Tests.**
-`tests/e2e/behavior-labelling.mjs` §1, §5, `tests/e2e/behavior-kpms-roundtrip.mjs` §2.
+(`setupTimeline`), `ui/behavior-panel.js`, `ui/behavior-strip.js`. **Tests.**
+`tests/e2e/behavior-labelling.mjs` §1, §5, `tests/e2e/behavior-kpms-roundtrip.mjs` §2,
+`tests/e2e/behavior-strip.mjs` §7 (the menu from the strip, and the Timeline's own).
+
+### ui/behavior-strip.js
+
+**Purpose.** The bouts strip: a slim, zoomed-in view of the labels around the
+playhead, under the camera view and the Timeline's resize handle and above the
+Timeline, so someone labelling can read the nearby bouts at a glance. Lined up with
+the seekbar (the CSS variables `--behavior-strip-left` and `--behavior-strip-width`,
+set from a `ResizeObserver` on `#seekbar`): the lane labels take the width of the
+frame readout and transport buttons, the zoom and × that of the FPS pill and the buttons.
+Shows with an ethogram and the user's choice on: always in Label Behaviors mode,
+outside it once the session has labels (`stripWanted`). A click seeks
+(`seekKeepingPlayback`: the video stays playing or paused); Shift+drag pauses, then
+opens the Timeline's range menu (`onTimelineRangeSelect`) for the lane's animal;
+wheel zooms, Shift+wheel scrolls lanes past `MAX_VISIBLE_LANES`, and picking an animal
+brings its lanes into view (`revealFocal`). The hover line and tooltip name the frame a
+click lands on and the bout under the pointer. The range armed with `[` `]` shows too.
+Labels only: predictions and states stay on the Timeline.
+
+**Playback cost.** Bars and ticks are drawn on hidden "film" canvases
+(`stripFilm`: a window each side of the one on show), redrawn once per window of
+playback and on a label, ethogram, zoom or fps change. The per-frame call copies the
+slice under the window to the two canvases on screen (`blit`), plus a rectangle per
+running state or range; nothing when the film has not moved by a whole device pixel.
+A CSS transform per frame looks cheaper and is not: on this page it costs a full
+Layerize, about 1 ms a frame, however small the element, against next to nothing for
+the copy. Timing: `tests/e2e/_bench-behavior-strip.mjs`.
+
+**Browser-local.** `localStorage` `lucid.behaviorStrip` (`'0'` = off) and
+`lucid.behaviorStripWindow` (seconds each side), read in try/catch; a failed write
+holds for the session. Never in the `.slp`.
+
+**Exports.** `setupBehaviorStrip({seek, pause})`, `refreshBehaviorStrip`,
+`updateBehaviorStripFrame(frame)`, `behaviorStripOn`, `setBehaviorStripOn`.
+
+**Imports.** `./app-state.js`, `./behavior-coding.js`, `./behavior-detect.js` (`detectionFps`),
+`./behavior-strip-model.js`, `./behavior-timeline.js` (`ABSENT_COLOR`, `onTimelineRangeSelect`), `./info-tip.js`,
+`./plane-definition.js` (`ICON_INFO`), `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
+`../import-export/save-load.js`. **Imported by** `ui/behavior-panel.js`, `ui/info-panel.js`, `ui/ui-wiring.js`.
+**Tests.** `tests/e2e/behavior-strip.mjs`.
+
+### ui/behavior-strip-model.js
+
+**Purpose.** The pure half of the bouts strip. `stripLanes` builds one lane per animal
+and behavior from `listBouts` and `runningStates` alone, never from frames: a mutual
+bout in both animals' lanes, a directed one in the actor's, known animals first, the
+ethogram's order within an animal, "not" labels under present bouts in paint order.
+`stripWanted` says whether it shows. The zoom is `STRIP_ZOOM_STEPS` (seconds each
+side; default `DEFAULT_HALF_SECONDS`, ±5). The rest is geometry: every frame has a
+slot `pxPerFrame` wide, with the playhead in the middle of its frame's slot and of the
+strip (`stripScale`, `frameAtX`, `xOfFrame`); the film and its window (`stripFilm`,
+`filmHolds`, `filmSourceX` in whole device pixels); what is on the film (`filmBars`,
+merging bars that touch once zoomed past a pixel a frame; `filmRect`, `filmOutside`,
+`filmTicks`, `runningBarWidth`); and the hover text (`boutAt`, `boutText`, `stripHoverText`).
+
+**Exports.** The functions above, `normalizeHalfSeconds`, `zoomedHalfSeconds`, `formatStripWindow`, and
+the constants `STRIP_ZOOM_STEPS`, `DEFAULT_HALF_SECONDS`, `LANE_HEIGHT_PX`, `RULER_HEIGHT_PX`,
+`MAX_VISIBLE_LANES`, `MIN_BAR_PX`, `POINT_BAR_PX`.
+
+**Imports.** `./seekbar-ticks.js`, `./seekbar-tooltip.js`, `./frame-readout.js`, all free of the DOM,
+so it runs in Node. **Imported by** `ui/behavior-strip.js`. **Tests.** `tests/test-behavior-strip.mjs`.
 
 ### ui/behavior-ethogram-modal.js
 
@@ -12771,7 +12868,9 @@ also takes a BORIS project's ethogram through `import-export/behavior-io.js`,
 exclusions as groups where they form cliques; files read through
 `readBlobArrayBuffer`). Mark
 Range Reviewed turns unlabelled frames of a range into "not" labels for the
-chosen animals and behaviors. Both close on Esc; one scroller (the modal).
+chosen animals and behaviors, with every animal ticked to start (the selected
+animal alone left the animal with the labels unreviewed, with no sign of it).
+Both close on Esc; one scroller (the modal).
 
 **Exports.** `showEthogramModal`, `showMarkReviewedModal`.
 
@@ -12779,7 +12878,7 @@ chosen animals and behaviors. Both close on Esc; one scroller (the modal).
 `../pose/behavior-ethogram.js`, `../pose/behavior-labels.js`,
 `../import-export/behavior-io.js`, `../import-export/save-load.js`,
 `../loading/cold-read-guard.js`. **Imported by** `ui/behavior-panel.js`.
-**Tests.** `tests/e2e/behavior-labelling.mjs` §4, `tests/e2e/behavior-import-export.mjs` §6.
+**Tests.** `tests/e2e/behavior-labelling.mjs` §4, §9, `tests/e2e/behavior-import-export.mjs` §6.
 
 ### ui/behavior-io-modal.js
 
@@ -12883,7 +12982,9 @@ save-load are safe. **Imported by** `ui/behavior-panel.js`, `ui/behavior-coding.
 ### ui/behavior-train.js
 
 **Purpose.** Behavior classifiers in the app. `classifierStatus()`: per behavior
-its label counts over the project, what the gate still needs, its model.
+its label counts over the project, what the gate still needs, who is labelled
+present with no "not" frames (`unreviewed`, the session named when there are
+several), its model.
 `trainClassifiers(ids)`: trains on every session (the active one from the
 cached context, the others built one at a time — `getCtx`; a lazy project's
 other sessions from their cached rows, or named as left out) behind a progress
@@ -12924,8 +13025,10 @@ next training can read its poses.
 
 **Purpose.** Behavior ▸ Train Classifiers…: a table of every behavior with its
 labelled frames · bouts per class against the gate (ready ones ticked) and its
-classifier; Train trains the ticked ones; a card per classifier says how it was
-trained and cross-validated (scheme and folds, frames it never saw, sessions
+classifier, with a warning row naming who is labelled present with no "not"
+frames; Train trains the ticked ones; a card per classifier says how it was
+trained and cross-validated (scheme and folds, frames it never saw, that those
+are a sample when they are, sessions
 left out), shows frame and bout precision / recall / F1, the precision–recall
 curve with the current threshold as a dot, the threshold slider and shortest
 bout / gap inputs (live numbers from `evaluateAt` on input, applied with
@@ -12940,7 +13043,7 @@ all…; Esc or Close leave; one scroller (the dialog). Repaints on
 **Imports.** `./app-state.js`, `./behavior-train.js`, `./behavior-detect.js`,
 `./info-tip.js`, `./plane-definition.js` (`ICON_INFO`), `../pose/behavior-ethogram.js`,
 `../pose/behavior-classifier.js`, `../import-export/save-load.js`. **Imported by**
-`ui/behavior-panel.js`. **Tests.** `tests/e2e/behavior-classifier.mjs` §1, §3.
+`ui/behavior-panel.js`. **Tests.** `tests/e2e/behavior-classifier.mjs` §1, §3, §9.
 
 ### ui/behavior-rules-modal.js
 
@@ -13223,6 +13326,39 @@ the wording (`LUCID local patch (luc3d newer-format)`), and
 
 **Tests.** `tests/test-slp-format-check.mjs`, `tests/e2e/slp-newer-format.mjs`.
 
+### loading/recording-folder.js
+
+**Purpose.** Remember the folder a recording was opened from, so File ▸ Save
+opens there. A folder picked with `<input webkitdirectory>` gives File objects
+only, never the folder, so the session folder loaders pick with
+`showDirectoryPicker` when the browser has it and keep the handle on the
+session (`session._recordingFolder`, in memory only, never written to the
+`.slp`). Firefox, Safari, Brave with the File System Access API off and
+Playwright's headless shell have no `showDirectoryPicker`: they pick through the
+input, and Save opens where the browser chooses. A project opened from a `.slp`
+has no recording folder: Save writes that file, Save As opens beside it.
+
+**Key exports.**
+- `RECORDING_FOLDER_PICKER_ID` (`'lucid-recording-folder'`): the folder
+  picker's own memory, so the next recording's pick opens beside the last one.
+- `pickRecordingFolder(fallbackPick)` → `{files, dirHandle}`: files as
+  `pickFolder` gives them (`webkitRelativePath` = `<folder>/…`); a cancel gives
+  no files; without `showDirectoryPicker`, `fallbackPick()`'s files and no handle.
+  An automated browser (`navigator.webdriver`) keeps the input while its
+  `showDirectoryPicker` is native code (Playwright cannot answer the native
+  dialog; the e2e suites fill the input); a stubbed picker takes the picker path.
+- `enumerateDirectoryHandle(dirHandle, rootName, prefix)`: every file under a
+  directory handle, wrapped with `webkitRelativePath` (moved here from
+  `session-loader.js`, which re-exports it).
+- `saveStartFolder(state, previousFile)`: the save picker's `startIn` — the
+  active session's `_recordingFolder`, else `previousFile` if it is a file
+  handle, else null.
+
+**Imported by.** `loading/session-loader.js`, `import-export/save-load.js`.
+Imports nothing.
+
+**Tests.** `tests/e2e/save-opens-in-recording-folder.mjs`.
+
 ### loading/campy-session.js
 
 **Purpose.** What a campy recording folder says about itself. campy (2.1.1+)
@@ -13390,7 +13526,9 @@ filesystem enumeration, decoder rebuild.
   exported for `tests/e2e/slp-import-fast-compound.mjs`).
   `handleLoadSessionFolderSingleSlp()` loads a folder holding a project `.slp`
   plus `videos/` + calibration. It reads the SLP with the **typed** reader
-  (`parseSlpWithRawFallback`, `import-export/file-io.js`) and restores
+  (`parseSlpWithRawFallback`, `import-export/file-io.js`) and, unless a group
+  crosses skeletons (`groupsAcrossSkeletonsRefusal` refuses the load), shows the poses
+  on `sessionSkeletonEntry`'s skeleton, as File ▸ Open does, and restores
   grouping, `nulledNodes`/occlusion, identities and 3D via the shared
   `restoreGroupingAndUnlink` (`import-export/slp-import.js`), then the rest of
   `metadata.lucid` through `readVisibilityMetadata`, `readSmoothingMetadata`
@@ -13466,7 +13604,16 @@ filesystem enumeration, decoder rebuild.
   removing the solo'd view itself falls back to the clamp AND re-renders the
   dock (`updateVideoGridDisplay`). Covered by `tests/e2e/videos-panel-buttons.mjs`.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
-- Filesystem: `enumerateDirectoryHandle`.
+- Filesystem: `enumerateDirectoryHandle` (re-exported from `./recording-folder.js`).
+- **Recording folder for Save.** The per-camera and single-SLP folder loaders
+  pick through `pickRecordingFolder` (`./recording-folder.js`):
+  `showDirectoryPicker` when the browser has it, else `<input webkitdirectory>`
+  (`pickFolder`). With a handle, the new session keeps it as
+  `session._recordingFolder` (in memory only, never in the `.slp`), and
+  File ▸ Save / Save As open there. `handleLoadSessionFolderPerCamera(files,
+  deferVideos, folderHandle)` takes the handle as its third argument, which
+  `handleLoadMultiSession` passes for each session subfolder. Test:
+  `tests/e2e/save-opens-in-recording-folder.mjs`.
 - **campy recordings** (`loading/campy-session.js`):
   `adoptCampyRecording(session, files, {record, calibFile, calibrationNames})`
   reads a picked folder's session.json (+ campy-live's manifests) onto
@@ -13709,8 +13856,9 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
 **Imports from project modules.**
 - `../pose/placeholder-cameras.js` (`makePlaceholderCamera`,
   `hasRealCalibration`, `ensurePlaceholderCameras`),
-- `../import-export/outside-frames.js` (poses on a video no session reads: kept
-  aside, and said in the load's status),
+- `../import-export/outside-frames.js` (poses on a video no session reads or on a
+  skeleton it does not show: kept aside, and said in the load's status; a group
+  across skeletons refuses the load),
 - `../import-export/kept-suggestions.js` (`keepSuggestions`: the single-`.slp` and
   per-camera folder loaders keep a file's suggestions),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
@@ -14094,6 +14242,15 @@ frames/instances and values, as typed arrays TRANSFERRED in the `postMessage`.
 Only `parseSlpH5(file, null, { columnar: true })` from
 `handleLoadSessionFolderPerCamera` asks for it. The equivalence test also
 requires the columnar result to expand back to exactly the nested `frames`.
+
+**A pose goes with the skeleton it is on (`readSkeletonRecord`, `sameSkeleton`).** A
+file with more than one skeleton also gets `data.skeletons`, one `{name, nodes, edges,
+symmetries, frames}` per skeleton (a duplicate, same nodes in the same order and same
+edges and symmetries, shares its twin's), the first being `data.skeleton` +
+`data.frames`, and not an unused one. `data.frames` and `data.columnar` hold only that
+first skeleton's poses (`buildColumnarFrames`' `skipRow`); the others are always boxed,
+with their `row`, `fromPredicted`, `trackingScore` and `complete` for
+`import-export/outside-frames.js`. A file with one skeleton gets no `data.skeletons`.
 
 **A prediction's per-node scores (`pred_points.score`)** ride along both ways:
 each nested instance carries `pointScores` (a `Float64Array(numNodes)`, NaN where
@@ -15465,9 +15622,11 @@ incl. `planeMetadataConflict`).
 
 ### import-export/outside-frames.js
 
-**Purpose.** Poses on a video no recording session names: not shown, and kept by
-every save on their own video. The lazy path keeps them in its store
-(`buildSessionRefGraph`; File ▸ Add SLP adds its own there,
+**Purpose.** Poses a `.slp` holds that LUC3D does not show, kept by every save: those
+on a video no recording session names, each on its own video, and those on a skeleton
+their session does not show, each on its own skeleton with its own nodes, on any video.
+The lazy path keeps both in its store (`buildSessionRefGraph`, though see CLAUDE.md for
+what it still reads by position; File ▸ Add SLP adds its own there,
 `SioLazyLoader.commitAddedRows`); this module holds them for the eager path, on
 `session.outsideFrames`, and has the rules both share.
 
@@ -15478,23 +15637,51 @@ every save on their own video. The lazy path keeps them in its store
   id `videos_json` does not hold, as older LUC3D saves left it).
 - `headerVideoOfRecord(SIO, record, id)` — the same for a `slpData.videos` record (the
   raw worker's have no typed video to keep). File ▸ Add SLP on a lazy project.
+- `fileSkeletons(slpData)` — `slpData.skeletons`, filled in for a reader's result that
+  lists none (one skeleton; an analysis `.h5`).
+- `sessionSkeletonEntry(slpData, sessionIdx)` — the entry a file's session shows: the
+  one its `metadata.lucid.skeleton` names (by nodes and edges, else nodes; a project
+  can hold sessions on different skeletons), else the first with a pose on its videos,
+  else the first.
+- `groupsAcrossSkeletonsRefusal(slpData, nSessions)` — the status sentence when a load
+  must refuse, else null: a group links a pose on a skeleton its session does not show.
+  A session with no typed session has groups going by position in the file's frame, so
+  any such group refuses in a file with more than one skeleton. Called before the load
+  touches anything; the loader then resolves `false`, so the file does not become the
+  save target.
 - `keptVideoOf(slpData, id)`, `headerVideoOfKept(SIO, kept)` — what an eager load holds
   of such a video, and the `SIO.Video` a header lists for it. `record` is the file's
   own entry (`slpData.videos[id]`): one object per video per file, so it tells a video
   apart where an id cannot (File ▸ Add SLP brings a second file's ids).
 - `keepOutsideFrames(session, slpData, claimedVideos, nodeReorderMap)` — eager load;
-  adds to what `session.outsideFrames` already holds. Each kept video remembers the
-  record its file's events name it by (`eventRecord`, `fileEventsOf`).
-- `ownVideoOfColumnar(col)`, `ownVideoOfFrames(frames)`, `keepOutsideColumnarFrames(session, slpData, own)` — the
-  per-camera eager load: a camera is the first video its file lists with frames.
+  adds to what `session.outsideFrames.frames` already holds. It reads `slpData.frames`,
+  which must be on `session`'s skeleton. Each kept video remembers the record its file's
+  events name it by (`eventRecord`, `fileEventsOf`).
+- `noteVideoReaders(readers, session, entry, claimedVideos, videoIdxToCameraName, cameras)`,
+  `keepOtherSkeletonFrames(slpData, readers, fallback, fallbackEntry)` — eager load: the
+  poses on a skeleton their session does not show go on
+  `session.outsideFrames.otherSkeletonFrames` as the reader's own instances (the raw
+  worker's are built into the same, with their `from_predicted` links), and a video's
+  camera is recorded in `videos[].camera`.
+- `ownVideoOfColumnar(col, slpData)`, `ownVideoOfFrames(frames, slpData)`,
+  `keepOutsideColumnarFrames(session, slpData, own, camName)`,
+  `keepCameraOtherSkeletonFrames(session, slpData, own, camName)` — the per-camera eager
+  load: a camera is the first video its file lists with frames, on any skeleton.
+- `moveKeptCameraPoses(fromSession, toSession, cameraName)` — a video moved to another
+  session takes the poses kept on it along, so they stay in that camera's frames.
 - `outsideFramesForSave(session)` — eager save, before the session's Labels are built:
-  `{videos, tracks, listedVideos, placedVideos, labeledFramesFor(skeleton, identities)}`,
-  or null. `listedVideos` (the file's record -> the entry) is what puts a kept event on
-  the entry its video's poses have (`buildBehaviorEvents`), and `placedVideos` (the
-  read's record -> the entry) a kept suggestion. The frames take those Labels' skeleton
-  and identity list, and an identity only these poses name is added to that list.
-- `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(session)` — the
-  sentence for a load's final status.
+  `{videos, tracks, listedVideos, placedVideos, labeledFramesFor(labels)}`, or null.
+  `videos` are those no camera of the session has. `listedVideos` (the file's record ->
+  the entry) is what puts a kept event on the entry its video's poses have
+  (`buildBehaviorEvents`), and `placedVideos` (the read's record -> the entry) a kept
+  suggestion. `labeledFramesFor` gives the frames those Labels lack: a kept pose on a
+  camera's video goes into the frame the Labels already have there, because a lazy
+  reopen's save keeps only the first row of each video and frame. An identity only
+  these poses name is added to `labels.identities`, and `new SIO.Labels` lists a kept
+  pose's skeleton by itself.
+- `outsideFramesNote(counts, fileSessions)`, `keptOutsideCounts(sessions)` — the
+  sentences for a load's final status: what is on no session's video, and what on a
+  camera's video is not shown for being on another skeleton.
 
 **Imports from project modules.** `../pose/pose-data.js` (`Instance`), `./file-io.js`
 (`makePooledSioInstances`), `./behavior-events.js` (`keptVideoRecords`).
@@ -15503,7 +15690,7 @@ every save on their own video. The lazy path keeps them in its store
 `import-export/slp-streaming-write.js`, `import-export/kept-suggestions.js`,
 `loading/session-loader.js`.
 
-**Tests.** `tests/e2e/poses-outside-session.mjs`.
+**Tests.** `tests/e2e/poses-outside-session.mjs`, `tests/e2e/poses-other-skeleton.mjs`.
 
 ### import-export/kept-suggestions.js
 
@@ -15794,7 +15981,12 @@ session's resident/total) rather than truncate silently. Covered by
   scores as `pointScores`, the typed instance's own `_score` column by reference,
   null for a user instance — the importers copy it with `Instance.setPointScores`). Each `videos[]` entry
   carries the typed `Video` as `_typedVideo` (`import-export/outside-frames.js` writes it back whole). `suggestions[]` holds
-  `{videoIdx, frameIdx, group}`, `group` as the file holds it, for `import-export/kept-suggestions.js`. Each `sessions[]` entry is
+  `{videoIdx, frameIdx, group}`, `group` as the file holds it, for `import-export/kept-suggestions.js`. A pose goes with the skeleton
+  it is on: `skeletons` lists `{name, nodes, edges, typed, frames}` per skeleton (a
+  duplicate by `Skeleton.matches` with `requireSameOrder` shares its twin's), the first
+  being `skeleton` + `frames`, and not an unused one; `skeletonEntryOf` maps a typed
+  skeleton to its entry; with more than one, each pose dict carries the typed instance
+  as `_typed`. Each `sessions[]` entry is
   the verbatim on-disk dict (for the direct calibration/video-map/metadata reads)
   PLUS a `_typedSession` ref (the typed RecordingSession) used by
   `reconstructInstanceGroupsFromSession` for grouping — which reads LUCID's legacy
@@ -16115,6 +16307,14 @@ a file when images in the opened file are in no session (`imagesLeftOutNote`).
   `state.isSaving` and refuses a second save while one runs (two builds would
   hold two copies of the file in memory), and `quickSave` awaits it. Covered by
   `tests/e2e/save-progress-card.mjs`.
+- **Where the save picker opens.** `quickSave`'s `showSaveFilePicker` gets
+  `startIn` from `saveStartFolder` (`loading/recording-folder.js`): the active
+  session's recording folder, else (Save As, which passes the file it is
+  replacing as `quickSave(previousFile)`) that file's folder, else none (the
+  browser's own choice, as before). Without it Chromium opened wherever the last
+  save went, and one recording's labels were saved in another's folder. The
+  suggested name is the session's name when there is one session. Covered by
+  `tests/e2e/save-opens-in-recording-folder.mjs`.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
   is used by the 3D-import reset), `markDirty`, `onMarkDirty(fn)` (a cheap hook
   run on every `markDirty`; ui/behavior-detect.js notes there that the poses
@@ -16414,7 +16614,10 @@ first track.
   non-embedded folder picker so the overlay stays up during video decode. Calls
   `resetPlaneState()` up front, then `readVisibilityMetadata` /
   `readPlaneMetadata` per session. Skip-and-continue on per-session video-load
-  failure (the failed session is dropped from `state.sessions`).
+  failure (the failed session is dropped from `state.sessions`). Each session shows
+  the poses on its own skeleton (`sessionSkeletonEntry`); the rest are kept for the
+  save, and a group across skeletons refuses the load before anything changes
+  (`import-export/outside-frames.js`).
 - `slpHasEmbeddedImages(file)` — whether a `.slp` holds embedded images (one worker
   start and a metadata read; no for a file that cannot be read). File ▸ Open asks it
   for a large file.
@@ -16570,8 +16773,10 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
   session keeps its part of the file's provenance),
-  `./outside-frames.js` (`keepOutsideFrames`, `keptOutsideCounts`,
-  `outsideFramesNote`, `headerVideoOfRecord` — poses on a video no session reads),
+  `./outside-frames.js` (`fileSkeletons`, `groupsAcrossSkeletonsRefusal`,
+  `headerVideoOfRecord`, `keepOtherSkeletonFrames`, `keepOutsideFrames`,
+  `keptOutsideCounts`, `noteVideoReaders`, `outsideFramesNote`, `sessionSkeletonEntry` —
+  poses on a video no session reads or on a skeleton it does not show),
   `./kept-suggestions.js` (`keepSuggestions`),
   `../loading/lazy-store-rows.js` (`storeFromParsedFrames`),
   `../loading/video-file-pick.js` (`preferNonCalibrationVideos`),

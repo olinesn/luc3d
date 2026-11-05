@@ -1868,11 +1868,13 @@ export class Session {
          */
         this.fileProvenance = null;
         /**
-         * Eager loads only: frames of the loaded .slp on a video no session
-         * names. Not shown; a save writes them back on their own video
+         * Eager loads only: poses of the loaded .slp this session does not show.
+         * `frames` are on a video no session names, `otherSkeletonFrames` (the
+         * reader's own sleap-io.js instances) on another skeleton, on any video. A
+         * save writes them back on their own video and skeleton
          * (`import-export/outside-frames.js`). A lazy session keeps these in its
          * store. Null when there are none.
-         * @type {{videos: Array, tracks: string[], frames: Array<{video: number, frameIdx: number, instances: Instance[]}>}|null}
+         * @type {{videos: Array, tracks: string[], frames: Array<{video: number, frameIdx: number, instances: Instance[]}>, otherSkeletonFrames: Array<{video: number, frameIdx: number, instances: Object[]}>}|null}
          */
         this.outsideFrames = null;
         /**
@@ -3500,6 +3502,13 @@ export class Session {
                     group.instances.delete(oldName);
                     group.instances.set(newName, inst);
                 }
+            }
+        }
+
+        // Poses kept aside on this camera's video stay with the camera.
+        if (this.outsideFrames) {
+            for (const video of this.outsideFrames.videos) {
+                if (video.camera === oldName) video.camera = newName;
             }
         }
 

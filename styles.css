@@ -7646,7 +7646,8 @@ body.plane-angle-lock .plane-panel summary {
 /* The menu bar's dropdowns are divs, so `disabled` cannot reach them. */
 body.origin-mode-lock .menu-bar,
 body.origin-mode-lock .view-strip,
-body.origin-mode-lock .timeline-container {
+body.origin-mode-lock .timeline-container,
+body.origin-mode-lock .behavior-strip {
   pointer-events: none;
   opacity: 0.5;
 }
@@ -8747,6 +8748,143 @@ div.track-summary-steps { padding-left: 0; }
   color: var(--text-muted);
 }
 
+/* The bouts strip under the camera view and above the Timeline
+   (ui/behavior-strip.js). The script sets --behavior-strip-left and
+   --behavior-strip-width from the seekbar, so the view lines up with it: the
+   labels take the width of the frame readout and transport buttons, the
+   controls that of the FPS pill and the buttons. Bars and ticks are on the
+   canvases; moving the playhead only copies onto them (nothing here may change
+   layout or layers per frame). */
+.behavior-strip {
+  position: relative;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  font-size: 11px;
+}
+.behavior-strip[hidden] { display: none; }
+.behavior-strip-head,
+.behavior-strip-body {
+  display: grid;
+  grid-template-columns: var(--behavior-strip-left, 0px) var(--behavior-strip-width, 0px) minmax(0, 1fr);
+}
+.behavior-strip-head { height: var(--behavior-strip-ruler-h); }
+.behavior-strip-body {
+  max-height: calc(var(--behavior-strip-lanes-max) * var(--behavior-strip-lane-h));
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.behavior-strip-title {
+  padding-right: 8px;
+  text-align: right;
+  line-height: var(--behavior-strip-ruler-h);
+  font-size: 10px;
+  color: var(--text-muted);
+  user-select: none;
+}
+.behavior-strip-view {
+  position: relative;
+  overflow: hidden;
+  contain: layout paint style;
+  cursor: pointer;
+  user-select: none;
+}
+.behavior-strip-ruler { background: var(--bg-tertiary); }
+.behavior-strip-lanes {
+  height: calc(var(--behavior-strip-lanes) * var(--behavior-strip-lane-h));
+  background: repeating-linear-gradient(to bottom,
+    var(--bg-primary) 0, var(--bg-primary) calc(var(--behavior-strip-lane-h) - 1px),
+    var(--bg-tertiary) calc(var(--behavior-strip-lane-h) - 1px), var(--bg-tertiary) var(--behavior-strip-lane-h));
+}
+.behavior-strip-view canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+}
+.behavior-strip-label {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  height: var(--behavior-strip-lane-h);
+  padding-right: 8px;
+  overflow: hidden;
+  line-height: var(--behavior-strip-lane-h);
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+/* The line between animals, as on the lanes: fading out to the left, for it has a wide column to cross. */
+.behavior-strip-label.is-next-animal {
+  background: linear-gradient(to left, rgba(255, 255, 255, 0.14), transparent 240px) top / 100% 1px no-repeat;
+}
+.behavior-strip-label.is-focal { color: var(--text-primary); font-weight: 600; }
+.behavior-strip-label.is-empty { color: var(--text-muted); }
+.behavior-strip-label .behavior-swatch { flex-shrink: 0; margin: 0; }
+.behavior-strip-running { color: #4cc878; }
+.behavior-strip-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--behavior-strip-ruler-h);
+  padding-left: 8px;
+  overflow: hidden;
+  user-select: none;
+}
+.behavior-strip-btn {
+  width: 16px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 14px;
+  cursor: pointer;
+}
+.behavior-strip-btn:hover:not(:disabled) {
+  background: var(--bg-button);
+  color: var(--text-primary);
+}
+.behavior-strip-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.behavior-strip-controls .plane-section-info {
+  width: 14px;
+  height: 14px;
+}
+.behavior-strip-window {
+  min-width: 42px;
+  text-align: center;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+/* In the middle of the view, for good: the film moves under it. */
+.behavior-strip-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--behavior-strip-left, 0px) + var(--behavior-strip-width, 0px) / 2);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 2;
+}
+.behavior-strip-hover {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--text-primary);
+  pointer-events: none;
+  z-index: 2;
+}
+.behavior-strip-hover[hidden] { display: none; }
+
 /* Timeline Shift+drag menu */
 .behavior-range-menu {
   position: fixed;
@@ -9097,6 +9235,10 @@ div.track-summary-steps { padding-left: 0; }
 }
 .bt-table tr.is-short td {
   color: var(--text-secondary);
+}
+.bt-table tr.bt-unreviewed td {
+  color: var(--warning-color);
+  white-space: normal;
 }
 .bt-body {
   display: flex;

@@ -34,6 +34,10 @@
  *     same forest and the predictions still stand; the threshold dialog's live
  *     numbers, an exported model file and active learning's lead-in use that
  *     rate too.
+ *  9. Who has no "not": an animal labelled present with "not" frames only on
+ *     another animal passes the gate, and the dialog and the Classifiers
+ *     section name it until it has its own; a sampled classifier's card says
+ *     its frame numbers count each tested frame for the frames it stands for.
  *
  * Run: node tests/e2e/behavior-classifier.mjs   (spawns its own http.server; PORT= to move it)
  */
@@ -452,6 +456,61 @@ try {
         return { start: it.start, went: window.__went };
     });
     check(leadIn.went === Math.max(0, leadIn.start - 60), 'and Next uncertain ▸ leads in by a second of video: frame ' + leadIn.went + ' for a stretch at ' + leadIn.start);
+
+    console.log('\n-- 9. who has no "not" --');
+    const lunge = await page.evaluate(async () => {
+        const eth = await import('/pose/behavior-ethogram.js');
+        const L = await import('/pose/behavior-labels.js');
+        const s = (await import('/ui/app-state.js')).state.session;
+        const names = (await import('/ui/behavior-coding.js')).sessionAnimals(s);
+        const b = eth.addBehavior({ name: 'lunge', key: 'l' }).behavior;
+        L.labelRange(s, b.id, names[0], '', 100, 119, true);
+        L.labelRange(s, b.id, names[0], '', 200, 219, true);
+        L.labelRange(s, b.id, names[1], '', 0, 49, false);
+        L.labelRange(s, b.id, names[1], '', 60, 99, false);
+        return { id: b.id, animal: names[0], other: names[1] };
+    });
+    await openTab();
+    await page.waitForFunction((name) => Array.from(document.querySelectorAll('.behavior-classifiers tbody tr')).some(r => r.textContent.includes(name)), 'lunge', { timeout: 10000 });
+    const panelRow = await page.evaluate(() => {
+        const r = Array.from(document.querySelectorAll('.behavior-classifiers tbody tr')).find(x => x.textContent.includes('lunge'));
+        const short = r.querySelector('.behavior-short');
+        return { text: r.textContent, title: short ? short.title : '' };
+    });
+    check(/needs more/.test(panelRow.text) && panelRow.title.includes(lunge.animal) && /no "not" frames/.test(panelRow.title),
+        'the Classifiers section flags it, and its tooltip says who: ' + panelRow.title);
+    await page.click('[data-menu="behavior"]');
+    await page.click('#menuBehaviorTrain');
+    await page.waitForSelector('.behavior-train-modal .bt-table', { timeout: 10000 });
+    const lungeRow = () => page.evaluate((id) => {
+        const r = document.querySelector('.bt-table tr[data-id="' + id + '"]');
+        const next = r.nextElementSibling;
+        const pick = r.querySelector('input[data-act="pick"]');
+        return { ready: !pick.disabled, note: next && next.classList.contains('bt-unreviewed') ? next.textContent : '' };
+    }, lunge.id);
+    const named = await lungeRow();
+    check(named.ready && named.note.startsWith(lunge.animal + ':') && /no "not" frames/.test(named.note) && /Mark Range Reviewed/.test(named.note),
+        '"not" frames on another animal pass the gate, and the dialog names the animal: ' + named.note);
+    await page.evaluate(async (l) => {
+        const L = await import('/pose/behavior-labels.js');
+        const s = (await import('/ui/app-state.js')).state.session;
+        L.labelRange(s, l.id, l.animal, '', 300, 349, false);
+        (await import('/ui/behavior-train-modal.js')).refreshBehaviorTrainModal();
+    }, lunge);
+    const cleared = await lungeRow();
+    check(cleared.ready && cleared.note === '', 'a "not" frame of its own clears it');
+    const sampledNote = await page.evaluate(async (id) => {
+        const C = await import('/pose/behavior-classifier.js');
+        const m = C.behaviorModelOf(id);
+        m.training.sampled = true;
+        const M = await import('/ui/behavior-train-modal.js');
+        M.refreshBehaviorTrainModal();
+        const total = m.training.counts.present.frames + m.training.counts.absent.frames;
+        return { text: document.querySelector('.bt-card[data-id="' + id + '"] .bd-note').textContent, total: total.toLocaleString('en-US') };
+    }, noVideo.id);
+    check(sampledNote.text.includes('They are a sample of ' + sampledNote.total + ', so the frame numbers count each one for the frames it stands for.'),
+        'a sampled classifier says so on its card: ' + sampledNote.text);
+    await page.keyboard.press('Escape');
 
     console.log('\n-- page errors --');
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));

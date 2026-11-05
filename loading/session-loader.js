@@ -35,6 +35,7 @@ import { OnDemandVideoDecoder, VideoController, releaseViewsFrames, closeEmbedde
 import { videoLoadFailureText } from './video-codec-diagnosis.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
+import { enumerateDirectoryHandle, pickRecordingFolder } from './recording-folder.js';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
@@ -44,7 +45,9 @@ import {
 
 import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
 import {
-    keepOutsideFrames, keepOutsideColumnarFrames, keptOutsideCounts, outsideFramesNote, ownVideoOfColumnar, ownVideoOfFrames,
+    groupsAcrossSkeletonsRefusal, keepCameraOtherSkeletonFrames, keepOtherSkeletonFrames, keepOutsideFrames,
+    keepOutsideColumnarFrames, keptOutsideCounts, noteVideoReaders, outsideFramesNote, ownVideoOfColumnar,
+    ownVideoOfFrames, sessionSkeletonEntry,
 } from '../import-export/outside-frames.js';
 import { keepSuggestions } from '../import-export/kept-suggestions.js';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
@@ -1520,27 +1523,8 @@ export function adoptLabeledFrameCount() {
     return firstLabeled;
 }
 
-/**
- * Recursively enumerate all files under a FileSystemDirectoryHandle.
- * Returns File objects with webkitRelativePath set to rootName/relative/path.
- */
-export async function enumerateDirectoryHandle(dirHandle, rootName, prefix) {
-    var files = [];
-    for await (var [name, handle] of dirHandle) {
-        if (handle.kind === 'file') {
-            var file = await handle.getFile();
-            var relPath = prefix ? prefix + '/' + name : rootName + '/' + name;
-            var wrappedFile = new File([file], file.name, { type: file.type, lastModified: file.lastModified });
-            Object.defineProperty(wrappedFile, 'webkitRelativePath', { value: relPath });
-            files.push(wrappedFile);
-        } else if (handle.kind === 'directory') {
-            var subPrefix = prefix ? prefix + '/' + name : rootName + '/' + name;
-            var subFiles = await enumerateDirectoryHandle(handle, rootName, subPrefix);
-            files = files.concat(subFiles);
-        }
-    }
-    return files;
-}
+// `enumerateDirectoryHandle` moved to ./recording-folder.js; re-exported for existing importers.
+export { enumerateDirectoryHandle };
 
 export async function handleLoadMultiSession() {
     try {
@@ -1629,7 +1613,7 @@ export async function handleLoadMultiSession() {
 
             var sessionFiles = await enumerateDirectoryHandle(sess.handle, sess.name, null);
             console.log('[multi-session] Session', sess.name, '— files:', sessionFiles.length);
-            var loadedSession = await handleLoadSessionFolderPerCamera(sessionFiles, si > 0);
+            var loadedSession = await handleLoadSessionFolderPerCamera(sessionFiles, si > 0, sess.handle);
             if (loadedSession) unreadSlps = unreadSlps.concat(loadedSession.slpFailures);
         }
 
@@ -2098,7 +2082,9 @@ export async function handleLoadSessionFolderSingleSlp() {
             return;
         }
         setStatus('Pick session folder...', 'warning');
-        var allFiles = await pickFolder();
+        // With showDirectoryPicker the folder's handle comes too: Save opens there.
+        var picked = await pickRecordingFolder(pickFolder);
+        var allFiles = picked.files;
         if (allFiles.length === 0) {
             setStatus('No folder selected', 'warning');
             return;
@@ -2202,6 +2188,13 @@ export async function handleLoadSessionFolderSingleSlp() {
             setStatus(slpReadErrorStatus('SLP parse error', parseErr), 'error');
             return;
         }
+        // This loader opens only the file's first session.
+        var acrossSkeletons = groupsAcrossSkeletonsRefusal(slpData, 1);
+        if (acrossSkeletons) {
+            hideLoading();
+            setStatus(acrossSkeletons, 'error');
+            return;
+        }
 
         // Load calibration
         var cameras = [];
@@ -2252,9 +2245,9 @@ export async function handleLoadSessionFolderSingleSlp() {
             }
         }
 
-        // Build session from SLP data
-        var skelData = slpData.skeleton || { name: 'skeleton', nodes: [], edges: [] };
-        var skeleton = new Skeleton(skelData.name, skelData.nodes, skelData.edges);
+        // Build session from SLP data: the poses on its own skeleton.
+        var singleEntry = sessionSkeletonEntry(slpData, 0);
+        var skeleton = new Skeleton(singleEntry.name, singleEntry.nodes, singleEntry.edges);
 
         // Override skeleton if skeleton.json is present (same folder as
         // calibration.toml). One skeleton per project — register it so it
@@ -2366,8 +2359,8 @@ export async function handleLoadSessionFolderSingleSlp() {
 
         // Populate frames
         showLoading('Building session...');
-        for (var fri = 0; fri < slpData.frames.length; fri++) {
-            var fd = slpData.frames[fri];
+        for (var fri = 0; fri < singleEntry.frames.length; fri++) {
+            var fd = singleEntry.frames[fri];
             // A video no camera has (kept aside below) would sit under a camera
             // key the session does not have, and the writer drops those.
             if (cameras.length > 0 && !videoIdxToCameraName[fd.videoIdx]) continue;
@@ -2392,11 +2385,14 @@ export async function handleLoadSessionFolderSingleSlp() {
             }
         }
         // Poses on a video no camera has (a video in no session, or a later
-        // session of the file, which this loader does not open): not shown, kept
-        // for the save.
+        // session of the file, which this loader does not open), or on another
+        // skeleton: not shown, kept for the save.
         if (cameras.length > 0) {
-            keepOutsideFrames(session, slpData, new Set(Object.keys(videoIdxToCameraName).map(Number)));
+            keepOutsideFrames(session, Object.assign({}, slpData, { frames: singleEntry.frames }), new Set(Object.keys(videoIdxToCameraName).map(Number)));
         }
+        var singleReaders = new Map();
+        noteVideoReaders(singleReaders, session, singleEntry, new Set(Object.keys(videoIdxToCameraName).map(Number)), videoIdxToCameraName, cameras);
+        keepOtherSkeletonFrames(slpData, singleReaders, session, singleEntry);
         keepSuggestions(slpData, [{ session: session, cameraByVideo: videoIdxToCameraName }]);
 
         // Restore the project's saved state from the SLP's sessions_json —
@@ -2517,6 +2513,9 @@ export async function handleLoadSessionFolderSingleSlp() {
                 failedVideos.push(videoLoadFailureText(vFile.name, e));
             }
         }
+
+        // The folder Save opens in (in memory only; see loading/recording-folder.js).
+        if (picked.dirHandle) session._recordingFolder = picked.dirHandle;
 
         // The recording's details, before updateTotalFrames takes its fps.
         if (campyRec) {
@@ -2943,7 +2942,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
             loader.close();
             loader = opened = null;
             if (await handleLoadSlpFile(slpFile)) {
-                var inFullNote = outsideFramesNote(keptOutsideCounts(state.sessions[0]));
+                var inFullNote = outsideFramesNote(keptOutsideCounts(state.sessions));
                 setStatus('Opened ' + slpFile.name + ' in full, not on demand: ' + eagerReason
                     + '. A file this large can run out of memory.' + (inFullNote ? ' ' + inFullNote : ''), 'warning');
             }
@@ -3241,7 +3240,7 @@ function slpFailuresStatus(slpFailures) {
         + slpFailures.map(function (f) { return f.camName + ' (' + f.file.name + ')'; }).join(', ');
 }
 
-export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos) {
+export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos, folderHandle) {
     try {
         var allFiles;
         if (preloadedFiles) {
@@ -3252,7 +3251,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 return;
             }
             setStatus('Pick session folder...', 'warning');
-            allFiles = await pickFolder();
+            // With showDirectoryPicker the folder's handle comes too: Save opens there.
+            var picked = await pickRecordingFolder(pickFolder);
+            allFiles = picked.files;
+            folderHandle = picked.dirHandle;
             if (allFiles.length === 0) {
                 setStatus('No folder selected', 'warning');
                 return;
@@ -3773,8 +3775,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             var trackRemap = trackUnion.remapByCam.get(camName) || new Int32Array(0);
 
             // A camera is one video, the first its file lists with frames.
-            var ownVideo = slpData.columnar ? ownVideoOfColumnar(slpData.columnar)
-                : (slpData.frames ? ownVideoOfFrames(slpData.frames) : undefined);
+            var ownVideo = slpData.columnar ? ownVideoOfColumnar(slpData.columnar, slpData)
+                : (slpData.frames ? ownVideoOfFrames(slpData.frames, slpData) : undefined);
 
             // What this camera's file says about its video, for a save with none loaded.
             var ownFileVideo = slpData.videos && slpData.videos[ownVideo !== undefined ? ownVideo : 0];
@@ -3785,9 +3787,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
             if (slpData.columnar) {
                 addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap, ownVideo);
-                keepOutsideColumnarFrames(state.session, slpData, ownVideo);
+                keepOutsideColumnarFrames(state.session, slpData, ownVideo, camName);
             } else if (slpData.frames) {
                 keepOutsideFrames(state.session, slpData, new Set([ownVideo]));
+                keepCameraOtherSkeletonFrames(state.session, slpData, ownVideo, camName);
                 for (var fri = 0; fri < slpData.frames.length; fri++) {
                     var frameData = slpData.frames[fri];
                     if (frameData.videoIdx !== ownVideo) continue;
@@ -4119,6 +4122,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 console.error('[session-folder] Skeleton file parse error:', skelErr);
             }
         }
+
+        // The folder Save opens in (in memory only; see loading/recording-folder.js).
+        if (folderHandle && state.session) state.session._recordingFolder = folderHandle;
 
         // 5c. The recording's details, before the frame count and fps are set
         // (updateTotalFrames takes campy's frame rate from them).

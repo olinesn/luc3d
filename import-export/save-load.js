@@ -62,6 +62,7 @@ import { buildSaveProvenance } from './slp-provenance.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 import { readImagesFromSavedFile } from './slp-import.js';
 import { anyEmbeddedVideo, noteEmbeddedVideos, adoptEmbeddedVideos, addImagesToSlp } from './slp-image-save.js';
+import { saveStartFolder } from '../loading/recording-folder.js';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -896,8 +897,8 @@ async function buildSlpBytes(opts) {
             return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
         });
 
-        // Poses on a video no session names go back on their own video, and the
-        // session's events on that video on the same entry.
+        // Poses LUC3D does not show go back on their own video and skeleton, and the
+        // session's events on such a video on the same entry.
         var sessOutside = outsideFramesForSave(sess);
         // A video only a suggestion names joins this list, and the session's bouts on it
         // share its entry, so this goes before the Labels are built.
@@ -906,7 +907,7 @@ async function buildSlpBytes(opts) {
         var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles, sessListed);
 
         // Merge into combined Labels
-        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFramesFor(sessLabels.skeletons[0], sessLabels.identities) : []);
+        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || [], sessOutside ? sessOutside.labeledFramesFor(sessLabels) : []);
         allVideos = allVideos.concat(sessLabels.videos || []);
         if (hasImages) noteEmbeddedVideos(sessLabels.sessions[0], sessionVideoFilesForSave(sess), imagePlan);
         for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
@@ -1293,7 +1294,7 @@ async function readImagesFromSaved(fileHandle, plan) {
     }
 }
 
-export async function quickSave() {
+export async function quickSave(previousFile) {
     if (!state.session) {
         setStatus('No session to save', 'error');
         return;
@@ -1311,14 +1312,20 @@ export async function quickSave() {
                 await saveProjectSlp();
                 return;
             }
+            var pickOpts = {
+                suggestedName: suggestedSaveName(),
+                types: [{
+                    description: 'SLEAP Labels',
+                    accept: { 'application/x-hdf5': ['.slp'] }
+                }]
+            };
+            // Open in the open recording's folder (else beside the file Save As
+            // replaces). Without `startIn` Chromium opens wherever the last
+            // save went: another recording's folder.
+            var start = saveStartFolder(state, previousFile);
+            if (start) pickOpts.startIn = start;
             try {
-                state.slpFileHandle = await window.showSaveFilePicker({
-                    suggestedName: suggestedSaveName(),
-                    types: [{
-                        description: 'SLEAP Labels',
-                        accept: { 'application/x-hdf5': ['.slp'] }
-                    }]
-                });
+                state.slpFileHandle = await window.showSaveFilePicker(pickOpts);
             } catch (pickErr) {
                 if (pickErr.name === 'AbortError') {
                     setStatus('Save cancelled', 'warning');
@@ -1391,9 +1398,11 @@ export async function quickSave() {
 }
 
 export async function saveAs() {
-    // Force a new file picker regardless of existing handle
+    // Force a new file picker regardless of existing handle; it opens beside
+    // the current file when the session has no recording folder.
+    var previous = state.slpFileHandle;
     state.slpFileHandle = null;
-    await quickSave();
+    await quickSave(previous);
 }
 
 export async function saveProjectSlp() {

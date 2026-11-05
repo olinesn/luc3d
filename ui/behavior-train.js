@@ -30,7 +30,7 @@ import { requestBehaviorRepaint, setReviewFocus, goToBehaviorFrame, BOUT_LEAD_IN
 import { behaviors, behaviorById, setBehaviorPost, exclusivePeers } from '../pose/behavior-ethogram.js';
 import { labelBouts } from '../pose/behavior-labels.js';
 import {
-    trainBehaviorClassifiers, setBehaviorModel, behaviorModelOf, behaviorModels, labelCounts, gateProblems,
+    trainBehaviorClassifiers, setBehaviorModel, behaviorModelOf, behaviorModels, labelCounts, gateProblems, labelledWithoutNot,
     uncertainSegments, disagreementSegments, deriveBouts, modelBoutSettings,
 } from '../pose/behavior-classifier.js';
 import { behaviorRunOf, replaceRunBouts, runConfigPrint, runModelHash } from '../pose/behavior-predictions.js';
@@ -50,14 +50,19 @@ function sessionName(s, i) {
 
 /**
  * Every behavior with its labels over the project (frames and bouts per
- * class, from the labels alone), what the gate still needs, and its model.
- * @returns {Array<{behavior, counts, gate: string[], model: ?Object}>}
+ * class, from the labels alone), what the gate still needs, who is labelled
+ * present with no "not" frames (`unreviewed`, session named when there are
+ * several), and its model.
+ * @returns {Array<{behavior, counts, gate: string[], unreviewed: string[], model: ?Object}>}
  */
 export function classifierStatus() {
     var sessions = state.sessions || [];
     return behaviors().map(function (b) {
         var counts = labelCounts(sessions, b.id);
-        return { behavior: b, counts: counts, gate: gateProblems(counts), model: behaviorModelOf(b.id) };
+        var unreviewed = labelledWithoutNot(sessions, b.id).map(function (u) {
+            return sessions.length > 1 ? sessionName(u.session, sessions.indexOf(u.session)) + ': ' + u.who : u.who;
+        });
+        return { behavior: b, counts: counts, gate: gateProblems(counts), unreviewed: unreviewed, model: behaviorModelOf(b.id) };
     });
 }
 

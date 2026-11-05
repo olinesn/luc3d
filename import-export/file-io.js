@@ -2943,12 +2943,23 @@ export async function parseSlpViaSleapIO(file, onProgress, opts) {
         },
     });
 
-    // --- skeleton ---
-    var skel = (labels.skeletons && labels.skeletons[0]) || null;
-    var skeleton = skel
-        ? { name: skel.name || 'skeleton', nodes: skel.nodeNames, edges: skel.edgeIndices }
-        : { name: 'skeleton', nodes: [], edges: [] };
-    var numNodes = skeleton.nodes.length;
+    // --- skeletons ---
+    // A pose goes with the skeleton it is on: read by another skeleton's node order,
+    // its values would land under the wrong node names and its extra nodes would go.
+    // A duplicate (same nodes in the same order, same edges and symmetries, what
+    // sleap-io's `dedupSkeletons` collapses) shares its twin's entry: its points line up.
+    var skelEntries = [];
+    var entryOfSkeleton = new Map();
+    (labels.skeletons || []).forEach(function (s) {
+        var entry = skelEntries.find(function (e) { return s.matches(e.typed, { requireSameOrder: true }); });
+        if (!entry) {
+            entry = { name: s.name || 'skeleton', nodes: s.nodeNames, edges: s.edgeIndices, typed: s, frames: [] };
+            skelEntries.push(entry);
+        }
+        entryOfSkeleton.set(s, entry);
+    });
+    if (skelEntries.length === 0) skelEntries.push({ name: 'skeleton', nodes: [], edges: [], typed: null, frames: [] });
+    var manySkeletons = skelEntries.length > 1;
 
     // --- tracks ---
     var typedTracks = labels.tracks || [];
@@ -2957,19 +2968,31 @@ export async function parseSlpViaSleapIO(file, onProgress, opts) {
     // --- frames[] (pose transform) ---
     // Only frames that carry at least one pose instance, matching the worker
     // (SI-worker only emits frames with >=1 instance).
-    var frames = [];
     var lfs = lazy ? [] : (labels.labeledFrames || []);
     for (var li = 0; li < lfs.length; li++) {
         var lf = lfs[li];
         var lfInsts = lf.instances || [];
         if (lfInsts.length === 0) continue;
         var videoIdx = labels.videos.indexOf(lf.video);
-        var instances = [];
-        for (var ii = 0; ii < lfInsts.length; ii++) {
-            instances.push(_typedInstanceToSlpData(lfInsts[ii], typedTracks, numNodes, PredictedInstance));
+        for (var ei = 0; ei < skelEntries.length; ei++) {
+            var skelEntry = skelEntries[ei];
+            var instances = [];
+            for (var ii = 0; ii < lfInsts.length; ii++) {
+                if (manySkeletons && (entryOfSkeleton.get(lfInsts[ii].skeleton) || skelEntries[0]) !== skelEntry) continue;
+                var instData = _typedInstanceToSlpData(lfInsts[ii], typedTracks, skelEntry.nodes.length, PredictedInstance);
+                // The record itself: a save writes it back untouched if the session
+                // does not show this skeleton (outside-frames.js).
+                if (manySkeletons) instData._typed = lfInsts[ii];
+                instances.push(instData);
+            }
+            if (instances.length > 0) skelEntry.frames.push({ frameIdx: lf.frameIdx, videoIdx: videoIdx, instances: instances });
         }
-        frames.push({ frameIdx: lf.frameIdx, videoIdx: videoIdx, instances: instances });
     }
+    // An unused skeleton left at the head of the list must not hide every pose.
+    var firstUsedSkeleton = skelEntries.findIndex(function (e) { return e.frames.length > 0; });
+    if (firstUsedSkeleton > 0) skelEntries.unshift(skelEntries.splice(firstUsedSkeleton, 1)[0]);
+    var skeleton = { name: skelEntries[0].name, nodes: skelEntries[0].nodes, edges: skelEntries[0].edges };
+    var frames = skelEntries[0].frames;
 
     // --- videos[] ---
     var videos = (labels.videos || []).map(function (v, i) {
@@ -3048,6 +3071,10 @@ export async function parseSlpViaSleapIO(file, onProgress, opts) {
         skeleton: skeleton,
         tracks: tracks,
         frames: frames,
+        // Every skeleton's poses; `skeletons[0]` is `skeleton` + `frames`
+        // (outside-frames.js says who reads the rest).
+        skeletons: skelEntries,
+        skeletonEntryOf: entryOfSkeleton,
         videos: videos,
         sessions: sessions,
         identities: identities,

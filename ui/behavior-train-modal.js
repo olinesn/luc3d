@@ -77,7 +77,10 @@ function tableHtml() {
             (b.social ? ' <span class="behavior-tag">' + (b.mutual ? '↔' : '→') + '</span>' : '') + '</td>' +
             '<td class="num">' + n(r.counts.present.frames) + ' · ' + n(r.counts.present.bouts) + '</td>' +
             '<td class="num">' + n(r.counts.absent.frames) + ' · ' + n(r.counts.absent.bouts) + '</td>' +
-            '<td>' + (ready ? esc(status) : '<span class="bd-warn">' + esc(r.gate.join('; ')) + '</span>') + '</td></tr>';
+            '<td>' + (ready ? esc(status) : '<span class="bd-warn">' + esc(r.gate.join('; ')) + '</span>') + '</td></tr>' +
+            (r.unreviewed.length ? '<tr class="bt-unreviewed"><td></td><td colspan="4" class="bd-warn">' + esc(r.unreviewed.join(', ')) +
+                ': labelled present with no "not" frames, so a classifier would learn the animal rather than the behavior. ' +
+                'Behavior ▸ Mark Range Reviewed… adds them.</td></tr>' : '');
     });
     return html + '</tbody></table>';
 }
@@ -96,13 +99,15 @@ function cardHtml(m) {
     var post = behaviorPost(b);
     var cv = m.cv;
     var rep = lastTrainingReport(m.behaviorId);
+    var tr = m.training || {};
     var how;
     if (!cv) how = 'Not cross-validated.';
     else if (cv.note) how = 'Not cross-validated: ' + cv.note + '.';
     else how = 'Cross-validated ' + (SCHEME_TEXT[cv.scheme] || cv.scheme) + ' (' + (cv.folds || []).length + ' folds' +
         (cv.folds && cv.folds.length && cv.scheme !== 'time' ? ': ' + cv.folds.join('; ') : '') + ')' +
-        (cv.tested ? ', on ' + n(cv.tested) + ' labelled frames it never saw' : '') + '.';
-    var tr = m.training || {};
+        (cv.tested ? ', on ' + n(cv.tested) + ' labelled frames it never saw' : '') + '.' +
+        (cv.tested && tr.sampled && tr.counts ? ' They are a sample of ' + n(tr.counts.present.frames + tr.counts.absent.frames) +
+            ', so the frame numbers count each one for the frames it stands for.' : '');
     var trained = m.imported ? 'Imported' + (tr.sessions && tr.sessions.length ? ', trained on ' + tr.sessions.join(', ') : '')
         : 'Trained on ' + n(tr.rows) + ' rows' + (tr.sampled ? ' (sampled)' : '') + ' from ' + (tr.sessions || []).join(', ');
     var left = (rep && rep.leftOut && rep.leftOut.length) ? '<div class="bd-note bd-warn">Left out: ' +
