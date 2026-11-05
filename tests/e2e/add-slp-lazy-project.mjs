@@ -1079,13 +1079,14 @@ try {
     }
 
     console.log('\nG. Other save routes');
-    if (wants('G')) {
-        // Two lazy sessions: pass 2 re-reads each from its files, which do not hold added rows.
+    // Two lazy sessions. File ▸ Save keeps them loaded; the evicting writer's pass 2
+    // re-reads each from its files, which do not hold added rows.
+    for (const keepLoaded of [true, false]) if (wants('G')) {
         const page = await open('lazy', readFile('project'));
         await addSlp(page, fileOf('added.slp'));
         await putBytes(page, '__camC', readFile('camC_alone'));
         await putBytes(page, '__camD', readFile('camD_alone'));
-        const err = await page.evaluate(async () => {
+        const err = await page.evaluate(async (keepLoaded) => {
             const pd = await import('/pose/pose-data.js');
             const { SioLazyLoader } = await import('/loading/sio-lazy-loader.js');
             const AS = await import('/ui/app-state.js');
@@ -1100,15 +1101,15 @@ try {
             second.lazyLoader = loader;
             AS.state.sessions.push(second);
             try {
-                window.__saved = await sl.saveAllSessionsStreaming(AS.state.sessions.slice());
+                window.__saved = await sl.saveAllSessionsStreaming(AS.state.sessions.slice(), { keepLoaded });
                 return null;
             } catch (e) { return String(e && e.stack || e); }
-        });
+        }, keepLoaded);
         check(!err, 'the two-pass save runs', err);
         if (!err) {
             const read = await page.evaluate(readInPage);
             const bytes = await savedBytes(page);
-            checkSave('a lazy multi-session save', { bytes, read }, {
+            checkSave('a lazy multi-session save' + (keepLoaded ? '' : ', evicting writer'), { bytes, read }, {
                 poses: merged(sources.project.poses, sources.added.poses, sources.camC_alone.poses, sources.camD_alone.poses),
                 groups: sources.project.groups,
                 sessions: [Object.assign({}, sources.project.sessions[0], { camX: 'camX.mp4', camY: 'camY.mp4' }), { camC: 'camC.mp4', camD: 'camD.mp4' }],
