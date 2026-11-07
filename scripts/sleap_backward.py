@@ -448,18 +448,24 @@ def objective(pair: Pair, image, poses, node_mask, gen=None):
 
 
 class PyramidImage(torch.nn.Module):
-    """An image as sigmoid(logit(init) + mask * sum of upsampled per-octave layers).
+    """An image as init + sigmoid(b + mask * delta) - sigmoid(b), b = logit(init).
 
-    Every octave gets its own learnable layer, so a step of the optimizer moves low
-    frequencies as readily as high ones; a plain pixel grid moves almost only the
-    highest, which is where adversarial noise lives. Where `mask` is 0 the image is
-    exactly `init`.
+    `delta` is a sum of upsampled per-octave layers: every octave gets its own
+    learnable layer, so a step of the optimizer moves low frequencies as readily as
+    high ones; a plain pixel grid moves almost only the highest, which is where
+    adversarial noise lives.
+
+    The residual form makes the image EXACTLY `init` wherever delta or mask is 0.
+    sigmoid(logit(init)) alone is not: logit needs init clamped away from 0 and 1,
+    which lifted every pixel darker than 2.55 grey levels — most of a dark arena
+    floor — and would count as an edit when the edit is what is being measured.
     """
 
     def __init__(self, init, levels, mask=None, finest=0):
         super().__init__()
         _, c, h, w = init.shape
         self.size = (h, w)
+        self.register_buffer("init", init)
         self.register_buffer("base", torch.logit(init.clamp(0.01, 0.99)))
         self.register_buffer("mask", mask if mask is not None else torch.ones_like(init[:, :1]))
         # Octave k holds detail of ~2^k px; leaving out the finest octaves leaves out
@@ -478,7 +484,8 @@ class PyramidImage(torch.nn.Module):
                 delta = delta + layer
             else:
                 delta = delta + F.interpolate(layer, size=self.size, mode="bilinear", align_corners=False)
-        return torch.sigmoid(self.base + self.mask * delta)
+        moved = torch.sigmoid(self.base + self.mask * delta) - torch.sigmoid(self.base)
+        return (self.init + moved).clamp(0, 1)
 
 
 def edit_mask(poses, size, margin, device):
