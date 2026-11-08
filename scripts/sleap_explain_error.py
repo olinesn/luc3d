@@ -85,7 +85,8 @@ YELLOW, CYAN, GREY = (245, 210, 60), (70, 200, 230), (190, 190, 190)
 
 def read_poses(pair, image_u8, poses):
     """sleap-nn's reading of each labeled animal: (poses (n,K,2), node scores, errors)."""
-    found = sb.recover(pair, image_u8, poses)
+    with sb.exact_forward(pair):  # sleap-nn's own fp32 pass, even mid-optimization
+        found = sb.recover(pair, image_u8, poses)
     want = poses.cpu().numpy()
     mask = torch.isfinite(poses).all(-1).cpu().numpy()
     if "reported" not in found:
@@ -381,6 +382,9 @@ def parse_args(argv=None):
     ap.add_argument("--no-augment", dest="augment", action="store_false")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--precision", choices=("auto", "fp32", "bf16"), default="auto",
+                    help="bf16 (CUDA only; 'auto' picks it there) edits with the models in bf16 "
+                    "and channels-last; every reading is sleap-nn's fp32 pass")
     ap.add_argument("--out", required=True)
     return ap.parse_args(argv)
 
@@ -434,7 +438,10 @@ def main(argv=None):
             say(f"  {name:16s} {err_before[target, k]:6.1f} px off: " + (on or "no labeled node (background)"))
 
     mask, window_c = crop_window_mask(pair, labels[target], (W, H), device)
-    edited, history, fixed_at = minimal_edit(pair, frame, P, labels, target, mask, bar, args)
+    t_edit = time.time()
+    with sb.fast_forward(pair, device, args.precision):
+        edited, history, fixed_at = minimal_edit(pair, frame, P, labels, target, mask, bar, args)
+    edit_seconds = time.time() - t_edit
     edited_u8 = (edited * 255).round().to(torch.uint8)
     after_fix = [h for h in history if fixed_at is not None and h["step"] >= fixed_at and h["reads_correctly"]]
     kept = min(after_fix, key=lambda h: h["change_rms"]) if after_fix else history[-1]
@@ -495,7 +502,7 @@ def main(argv=None):
     nan_none = lambda a: np.where(np.isfinite(a), a, None).tolist()
     report = {
         "args": vars(args), "device": device, "nodes": pair.node_names, "target": target,
-        "fixed_at_step": fixed_at, "kept_step": kept["step"],
+        "fixed_at_step": fixed_at, "kept_step": kept["step"], "edit_seconds": round(edit_seconds, 1),
         "correct_bar_px": {"median": bar[0] if np.isfinite(bar[0]) else None, "node": bar[1]},
         "history": history,
         "error_before_px": nan_none(err_before), "error_after_px": nan_none(err_after),
