@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["sleap-nn>=0.2.0"]
+# dependencies = ["sleap-nn>=0.3.5"]
 # ///
 """
 Run a SLEAP top-down model pair BACKWARD: give it a skeleton, get an image.
@@ -107,11 +107,21 @@ from typing import Optional
 
 import numpy as np
 
+SLEAP_NN_MIN = (0, 3, 5)
+
 try:
     import cv2
     import sleap_io as sio
     import torch
     import torch.nn.functional as F
+    import sleap_nn
+
+    _have = tuple(int(p) for p in sleap_nn.__version__.split("+")[0].split(".")[:3])
+    if _have < SLEAP_NN_MIN:
+        raise ImportError(
+            f"these tools need sleap-nn {'.'.join(map(str, SLEAP_NN_MIN))} or newer "
+            f"(found {sleap_nn.__version__})"
+        )
     from sleap_nn.data.confidence_maps import generate_confmaps, generate_multiconfmaps
     from sleap_nn.data.instance_centroids import generate_centroids
     from sleap_nn.data.instance_cropping import make_centered_bboxes
@@ -120,11 +130,11 @@ try:
         apply_sizematcher,
         resize_image,
     )
-    from sleap_nn.inference.peak_finding import (
-        crop_bboxes,
-        find_global_peaks,
-        find_local_peaks,
-    )
+    from sleap_nn.inference.ops.crops import crop_bboxes
+    from sleap_nn.inference.ops.peaks import find_global_peaks, find_local_peaks
+
+    # Deprecated in 0.3.5 but still working; its replacement's loader
+    # (`sleap_nn.inference.loaders`) is internal.
     from sleap_nn.inference.predictors import TopDownPredictor
     from omegaconf import OmegaConf
 except ImportError as e:
@@ -303,8 +313,8 @@ def centroids_of(pair: Pair, poses):
     return generate_centroids(poses, anchor_ind=pair.anchor_ind)
 
 
-def crop_instances(pair: Pair, image, centroids, as_sleap_nn=False):
-    """Crop around each centroid.
+def crop_instances(pair: Pair, image, centroids):
+    """Crop around each centroid with sleap-nn's own `crop_bboxes`.
 
     Returns the crops, their bounding boxes (sleap-nn's half-pixel corners) and the
     integer pixel each crop actually starts at; the two differ by up to a pixel.
@@ -312,45 +322,30 @@ def crop_instances(pair: Pair, image, centroids, as_sleap_nn=False):
     that is the frame sleap-nn's training labels are in (`instance - bbox[0]`) and
     the one its inference adds back (`peak + bbox[0]`).
 
-    While optimizing this slices instead of calling sleap-nn's `crop_bboxes`, whose
-    unfold-and-index has no usable gradient: its backward allocates every possible
-    crop of the frame at once (1.2 TB for a 500 px crop of a 1280x1024 frame). The
-    index arithmetic — rounding, zero padding, clamping — is `crop_bboxes`'s.
-
-    With `as_sleap_nn`, it calls `crop_bboxes` itself, to reproduce the installed
-    sleap-nn exactly. Up to 0.3.4 that includes its crops one pixel short: it read
-    the crop size off the first box in float32, so for ~6% of first centroids per
-    axis `499.0` came out as `498.99997` and every crop of that frame lost a pixel
-    (sleap-nn#778, fixed in 0.3.5).
+    Gradients flow through it: since 0.3.5 `crop_bboxes` gathers each crop's pixels
+    from the zero-padded frame, so its backward needs about one frame of memory.
+    (0.2.0's unfold-and-index backward allocated every possible crop of the frame
+    at once, 1.2 TB for a 500 px crop of a 1280x1024 frame.) Against slicing by
+    hand it gives the same crops and gradients and costs ~0.3 ms more a step for
+    five 500 px crops on an L40S (runs/2026-11-09_crop-bboxes-backward on cup).
     """
     h, w = pair.crop_hw
     bboxes = make_centered_bboxes(centroids, h, w)  # (n, 4, 2)
-    if as_sleap_nn:
-        crops = crop_bboxes(image, bboxes=bboxes, sample_inds=[0] * len(centroids))
-        return crops, bboxes, crop_starts(bboxes, *crops.shape[-2:], image.shape[-2:])
-    starts = crop_starts(bboxes, h, w, image.shape[-2:])
-    hh, hw = h // 2, w // 2
-    padded = F.pad(image, (hw, hw, hh, hh), mode="constant", value=0)
-    crops = [
-        padded[:, :, y + hh : y + hh + h, x + hw : x + hw + w]
-        for x, y in starts.to(torch.long).tolist()
-    ]
-    crops = torch.cat(crops) if crops else image.new_zeros((0, image.shape[1], h, w))
-    return crops, bboxes, starts
+    if len(centroids) == 0:  # crop_bboxes would return (0, C, 0, 0)
+        return image.new_zeros((0, image.shape[1], h, w)), bboxes, bboxes[:, 0, :]
+    sample_inds = torch.zeros(len(centroids), dtype=torch.long, device=image.device)
+    crops = crop_bboxes(image, bboxes=bboxes, sample_inds=sample_inds, crop_size=(h, w))
+    return crops, bboxes, crop_starts(bboxes, h, w)
 
 
-def crop_starts(bboxes, h, w, image_hw):
+def crop_starts(bboxes, h, w):
     """The image pixel (x, y) that crop pixel (0, 0) of an `h x w` crop really is.
 
-    Same arithmetic as `crop_bboxes`: it truncates the box's top-left plus half the
-    crop to a pixel, clamps it to the padded frame, and slices `h x w` from there.
+    Same arithmetic as `crop_bboxes`: the box's top-left plus half the crop,
+    truncated toward zero, minus half the crop again.
     """
-    hh, hw = h // 2, w // 2
-    half = torch.tensor([hw, hh], dtype=bboxes.dtype, device=bboxes.device)
-    idx = (bboxes[:, 0, :] + half).to(torch.long)
-    idx[:, 0] = idx[:, 0].clamp(0, image_hw[1] + 2 * hw - w)
-    idx[:, 1] = idx[:, 1].clamp(0, image_hw[0] + 2 * hh - h)
-    return idx.to(bboxes.dtype) - half
+    half = torch.tensor([w // 2, h // 2], dtype=bboxes.dtype, device=bboxes.device)
+    return ((bboxes[:, 0, :] + half).to(torch.long) - half.long()).to(bboxes.dtype)
 
 
 def similarity_warp(image, src, dst, angle, zoom, out_hw):
@@ -447,7 +442,7 @@ def objective(pair: Pair, image, poses, node_mask, gen=None):
         centroids = centroids_of(pair, poses)
         h, w = pair.crop_hw
         bboxes = make_centered_bboxes(centroids, h, w)
-        starts = crop_starts(bboxes, h, w, image.shape[-2:])
+        starts = crop_starts(bboxes, h, w)
         if gen is not None and (st.rotation != (0.0, 0.0) or st.zoom != (1.0, 1.0)):
             # Each crop turned about its own centroid, which stays where the plain
             # crop would have put it, so angle 0 / zoom 1 is exactly that crop.
@@ -829,9 +824,7 @@ def recover(pair: Pair, image, poses):
     if pair.instance is None or len(centroids) == 0:
         return result
     st = pair.instance
-    crops, bboxes, _ = crop_instances(
-        pair, image, centroids.to(image.device), as_sleap_nn=True
-    )
+    crops, bboxes, _ = crop_instances(pair, image, centroids.to(image.device))
     cms, _ = run_stage(st, crops)
     peaks, vals = find_global_peaks(
         cms.cpu(), threshold=PEAK_THRESHOLD, refinement="integral",
