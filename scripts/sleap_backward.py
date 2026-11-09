@@ -60,7 +60,7 @@ Usage (sleap-nn's own environment has everything this needs):
     $PY scripts/sleap_backward.py ... --slp labels.slp --jobs jobs.jsonl \
         --shard $SLURM_ARRAY_TASK_ID/$N --out out/
 
-Speed (5-mouse frames, Swin models of 650M + 780M parameters): about 7-9 min a
+Speed (5-mouse frames, UNet models of 650M + 780M parameters): about 7-9 min a
 frame on an M2 Pro; on an A100, 0.19 s a step in fp32, 0.082 s in bf16 with
 channels-last weights (--precision auto, the default on CUDA; every read-back
 stays sleap-nn's fp32 pass), about 40 s a frame in all. Every --check-every
@@ -214,7 +214,7 @@ def load_pair(centroid_dir, instance_dir, device) -> Pair:
         centroid_ckpt_path=centroid_dir,
         confmap_ckpt_path=instance_dir,
         device=device,
-        # None = take each setting from the training config, as `sleap-nn track` does.
+        # None = take each setting from the training config, as `sleap-nn predict` does.
         preprocess_config=OmegaConf.create(
             dict.fromkeys(
                 ["ensure_rgb", "ensure_grayscale", "crop_size", "max_width", "max_height", "scale"]
@@ -265,7 +265,13 @@ def load_pair(centroid_dir, instance_dir, device) -> Pair:
 
 
 def size_match(pair: Pair, image):
-    """sleap-nn's sizematcher: returns (image, effective scale)."""
+    """sleap-nn's sizematcher: returns (image, effective scale).
+
+    A uint8 image is resized on the CPU, as sleap-nn does (see `run_stage`).
+    """
+    if image.dtype == torch.uint8 and image.device.type != "cpu":
+        out, eff = apply_sizematcher(image.cpu(), max_height=pair.max_hw[0], max_width=pair.max_hw[1])
+        return out.to(image.device), eff
     return apply_sizematcher(image, max_height=pair.max_hw[0], max_width=pair.max_hw[1])
 
 
@@ -273,11 +279,17 @@ def run_stage(stage: Stage, image):
     """Scale, pad to stride, and run one model.
 
     `image` is (n, C, H, W): float in [0, 1] while optimizing, or uint8 to reproduce
-    `sleap-nn track` exactly — it resizes the uint8 frame, rounding to whole grey
-    levels, and only then divides by 255.
+    `sleap-nn predict` exactly — it resizes the uint8 frame, rounding to whole grey
+    levels, and only then divides by 255. sleap-nn resizes frames on the CPU, and
+    torchvision rounds a uint8 resize differently on CUDA (one grey level off on
+    ~15% of pixels, enough to move a centroid by a heatmap pixel now and then), so
+    a uint8 image is resized on the CPU here too.
     """
     if stage.scale != 1.0:
-        image = resize_image(image, stage.scale)
+        if image.dtype == torch.uint8 and image.device.type != "cpu":
+            image = resize_image(image.cpu(), stage.scale).to(image.device)
+        else:
+            image = resize_image(image, stage.scale)
     image = apply_pad_to_stride(image, stage.max_stride)
     if image.dtype == torch.uint8:
         image = image.float() / 255
@@ -305,10 +317,11 @@ def crop_instances(pair: Pair, image, centroids, as_sleap_nn=False):
     crop of the frame at once (1.2 TB for a 500 px crop of a 1280x1024 frame). The
     index arithmetic — rounding, zero padding, clamping — is `crop_bboxes`'s.
 
-    With `as_sleap_nn`, it calls `crop_bboxes` itself, to reproduce `sleap-nn track`
-    exactly — including that (sleap-nn 0.2.0) it reads the crop size off the first
-    box in float32, so for ~6% of first centroids per axis `499.0` comes out as
-    `498.99997` and every crop of that frame is one pixel short.
+    With `as_sleap_nn`, it calls `crop_bboxes` itself, to reproduce the installed
+    sleap-nn exactly. Up to 0.3.4 that includes its crops one pixel short: it read
+    the crop size off the first box in float32, so for ~6% of first centroids per
+    axis `499.0` came out as `498.99997` and every crop of that frame lost a pixel
+    (sleap-nn#778, fixed in 0.3.5).
     """
     h, w = pair.crop_hw
     bboxes = make_centered_bboxes(centroids, h, w)  # (n, 4, 2)
@@ -651,7 +664,7 @@ def _set_layout(pair: Pair, channels_last):
 def fast_forward(pair: Pair, device, precision):
     """The models' forward (and backward) pass in bf16, channels-last, on CUDA.
 
-    On an A100 with these Swin models (650M + 780M parameters) one optimization
+    On an A100 with these UNet models (650M + 780M parameters) one optimization
     step takes 0.174 s in fp32, 0.140 s in bf16 and 0.067 s in bf16 with
     channels-last weights and activations. A no-op for fp32 or off CUDA. Inside
     it, `exact_forward` gives back sleap-nn's own fp32 NCHW pass for read-backs.
@@ -669,7 +682,7 @@ def fast_forward(pair: Pair, device, precision):
 
 @contextlib.contextmanager
 def exact_forward(pair: Pair):
-    """fp32, NCHW: the pass `sleap-nn track` runs, even inside `fast_forward`."""
+    """fp32, NCHW: the pass `sleap-nn predict` runs, even inside `fast_forward`."""
     was = any(st is not None and st.channels_last for st in (pair.centroid, pair.instance))
     _set_layout(pair, False)
     try:
@@ -680,7 +693,7 @@ def exact_forward(pair: Pair):
 
 
 def read_back(pair: Pair, image, poses, node_mask):
-    """Quantize `image` like a saved PNG and read it as `sleap-nn track` would.
+    """Quantize `image` like a saved PNG and read it as `sleap-nn predict` would.
 
     Returns {mean_px, median_px, max_px, centroids}: the node error against
     `poses` and how many animals the centroid model found. Always fp32 NCHW
@@ -790,7 +803,7 @@ def _optimize_loop(pair, img_param, opt, init, poses, node_mask, args, mask, log
 
 @torch.no_grad()
 def recover(pair: Pair, image, poses):
-    """Run the image forward the way `sleap-nn track` does; return what it finds.
+    """Run the image forward the way `sleap-nn predict` does; return what it finds.
 
     Pass `image` as uint8 (1, C, H, W) to match it bit for bit.
 

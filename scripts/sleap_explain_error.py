@@ -8,7 +8,7 @@ Explain a real SLEAP prediction error: what would have to change in the frame
 for the models to get the pose right?
 
 Runs a top-down pair (centroid + centered-instance) on a labeled frame exactly as
-`sleap-nn track` does, finds the animal it gets most wrong against the hand
+`sleap-nn predict` does, finds the animal it gets most wrong against the hand
 labels, then edits the REAL frame as little as possible — the backward
 machinery of scripts/sleap_backward.py with a sparsity penalty on the change —
 until sleap-nn's own inference reads the hand-labeled pose for that animal. It
@@ -77,9 +77,11 @@ improve the neighbour's own reading; --target-only drops that pull. On the DPBox
 top labels (20 held-out frames, 31 misread mice) neighbours covered 13-14% of the
 window and took 45% of the edit, 31% with --target-only; but --target-only let 14
 neighbours get worse to fix the target (0 without it), so it is a check, not
-the default.
+the default. The same sweep with sleap-nn 0.3.5 (crops no longer a pixel short)
+gave the same counts and shares; readings moved by a median of 0.01 px.
 
-Requires: sleap-nn (torch, sleap-io, opencv come with it).
+Requires: sleap-nn (torch, sleap-io, opencv come with it); read-backs checked
+node for node against `sleap-nn predict` 0.3.5.
 """
 
 import os
