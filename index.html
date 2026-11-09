@@ -100,6 +100,8 @@
                     <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
                     <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
                     <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
+                    <div class="menu-dropdown-item" id="menuLoadModelCheck"
+                        title="Step through the animals a model misread: the scan.json written by scripts/sleap_explain_error.py --sweep">Load Model Check…</div>
                     <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSaveSkeleton">Save Skeleton (JSON)</div>
@@ -517,6 +519,7 @@
                     <button class="panel-tab active" data-tab="tabInstances">Instances</button>
                     <button class="panel-tab" data-tab="tabVisibility">Visibility</button>
                     <button class="panel-tab" data-tab="tabIdSwitches">ID Switches</button>
+                    <button class="panel-tab" data-tab="tabModelCheck">Model Check</button>
                     <button class="panel-tab" data-tab="tabVideos">Videos</button>
                     <button class="panel-tab" data-tab="tabCameras">Cameras</button>
                     <button class="panel-tab" data-tab="tabSkeleton">Skeleton</button>
@@ -877,6 +880,13 @@
                      Tracks ▸ Check ID Switches results for the active session. -->
                 <div class="panel-tab-content" id="tabIdSwitches">
                     <div id="idSwitchPanel"></div>
+                </div>
+
+                <!-- ==================== Model Check Tab ==================== -->
+                <!-- Rendered by ui/model-check-panel.js refreshModelCheckPanel: the animals a model misread,
+                     from File ▸ Load Model Check… (scan.json). Kept in this page only, never in the .slp. -->
+                <div class="panel-tab-content" id="tabModelCheck">
+                    <div id="modelCheckPanel"></div>
                 </div>
 
                 <!-- ==================== Videos Tab ==================== -->

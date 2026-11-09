@@ -1267,6 +1267,20 @@ backwards.
 
 ### pose/pose-data.js
 
+**A hand-labelled instance knows its row in the file (eager loads).**
+`tagFileRow(inst, row)` sets `inst._fileRow` (its index among the camera-frame's
+instances in the file) on USER instances only, from the eager readers' first
+pass (`handleLoadSlpFile`, `handleLoadSessionFolderSingleSlp`), and
+`adoptFileRow(inst, from)` carries it to the instance that replaces it when
+`reconstructInstanceGroupsFromDicts` / `reconstructInstanceGroupsFromSession`
+rebuild the groups — from the hand-labelled pass-1 instance at the same points
+(`fileRowSource` in import-export/slp-import.js), looked up apart from the
+duplicate those remove, which can be a prediction at the same points. Those readers list grouped instances before unlinked ones, so
+a frame's lists are not in file order; the Model Check tab
+(`ui/model-check-panel.js`) sorts by `_fileRow` to name "animal N" as a tool
+reading the file does (a lazy project has `_rawInstIndex`). In memory only, never
+saved, never on predictions (no per-instance cost on the millions of those).
+
 **3D read from a file is marked.** `markPoints3dFromFile(points3d)` /
 `isPoints3dFromFile(points3d)` — a `WeakSet` of `points3d` arrays the loaders
 read from a file (`import-export/slp-import.js`'s three restore sites and its
@@ -4421,6 +4435,65 @@ read and given back.
 **Imports.** `pose/triangulation-core.js`, `pose/lazy-residency.js`,
 `pose/placeholder-cameras.js`. **Imported by** `ui/threshold-examples-panel.js`.
 **Tests.** `tests/test-threshold-examples.mjs`.
+
+### pose/model-check.js
+
+**Purpose.** A model check — the `scan.json` that `scripts/sleap_explain_error.py
+--sweep` writes, one row per hand-labelled animal the sweep read — parsed and
+matched to the open project, DOM-free and import-free so it is unit-tested in Node.
+The tab is `ui/model-check-panel.js`.
+
+**Key exports.**
+- `parseModelCheck(text)` → `{rows, skipped}`, rows camelCased (`videoIndex`,
+  `video`, `camera`, `frame`, `animal`, `split`, `medianPx`, `maxPx`, `barPx`,
+  `misread`, `name`, `nodes: [{node, px, cause, readOn, ref}]`, worst first).
+  Python writes NaN as a bare `NaN`, which JSON.parse refuses, so
+  `jsonWithoutNaN` turns bare NaN / ±Infinity outside strings into null first and
+  missing numbers read as NaN (`maxPx` NaN = never detected). Rows without a video,
+  frame and animal are counted in `skipped`, never fatal. Throws a plain message
+  for a file that is not a check.
+- `parseReadOn(text)` → `{own, animal, node, px}` for "animal 2's Ear_L (5.4 px)" /
+  "its own Neck (10.2 px)", null for the background (null) or unknown text.
+- `scanCameras(rows)`, `scanCameraKey(row)` (video_index + video + camera),
+  `rowKey(row)`.
+- `matchScanCameras(scanCams, projectCams)` → Map key → `{status: matched |
+  ambiguous | unmatched, cam, candidates, how: video | camera, reason}`. By video
+  file name when the name is distinctive (not `GENERIC_VIDEO_NAME` — campy writes
+  every video as `0.mp4` — and used by one scan camera only), narrowed by camera
+  name when several project cameras share it; else by camera name (exact, then
+  case-insensitive). Ambiguous when several fit, or when the one camera of that
+  name has a different distinctive video in the project (the check may have read
+  another recording). Never matches on a generic name alone.
+- `matchAnimals(frameRows, instances)` → Map animal → `{index, status, reason,
+  checks}` for the misread rows of ONE camera-frame. `instances` are the
+  project's hand-labelled instances there, in file order, as `{points: {node:
+  [x, y]}}`. File order first, checked by `rowConstraints`: each misread node
+  must be labelled, the node it was read on too, and since node k was read `px`
+  from its own label and `d` from the named label, the two labels are between
+  `px - d` and `px + d` apart (± `DISTANCE_TOLERANCE`, 0.1 px: `read_on` is
+  printed to 0.1 px). Status `verified` (file order, distances agree), `order`
+  (file order, the row gives no distance — background / imprecise only, or never
+  detected), `positions` (file order fails or the counts differ: the ONE instance
+  whose nodes fit, found by trying every injective assignment of the animals the
+  row names; up to 12 instances), `unmatched` (with why: count differs and nothing
+  to check, a misread node not labelled, none or several fit).
+- `reviewEntries(rows, {split, cause})` — the misread rows, filtered, worst first
+  (`worstPx`: never detected first). `rowCauses(row)` (adds `not_detected`).
+- `describeNode(n, animalName?)` — "Ear_L read on animal 2 (id_1)'s Ear_L",
+  "Nose read on the background", "Neck read near its own label, just past the bar".
+- `CAUSE_TEXT` (the sweep's wording), `CAUSE_LABELS` (filter names), `SPLITS`,
+  `MATCH_STATUS_TEXT`, `formatPx`, `baseName`.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/model-check-panel.js`.
+
+**Coverage.** `tests/test-model-check.mjs` (NaN, malformed rows, read_on, camera
+matching incl. campy `0.mp4` and multi-session ambiguity, filters and order,
+file order verified / reordered / count changed / labels edited / ambiguous /
+rounding slack); `tests/e2e/model-check-review.mjs`.
+
+---
 
 ### pose/view-align.js
 
@@ -9597,6 +9670,109 @@ with a row selected).
 
 ---
 
+### ui/model-check-panel.js
+
+**Purpose.** File ▸ **Load Model Check…** and the right panel's **Model Check**
+tab (`#tabModelCheck` / `#modelCheckPanel`, after ID Switches): the animals a
+model misread, from a `scan.json` (`pose/model-check.js`), to step through while
+proofreading.
+
+**Loading.** `openModelCheckFile(pick)` reads the file through
+`readBlobArrayBuffer` (it is often on a share or Drive); `loadModelCheckText(text,
+name)` (also the e2e entry) parses it, matches its cameras to `projectCameras()`
+— one per (session, camera), with the video names the project knows for it: the
+loaded files (`state.videoFiles` by `assignedCamera`, `videoFileIndices` /
+`sessionIdx`), and what the opened `.slp` stored (`session.fileVideos`, or the
+lazy loader's `videos`) — and asks about ambiguous cameras in one dialog
+(`.model-check-ask`: a select per camera with the reason, "Skip this camera";
+Esc / Cancel / a click outside cancels the load; keys stop at it). The status line
+and the tab report rows matched and not (frames past the end of a camera's video
+count as not matched), and how cameras matched (video name / camera name / chosen).
+
+**The list.** Misread animals worst first (`reviewEntries`), filtered by split
+and cause (`<select>`s in the sticky toolbar, with counts; kept in
+`localStorage.modelCheckFilter`). Each entry: camera (session when there are
+several), frame (1-based), "animal N · <identity or track>", worst error, split,
+the misread body parts, and a match mark (✓ verified, · file order, ↔ by
+positions, ⚠ not matched; the title says why). The selected entry lists every
+misread node — `describeNode` naming the neighbour's identity when the row is
+verified — with its cause and both distances, and says how its animal was matched
+and how many distances were checked.
+
+**Selecting** (`goToEntry`, click, Prev / Next, `stepModelCheck(±1)` = **M** /
+**Shift+M**, `ACTION_CATALOG` `modelCheckNext` / `modelCheckPrev`, wrapping):
+switches session when needed, solos the camera in single-view mode (else focuses
+its pane), goes to the frame, marks the animal (`ui/model-check-highlight.js`)
+and writes "Model check k of n: camera, frame, animal" (or why it is not matched,
+or that the camera is hidden) on the status line. An entry whose camera did not
+match only says why.
+
+**Matching an animal.** `userInstancesAt(session, cam, frame)`: the resident
+frame's user instances (grouped and unlinked), sorted into the file's order by
+`_rawInstIndex` (lazy) or `_fileRow` (eager: `tagFileRow` in pose/pose-data.js —
+the eager readers list grouped instances before unlinked ones; on the real DPBox
+labels, LUC3D's own order failed the distance check on 9 of the 31 misread rows,
+and with `_fileRow` none fails, as on the lazy load), when every one has it; else
+a lazy project's store rows (`lazyLoader.getFrameSync`, file order) for a frame
+not loaded. Re-resolved on every render and draw (cheap), so edits and
+hydration show at once.
+
+**Nothing is saved.** The check lives in this module until Close or reload: no
+`markDirty`, nothing on the session, nothing in the `.slp`.
+
+**Key exports.** `openModelCheckFile`, `loadModelCheckText`, `closeModelCheck`,
+`refreshModelCheckPanel`, `openModelCheckPanel`, `stepModelCheck`, `goToEntry`,
+`updateModelCheckFrame(frame)` (every frame change, ui-wiring
+`updateSeekbarVisual`), `setModelCheckNavigator({goToFrame, showView,
+switchSession})` (ui-wiring registers `navigateToFrame`, `setSoloView` /
+`activatePanelForView` and `switchSession`, keeping this a leaf),
+`projectCameras`, `getModelCheck` (tests).
+
+**Imports from project modules.** `ui/app-state.js` (`state`),
+`import-export/save-load.js` (`setStatus`), `pose/pose-data.js`
+(`groupDisplayName`), `ui/frame-readout.js` (`formatFrameNumber`),
+`loading/cold-read-guard.js` (`readBlobArrayBuffer`), `pose/model-check.js`,
+`ui/model-check-highlight.js`.
+
+**Imported by.** `ui/ui-wiring.js`.
+
+**Coverage.** `tests/e2e/model-check-review.mjs` (menu + file chooser, report,
+order, M / Shift+M, solo view, the mark, filters, nothing dirty, the ambiguity
+question, a lazy project, Close); real data: `tests/e2e/_real-model-check.mjs`
+(`SLP=… SCAN=…`, `LAZY=1`, `SHOT=`).
+
+---
+
+### ui/model-check-highlight.js
+
+**Purpose.** The selected Model Check entry's mark in its camera's view: a box
+around the misread animal labelled "animal N · name · worst px", a red ring on
+each misread node (named), a dashed line from it to the labelled node it was read
+on, and a thin grey box around that neighbour ("animal M · name"). Only where the
+entry's animal is matched; neighbours only on a verified row.
+
+**How.** Its own canvas per view (`.model-check-canvas` in the view's
+`.canvas-wrapper`), like `ui/id-switch-highlight.js`: zoom / pan / rotation come
+from the wrapper's transform, overlay redraws never clear it, exports leave it
+out; lines and text sized in screen pixels. Static: a requestAnimationFrame loop
+runs only while the active session is on the entry's frame and repaints only when
+the canvas size or the positions it drew change (a node dragged, a lazy frame
+hydrated). Leaving the frame clears it.
+
+**Key exports.** `setModelCheckHighlight({session, camera, frame, label, locate})
+| null`, `updateModelCheckHighlight(frame)`, `getModelCheckHighlight()` (tests),
+`MODEL_CHECK_COLORS`.
+
+**Imports from project modules.** `ui/app-state.js` (`state`), `ui/overlays.js`
+(`makeVideoToCanvasTransform`).
+
+**Imported by.** `ui/model-check-panel.js`.
+
+**Coverage.** `tests/e2e/model-check-review.mjs` (on the entry's view only,
+around the animal, cleared off the frame, redrawn on return, after hydration).
+
+---
+
 ### ui/image-embedder.js
 
 **Purpose.** Appearance embeddings for the image ID-switch check: for a sampled
@@ -11275,6 +11451,12 @@ environment file is too new, rather than triangulating from the readable cameras
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
   once at setup, as is `setTrackSummaryNavigator` (`ui/track-summary-modal.js`:
   the Track All summary's Identities samples and maps go to a frame).
+  File ▸ **Load Model Check…** (`menuLoadModelCheck`) calls `openModelCheckFile`
+  with `pickFiles({accept: '.json'})` (`ui/model-check-panel.js`);
+  `setModelCheckNavigator` gets `navigateToFrame`, `setSoloView` (else
+  `activatePanelForView`) and `switchSession`; `modelCheckNext` / `modelCheckPrev`
+  (M / Shift+M) call `stepModelCheck(±1)`; `updateSeekbarVisual` calls
+  `updateModelCheckFrame` beside `updateIdSwitchProgress`.
 - Color-by toggle: the Tracks / Identity control is in the top toolbar
   (`colorByTracks` / `colorById`; group `aria-label="Color by"`).
   `updateColorByToggle()` reflects `state.colorByIdentity`. Every change goes

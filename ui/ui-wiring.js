@@ -99,6 +99,7 @@ import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
 import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js';
+import { openModelCheckFile, setModelCheckNavigator, stepModelCheck, updateModelCheckFrame, refreshModelCheckPanel } from './model-check-panel.js';
 import { setTrackSummaryNavigator } from './track-summary-modal.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
@@ -922,6 +923,19 @@ export function setupMenus() {
     document.getElementById('menuCheckSizeSwitches').addEventListener('click', function () {
         closeMenus();
         runIdSwitchChecks({ size: true, navigateToFrame: navigateToFrame });
+    });
+    // File ▸ Load Model Check…: the Model Check tab (ui/model-check-panel.js) steps through the
+    // animals a model misread. An entry goes to its session, its camera (solo'd in single-view
+    // mode, else the focused pane) and its frame.
+    setModelCheckNavigator({
+        goToFrame: navigateToFrame,
+        showView: function (name) { if (!setSoloView(name)) activatePanelForView(name); },
+        switchSession: switchSession,
+    });
+    refreshModelCheckPanel();
+    document.getElementById('menuLoadModelCheck').addEventListener('click', function () {
+        closeMenus();
+        openModelCheckFile(function () { return pickFiles({ accept: '.json' }); });
     });
     // Tracks ▸ Check ID Switches (Images): the same, by appearance — minutes, needs the videos (GPU, else CPU).
     document.getElementById('menuCheckImageSwitches').addEventListener('click', function () {
@@ -2443,6 +2457,8 @@ export function setupUI() {
     // has unwinding to do (Set Origin Mode, the angle dialog, the toolbar lock)
     // and a second entry point would be a second place to forget it.
     setHandler('definePlanes', function () { togglePlaneMode(); });
+    setHandler('modelCheckNext', function () { stepModelCheck(1); });
+    setHandler('modelCheckPrev', function () { stepModelCheck(-1); });
 
     // Single dispatcher for catalog-driven shortcuts. Runs before the structural
     // handlers below; if a catalog action matches it consumes the event.
@@ -3303,6 +3319,7 @@ export function updateSeekbarVisual(frameIdx) {
     setSeekbarMarkerFrames(state.totalFrames);       // no-op unless the frame count changed
     refreshSeekbarTicks();                           // no-op unless the frame count or FPS changed
     updateIdSwitchProgress(frameIdx);                // the ID Switches tab's selected-row bar (no-op without one)
+    updateModelCheckFrame(frameIdx);                 // the Model Check entry's mark in its view (no-op without one)
     updateBehaviorFrame(frameIdx);                   // behavior labels: save cursor, running states, lit buttons
 }
 

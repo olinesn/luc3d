@@ -8336,6 +8336,48 @@ details[open] > summary.origin-rebase-block-title::before {
   background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 3px;
 }
 .id-switch-end:hover { color: var(--text-primary); background: var(--surface-hover); }
+/* File ▸ Load Model Check… — the Model Check tab (ui/model-check-panel.js). Reuses the ID Switches
+   tab's sticky toolbar and summary styles; the tab content is the panel's one scroller. */
+.model-check-file { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; overflow-wrap: anywhere; }
+.model-check-summary { font-size: 12px; margin: 2px 0; }
+.model-check-intro { font-size: 12px; color: var(--text-secondary); line-height: 1.45; }
+.model-check-unmatched ul { margin: 6px 0; padding-left: 18px; color: var(--text-secondary); }
+.model-check-unmatched li { margin: 2px 0; overflow-wrap: anywhere; }
+.model-check-toolbar select { font-size: 11px; max-width: 46%; }
+.model-check-pos { font-size: 12px; margin-right: auto; font-variant-numeric: tabular-nums; }
+.model-check-row {
+  cursor: pointer; padding: 6px 16px 6px 13px; border-bottom: 1px solid var(--border-color);
+  border-left: 3px solid #ff8c28;
+}
+.model-check-row:hover { background: rgba(255, 140, 40, 0.10); }
+.model-check-row.is-current { background: rgba(255, 140, 40, 0.22); }
+.model-check-row.status-unmatched { border-left-color: var(--warning-color, #e0a030); }
+.model-check-row.status-unmatched:not(.is-current) .model-check-line1 { opacity: 0.6; }
+.model-check-line1 { display: flex; gap: 8px; font-size: 12px; }
+.model-check-where { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.model-check-who { font-weight: 600; }
+.model-check-px { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.model-check-line2 { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.model-check-status { margin-left: 2px; }
+.model-check-row.status-verified .model-check-status { color: var(--success-color); }
+.model-check-row.status-unmatched .model-check-status { color: var(--warning-color, #e0a030); }
+.model-check-nodes { list-style: none; margin: 6px 0 0; padding: 0; font-size: 12px; }
+.model-check-nodes li { margin: 5px 0; }
+.model-check-nodemeta { display: flex; gap: 6px; align-items: baseline; margin-top: 1px; font-size: 11px; }
+.model-check-npx { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.model-check-cause {
+  flex: none; font-size: 10px; padding: 0 5px; border-radius: 3px; line-height: 16px;
+  border: 1px solid var(--border-color); color: var(--text-secondary);
+}
+.model-check-cause.cause-neighbour_same, .model-check-cause.cause-neighbour_other { border-color: #ff6b5a; color: #ff8a7a; }
+.model-check-cause.cause-swap { border-color: #b28cff; color: #c4a6ff; }
+.model-check-note { font-size: 11px; color: var(--text-secondary); margin: 6px 0 0; line-height: 1.4; }
+.model-check-ask-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin: 8px 0; font-size: 12px; }
+.model-check-ask-row small { color: var(--text-secondary); }
+.model-check-ask-row select { max-width: 50%; }
+/* The selected entry's mark, on its own canvas in its view (ui/model-check-highlight.js). */
+.model-check-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+
 /* Animated box around the selected row's two animals, on its own canvas per view
    (ui/id-switch-highlight.js) — inside the wrapper, so zoom/pan/rotation apply. */
 .id-switch-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
