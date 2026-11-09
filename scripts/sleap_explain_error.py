@@ -80,6 +80,14 @@ neighbours get worse to fix the target (0 without it), so it is a check, not
 the default. The same sweep with sleap-nn 0.3.5 (crops no longer a pixel short)
 gave the same counts and shares; readings moved by a median of 0.01 px.
 
+A .pkg.slp is read from its own images (no --video-root), its videos told apart by
+their embedded dataset, since file names repeat in merged packages. For a big
+package, --scan-training N reads only N sampled training frames and
+--explain-limit N explains a seeded sample. On a second pair (top-view models
+trained on a 30,869-frame merged package, 318 held-out frames) neighbours took 28%
+of the edit against 12% of the window, 93 of 110 fixed mice above their share; its
+training frames were misread as often as held-out ones (26% vs 25%).
+
 Requires: sleap-nn (torch, sleap-io, opencv come with it); read-backs checked
 node for node against `sleap-nn predict` 0.3.5.
 """
@@ -203,9 +211,7 @@ def cause_of(k, read_xy, labels, target, mirror, near_px):
 
 def mirror_map(slp_path, node_names):
     """Node index -> its left/right partner, from the skeleton's symmetries."""
-    import sleap_io as sio
-
-    sk = sio.load_slp(str(slp_path), open_videos=False).skeletons[0]
+    sk = load_labels(slp_path).skeletons[0]
     out = {}
     for sym in getattr(sk, "symmetries", []) or []:
         a, b = [n.name for n in sym.nodes]
@@ -481,6 +487,10 @@ def parse_args(argv=None):
     g.add_argument("--split", choices=("held-out", "training", "all"), default="all",
                    help="which misread animals to explain (held-out = in no model's training set)")
     g.add_argument("--scan-only", action="store_true", help="only read the frames and tally; explain nothing")
+    g.add_argument("--scan-training", type=int, metavar="N",
+                   help="read every held-out frame but only a seeded sample of N training frames")
+    g.add_argument("--explain-limit", type=int, metavar="N",
+                   help="explain a seeded random sample of N misread animals, not all of them")
     g.add_argument("--shard", metavar="K/N", help="explain only every N-th misread animal from K (one per GPU)")
     g.add_argument("--redo", action="store_true", help="redo the scan and animals already explained")
     g.add_argument("--summarize", action="store_true",
@@ -636,7 +646,7 @@ def single(pair, args, device):
 
     out = Path(args.out)
     poses, video = sb.poses_from_slp(args.slp, args.frame, args.video_index, pair.node_names, "user")
-    reader = sb.open_video(video, args.video)
+    reader = frame_reader(args.slp, args.video_index, args.video)
     if reader is None:
         raise SystemExit(f"cannot open the video ({video.filename}); pass --video PATH")
     frame_u8 = frame_tensor(reader, args.frame, device)
@@ -669,6 +679,66 @@ def find_videos(root):
     return index
 
 
+_LABELS = {}
+
+
+def load_labels(path, open_videos=False):
+    """sio.load_slp, once per file and mode (a package of 30,000 frames takes a while)."""
+    import sleap_io as sio
+
+    key = (str(path), open_videos)
+    if key not in _LABELS:
+        _LABELS[key] = sio.load_slp(str(path), open_videos=open_videos)
+    return _LABELS[key]
+
+
+def video_path(video):
+    """The file a labels video stands for: for images embedded in a package, the file
+    at the bottom of its source chain (every embedded video's own filename is the
+    package, and packages are often made from packages)."""
+    fn = video.filename
+    src = getattr(video, "source_video", None)
+    while src is not None:
+        fn = src.filename or fn
+        src = getattr(src, "source_video", None)
+    if isinstance(fn, list):
+        fn = fn[0] if fn else ""
+    return Path(str(fn).replace("\\", "/"))
+
+
+def video_key(video):
+    """What identifies a labels video across a package and its subsets: the embedded
+    dataset (`videoN/video`) for a package's own images, else the video's file name.
+    File names can repeat in a package (144 names for 1,068 videos in one)."""
+    meta = getattr(video, "backend_metadata", None) or {}
+    return meta.get("dataset") or video_path(video).name
+
+
+def embeds_images(video):
+    """True if the video's frames are stored in the .slp itself (a .pkg.slp)."""
+    return bool((getattr(video, "backend_metadata", None) or {}).get("dataset"))
+
+
+def frame_reader(slp, vi, override=None):
+    """Something `frame_tensor` can index for video `vi` of `slp`: the video file
+    (`override`, else the stored path), or the package's own images."""
+    v = load_labels(slp).videos[vi]
+    if embeds_images(v) and not override:
+        # Never sio.load_video(the package): that opens its FIRST embedded video.
+        return load_labels(slp, open_videos=True).videos[vi]
+    return sb.open_video(v, override)
+
+
+def frame_poses(slp, vi, frame, node_names):
+    """The frame's hand-labeled poses (n, K, 2) in the model's node order."""
+    labels = load_labels(slp)
+    lfs = labels.find(labels.videos[vi], frame)
+    insts = lfs[0].user_instances if lfs else []
+    if not insts:
+        raise ValueError(f"no hand-labeled animals on frame {frame} of video {vi}")
+    return np.stack([sb.instance_to_array(i, node_names) for i in insts])
+
+
 def held_out_frames(model_dirs):
     """(video file name, frame) of the frames NO given model trained on: the
     intersection of their labels_gt.val.*.slp; None if a model has no split file."""
@@ -683,8 +753,14 @@ def held_out_frames(model_dirs):
             return None
         s = set()
         for f in files:
-            for lf in sio.load_slp(f, open_videos=False).labeled_frames:
-                s.add((Path(str(lf.video.filename).replace("\\", "/")).name, lf.frame_idx))
+            try:
+                lab = sio.load_slp(f, open_videos=False)
+            except IndexError:
+                # sleap-io#590: a subset of a package saved without re-embedding has
+                # frame -> video ids only the default load reads correctly.
+                lab = sio.load_slp(f)
+            for lf in lab.labeled_frames:
+                s.add((video_key(lf.video), lf.frame_idx))
         sets.append(s)
     return set.intersection(*sets)
 
@@ -708,21 +784,31 @@ def sweep_bar(pose, args):
 
 def scan(pair, args, device, mirror):
     """Read every hand-labeled frame of the .slp; return one row per animal."""
-    import sleap_io as sio
-
-    labels = sio.load_slp(str(args.slp), open_videos=False)
+    labels = load_labels(args.slp)
     index = find_videos(args.video_root) if args.video_root else {}
     held = held_out_frames([args.centroid, args.instance])
+    lfs = [lf for lf in labels.labeled_frames if lf.user_instances]
+    if held is not None:
+        n_held = sum((video_key(lf.video), lf.frame_idx) in held for lf in lfs)
+        print(f"{len(lfs)} hand-labeled frames; {n_held} held out of every model's training "
+              f"({len(held)} in the intersection of their validation splits)")
+    vindex = {id(v): i for i, v in enumerate(labels.videos)}
+    if args.scan_training is not None and held is not None:
+        # Every held-out frame, and a seeded sample of the training frames.
+        train = [i for i, lf in enumerate(lfs) if (video_key(lf.video), lf.frame_idx) not in held]
+        keep = set(np.random.default_rng(args.seed).permutation(train)[: args.scan_training].tolist())
+        lfs = [lf for i, lf in enumerate(lfs)
+               if (video_key(lf.video), lf.frame_idx) in held or i in keep]
+    # A package's videos often share a camera folder name: then name folders by video index too.
+    cams = [video_path(v).parent.name for v in labels.videos]
+    by_index = len(set(cams)) < len(cams)
     rows, readers = [], {}
-    for lf in labels.labeled_frames:
+    for lf in lfs:
         insts = lf.user_instances
-        if not insts:
-            continue
-        vi = labels.videos.index(lf.video)
-        name = Path(str(lf.video.filename).replace("\\", "/")).name
+        vi = vindex[id(lf.video)]
+        name = video_path(lf.video).name
         if vi not in readers:
-            path = index.get(name) or (lf.video.filename if Path(str(lf.video.filename)).exists() else None)
-            readers[vi] = sb.open_video(lf.video, path)
+            readers[vi] = frame_reader(args.slp, vi, index.get(name))
             if readers[vi] is None:
                 print(f"  cannot open video {vi} ({name}); its frames are skipped")
         if readers[vi] is None:
@@ -730,13 +816,14 @@ def scan(pair, args, device, mirror):
         poses = np.stack([sb.instance_to_array(i, pair.node_names) for i in insts])
         u8 = frame_tensor(readers[vi], lf.frame_idx, device)
         read, scores, err = read_poses(pair, u8, torch.tensor(poses, dtype=torch.float32, device=device))
-        split = "unknown" if held is None else ("held-out" if (name, lf.frame_idx) in held else "training")
+        split = "unknown" if held is None else ("held-out" if (video_key(lf.video), lf.frame_idx) in held else "training")
         for a in range(len(poses)):
             bar = sweep_bar(poses[a], args)
             bad = [k for k in range(len(pair.node_names)) if np.isfinite(err[a, k]) and err[a, k] > bar[1]]
             rows.append({
-                "video_index": vi, "video": name, "camera": Path(str(lf.video.filename).replace("\\", "/")).parent.name,
+                "video_index": vi, "video": name, "camera": cams[vi],
                 "frame": int(lf.frame_idx), "animal": a, "split": split,
+                "name": f"v{vi}_f{lf.frame_idx}_a{a}" if by_index else f"{cams[vi]}_f{lf.frame_idx}_a{a}",
                 "median_px": float(np.nanmedian(err[a])), "max_px": float(np.nanmax(err[a])),
                 "bar_px": bar[1], "misread": not reads_correctly(err[a], bar),
                 "misread_nodes": {pair.node_names[k]: {
@@ -765,6 +852,9 @@ def tally_text(rows, reports):
             n = sum(x["cause"] == c for x in nodes)
             if n:
                 out.append(f"  {100 * n / len(nodes):5.1f}%  {n:3d}  {text}")
+        missed = sum(not np.isfinite(r["max_px"]) for r in bad)
+        if missed:
+            out.append(f"  not detected at all (no reading, so not explained): {missed} of {len(bad)}")
         involved = sum(any(x["cause"].startswith("neighbour") for x in r["misread_nodes"].values()) for r in bad)
         swapped = sum(any(x["cause"] == "swap" for x in r["misread_nodes"].values()) for r in bad)
         if bad:
@@ -812,34 +902,36 @@ def sweep(pair, args, device):
         if not args.shard or args.shard.startswith("0/"):
             scan_file.write_text(json.dumps(rows, indent=1))
     todo = [r for r in rows if r["misread"] and (args.split == "all" or r["split"] == args.split)]
+    if args.explain_limit is not None and len(todo) > args.explain_limit:
+        # A seeded sample, the same for every shard.
+        pick = np.random.default_rng(args.seed).permutation(len(todo))[: args.explain_limit]
+        todo = [todo[i] for i in sorted(pick)]
     if args.shard:
         k, n = (int(x) for x in args.shard.split("/"))
         todo = todo[k::n]
     if args.scan_only:
         todo = []
     index = find_videos(args.video_root) if args.video_root else {}
-    import sleap_io as sio
-
-    labels = sio.load_slp(str(args.slp), open_videos=False)
     for i, r in enumerate(todo):
-        name = f"{r['camera']}_f{r['frame']}_a{r['animal']}"
+        name = r.get("name") or f"{r['camera']}_f{r['frame']}_a{r['animal']}"
         sub = out / "explained" / name
         if (sub / "report.json").exists() and not args.redo:
             print(f"[{i + 1}/{len(todo)}] {name}: already explained")
             continue
+        if not np.isfinite(r["max_px"]):
+            print(f"[{i + 1}/{len(todo)}] {name}: not detected at all, so there is no reading to explain")
+            continue
         print(f"[{i + 1}/{len(todo)}] {name} ({r['split']}, max {r['max_px']:.0f} px)")
         vi = r["video_index"]
         if vi not in readers:
-            v = labels.videos[vi]
-            readers[vi] = sb.open_video(v, index.get(r["video"]))
+            readers[vi] = frame_reader(args.slp, vi, index.get(r["video"]))
         lines = []
 
         def say(text=""):
             lines.append(text)
 
         try:
-            poses, _ = sb.poses_from_slp(args.slp, r["frame"], vi, pair.node_names, "user")
-            labels_np = np.stack(poses)
+            labels_np = frame_poses(args.slp, vi, r["frame"], pair.node_names)
             rep = explain_one(pair, args, device, frame_tensor(readers[vi], r["frame"], device),
                               labels_np, r["animal"], sweep_bar(labels_np[r["animal"]], args), sub,
                               f"{r['camera']} frame {r['frame']}", say)
@@ -855,7 +947,11 @@ def summarize(out, rows=None):
     out = Path(out)
     if rows is None:
         rows = json.loads((out / "scan.json").read_text())
-    reports = [json.loads(p.read_text()) for p in sorted((out / "explained").glob("*/report.json"))]
+    reports = []
+    for p in sorted((out / "explained").glob("*/report.json")):
+        rep = json.loads(p.read_text())
+        rep["_dir"] = p.parent.name  # the folder, which need not follow the title
+        reports.append(rep)
     text = tally_text(rows, reports)
     (out / "sweep_summary.txt").write_text(text + "\n")
     print(text)
@@ -874,7 +970,7 @@ def sweep_sheet(out, reports, scale=0.5, cols=2):
         return 1 - sum(v for k, v in by.items() if k.endswith("(target)")) - by.get("background", 0.0)
 
     for r in sorted(reports, key=neighbour_share, reverse=True):
-        name = f"{r['title'].replace(' frame ', '_f')}_a{r['target']}"
+        name = r.get("_dir") or f"{r['title'].replace(' frame ', '_f')}_a{r['target']}"
         img = cv2.imread(str(out / "explained" / name / "explain.png"))
         if img is None:
             continue
