@@ -66,6 +66,11 @@ each other's bar. Split over a Slurm array with --shard K/N, then --summarize:
         --sweep --video-root /path/to/recording --shard $SLURM_ARRAY_TASK_ID/$N --out sweep/
     $PY scripts/sleap_explain_error.py --summarize --out sweep/
 
+On CUDA a sweep edits 8 animals at a time (--batch; 1 = one after another), each
+with its own random views, readings and phases. On 8 misread mice it took 240 s
+one at a time and 156 s all at once on an L40S, with the same results except on
+one borderline mouse that is fixed in some runs and not others either way.
+
 Sweep outputs, in --out: scan.json (every animal's errors and misread nodes),
 sweep_summary.txt (the tally), sweep_browser.html (below), explained/ (one
 folder per misread animal), and with --sheet sweep_sheet.png (every explained
@@ -314,81 +319,108 @@ def minimal_edit(pair, frame, poses, labels, target, mask, bar, args, log=print)
 
     Returns (best edited image, history, step of the first fix or None).
     """
-    gen = torch.Generator().manual_seed(args.seed)
-    img_param = sb.PyramidImage(frame, args.levels, mask, args.finest)
-    opt = torch.optim.Adam(img_param.parameters(), lr=args.lr)
-    node_mask = torch.isfinite(poses).all(-1)
-    if getattr(args, "target_only", False):
-        # Only the target's nodes in the centered-instance loss; the others still
-        # must be found (centroid loss) but are not pulled toward their labels, so
-        # no part of the edit on them is there to improve THEIR reading.
-        keep = torch.zeros_like(node_mask)
-        keep[target] = True
-        node_mask = node_mask & keep
-    weight = mask.sum()
-    history = []
-    fixed_at = None
-    best, best_rms, misses, streak = None, np.inf, 0, 0
-    sparsity = args.sparsity
-    t0 = time.time()
-    last = args.max_steps
-    for step in range(args.max_steps + args.shrink_steps + 1):
-        image = img_param()
-        if step % args.check_every == 0 or step == last:
+    run = EditRun(pair, frame, poses, labels, target, mask, bar, args, log)
+    sb.run_together(pair, [run], 1)
+    return run.result()
+
+
+class EditRun:
+    """`minimal_edit`, a step at a time, so that several edits can share each pass
+    through the networks (`sb.run_together`; see `sb.BackwardRun`). Each keeps its
+    own generator, optimizer, readings and phases."""
+
+    def __init__(self, pair, frame, poses, labels, target, mask, bar, args, log=print):
+        self.pair, self.frame, self.poses, self.labels = pair, frame, poses, labels
+        self.target, self.mask, self.bar, self.args, self.log = target, mask, bar, args, log
+        self.gen = torch.Generator().manual_seed(args.seed)
+        self.img_param = sb.PyramidImage(frame, args.levels, mask, args.finest)
+        self.opt = torch.optim.Adam(self.img_param.parameters(), lr=args.lr)
+        node_mask = torch.isfinite(poses).all(-1)
+        if getattr(args, "target_only", False):
+            # Only the target's nodes in the centered-instance loss; the others still
+            # must be found (centroid loss) but are not pulled toward their labels, so
+            # no part of the edit on them is there to improve THEIR reading.
+            keep = torch.zeros_like(node_mask)
+            keep[target] = True
+            node_mask = node_mask & keep
+        self.node_mask = node_mask
+        self.weight = mask.sum()
+        self.history = []
+        self.fixed_at = None
+        self.best, self.best_rms, self.misses, self.streak = None, np.inf, 0, 0
+        self.sparsity = args.sparsity
+        self.t0 = time.time()
+        self.last = args.max_steps
+        self.step = 0
+        self.image = None
+
+    def inputs(self):
+        args, step, pair, target, frame, mask = self.args, self.step, self.pair, self.target, self.frame, self.mask
+        image = self.img_param()
+        if step % args.check_every == 0 or step == self.last:
             u8 = (image.detach() * 255).round().to(torch.uint8)
-            read, scores, err = read_poses(pair, u8, poses)
-            rms = float(torch.sqrt((((u8.float() / 255 - frame) ** 2) * mask).sum() / weight) * 255)
+            read, scores, err = read_poses(pair, u8, self.poses)
+            rms = float(torch.sqrt((((u8.float() / 255 - frame) ** 2) * mask).sum() / self.weight) * 255)
             t_err = err[target]
-            ok = reads_correctly(t_err, bar)
+            ok = reads_correctly(t_err, self.bar)
             others = np.delete(err, target, axis=0)
             worst = int(np.nanargmax(t_err))
             row = {
                 "step": step,
-                "phase": "find" if fixed_at is None else "shrink",
+                "phase": "find" if self.fixed_at is None else "shrink",
                 "worst_node": pair.node_names[worst],
-                "worst_node_read_on": where_read(read[target, worst], labels, target, pair.node_names, args.near),
-                "sparsity": sparsity,
+                "worst_node_read_on": where_read(read[target, worst], self.labels, target, pair.node_names, args.near),
+                "sparsity": self.sparsity,
                 "change_rms": rms,
                 "reads_correctly": bool(ok),
                 "target_median_px": float(np.nanmedian(t_err)),
                 "target_max_px": float(np.nanmax(t_err)),
                 "others_max_px": float(np.nanmax(others)) if others.size else None,
             }
-            history.append(row)
-            log(f"  step {step:4d} {row['phase']:6s} change {rms:5.2f} grey levels  target median "
-                f"{row['target_median_px']:5.2f} px, max {row['target_max_px']:6.2f} px "
-                f"({row['worst_node']}){'  reads correctly' if ok else ''}  ({time.time() - t0:.0f} s)")
-            streak = streak + 1 if ok else 0
-            if fixed_at is None:
-                if streak >= args.stable:
-                    fixed_at = step
-                    last = step + args.shrink_steps
-                    best, best_rms = u8.float() / 255, rms
-            elif ok and rms < best_rms:
-                best, best_rms = u8.float() / 255, rms
+            self.history.append(row)
+            self.log(f"  step {step:4d} {row['phase']:6s} change {rms:5.2f} grey levels  target median "
+                     f"{row['target_median_px']:5.2f} px, max {row['target_max_px']:6.2f} px "
+                     f"({row['worst_node']}){'  reads correctly' if ok else ''}  ({time.time() - self.t0:.0f} s)")
+            self.streak = self.streak + 1 if ok else 0
+            if self.fixed_at is None:
+                if self.streak >= args.stable:
+                    self.fixed_at = step
+                    self.last = step + args.shrink_steps
+                    self.best, self.best_rms = u8.float() / 255, rms
+            elif ok and rms < self.best_rms:
+                self.best, self.best_rms = u8.float() / 255, rms
             else:
-                misses = 0 if ok else misses + 1
-                if misses >= args.stable:
-                    break
-                sparsity *= 1.25
-        if step >= last:
-            break
+                self.misses = 0 if ok else self.misses + 1
+                if self.misses >= args.stable:
+                    return None
+                self.sparsity *= 1.25
+        if step >= self.last:
+            return None
         j = args.jitter
-        dx, dy = (torch.randint(-j, j + 1, (2,), generator=gen).tolist() if j else (0, 0))
+        dx, dy = (torch.randint(-j, j + 1, (2,), generator=self.gen).tolist() if j else (0, 0))
         shifted = torch.roll(image, shifts=(dy, dx), dims=(2, 3)) if j else image
-        shift = torch.tensor([dx, dy], dtype=poses.dtype, device=poses.device)
-        terms = sb.objective(pair, shifted, poses + shift, node_mask, gen if args.augment else None)
+        shift = torch.tensor([dx, dy], dtype=self.poses.dtype, device=self.poses.device)
+        self.image = image
+        return shifted, self.poses + shift, self.node_mask, self.gen if args.augment else None
+
+    def loss(self, terms):
         loss = sum(terms[k] for k in ("centroid", "instance") if k in terms)
-        change = image - frame
-        loss = loss + sparsity * (change.abs() * mask).sum() / weight
-        if args.tv:
-            loss = loss + args.tv * sb.total_variation(change)
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
-    if best is None:  # never fixed: report where it got to
-        best = (img_param().detach() * 255).round() / 255
-    return best, history, fixed_at
+        change = self.image - self.frame
+        loss = loss + self.sparsity * (change.abs() * self.mask).sum() / self.weight
+        if self.args.tv:
+            loss = loss + self.args.tv * sb.total_variation(change)
+        return loss
+
+    def record(self, loss, terms):
+        self.image = None
+        self.step += 1
+
+    def result(self):
+        """(best edited image, history, step of the first fix or None)."""
+        best = self.best
+        if best is None:  # never fixed: report where it got to
+            best = (self.img_param().detach() * 255).round() / 255
+        return best, self.history, self.fixed_at
 
 
 # ---------------------------------------------------------------------------
@@ -498,6 +530,10 @@ def parse_args(argv=None):
     g.add_argument("--explain-limit", type=int, metavar="N",
                    help="explain a seeded random sample of N misread animals, not all of them")
     g.add_argument("--shard", metavar="K/N", help="explain only every N-th misread animal from K (one per GPU)")
+    g.add_argument("--batch", type=int, default=0,
+                   help="edit up to this many animals at once, one pass through the networks for "
+                   f"all of them (a finished edit makes room for the next); 0 = {sb.CUDA_BATCH} on "
+                   "CUDA, 1 elsewhere")
     g.add_argument("--redo", action="store_true", help="redo the scan and animals already explained")
     g.add_argument("--summarize", action="store_true",
                    help="only tally OUT/scan.json and OUT/explained/ (after sharded runs); "
@@ -535,6 +571,19 @@ def explain_one(pair, args, device, frame_u8, poses, target, bar, out, title, sa
     `frame_u8` (1, C, H, W) uint8 on `device`; `poses` the frame's hand labels
     (n, K, 2); `bar` (max median px, max node px) is what "read correctly" means.
     """
+    st = explain_start(pair, args, device, frame_u8, poses, target, bar, out, title, say)
+    with sb.fast_forward(pair, device, args.precision):
+        sb.run_together(pair, [st.run], 1)
+    return explain_finish(pair, st)
+
+
+def explain_start(pair, args, device, frame_u8, poses, target, bar, out, title, say):
+    """`explain_one` up to its edit: the readings before, and the edit's run (not yet run)."""
+    with sb.exact_forward(pair):
+        return _explain_start(pair, args, device, frame_u8, poses, target, bar, out, title, say)
+
+
+def _explain_start(pair, args, device, frame_u8, poses, target, bar, out, title, say):
     out.mkdir(parents=True, exist_ok=True)
     H, W = frame_u8.shape[-2:]
     frame = frame_u8.float() / 255
@@ -556,10 +605,28 @@ def explain_one(pair, args, device, frame_u8, poses, target, bar, out, title, sa
 
     mask, window_c = crop_window_mask(pair, labels[target], (W, H), device)
     t_edit = time.time()
-    with sb.fast_forward(pair, device, args.precision):
-        edited, history, fixed_at = minimal_edit(pair, frame, P, labels, target, mask, bar, args,
-                                                 log=print if args.verbose else (lambda *_: None))
-    edit_seconds = time.time() - t_edit
+    run = EditRun(pair, frame, P, labels, target, mask, bar, args,
+                  log=print if args.verbose else (lambda *_: None))
+    return argparse.Namespace(run=run, t_edit=t_edit, frame_u8=frame_u8, frame=frame, P=P, labels=labels,
+                              poses=poses, target=target, bar=bar, out=out, title=title, say=say,
+                              mask=mask, window_c=window_c, pred_before=pred_before,
+                              scores_before=scores_before, err_before=err_before, W=W, H=H,
+                              args=args, device=device)
+
+
+def explain_finish(pair, st):
+    """The rest of `explain_one` once its edit `st.run` is over: figure, summary, report."""
+    with sb.exact_forward(pair):
+        return _explain_finish(pair, st)
+
+
+def _explain_finish(pair, st):
+    run, args, device, frame_u8, frame, P = st.run, st.args, st.device, st.frame_u8, st.frame, st.P
+    labels, poses, target, bar, out, title, say = st.labels, st.poses, st.target, st.bar, st.out, st.title, st.say
+    mask, window_c, W, H = st.mask, st.window_c, st.W, st.H
+    pred_before, scores_before, err_before = st.pred_before, st.scores_before, st.err_before
+    edited, history, fixed_at = run.result()
+    edit_seconds = time.time() - st.t_edit
     edited_u8 = (edited * 255).round().to(torch.uint8)
     after_fix = [h for h in history if fixed_at is not None and h["step"] >= fixed_at and h["reads_correctly"]]
     kept = min(after_fix, key=lambda h: h["change_rms"]) if after_fix else history[-1]
@@ -876,34 +943,53 @@ def sweep(pair, args, device):
     if args.scan_only:
         todo = []
     index = find_videos(args.video_root) if args.video_root else {}
-    for i, r in enumerate(todo):
-        name = r.get("name") or f"{r['camera']}_f{r['frame']}_a{r['animal']}"
-        sub = out / "explained" / name
-        if (sub / "report.json").exists() and not args.redo:
-            print(f"[{i + 1}/{len(todo)}] {name}: already explained")
-            continue
-        if not np.isfinite(r["max_px"]):
-            print(f"[{i + 1}/{len(todo)}] {name}: not detected at all, so there is no reading to explain")
-            continue
-        print(f"[{i + 1}/{len(todo)}] {name} ({r['split']}, max {r['max_px']:.0f} px)")
-        vi = r["video_index"]
-        if vi not in readers:
-            readers[vi] = frame_reader(args.slp, vi, index.get(r["video"]))
-        lines = []
+    batch = sb.resolve_batch(device, args.batch)
+    who = (lambda run: "") if batch == 1 else (lambda run: f"{run.name}: ")
 
-        def say(text=""):
-            lines.append(text)
+    def starts():
+        for i, r in enumerate(todo):
+            name = r.get("name") or f"{r['camera']}_f{r['frame']}_a{r['animal']}"
+            sub = out / "explained" / name
+            if (sub / "report.json").exists() and not args.redo:
+                print(f"[{i + 1}/{len(todo)}] {name}: already explained")
+                continue
+            if not np.isfinite(r["max_px"]):
+                print(f"[{i + 1}/{len(todo)}] {name}: not detected at all, so there is no reading to explain")
+                continue
+            print(f"[{i + 1}/{len(todo)}] {name} ({r['split']}, max {r['max_px']:.0f} px)")
+            vi = r["video_index"]
+            if vi not in readers:
+                readers[vi] = frame_reader(args.slp, vi, index.get(r["video"]))
+            lines = []
 
+            def say(text="", lines=lines):
+                lines.append(text)
+
+            try:
+                labels_np = frame_poses(args.slp, vi, r["frame"], pair.node_names)
+                st = explain_start(pair, args, device, frame_tensor(readers[vi], r["frame"], device),
+                                   labels_np, r["animal"], sweep_bar(labels_np[r["animal"]], args), sub,
+                                   f"{r['camera']} frame {r['frame']}", say)
+            except Exception as e:  # one bad frame must not stop a sweep
+                print(f"  FAILED: {e}")
+                continue
+            st.run.name, st.run.state, st.run.lines = name, st, lines
+            yield st.run
+
+    def finish(run):
         try:
-            labels_np = frame_poses(args.slp, vi, r["frame"], pair.node_names)
-            rep = explain_one(pair, args, device, frame_tensor(readers[vi], r["frame"], device),
-                              labels_np, r["animal"], sweep_bar(labels_np[r["animal"]], args), sub,
-                              f"{r['camera']} frame {r['frame']}", say)
-            (sub / "summary.txt").write_text("\n".join(lines) + "\n")
-            print(f"  {'fixed at step ' + str(rep['fixed_at_step']) if rep['fixed_at_step'] is not None else 'NOT fixed'}"
+            rep = explain_finish(pair, run.state)
+            (run.state.out / "summary.txt").write_text("\n".join(run.lines) + "\n")
+            print(f"  {who(run)}{'fixed at step ' + str(rep['fixed_at_step']) if rep['fixed_at_step'] is not None else 'NOT fixed'}"
                   f", edit {rep['kept_change_rms']:.1f} grey levels, {rep['edit_seconds']:.0f} s")
-        except Exception as e:  # one bad frame must not stop a sweep
-            print(f"  FAILED: {e}")
+        except Exception as e:
+            print(f"  {who(run)}FAILED: {e}")
+
+    # Up to --batch edits share each pass through the networks; each keeps its own
+    # random views, readings and phases, and a finished one makes room for the next.
+    with sb.fast_forward(pair, device, args.precision):
+        sb.run_together(pair, starts(), batch, on_done=finish,
+                        on_error=lambda run, e: print(f"  {run.name} FAILED: {e}"))
     summarize(out, rows, args)
 
 

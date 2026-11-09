@@ -60,6 +60,11 @@ Usage (sleap-nn's own environment has everything this needs):
     $PY scripts/sleap_backward.py ... --slp labels.slp --jobs jobs.jsonl \
         --shard $SLURM_ARRAY_TASK_ID/$N --out out/
 
+    # On CUDA, --jobs optimizes 8 frames at a time by default (--batch): one pass
+    # through each network for all of them, each frame keeping its own random
+    # views, optimizer, read-backs and stop rule; a frame that stops makes room
+    # for the next job. --batch 1 runs them one after another.
+
 Speed (5-mouse frames, UNet models of 650M + 780M parameters): about 7-9 min a
 frame on an M2 Pro; on an A100, 0.19 s a step in fp32, 0.082 s in bf16 with
 channels-last weights (--precision auto, the default on CUDA; every read-back
@@ -67,6 +72,12 @@ stays sleap-nn's fp32 pass), about 40 s a frame in all. Every --check-every
 steps the image is read back; the best-reading one is kept and the run stops
 after --patience steps without a better one (on 9 held-out frames: 2.1x less
 optimizing than bf16 without channels-last at 400 steps, same median error).
+With --jobs, frames share each pass (--batch, 8 on CUDA): on an L40S a
+frame-step takes 0.094 s alone, 0.071 s with 2 frames, 0.055 s with 8, 0.049 s
+with 24 (8 frames peak at 14.9 GiB, 32 at 35.5 GiB). The 9 held-out frames
+took 399 s one at a time, 259 s all at once; their read-back errors stayed
+within the spread of reruns one at a time (GPU kernels are not deterministic,
+and batched ones round differently, so no run is bit-identical to another).
 
 Either model may be given alone. With only --centroid, the whole frame is
 optimized for the centroid heatmap; with only --instance, each crop is
@@ -170,7 +181,9 @@ class Stage:
     sigma: float
     rotation: tuple = (0.0, 0.0)  # degrees it was trained to ignore (min, max)
     zoom: tuple = (1.0, 1.0)  # scale factors it was trained to ignore (min, max)
-    channels_last: bool = False  # set only inside `fast_forward`
+    channels_last: bool = False  # the layout its weights are in now
+    fast: bool = False  # inside `fast_forward`: channels-last wanted
+    exact: int = 0  # depth of `exact_forward`: while > 0, sleap-nn's NCHW pass
 
 
 @dataclass
@@ -303,6 +316,7 @@ def run_stage(stage: Stage, image):
     image = apply_pad_to_stride(image, stage.max_stride)
     if image.dtype == torch.uint8:
         image = image.float() / 255
+    _settle_layout(stage)
     if stage.channels_last:
         image = image.contiguous(memory_format=torch.channels_last)
     return stage.net(image)[stage.head], image.shape[-2:]
@@ -413,59 +427,98 @@ def objective(pair: Pair, image, poses, node_mask, gen=None):
     distribution, and an image has to look like the pose from every such view to
     keep the error down, which is what keeps it from being pixel-exact noise.
     """
-    image, eff = size_match(pair, image)
-    poses = poses * eff
-    out = {}
+    return objective_many(pair, [(image, poses, node_mask, gen)])[0]
+
+
+def objective_many(pair: Pair, items):
+    """`objective` for several images at once, each model run once on all of them.
+
+    `items` is a list of (image, poses, node_mask, gen), each as `objective` takes
+    them, with one generator per item (or None); returns one `objective` dict per
+    item. The frames go through the centroid model as one batch (frames of the
+    same size together) and all the frames' crops through the centered-instance
+    model as one batch, each crop indexed back to its frame, which need not have
+    the same number of animals. Every item draws its random views from its own
+    generator in the order `objective` draws them for one image (the frame's, then
+    its crops'), so a frame sees the same views batched or alone. What batching
+    changes is only the arithmetic inside batch-sized kernels.
+    """
+    sized = []
+    for image, poses, node_mask, gen in items:
+        image, eff = size_match(pair, image)
+        sized.append((image, poses * eff, node_mask, gen))
+    out = [{} for _ in items]
+    one = len(items) == 1
     if pair.centroid is not None:
         st = pair.centroid
-        frame, frame_poses = image, poses
-        if gen is not None and (st.rotation != (0.0, 0.0) or st.zoom != (1.0, 1.0)):
-            H, W = image.shape[-2:]
-            mid = torch.tensor([[(W - 1) / 2, (H - 1) / 2]], device=image.device)
-            angle, zoom = random_view(st, 1, gen, image.device)
-            frame = similarity_warp(image, mid, mid, angle, zoom, (H, W))
-            flat = warp_points(poses.reshape(1, -1, 2), mid, mid, angle, zoom)
-            frame_poses = flat.reshape(poses.shape)
-        pred, hw = run_stage(st, frame)
-        target = generate_multiconfmaps(
-            centroids_of(pair, frame_poses * st.scale)[None].cpu(),  # its grids are on the CPU
-            img_hw=tuple(hw),
-            num_instances=len(poses),
-            sigma=st.sigma,
-            output_stride=st.output_stride,
-            is_centroids=True,
-        ).to(pred.device)
-        out["centroid"] = ((pred - target) ** 2).sum() / (target**2).sum()
-        out["centroid_maps"] = (pred, target)
+        frames = []
+        for image, poses, _, gen in sized:
+            frame, frame_poses = image, poses
+            if gen is not None and (st.rotation != (0.0, 0.0) or st.zoom != (1.0, 1.0)):
+                H, W = image.shape[-2:]
+                mid = torch.tensor([[(W - 1) / 2, (H - 1) / 2]], device=image.device)
+                angle, zoom = random_view(st, 1, gen, image.device)
+                frame = similarity_warp(image, mid, mid, angle, zoom, (H, W))
+                flat = warp_points(poses.reshape(1, -1, 2), mid, mid, angle, zoom)
+                frame_poses = flat.reshape(poses.shape)
+            frames.append((frame, frame_poses))
+        same_size = {}
+        for i, (frame, _) in enumerate(frames):
+            same_size.setdefault(tuple(frame.shape[1:]), []).append(i)
+        for idx in same_size.values():
+            batch = frames[idx[0]][0] if len(idx) == 1 else torch.cat([frames[i][0] for i in idx])
+            preds, hw = run_stage(st, batch)
+            for j, i in enumerate(idx):
+                pred = preds if len(idx) == 1 else preds[j : j + 1]
+                frame_poses = frames[i][1]
+                target = generate_multiconfmaps(
+                    centroids_of(pair, frame_poses * st.scale)[None].cpu(),  # its grids are on the CPU
+                    img_hw=tuple(hw),
+                    num_instances=len(frame_poses),
+                    sigma=st.sigma,
+                    output_stride=st.output_stride,
+                    is_centroids=True,
+                ).to(pred.device)
+                out[i]["centroid"] = ((pred - target) ** 2).sum() / (target**2).sum()
+                out[i]["centroid_maps"] = (pred, target)
     if pair.instance is not None:
         st = pair.instance
-        centroids = centroids_of(pair, poses)
         h, w = pair.crop_hw
-        bboxes = make_centered_bboxes(centroids, h, w)
-        starts = crop_starts(bboxes, h, w)
-        if gen is not None and (st.rotation != (0.0, 0.0) or st.zoom != (1.0, 1.0)):
-            # Each crop turned about its own centroid, which stays where the plain
-            # crop would have put it, so angle 0 / zoom 1 is exactly that crop.
-            here = centroids - starts
-            angle, zoom = random_view(st, len(poses), gen, image.device)
-            crops = similarity_warp(image, centroids, here, angle, zoom, pair.crop_hw)
-            local = warp_points(poses, centroids, here, angle, zoom) + starts[:, None, :]
-        else:
-            crops, _, _ = crop_instances(pair, image, centroids)
-            local = poses
-        # In the box-corner frame sleap-nn labels and reads peaks in (see
-        # `crop_instances`): measured on 5,493 hand-labeled nodes, reading peaks
-        # against the integer start instead is off by -0.66/-0.76 px, against the
-        # corner by -0.25/-0.34 px.
-        local = local - bboxes[:, None, 0, :]
-        pred, hw = run_stage(st, crops)
-        local = local * st.scale
-        target = generate_confmaps(
-            local.cpu(), img_hw=tuple(hw), sigma=st.sigma, output_stride=st.output_stride
-        ).to(pred.device)
-        m = node_mask[:, :, None, None].to(pred.dtype)
-        out["instance"] = (((pred - target) ** 2) * m).sum() / ((target**2) * m).sum()
-        out["instance_maps"] = (pred, target, crops)
+        crops, local = [], []
+        for image, poses, _, gen in sized:
+            centroids = centroids_of(pair, poses)
+            bboxes = make_centered_bboxes(centroids, h, w)
+            starts = crop_starts(bboxes, h, w)
+            if gen is not None and (st.rotation != (0.0, 0.0) or st.zoom != (1.0, 1.0)):
+                # Each crop turned about its own centroid, which stays where the plain
+                # crop would have put it, so angle 0 / zoom 1 is exactly that crop.
+                here = centroids - starts
+                angle, zoom = random_view(st, len(poses), gen, image.device)
+                c = similarity_warp(image, centroids, here, angle, zoom, pair.crop_hw)
+                pts = warp_points(poses, centroids, here, angle, zoom) + starts[:, None, :]
+            else:
+                c, _, _ = crop_instances(pair, image, centroids)
+                pts = poses
+            # In the box-corner frame sleap-nn labels and reads peaks in (see
+            # `crop_instances`): measured on 5,493 hand-labeled nodes, reading peaks
+            # against the integer start instead is off by -0.66/-0.76 px, against the
+            # corner by -0.25/-0.34 px.
+            crops.append(c)
+            local.append(pts - bboxes[:, None, 0, :])
+        preds, hw = run_stage(st, crops[0] if one else torch.cat(crops))
+        targets = generate_confmaps(
+            ((local[0] if one else torch.cat(local)) * st.scale).cpu(),
+            img_hw=tuple(hw), sigma=st.sigma, output_stride=st.output_stride,
+        ).to(preds.device)
+        start = 0
+        for i, (_, poses, node_mask, _) in enumerate(sized):
+            n = len(poses)
+            pred = preds if one else preds[start : start + n]
+            target = targets if one else targets[start : start + n]
+            start += n
+            m = node_mask[:, :, None, None].to(pred.dtype)
+            out[i]["instance"] = (((pred - target) ** 2) * m).sum() / ((target**2) * m).sum()
+            out[i]["instance_maps"] = (pred, target, crops[i])
     return out
 
 
@@ -640,6 +693,19 @@ def total_variation(image):
     ).abs().mean()
 
 
+# Frames per pass by default on CUDA (--batch 0). On an L40S, seconds per frame-step
+# 0.096 alone, 0.073 for 2, 0.067 for 4, 0.058 for 6, 0.057 for 8, 0.055 for 16;
+# 8 five-mouse frames peak at 14.9 GiB (runs/2026-11-09_backward-batch on cup).
+CUDA_BATCH = 8
+
+
+def resolve_batch(device, batch):
+    """--batch 0 is CUDA_BATCH on CUDA, 1 anywhere else (untested there)."""
+    if batch and batch > 0:
+        return batch
+    return CUDA_BATCH if str(device).startswith("cuda") else 1
+
+
 def resolve_precision(device, precision):
     """'auto' is bf16 on CUDA, fp32 anywhere else."""
     if precision == "auto":
@@ -647,12 +713,21 @@ def resolve_precision(device, precision):
     return precision
 
 
-def _set_layout(pair: Pair, channels_last):
-    fmt = torch.channels_last if channels_last else torch.contiguous_format
-    for st in (pair.centroid, pair.instance):
-        if st is not None and st.channels_last != channels_last:
-            st.net.to(memory_format=fmt)
-            st.channels_last = channels_last
+def _stages(pair: Pair):
+    return [st for st in (pair.centroid, pair.instance) if st is not None]
+
+
+def _settle_layout(stage: Stage):
+    """Put the weights in the layout the current pass wants (see `fast_forward`).
+
+    Changed lazily, at the next forward: several read-backs in a row (a batch of
+    frames all due for one) convert the weights once, not once each, and so does
+    the optimization step after them. The conversion moves no value.
+    """
+    want = stage.fast and stage.exact == 0
+    if stage.channels_last != want:
+        stage.net.to(memory_format=torch.channels_last if want else torch.contiguous_format)
+        stage.channels_last = want
 
 
 @contextlib.contextmanager
@@ -667,24 +742,28 @@ def fast_forward(pair: Pair, device, precision):
     if resolve_precision(device, precision) != "bf16" or not str(device).startswith("cuda"):
         yield
         return
-    _set_layout(pair, True)
+    for st in _stages(pair):
+        st.fast = True
     try:
         with torch.autocast("cuda", dtype=torch.bfloat16):
             yield
     finally:
-        _set_layout(pair, False)
+        for st in _stages(pair):
+            st.fast = False
+            _settle_layout(st)
 
 
 @contextlib.contextmanager
 def exact_forward(pair: Pair):
     """fp32, NCHW: the pass `sleap-nn predict` runs, even inside `fast_forward`."""
-    was = any(st is not None and st.channels_last for st in (pair.centroid, pair.instance))
-    _set_layout(pair, False)
+    for st in _stages(pair):
+        st.exact += 1
     try:
         with torch.autocast("cuda", enabled=False), torch.autocast("cpu", enabled=False):
             yield
     finally:
-        _set_layout(pair, was)
+        for st in _stages(pair):
+            st.exact -= 1
 
 
 def read_back(pair: Pair, image, poses, node_mask):
@@ -718,77 +797,185 @@ def optimize(pair: Pair, init, poses, node_mask, args, mask=None, log=print):
     5-mouse frames: most frames stop improving by step 200, but hard ones keep
     gaining until 300-400, and the last step is not always the best.
     """
-    gen = torch.Generator().manual_seed(args.seed)
-    img_param = PyramidImage(init, args.levels, mask, args.finest)
-    opt = torch.optim.Adam(img_param.parameters(), lr=args.lr)
-    weights = {"centroid": args.centroid_weight, "instance": args.instance_weight}
-    history, snapshots = [], []
-    snap_every = max(1, args.steps // 7)
-    check_every = getattr(args, "check_every", 0) or 0
-    precision = getattr(args, "precision", "fp32")
-    device = init.device
-    checks = []
-    t0 = time.time()
-    with fast_forward(pair, device, precision):
-        image, kept = _optimize_loop(pair, img_param, opt, init, poses, node_mask, args, mask, log,
-                                     gen, weights, history, snapshots, snap_every, check_every, checks, t0)
-    optimize.last_seconds = time.time() - t0
-    optimize.last_checks = checks
+    run = BackwardRun(pair, init, poses, node_mask, args, mask, log)
+    with fast_forward(pair, init.device, getattr(args, "precision", "fp32")):
+        run_together(pair, [run], 1)
+    image, kept = run.result()
+    run.seconds = time.time() - run.t0
+    optimize.last_seconds = run.seconds
+    optimize.last_checks = run.checks
     optimize.last_kept_step = kept
-    optimize.last_steps_run = history[-1]["step"] + 1 if history else 0
-    return image, history, snapshots
+    optimize.last_steps_run = run.steps_run()
+    return image, run.history, run.snapshots
 
 
-def _optimize_loop(pair, img_param, opt, init, poses, node_mask, args, mask, log,
-                   gen, weights, history, snapshots, snap_every, check_every, checks, t0):
-    patience = getattr(args, "patience", 0) or 0
-    best, best_score, best_step = None, np.inf, None
-    for step in range(args.steps + 1):
-        image = img_param()
-        if step % snap_every == 0 or step == args.steps:
-            snapshots.append((step, image.detach().cpu()))
-        if check_every and (step % check_every == 0 or step == args.steps):
-            c = {"step": step, **read_back(pair, image, poses, node_mask)}
-            checks.append(c)
+class BackwardRun:
+    """One frame's optimization (see `optimize`), a step at a time.
+
+    So that several frames can share each pass through the networks
+    (`run_together`), a run is driven from outside: `inputs()` starts a step (a
+    snapshot, a read-back when one is due, the stop rule) and returns what
+    `objective_many` takes for it, or None once the run is over; `loss(terms)`
+    turns that step's objective into the loss; `record(loss, terms)` logs it once
+    the step is taken. A run keeps its own generator, optimizer, best read-back
+    and patience, so whatever runs beside it, it draws the same views and keeps
+    and stops by its own read-backs alone.
+    """
+
+    def __init__(self, pair: Pair, init, poses, node_mask, args, mask=None, log=print):
+        self.pair, self.init, self.poses, self.node_mask = pair, init, poses, node_mask
+        self.args, self.log = args, log
+        self.gen = torch.Generator().manual_seed(args.seed)
+        self.img_param = PyramidImage(init, args.levels, mask, args.finest)
+        self.opt = torch.optim.Adam(self.img_param.parameters(), lr=args.lr)
+        self.weights = {"centroid": args.centroid_weight, "instance": args.instance_weight}
+        self.history, self.snapshots, self.checks = [], [], []
+        self.snap_every = max(1, args.steps // 7)
+        self.check_every = getattr(args, "check_every", 0) or 0
+        self.patience = getattr(args, "patience", 0) or 0
+        self.best, self.best_score, self.best_step = None, np.inf, None
+        self.step = 0
+        self.image = None
+        self.t0 = time.time()
+
+    def inputs(self):
+        args, step = self.args, self.step
+        image = self.img_param()
+        if step % self.snap_every == 0 or step == args.steps:
+            self.snapshots.append((step, image.detach().cpu()))
+        if self.check_every and (step % self.check_every == 0 or step == args.steps):
+            c = {"step": step, **read_back(self.pair, image, self.poses, self.node_mask)}
+            self.checks.append(c)
             score = c.get("mean_px", np.nan)
-            if np.isfinite(score) and score < best_score:
-                best, best_score, best_step = image.detach().clone(), score, step
-            log(
+            if np.isfinite(score) and score < self.best_score:
+                self.best, self.best_score, self.best_step = image.detach().clone(), score, step
+            self.log(
                 f"  check {step:5d}  read back: median {c.get('median_px', float('nan')):.2f} px, "
                 f"max {c.get('max_px', float('nan')):.2f} px, {c.get('centroids', '-')} centroid(s)"
-                + ("  (best so far)" if best_step == step else "")
+                + ("  (best so far)" if self.best_step == step else "")
             )
-            if patience and best_step is not None and step - best_step >= patience and step < args.steps:
-                log(f"  no better read-back in {patience} steps: stopping at step {step}, "
-                    f"keeping step {best_step}")
-                snapshots.append((step, image.detach().cpu()))
-                break
+            if (self.patience and self.best_step is not None
+                    and step - self.best_step >= self.patience and step < args.steps):
+                self.log(f"  no better read-back in {self.patience} steps: stopping at step {step}, "
+                         f"keeping step {self.best_step}")
+                self.snapshots.append((step, image.detach().cpu()))
+                return None
         if step == args.steps:
-            break
+            return None
         # Random shift of the whole frame — and of the poses with it — so no detail
         # can rely on sitting at one exact pixel.
         j = args.jitter
-        dx, dy = (torch.randint(-j, j + 1, (2,), generator=gen).tolist() if j else (0, 0))
+        dx, dy = (torch.randint(-j, j + 1, (2,), generator=self.gen).tolist() if j else (0, 0))
         shifted = torch.roll(image, shifts=(dy, dx), dims=(2, 3)) if j else image
-        shift = torch.tensor([dx, dy], dtype=poses.dtype, device=poses.device)
-        terms = objective(pair, shifted, poses + shift, node_mask, gen if args.augment else None)
-        loss = sum(weights[k] * terms[k].float() for k in weights if k in terms)
+        shift = torch.tensor([dx, dy], dtype=self.poses.dtype, device=self.poses.device)
+        self.image = image
+        return shifted, self.poses + shift, self.node_mask, self.gen if args.augment else None
+
+    def loss(self, terms):
+        args, image = self.args, self.image
+        loss = sum(self.weights[k] * terms[k].float() for k in self.weights if k in terms)
         if args.tv:
             loss = loss + args.tv * total_variation(image)
         if args.keep:
-            loss = loss + args.keep * ((image - init) ** 2).mean()
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
-        row = {"step": step, "loss": loss.item()}
-        row.update({k: terms[k].item() for k in weights if k in terms})
-        history.append(row)
-        if step % args.log_every == 0:
-            parts = "  ".join(f"{k} {row[k]:.4f}" for k in weights if k in row)
-            log(f"  step {step:5d}  loss {row['loss']:.4f}  {parts}  ({time.time() - t0:.0f} s)")
-    if best is not None:
-        return best, best_step
-    return img_param().detach(), step
+            loss = loss + args.keep * ((image - self.init) ** 2).mean()
+        return loss
+
+    def record(self, loss, terms):
+        row = {"step": self.step, "loss": loss.item()}
+        row.update({k: terms[k].item() for k in self.weights if k in terms})
+        self.history.append(row)
+        if self.step % self.args.log_every == 0:
+            parts = "  ".join(f"{k} {row[k]:.4f}" for k in self.weights if k in row)
+            self.log(f"  step {self.step:5d}  loss {row['loss']:.4f}  {parts}  ({time.time() - self.t0:.0f} s)")
+        self.image = None
+        self.step += 1
+
+    def steps_run(self):
+        return self.history[-1]["step"] + 1 if self.history else 0
+
+    def result(self):
+        """(the image kept, the step it is from): the best read-back, else the last step."""
+        if self.best is not None:
+            return self.best, self.best_step
+        return self.img_param().detach(), self.step
+
+
+def step_together(pair: Pair, runs, inputs):
+    """One optimization step of every run in `runs`, with one pass through each model.
+
+    Each run's loss depends only on its own image, so the gradient of their sum is,
+    for each image, the gradient of its own loss; each run steps its own optimizer.
+    """
+    terms = objective_many(pair, inputs)
+    losses = [r.loss(t) for r, t in zip(runs, terms)]
+    for r in runs:
+        r.opt.zero_grad(set_to_none=True)
+    (losses[0] if len(losses) == 1 else torch.stack(losses).sum()).backward()
+    for r in runs:
+        r.opt.step()
+    for r, loss, t in zip(runs, losses, terms):
+        r.record(loss, t)
+
+
+def run_together(pair: Pair, runs, batch, on_done=None, on_error=None):
+    """Optimize every run of the iterable `runs`, up to `batch` of them per pass.
+
+    Runs are started as places free up: when one ends (its own stop rule) the next
+    takes its place at the next step, so the batch stays full until the runs run
+    out. `on_done(run)` is called as each one ends. With `on_error`, a step of
+    several runs that fails (most likely out of GPU memory) is retried one run at
+    a time and the batch is halved from then on; a run that fails alone ends with
+    `on_error(run, exception)` while the others go on. Without it, errors raise.
+    """
+    pending = iter(runs)
+    active, more = [], True
+    while True:
+        stepping, inputs = [], []
+
+        def start(r):
+            x = r.inputs()
+            if x is None:
+                on_done and on_done(r)
+            else:
+                stepping.append(r)
+                inputs.append(x)
+
+        for r in active:
+            start(r)
+        while more and len(stepping) < batch:
+            r = next(pending, None)
+            if r is None:
+                more = False
+            else:
+                start(r)
+        if not stepping:
+            return
+        active = []
+        for k in range(0, len(stepping), batch):
+            runs_k, inputs_k = stepping[k : k + batch], inputs[k : k + batch]
+            try:
+                step_together(pair, runs_k, inputs_k)
+                active += runs_k
+                continue
+            except Exception as e:
+                if on_error is None:
+                    raise
+                failed = e
+            if len(runs_k) == 1:
+                on_error(runs_k[0], failed)
+                continue
+            batch = max(1, len(runs_k) // 2)
+            print(f"  a step of {len(runs_k)} frames together failed ({type(failed).__name__}: "
+                  f"{failed}); retrying it one frame at a time, then going on {batch} at a time")
+            del failed
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            for r, x in zip(runs_k, inputs_k):
+                try:
+                    step_together(pair, [r], [x])
+                    active.append(r)
+                except Exception as e1:
+                    on_error(r, e1)
 
 
 # ---------------------------------------------------------------------------
@@ -1176,6 +1363,12 @@ def parse_args(argv=None):
     )
     ap.add_argument("--redo", action="store_true", help="with --jobs: rerun jobs that already have a report.json")
     ap.add_argument(
+        "--batch", type=int, default=0,
+        help="with --jobs: optimize up to this many frames at once, one pass through the "
+        "networks for all of them (a frame that stops makes room for the next job); "
+        f"0 = {CUDA_BATCH} on CUDA, 1 elsewhere",
+    )
+    ap.add_argument(
         "--shard", metavar="K/N",
         help="with --jobs: run only every N-th job starting at K (0-based), e.g. one "
         "shard per GPU of a Slurm array: --shard $SLURM_ARRAY_TASK_ID/$N",
@@ -1246,14 +1439,24 @@ def main(argv=None):
     if not args.jobs:
         run_one(pair, args, device, cache)
         return
+    run_jobs(pair, args, device, cache)
+
+
+def run_jobs(pair: Pair, args, device, cache):
+    """--jobs: every job of the file (or of this shard), up to --batch of them at a time.
+
+    With --batch above 1 the frames being optimized share each pass through the
+    networks (`run_together`): each keeps its own random views, optimizer,
+    read-backs and stop rule, and when one stops the next job takes its place.
+    Jobs asking for different --precision run in separate groups.
+    """
     jobs = read_jobs(args.jobs)
     shard = ""
     if args.shard:
         k, n = (int(x) for x in args.shard.split("/"))
         jobs = [j for i, j in enumerate(jobs) if i % n == k]
         shard = f"_{k}of{n}"
-    done = []
-    t_all = time.time()
+    todo = []
     for k, job in enumerate(jobs):
         a = argparse.Namespace(**{**vars(args), **job})
         name = job.get("name") or f"job{k:04d}"
@@ -1261,17 +1464,64 @@ def main(argv=None):
         if (Path(a.out) / "report.json").exists() and not args.redo:
             print(f"[{k + 1}/{len(jobs)}] {name}: already done, skipped")
             continue
-        print(f"[{k + 1}/{len(jobs)}] {name}")
-        t = time.time()
+        todo.append((k, name, a))
+    batch = resolve_batch(device, args.batch)
+    done = []
+    t_all = time.time()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+    def failed(name, e):
+        print(f"  {name} FAILED: {e}")
+        done.append({"name": name, "error": str(e)})
+
+    def runs(items):
+        for k, name, a in items:
+            print(f"[{k + 1}/{len(jobs)}] {name}")
+            t = time.time()
+            try:
+                check_job(a)
+                with exact_forward(pair):  # no bf16 for the start image either
+                    job = prepare_job(pair, a, device, cache)
+                log = print if batch == 1 else (lambda text, name=name: print(f"  {name}:{text[1:]}"))
+                run = BackwardRun(pair, job.init, job.poses_t, job.node_mask, a, job.mask, log)
+            except (SystemExit, Exception) as e:  # one bad job must not stop a sweep
+                failed(name, e)
+                continue
+            run.job, run.name, run.started = job, name, t
+            yield run
+
+    def finish(run):
+        image, kept = run.result()
+        seconds = time.time() - run.t0
+        stats = {
+            "optimize_seconds": round(seconds, 2),
+            "steps_run": run.steps_run(),
+            "kept_step": kept,
+            "seconds_per_step": round(seconds / max(run.steps_run(), 1), 4),
+            "checks": run.checks,
+        }
         try:
-            check_job(a)
-            run_one(pair, a, device, cache)
-            done.append({"name": name, "seconds": round(time.time() - t, 1)})
-        except (SystemExit, Exception) as e:  # one bad job must not stop a sweep
-            print(f"  {name} FAILED: {e}")
-            done.append({"name": name, "error": str(e)})
-    failed = sum("error" in d for d in done)
-    print(f"{len(done)} job(s) run in {time.time() - t_all:.0f} s, {failed} failed")
+            if batch > 1:
+                print(f"  {run.name}: done, {run.steps_run()} steps, keeping step {kept}")
+            finish_job(pair, run.job, image, run.history, run.snapshots, stats)
+            done.append({"name": run.name, "seconds": round(time.time() - run.started, 1)})
+        except (SystemExit, Exception) as e:
+            failed(run.name, e)
+
+    groups = {}
+    for item in todo:
+        groups.setdefault(resolve_precision(device, item[2].precision), []).append(item)
+    for precision, items in groups.items():
+        with fast_forward(pair, device, precision):
+            run_together(pair, runs(items), batch, on_done=finish,
+                         on_error=lambda run, e: failed(run.name, e))
+    failed_n = sum("error" in d for d in done)
+    peak = ""
+    if torch.cuda.is_available():
+        peak = f", peak GPU memory {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB"
+    print(f"{len(done)} job(s) run in {time.time() - t_all:.0f} s, {failed_n} failed"
+          + (f", {batch} at a time" if batch > 1 else "") + peak)
     (Path(args.out) / f"jobs_done{shard}.json").write_text(json.dumps(done, indent=1))
 
 
@@ -1281,6 +1531,20 @@ def run_one(pair: Pair, args, device, cache):
     `cache` keeps what jobs of a sweep share — open videos, median backgrounds —
     so each is opened or computed once per process.
     """
+    job = prepare_job(pair, args, device, cache)
+    image, history, snapshots = optimize(pair, job.init, job.poses_t, job.node_mask, args, job.mask)
+    stats = {
+        "optimize_seconds": round(optimize.last_seconds, 2),
+        "steps_run": optimize.last_steps_run,
+        "kept_step": optimize.last_kept_step,
+        "seconds_per_step": round(optimize.last_seconds / max(optimize.last_steps_run, 1), 4),
+        "checks": optimize.last_checks,
+    }
+    finish_job(pair, job, image, history, snapshots, stats)
+
+
+def prepare_job(pair: Pair, args, device, cache):
+    """Everything a run needs before optimizing: poses, frame size, start image, mask."""
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(args.seed)
@@ -1358,8 +1622,23 @@ def run_one(pair: Pair, args, device, cache):
     print(f"{len(poses)} animal(s), {W}x{H} px, {channels} channel(s), init {args.init}")
 
     mask = edit_mask(poses, (W, H), args.margin, device)
-    image, history, snapshots = optimize(pair, init, poses_t, node_mask, args, mask)
+    return argparse.Namespace(args=args, out=out, poses=poses, poses_t=poses_t, node_mask=node_mask,
+                              init=init, mask=mask, channels=channels, W=W, H=H, device=device)
 
+
+def finish_job(pair: Pair, job, image, history, snapshots, stats):
+    """Write a finished run's image, figures, .slp and report.json into its folder.
+
+    Every model pass in it is sleap-nn's fp32 one, even when called inside
+    `fast_forward` (as `run_jobs` does while other frames are still optimizing).
+    """
+    with exact_forward(pair):
+        _finish_job(pair, job, image, history, snapshots, stats)
+
+
+def _finish_job(pair: Pair, job, image, history, snapshots, stats):
+    args, out, poses, poses_t, node_mask = job.args, job.out, job.poses, job.poses_t, job.node_mask
+    channels, W, H, device = job.channels, job.W, job.H, job.device
     # Quantize like a saved image would be, then run it forward as sleap-nn would.
     saved_u8 = (image * 255).round().to(torch.uint8)
     saved = saved_u8.float() / 255
@@ -1393,11 +1672,7 @@ def run_one(pair: Pair, args, device, cache):
         "nodes": pair.node_names,
         "size": [W, H],
         "final": history[-1] if history else None,
-        "optimize_seconds": round(optimize.last_seconds, 2),
-        "steps_run": optimize.last_steps_run,
-        "kept_step": optimize.last_kept_step,
-        "seconds_per_step": round(optimize.last_seconds / max(optimize.last_steps_run, 1), 4),
-        "checks": optimize.last_checks,
+        **stats,
         "history": history,
         "target_poses": np.where(np.isfinite(target), target, None).tolist(),
     }
