@@ -67,8 +67,24 @@ each other's bar. Split over a Slurm array with --shard K/N, then --summarize:
     $PY scripts/sleap_explain_error.py --summarize --out sweep/
 
 Sweep outputs, in --out: scan.json (every animal's errors and misread nodes),
-sweep_summary.txt (the tally), sweep_sheet.png (every explained animal),
-explained/ (one folder per misread animal).
+sweep_summary.txt (the tally), sweep_browser.html (below), explained/ (one
+folder per misread animal), and with --sheet sweep_sheet.png (every explained
+animal in one PNG: 13,000 px tall for 113 animals, so no longer the default).
+
+sweep_browser.html browses every explained animal: the summary's numbers as
+tables, then one card per animal (its explain.png, fixed or not, the edit in
+grey levels, the edit's split between target, neighbours and background next
+to the share of the crop window each covers, its misread nodes with what each
+was read on), filtered by split, fixed, cause and --groups, sorted by the
+neighbours' share, the edit or the worst node; then the misread animals with
+no explanation (not detected, or outside --explain-limit). It is one file
+(scripts/sleap_sweep_browser.py) with no server or CDN: pictures load by
+relative path from explained/, so open it where it was written, e.g. straight
+from the file share. --summarize rewrites it in seconds without a GPU or the
+models, e.g. with a group per video (a JSON list indexed by video_index):
+
+    $PY scripts/sleap_explain_error.py --summarize --out sweep/ \
+        --groups video_projects.json --group-label project
 
 The summary sets where the edit went against how much of the crop window each
 region covers (an evenly spread edit lands in those shares). Every other animal
@@ -107,6 +123,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sleap_backward as sb  # noqa: E402  (its import guard explains a missing sleap-nn)
+import sleap_sweep_browser as browser  # noqa: E402
+from sleap_sweep_browser import CAUSES, tally_text  # noqa: E402,F401  (CAUSES: what cause_of returns)
 
 import cv2  # noqa: E402
 import torch  # noqa: E402
@@ -180,18 +198,6 @@ def where_read(read_xy, labels, target, node_names, near_px):
     a, k, d = hit
     who = "its own" if a == target else f"animal {a}'s"
     return f"{who} {node_names[k]} ({d:.1f} px)"
-
-
-# What a misread node was read on, in a sweep's tally.
-CAUSES = {
-    "neighbour_same": "on a neighbour's same body part",
-    "neighbour_other": "on a neighbour's other body part",
-    "swap": "on its own mirror node (left/right swap)",
-    "own_other": "on another of its own nodes",
-    "imprecise": "near its own label, just past the bar (imprecise, not confused)",
-    "background": "on no labeled node (background)",
-    "not_read": "not read at all",
-}
 
 
 def cause_of(k, read_xy, labels, target, mirror, near_px):
@@ -494,7 +500,14 @@ def parse_args(argv=None):
     g.add_argument("--shard", metavar="K/N", help="explain only every N-th misread animal from K (one per GPU)")
     g.add_argument("--redo", action="store_true", help="redo the scan and animals already explained")
     g.add_argument("--summarize", action="store_true",
-                   help="only tally OUT/scan.json and OUT/explained/ (after sharded runs)")
+                   help="only tally OUT/scan.json and OUT/explained/ (after sharded runs); "
+                   "writes sweep_summary.txt and sweep_browser.html")
+    g.add_argument("--groups", metavar="JSON",
+                   help="a group for each video, for the page's group filter: a JSON list indexed by "
+                   "video_index, or an object keyed by it (e.g. which labelling project each video is from)")
+    g.add_argument("--group-label", default="group", help="what the page calls a --groups value")
+    g.add_argument("--sheet", action="store_true",
+                   help="also write sweep_sheet.png, every explained animal in one tall PNG")
     g.add_argument("--verbose", action="store_true", help="print every reading of each edit")
     ap.add_argument("--target-only", action="store_true",
                     help="pull only the target's nodes toward their labels (the other animals must "
@@ -837,55 +850,6 @@ def scan(pair, args, device, mirror):
     return rows, readers
 
 
-def tally_text(rows, reports):
-    """The sweep's summary: how often, which causes, what fixed them."""
-    out = []
-    for split in ("held-out", "training", "unknown"):
-        rs = [r for r in rows if r["split"] == split]
-        if not rs:
-            continue
-        bad = [r for r in rs if r["misread"]]
-        nodes = [n for r in bad for n in r["misread_nodes"].values()]
-        out.append(f"{split} frames: {len(bad)} of {len(rs)} animals misread "
-                   f"({100 * len(bad) / len(rs):.1f}%), {len(nodes)} misread nodes")
-        for c, text in CAUSES.items():
-            n = sum(x["cause"] == c for x in nodes)
-            if n:
-                out.append(f"  {100 * n / len(nodes):5.1f}%  {n:3d}  {text}")
-        missed = sum(not np.isfinite(r["max_px"]) for r in bad)
-        if missed:
-            out.append(f"  not detected at all (no reading, so not explained): {missed} of {len(bad)}")
-        involved = sum(any(x["cause"].startswith("neighbour") for x in r["misread_nodes"].values()) for r in bad)
-        swapped = sum(any(x["cause"] == "swap" for x in r["misread_nodes"].values()) for r in bad)
-        if bad:
-            out.append(f"  animals with a node read on a neighbour: {involved} of {len(bad)}; "
-                       f"with a left/right swap: {swapped} of {len(bad)}")
-    if reports:
-        fixed = [r for r in reports if r["fixed_at_step"] is not None]
-        out.append(f"Explained {len(reports)} misread animals; {len(fixed)} fixed by a minimal edit.")
-        if fixed:
-            out.append(f"  edit: median {np.median([r['kept_change_rms'] for r in fixed]):.1f} grey levels RMS "
-                       f"in the crop window; first fix at median step {np.median([r['fixed_at_step'] for r in fixed]):.0f}")
-            def split(by):
-                t = sum(v for k, v in by.items() if k.endswith("(target)"))
-                b = by.get("background", 0.0)
-                return {"target": t, "neighbours": 1 - t - b, "background": b}
-
-            edit = [split(r["change"]["by_region"]) for r in fixed]
-            area = [split(r["change"]["window_by_region"]) for r in fixed if "window_by_region" in r["change"]]
-            out.append("  where the edit went (mean over fixed animals): " + ", ".join(
-                f"{k} {100 * np.mean([e[k] for e in edit]):.0f}%" for k in edit[0]))
-            if len(area) == len(edit):
-                out.append("  share of the crop window they cover (an even edit's split): " + ", ".join(
-                    f"{k} {100 * np.mean([a[k] for a in area]):.0f}%" for k in area[0]))
-                ratio = {k: np.median([e[k] / a[k] for e, a in zip(edit, area) if a[k] > 0.01]) for k in edit[0]}
-                out.append("  edit per area, median over animals (1 = no more than an even spread): " + ", ".join(
-                    f"{k} {v:.1f}x" for k, v in ratio.items()))
-                more = sum(e["neighbours"] > a["neighbours"] for e, a in zip(edit, area))
-                out.append(f"  animals whose fix put more on neighbours than they cover: {more} of {len(edit)}")
-    return "\n".join(out)
-
-
 def sweep(pair, args, device):
     """--sweep: read every labeled frame, then explain every misread animal."""
     out = Path(args.out)
@@ -940,10 +904,12 @@ def sweep(pair, args, device):
                   f", edit {rep['kept_change_rms']:.1f} grey levels, {rep['edit_seconds']:.0f} s")
         except Exception as e:  # one bad frame must not stop a sweep
             print(f"  FAILED: {e}")
-    summarize(out, rows)
+    summarize(out, rows, args)
 
 
-def summarize(out, rows=None):
+def summarize(out, rows=None, args=None):
+    """Write OUT/sweep_summary.txt and OUT/sweep_browser.html from scan.json and
+    explained/ (and OUT/sweep_sheet.png with --sheet)."""
     out = Path(out)
     if rows is None:
         rows = json.loads((out / "scan.json").read_text())
@@ -955,10 +921,14 @@ def summarize(out, rows=None):
     text = tally_text(rows, reports)
     (out / "sweep_summary.txt").write_text(text + "\n")
     print(text)
-    sheet = sweep_sheet(out, reports)
-    if sheet is not None:
-        sb.save_rgb(out / "sweep_sheet.png", sheet)
-        print(f"Wrote {out}/sweep_sheet.png ({len(reports)} explained animals, most edit on neighbours first)")
+    groups = browser.load_groups(args.groups) if getattr(args, "groups", None) else None
+    page = browser.write_browser(out, rows, reports, groups, getattr(args, "group_label", None) or "group")
+    print(f"Wrote {page} ({len(reports)} explained animals; open it from the folder, next to explained/)")
+    if getattr(args, "sheet", False):
+        sheet = sweep_sheet(out, reports)
+        if sheet is not None:
+            sb.save_rgb(out / "sweep_sheet.png", sheet)
+            print(f"Wrote {out}/sweep_sheet.png ({len(reports)} explained animals, most edit on neighbours first)")
 
 
 def sweep_sheet(out, reports, scale=0.5, cols=2):
@@ -996,7 +966,7 @@ def main(argv=None):
     warnings.filterwarnings("ignore", message=".*not currently supported on the MPS backend.*")
     args = parse_args(argv)
     if args.summarize:
-        summarize(args.out)
+        summarize(args.out, None, args)
         return
     device = sb.pick_device(args.device)
     print(f"Loading models on {device} ...")
