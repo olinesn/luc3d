@@ -689,6 +689,7 @@ export function deleteTargetsFromStore(session, targets) {
                 if (rUl) for (var uj = 0; uj < rUl.length; uj++) renumberInst(rUl[uj] && rUl[uj].instance, rKill);
             }
         }
+        if (typeof session.shiftOutsideGroupMembers === 'function') session.shiftOutsideGroupMembers(killByCam);
     }
 
     return result;

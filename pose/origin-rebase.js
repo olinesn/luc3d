@@ -409,6 +409,8 @@ export async function planOriginRebase(sessions, model, frame, opts) {
     var fitPlans = [];
     /** @type {Array<{camera:Object, rvec:*, tvec:number[]}>} */
     var cameraPlans = [];
+    /** @type {Array<{instance3d:Object, next:Float64Array, nextUnsmoothed:Float64Array|null}>} */
+    var outsideGroupPlans = [];
 
     var cancelled = false;
     async function tick() {
@@ -440,6 +442,19 @@ export async function planOriginRebase(sessions, model, frame, opts) {
                 });
                 await tick();
                 if (cancelled) break;
+            }
+        }
+        // A group kept aside is not shown, but its 3D is in this world too.
+        if (cancelled || !sess.outsideGroups) continue;
+        for (var keptGroups of sess.outsideGroups.values()) {
+            for (var kgi = 0; kgi < keptGroups.length; kgi++) {
+                var kept3d = keptGroups[kgi].instance3d;
+                if (!kept3d || !kept3d.points) continue;
+                outsideGroupPlans.push({
+                    instance3d: kept3d,
+                    next: rebasePoints3d(kept3d.points, R, t),
+                    nextUnsmoothed: kept3d.lucidUnsmoothed ? rebasePoints3d(kept3d.lucidUnsmoothed, R, t) : null,
+                });
             }
         }
     }
@@ -509,6 +524,7 @@ export async function planOriginRebase(sessions, model, frame, opts) {
         frame: frame,
         tally: tally,
         groups: groupPlans,
+        outsideGroups: outsideGroupPlans,
         nodes: nodePlans,
         fits: fitPlans,
         cameras: cameraPlans,
@@ -543,6 +559,10 @@ export function applyOriginRebase(plan) {
         if (plan.groups[i].nextUnsmoothed) {
             markPoints3dSmoothed(g.points3d, pooledPoints3d(plan.groups[i].nextUnsmoothed));
         }
+    }
+    for (i = 0; i < plan.outsideGroups.length; i++) {
+        plan.outsideGroups[i].instance3d.points = pooledPoints3d(plan.outsideGroups[i].next);
+        if (plan.outsideGroups[i].nextUnsmoothed) plan.outsideGroups[i].instance3d.lucidUnsmoothed = plan.outsideGroups[i].nextUnsmoothed;
     }
     for (i = 0; i < plan.nodes.length; i++) {
         var node = plan.nodes[i].node, nn = plan.nodes[i].next;

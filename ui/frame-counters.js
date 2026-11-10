@@ -234,6 +234,8 @@ export function createFrameCounterBaselineBuilder(session, cam, opts) {
             nRows = 0;
         }
         var off = info ? info.offsetInFrame : nRows;
+        // A position not visited is a pose the session does not show: nothing there.
+        while (nRows < off) rowType[nRows++] = undefined;
         rowType[off] = info ? info.type : 'user';
         if (off >= nRows) nRows = off + 1;
     };
