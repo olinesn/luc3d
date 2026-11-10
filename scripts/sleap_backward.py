@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["sleap-nn>=0.2.0"]
+# dependencies = ["sleap-nn>=0.3.5"]
 # ///
 """
 Run a SLEAP top-down model pair BACKWARD: give it a skeleton, get an image.
@@ -53,6 +53,32 @@ Usage (sleap-nn's own environment has everything this needs):
     # What the models alone make of a pose, with no real animal to start from:
     $PY scripts/sleap_backward.py ... --init background --out out/
 
+    # Many poses or frames in one process (models loaded once, each video's
+    # background computed once), split over the GPUs of a Slurm array:
+    #   jobs.jsonl: {"name": "cam4_f926", "frame": 926, "video_index": 3, "video": "/path/cam4.mp4"}
+    #               {"name": "curl_1", "frame": 1000, "pose": "curl_1.json", "steps": 600}
+    $PY scripts/sleap_backward.py ... --slp labels.slp --jobs jobs.jsonl \
+        --shard $SLURM_ARRAY_TASK_ID/$N --out out/
+
+    # On CUDA, --jobs optimizes 8 frames at a time by default (--batch): one pass
+    # through each network for all of them, each frame keeping its own random
+    # views, optimizer, read-backs and stop rule; a frame that stops makes room
+    # for the next job. --batch 1 runs them one after another.
+
+Speed (5-mouse frames, UNet models of 650M + 780M parameters): about 7-9 min a
+frame on an M2 Pro; on an A100, 0.19 s a step in fp32, 0.082 s in bf16 with
+channels-last weights (--precision auto, the default on CUDA; every read-back
+stays sleap-nn's fp32 pass), about 40 s a frame in all. Every --check-every
+steps the image is read back; the best-reading one is kept and the run stops
+after --patience steps without a better one (on 9 held-out frames: 2.1x less
+optimizing than bf16 without channels-last at 400 steps, same median error).
+With --jobs, frames share each pass (--batch, 8 on CUDA): on an L40S a
+frame-step takes 0.094 s alone, 0.071 s with 2 frames, 0.055 s with 8, 0.049 s
+with 24 (8 frames peak at 14.9 GiB, 32 at 35.5 GiB). The 9 held-out frames
+took 399 s one at a time, 259 s all at once; their read-back errors stayed
+within the spread of reruns one at a time (GPU kernels are not deterministic,
+and batched ones round differently, so no run is bit-identical to another).
+
 Either model may be given alone. With only --centroid, the whole frame is
 optimized for the centroid heatmap; with only --instance, each crop is
 optimized for its node heatmaps and the crops are placed on the frame at the
@@ -81,6 +107,7 @@ import os
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import argparse
+import contextlib
 import json
 import math
 import sys
@@ -91,11 +118,21 @@ from typing import Optional
 
 import numpy as np
 
+SLEAP_NN_MIN = (0, 3, 5)
+
 try:
     import cv2
     import sleap_io as sio
     import torch
     import torch.nn.functional as F
+    import sleap_nn
+
+    _have = tuple(int(p) for p in sleap_nn.__version__.split("+")[0].split(".")[:3])
+    if _have < SLEAP_NN_MIN:
+        raise ImportError(
+            f"these tools need sleap-nn {'.'.join(map(str, SLEAP_NN_MIN))} or newer "
+            f"(found {sleap_nn.__version__})"
+        )
     from sleap_nn.data.confidence_maps import generate_confmaps, generate_multiconfmaps
     from sleap_nn.data.instance_centroids import generate_centroids
     from sleap_nn.data.instance_cropping import make_centered_bboxes
@@ -104,11 +141,11 @@ try:
         apply_sizematcher,
         resize_image,
     )
-    from sleap_nn.inference.peak_finding import (
-        crop_bboxes,
-        find_global_peaks,
-        find_local_peaks,
-    )
+    from sleap_nn.inference.ops.crops import crop_bboxes
+    from sleap_nn.inference.ops.peaks import find_global_peaks, find_local_peaks
+
+    # Deprecated in 0.3.5 but still working; its replacement's loader
+    # (`sleap_nn.inference.loaders`) is internal.
     from sleap_nn.inference.predictors import TopDownPredictor
     from omegaconf import OmegaConf
 except ImportError as e:
@@ -144,6 +181,9 @@ class Stage:
     sigma: float
     rotation: tuple = (0.0, 0.0)  # degrees it was trained to ignore (min, max)
     zoom: tuple = (1.0, 1.0)  # scale factors it was trained to ignore (min, max)
+    channels_last: bool = False  # the layout its weights are in now
+    fast: bool = False  # inside `fast_forward`: channels-last wanted
+    exact: int = 0  # depth of `exact_forward`: while > 0, sleap-nn's NCHW pass
 
 
 @dataclass
@@ -197,7 +237,7 @@ def load_pair(centroid_dir, instance_dir, device) -> Pair:
         centroid_ckpt_path=centroid_dir,
         confmap_ckpt_path=instance_dir,
         device=device,
-        # None = take each setting from the training config, as `sleap-nn track` does.
+        # None = take each setting from the training config, as `sleap-nn predict` does.
         preprocess_config=OmegaConf.create(
             dict.fromkeys(
                 ["ensure_rgb", "ensure_grayscale", "crop_size", "max_width", "max_height", "scale"]
@@ -248,7 +288,13 @@ def load_pair(centroid_dir, instance_dir, device) -> Pair:
 
 
 def size_match(pair: Pair, image):
-    """sleap-nn's sizematcher: returns (image, effective scale)."""
+    """sleap-nn's sizematcher: returns (image, effective scale).
+
+    A uint8 image is resized on the CPU, as sleap-nn does (see `run_stage`).
+    """
+    if image.dtype == torch.uint8 and image.device.type != "cpu":
+        out, eff = apply_sizematcher(image.cpu(), max_height=pair.max_hw[0], max_width=pair.max_hw[1])
+        return out.to(image.device), eff
     return apply_sizematcher(image, max_height=pair.max_hw[0], max_width=pair.max_hw[1])
 
 
@@ -256,14 +302,23 @@ def run_stage(stage: Stage, image):
     """Scale, pad to stride, and run one model.
 
     `image` is (n, C, H, W): float in [0, 1] while optimizing, or uint8 to reproduce
-    `sleap-nn track` exactly — it resizes the uint8 frame, rounding to whole grey
-    levels, and only then divides by 255.
+    `sleap-nn predict` exactly — it resizes the uint8 frame, rounding to whole grey
+    levels, and only then divides by 255. sleap-nn resizes frames on the CPU, and
+    torchvision rounds a uint8 resize differently on CUDA (one grey level off on
+    ~15% of pixels, enough to move a centroid by a heatmap pixel now and then), so
+    a uint8 image is resized on the CPU here too.
     """
     if stage.scale != 1.0:
-        image = resize_image(image, stage.scale)
+        if image.dtype == torch.uint8 and image.device.type != "cpu":
+            image = resize_image(image.cpu(), stage.scale).to(image.device)
+        else:
+            image = resize_image(image, stage.scale)
     image = apply_pad_to_stride(image, stage.max_stride)
     if image.dtype == torch.uint8:
         image = image.float() / 255
+    _settle_layout(stage)
+    if stage.channels_last:
+        image = image.contiguous(memory_format=torch.channels_last)
     return stage.net(image)[stage.head], image.shape[-2:]
 
 
@@ -272,8 +327,8 @@ def centroids_of(pair: Pair, poses):
     return generate_centroids(poses, anchor_ind=pair.anchor_ind)
 
 
-def crop_instances(pair: Pair, image, centroids, as_sleap_nn=False):
-    """Crop around each centroid.
+def crop_instances(pair: Pair, image, centroids):
+    """Crop around each centroid with sleap-nn's own `crop_bboxes`.
 
     Returns the crops, their bounding boxes (sleap-nn's half-pixel corners) and the
     integer pixel each crop actually starts at; the two differ by up to a pixel.
@@ -281,44 +336,30 @@ def crop_instances(pair: Pair, image, centroids, as_sleap_nn=False):
     that is the frame sleap-nn's training labels are in (`instance - bbox[0]`) and
     the one its inference adds back (`peak + bbox[0]`).
 
-    While optimizing this slices instead of calling sleap-nn's `crop_bboxes`, whose
-    unfold-and-index has no usable gradient: its backward allocates every possible
-    crop of the frame at once (1.2 TB for a 500 px crop of a 1280x1024 frame). The
-    index arithmetic — rounding, zero padding, clamping — is `crop_bboxes`'s.
-
-    With `as_sleap_nn`, it calls `crop_bboxes` itself, to reproduce `sleap-nn track`
-    exactly — including that (sleap-nn 0.2.0) it reads the crop size off the first
-    box in float32, so for ~6% of first centroids per axis `499.0` comes out as
-    `498.99997` and every crop of that frame is one pixel short.
+    Gradients flow through it: since 0.3.5 `crop_bboxes` gathers each crop's pixels
+    from the zero-padded frame, so its backward needs about one frame of memory.
+    (0.2.0's unfold-and-index backward allocated every possible crop of the frame
+    at once, 1.2 TB for a 500 px crop of a 1280x1024 frame.) Against slicing by
+    hand it gives the same crops and gradients and costs ~0.3 ms more a step for
+    five 500 px crops on an L40S (runs/2026-11-09_crop-bboxes-backward on cup).
     """
     h, w = pair.crop_hw
     bboxes = make_centered_bboxes(centroids, h, w)  # (n, 4, 2)
-    if as_sleap_nn:
-        crops = crop_bboxes(image, bboxes=bboxes, sample_inds=[0] * len(centroids))
-        return crops, bboxes, crop_starts(bboxes, *crops.shape[-2:], image.shape[-2:])
-    starts = crop_starts(bboxes, h, w, image.shape[-2:])
-    hh, hw = h // 2, w // 2
-    padded = F.pad(image, (hw, hw, hh, hh), mode="constant", value=0)
-    crops = [
-        padded[:, :, y + hh : y + hh + h, x + hw : x + hw + w]
-        for x, y in starts.to(torch.long).tolist()
-    ]
-    crops = torch.cat(crops) if crops else image.new_zeros((0, image.shape[1], h, w))
-    return crops, bboxes, starts
+    if len(centroids) == 0:  # crop_bboxes would return (0, C, 0, 0)
+        return image.new_zeros((0, image.shape[1], h, w)), bboxes, bboxes[:, 0, :]
+    sample_inds = torch.zeros(len(centroids), dtype=torch.long, device=image.device)
+    crops = crop_bboxes(image, bboxes=bboxes, sample_inds=sample_inds, crop_size=(h, w))
+    return crops, bboxes, crop_starts(bboxes, h, w)
 
 
-def crop_starts(bboxes, h, w, image_hw):
+def crop_starts(bboxes, h, w):
     """The image pixel (x, y) that crop pixel (0, 0) of an `h x w` crop really is.
 
-    Same arithmetic as `crop_bboxes`: it truncates the box's top-left plus half the
-    crop to a pixel, clamps it to the padded frame, and slices `h x w` from there.
+    Same arithmetic as `crop_bboxes`: the box's top-left plus half the crop,
+    truncated toward zero, minus half the crop again.
     """
-    hh, hw = h // 2, w // 2
-    half = torch.tensor([hw, hh], dtype=bboxes.dtype, device=bboxes.device)
-    idx = (bboxes[:, 0, :] + half).to(torch.long)
-    idx[:, 0] = idx[:, 0].clamp(0, image_hw[1] + 2 * hw - w)
-    idx[:, 1] = idx[:, 1].clamp(0, image_hw[0] + 2 * hh - h)
-    return idx.to(bboxes.dtype) - half
+    half = torch.tensor([w // 2, h // 2], dtype=bboxes.dtype, device=bboxes.device)
+    return ((bboxes[:, 0, :] + half).to(torch.long) - half.long()).to(bboxes.dtype)
 
 
 def similarity_warp(image, src, dst, angle, zoom, out_hw):
@@ -386,59 +427,98 @@ def objective(pair: Pair, image, poses, node_mask, gen=None):
     distribution, and an image has to look like the pose from every such view to
     keep the error down, which is what keeps it from being pixel-exact noise.
     """
-    image, eff = size_match(pair, image)
-    poses = poses * eff
-    out = {}
+    return objective_many(pair, [(image, poses, node_mask, gen)])[0]
+
+
+def objective_many(pair: Pair, items):
+    """`objective` for several images at once, each model run once on all of them.
+
+    `items` is a list of (image, poses, node_mask, gen), each as `objective` takes
+    them, with one generator per item (or None); returns one `objective` dict per
+    item. The frames go through the centroid model as one batch (frames of the
+    same size together) and all the frames' crops through the centered-instance
+    model as one batch, each crop indexed back to its frame, which need not have
+    the same number of animals. Every item draws its random views from its own
+    generator in the order `objective` draws them for one image (the frame's, then
+    its crops'), so a frame sees the same views batched or alone. What batching
+    changes is only the arithmetic inside batch-sized kernels.
+    """
+    sized = []
+    for image, poses, node_mask, gen in items:
+        image, eff = size_match(pair, image)
+        sized.append((image, poses * eff, node_mask, gen))
+    out = [{} for _ in items]
+    one = len(items) == 1
     if pair.centroid is not None:
         st = pair.centroid
-        frame, frame_poses = image, poses
-        if gen is not None and (st.rotation != (0.0, 0.0) or st.zoom != (1.0, 1.0)):
-            H, W = image.shape[-2:]
-            mid = torch.tensor([[(W - 1) / 2, (H - 1) / 2]], device=image.device)
-            angle, zoom = random_view(st, 1, gen, image.device)
-            frame = similarity_warp(image, mid, mid, angle, zoom, (H, W))
-            flat = warp_points(poses.reshape(1, -1, 2), mid, mid, angle, zoom)
-            frame_poses = flat.reshape(poses.shape)
-        pred, hw = run_stage(st, frame)
-        target = generate_multiconfmaps(
-            centroids_of(pair, frame_poses * st.scale)[None].cpu(),  # its grids are on the CPU
-            img_hw=tuple(hw),
-            num_instances=len(poses),
-            sigma=st.sigma,
-            output_stride=st.output_stride,
-            is_centroids=True,
-        ).to(pred.device)
-        out["centroid"] = ((pred - target) ** 2).sum() / (target**2).sum()
-        out["centroid_maps"] = (pred, target)
+        frames = []
+        for image, poses, _, gen in sized:
+            frame, frame_poses = image, poses
+            if gen is not None and (st.rotation != (0.0, 0.0) or st.zoom != (1.0, 1.0)):
+                H, W = image.shape[-2:]
+                mid = torch.tensor([[(W - 1) / 2, (H - 1) / 2]], device=image.device)
+                angle, zoom = random_view(st, 1, gen, image.device)
+                frame = similarity_warp(image, mid, mid, angle, zoom, (H, W))
+                flat = warp_points(poses.reshape(1, -1, 2), mid, mid, angle, zoom)
+                frame_poses = flat.reshape(poses.shape)
+            frames.append((frame, frame_poses))
+        same_size = {}
+        for i, (frame, _) in enumerate(frames):
+            same_size.setdefault(tuple(frame.shape[1:]), []).append(i)
+        for idx in same_size.values():
+            batch = frames[idx[0]][0] if len(idx) == 1 else torch.cat([frames[i][0] for i in idx])
+            preds, hw = run_stage(st, batch)
+            for j, i in enumerate(idx):
+                pred = preds if len(idx) == 1 else preds[j : j + 1]
+                frame_poses = frames[i][1]
+                target = generate_multiconfmaps(
+                    centroids_of(pair, frame_poses * st.scale)[None].cpu(),  # its grids are on the CPU
+                    img_hw=tuple(hw),
+                    num_instances=len(frame_poses),
+                    sigma=st.sigma,
+                    output_stride=st.output_stride,
+                    is_centroids=True,
+                ).to(pred.device)
+                out[i]["centroid"] = ((pred - target) ** 2).sum() / (target**2).sum()
+                out[i]["centroid_maps"] = (pred, target)
     if pair.instance is not None:
         st = pair.instance
-        centroids = centroids_of(pair, poses)
         h, w = pair.crop_hw
-        bboxes = make_centered_bboxes(centroids, h, w)
-        starts = crop_starts(bboxes, h, w, image.shape[-2:])
-        if gen is not None and (st.rotation != (0.0, 0.0) or st.zoom != (1.0, 1.0)):
-            # Each crop turned about its own centroid, which stays where the plain
-            # crop would have put it, so angle 0 / zoom 1 is exactly that crop.
-            here = centroids - starts
-            angle, zoom = random_view(st, len(poses), gen, image.device)
-            crops = similarity_warp(image, centroids, here, angle, zoom, pair.crop_hw)
-            local = warp_points(poses, centroids, here, angle, zoom) + starts[:, None, :]
-        else:
-            crops, _, _ = crop_instances(pair, image, centroids)
-            local = poses
-        # In the box-corner frame sleap-nn labels and reads peaks in (see
-        # `crop_instances`): measured on 5,493 hand-labeled nodes, reading peaks
-        # against the integer start instead is off by -0.66/-0.76 px, against the
-        # corner by -0.25/-0.34 px.
-        local = local - bboxes[:, None, 0, :]
-        pred, hw = run_stage(st, crops)
-        local = local * st.scale
-        target = generate_confmaps(
-            local.cpu(), img_hw=tuple(hw), sigma=st.sigma, output_stride=st.output_stride
-        ).to(pred.device)
-        m = node_mask[:, :, None, None].to(pred.dtype)
-        out["instance"] = (((pred - target) ** 2) * m).sum() / ((target**2) * m).sum()
-        out["instance_maps"] = (pred, target, crops)
+        crops, local = [], []
+        for image, poses, _, gen in sized:
+            centroids = centroids_of(pair, poses)
+            bboxes = make_centered_bboxes(centroids, h, w)
+            starts = crop_starts(bboxes, h, w)
+            if gen is not None and (st.rotation != (0.0, 0.0) or st.zoom != (1.0, 1.0)):
+                # Each crop turned about its own centroid, which stays where the plain
+                # crop would have put it, so angle 0 / zoom 1 is exactly that crop.
+                here = centroids - starts
+                angle, zoom = random_view(st, len(poses), gen, image.device)
+                c = similarity_warp(image, centroids, here, angle, zoom, pair.crop_hw)
+                pts = warp_points(poses, centroids, here, angle, zoom) + starts[:, None, :]
+            else:
+                c, _, _ = crop_instances(pair, image, centroids)
+                pts = poses
+            # In the box-corner frame sleap-nn labels and reads peaks in (see
+            # `crop_instances`): measured on 5,493 hand-labeled nodes, reading peaks
+            # against the integer start instead is off by -0.66/-0.76 px, against the
+            # corner by -0.25/-0.34 px.
+            crops.append(c)
+            local.append(pts - bboxes[:, None, 0, :])
+        preds, hw = run_stage(st, crops[0] if one else torch.cat(crops))
+        targets = generate_confmaps(
+            ((local[0] if one else torch.cat(local)) * st.scale).cpu(),
+            img_hw=tuple(hw), sigma=st.sigma, output_stride=st.output_stride,
+        ).to(preds.device)
+        start = 0
+        for i, (_, poses, node_mask, _) in enumerate(sized):
+            n = len(poses)
+            pred = preds if one else preds[start : start + n]
+            target = targets if one else targets[start : start + n]
+            start += n
+            m = node_mask[:, :, None, None].to(pred.dtype)
+            out[i]["instance"] = (((pred - target) ** 2) * m).sum() / ((target**2) * m).sum()
+            out[i]["instance_maps"] = (pred, target, crops[i])
     return out
 
 
@@ -448,18 +528,24 @@ def objective(pair: Pair, image, poses, node_mask, gen=None):
 
 
 class PyramidImage(torch.nn.Module):
-    """An image as sigmoid(logit(init) + mask * sum of upsampled per-octave layers).
+    """An image as init + sigmoid(b + mask * delta) - sigmoid(b), b = logit(init).
 
-    Every octave gets its own learnable layer, so a step of the optimizer moves low
-    frequencies as readily as high ones; a plain pixel grid moves almost only the
-    highest, which is where adversarial noise lives. Where `mask` is 0 the image is
-    exactly `init`.
+    `delta` is a sum of upsampled per-octave layers: every octave gets its own
+    learnable layer, so a step of the optimizer moves low frequencies as readily as
+    high ones; a plain pixel grid moves almost only the highest, which is where
+    adversarial noise lives.
+
+    The residual form makes the image EXACTLY `init` wherever delta or mask is 0.
+    sigmoid(logit(init)) alone is not: logit needs init clamped away from 0 and 1,
+    which lifted every pixel darker than 2.55 grey levels — most of a dark arena
+    floor — and would count as an edit when the edit is what is being measured.
     """
 
     def __init__(self, init, levels, mask=None, finest=0):
         super().__init__()
         _, c, h, w = init.shape
         self.size = (h, w)
+        self.register_buffer("init", init)
         self.register_buffer("base", torch.logit(init.clamp(0.01, 0.99)))
         self.register_buffer("mask", mask if mask is not None else torch.ones_like(init[:, :1]))
         # Octave k holds detail of ~2^k px; leaving out the finest octaves leaves out
@@ -478,7 +564,8 @@ class PyramidImage(torch.nn.Module):
                 delta = delta + layer
             else:
                 delta = delta + F.interpolate(layer, size=self.size, mode="bilinear", align_corners=False)
-        return torch.sigmoid(self.base + self.mask * delta)
+        moved = torch.sigmoid(self.base + self.mask * delta) - torch.sigmoid(self.base)
+        return (self.init + moved).clamp(0, 1)
 
 
 def edit_mask(poses, size, margin, device):
@@ -606,43 +693,289 @@ def total_variation(image):
     ).abs().mean()
 
 
+# Frames per pass by default on CUDA (--batch 0). On an L40S, seconds per frame-step
+# 0.096 alone, 0.073 for 2, 0.067 for 4, 0.058 for 6, 0.057 for 8, 0.055 for 16;
+# 8 five-mouse frames peak at 14.9 GiB (runs/2026-11-09_backward-batch on cup).
+CUDA_BATCH = 8
+
+
+def resolve_batch(device, batch):
+    """--batch 0 is CUDA_BATCH on CUDA, 1 anywhere else (untested there)."""
+    if batch and batch > 0:
+        return batch
+    return CUDA_BATCH if str(device).startswith("cuda") else 1
+
+
+def resolve_precision(device, precision):
+    """'auto' is bf16 on CUDA, fp32 anywhere else."""
+    if precision == "auto":
+        return "bf16" if str(device).startswith("cuda") else "fp32"
+    return precision
+
+
+def _stages(pair: Pair):
+    return [st for st in (pair.centroid, pair.instance) if st is not None]
+
+
+def _settle_layout(stage: Stage):
+    """Put the weights in the layout the current pass wants (see `fast_forward`).
+
+    Changed lazily, at the next forward: several read-backs in a row (a batch of
+    frames all due for one) convert the weights once, not once each, and so does
+    the optimization step after them. The conversion moves no value.
+    """
+    want = stage.fast and stage.exact == 0
+    if stage.channels_last != want:
+        stage.net.to(memory_format=torch.channels_last if want else torch.contiguous_format)
+        stage.channels_last = want
+
+
+@contextlib.contextmanager
+def fast_forward(pair: Pair, device, precision):
+    """The models' forward (and backward) pass in bf16, channels-last, on CUDA.
+
+    On an A100 with these UNet models (650M + 780M parameters) one optimization
+    step takes 0.174 s in fp32, 0.140 s in bf16 and 0.067 s in bf16 with
+    channels-last weights and activations. A no-op for fp32 or off CUDA. Inside
+    it, `exact_forward` gives back sleap-nn's own fp32 NCHW pass for read-backs.
+    """
+    if resolve_precision(device, precision) != "bf16" or not str(device).startswith("cuda"):
+        yield
+        return
+    for st in _stages(pair):
+        st.fast = True
+    try:
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            yield
+    finally:
+        for st in _stages(pair):
+            st.fast = False
+            _settle_layout(st)
+
+
+@contextlib.contextmanager
+def exact_forward(pair: Pair):
+    """fp32, NCHW: the pass `sleap-nn predict` runs, even inside `fast_forward`."""
+    for st in _stages(pair):
+        st.exact += 1
+    try:
+        with torch.autocast("cuda", enabled=False), torch.autocast("cpu", enabled=False):
+            yield
+    finally:
+        for st in _stages(pair):
+            st.exact -= 1
+
+
+def read_back(pair: Pair, image, poses, node_mask):
+    """Quantize `image` like a saved PNG and read it as `sleap-nn predict` would.
+
+    Returns {mean_px, median_px, max_px, centroids}: the node error against
+    `poses` and how many animals the centroid model found. Always fp32 NCHW
+    (`exact_forward`).
+    """
+    u8 = (image.detach() * 255).round().to(torch.uint8)
+    with exact_forward(pair):
+        found = recover(pair, u8, poses)
+    row = {}
+    if found.get("centroids") is not None:
+        row["centroids"] = int(len(found["centroids"]))
+    if "reported" in found:
+        err = node_errors(found["reported"], poses.cpu().numpy(), node_mask.cpu().numpy())
+        row["mean_px"] = float(np.nanmean(err))
+        row["median_px"] = float(np.nanmedian(err))
+        row["max_px"] = float(np.nanmax(err))
+    return row
+
+
 def optimize(pair: Pair, init, poses, node_mask, args, mask=None, log=print):
-    """Gradient descent on the pixels. Returns (image, history, snapshots)."""
-    gen = torch.Generator().manual_seed(args.seed)
-    img_param = PyramidImage(init, args.levels, mask, args.finest)
-    opt = torch.optim.Adam(img_param.parameters(), lr=args.lr)
-    weights = {"centroid": args.centroid_weight, "instance": args.instance_weight}
-    history, snapshots = [], []
-    snap_every = max(1, args.steps // 7)
-    t0 = time.time()
-    for step in range(args.steps + 1):
-        image = img_param()
-        if step % snap_every == 0 or step == args.steps:
-            snapshots.append((step, image.detach().cpu()))
+    """Gradient descent on the pixels. Returns (image, history, snapshots).
+
+    With `args.check_every` > 0, every that many steps the image is also read back
+    as a saved PNG (`read_back`, into `optimize.last_checks`), the image that reads
+    back best (lowest mean node error) is the one returned, and the run stops once
+    `args.patience` steps have passed without a better one. Measured on 9 held-out
+    5-mouse frames: most frames stop improving by step 200, but hard ones keep
+    gaining until 300-400, and the last step is not always the best.
+    """
+    run = BackwardRun(pair, init, poses, node_mask, args, mask, log)
+    with fast_forward(pair, init.device, getattr(args, "precision", "fp32")):
+        run_together(pair, [run], 1)
+    image, kept = run.result()
+    run.seconds = time.time() - run.t0
+    optimize.last_seconds = run.seconds
+    optimize.last_checks = run.checks
+    optimize.last_kept_step = kept
+    optimize.last_steps_run = run.steps_run()
+    return image, run.history, run.snapshots
+
+
+class BackwardRun:
+    """One frame's optimization (see `optimize`), a step at a time.
+
+    So that several frames can share each pass through the networks
+    (`run_together`), a run is driven from outside: `inputs()` starts a step (a
+    snapshot, a read-back when one is due, the stop rule) and returns what
+    `objective_many` takes for it, or None once the run is over; `loss(terms)`
+    turns that step's objective into the loss; `record(loss, terms)` logs it once
+    the step is taken. A run keeps its own generator, optimizer, best read-back
+    and patience, so whatever runs beside it, it draws the same views and keeps
+    and stops by its own read-backs alone.
+    """
+
+    def __init__(self, pair: Pair, init, poses, node_mask, args, mask=None, log=print):
+        self.pair, self.init, self.poses, self.node_mask = pair, init, poses, node_mask
+        self.args, self.log = args, log
+        self.gen = torch.Generator().manual_seed(args.seed)
+        self.img_param = PyramidImage(init, args.levels, mask, args.finest)
+        self.opt = torch.optim.Adam(self.img_param.parameters(), lr=args.lr)
+        self.weights = {"centroid": args.centroid_weight, "instance": args.instance_weight}
+        self.history, self.snapshots, self.checks = [], [], []
+        self.snap_every = max(1, args.steps // 7)
+        self.check_every = getattr(args, "check_every", 0) or 0
+        self.patience = getattr(args, "patience", 0) or 0
+        self.best, self.best_score, self.best_step = None, np.inf, None
+        self.step = 0
+        self.image = None
+        self.t0 = time.time()
+
+    def inputs(self):
+        args, step = self.args, self.step
+        image = self.img_param()
+        if step % self.snap_every == 0 or step == args.steps:
+            self.snapshots.append((step, image.detach().cpu()))
+        if self.check_every and (step % self.check_every == 0 or step == args.steps):
+            c = {"step": step, **read_back(self.pair, image, self.poses, self.node_mask)}
+            self.checks.append(c)
+            score = c.get("mean_px", np.nan)
+            if np.isfinite(score) and score < self.best_score:
+                self.best, self.best_score, self.best_step = image.detach().clone(), score, step
+            self.log(
+                f"  check {step:5d}  read back: median {c.get('median_px', float('nan')):.2f} px, "
+                f"max {c.get('max_px', float('nan')):.2f} px, {c.get('centroids', '-')} centroid(s)"
+                + ("  (best so far)" if self.best_step == step else "")
+            )
+            if (self.patience and self.best_step is not None
+                    and step - self.best_step >= self.patience and step < args.steps):
+                self.log(f"  no better read-back in {self.patience} steps: stopping at step {step}, "
+                         f"keeping step {self.best_step}")
+                self.snapshots.append((step, image.detach().cpu()))
+                return None
         if step == args.steps:
-            break
+            return None
         # Random shift of the whole frame — and of the poses with it — so no detail
         # can rely on sitting at one exact pixel.
         j = args.jitter
-        dx, dy = (torch.randint(-j, j + 1, (2,), generator=gen).tolist() if j else (0, 0))
+        dx, dy = (torch.randint(-j, j + 1, (2,), generator=self.gen).tolist() if j else (0, 0))
         shifted = torch.roll(image, shifts=(dy, dx), dims=(2, 3)) if j else image
-        shift = torch.tensor([dx, dy], dtype=poses.dtype, device=poses.device)
-        terms = objective(pair, shifted, poses + shift, node_mask, gen if args.augment else None)
-        loss = sum(weights[k] * terms[k] for k in weights if k in terms)
+        shift = torch.tensor([dx, dy], dtype=self.poses.dtype, device=self.poses.device)
+        self.image = image
+        return shifted, self.poses + shift, self.node_mask, self.gen if args.augment else None
+
+    def loss(self, terms):
+        args, image = self.args, self.image
+        loss = sum(self.weights[k] * terms[k].float() for k in self.weights if k in terms)
         if args.tv:
             loss = loss + args.tv * total_variation(image)
         if args.keep:
-            loss = loss + args.keep * ((image - init) ** 2).mean()
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
-        row = {"step": step, "loss": loss.item()}
-        row.update({k: terms[k].item() for k in weights if k in terms})
-        history.append(row)
-        if step % args.log_every == 0:
-            parts = "  ".join(f"{k} {row[k]:.4f}" for k in weights if k in row)
-            log(f"  step {step:5d}  loss {row['loss']:.4f}  {parts}  ({time.time() - t0:.0f} s)")
-    return img_param().detach(), history, snapshots
+            loss = loss + args.keep * ((image - self.init) ** 2).mean()
+        return loss
+
+    def record(self, loss, terms):
+        row = {"step": self.step, "loss": loss.item()}
+        row.update({k: terms[k].item() for k in self.weights if k in terms})
+        self.history.append(row)
+        if self.step % self.args.log_every == 0:
+            parts = "  ".join(f"{k} {row[k]:.4f}" for k in self.weights if k in row)
+            self.log(f"  step {self.step:5d}  loss {row['loss']:.4f}  {parts}  ({time.time() - self.t0:.0f} s)")
+        self.image = None
+        self.step += 1
+
+    def steps_run(self):
+        return self.history[-1]["step"] + 1 if self.history else 0
+
+    def result(self):
+        """(the image kept, the step it is from): the best read-back, else the last step."""
+        if self.best is not None:
+            return self.best, self.best_step
+        return self.img_param().detach(), self.step
+
+
+def step_together(pair: Pair, runs, inputs):
+    """One optimization step of every run in `runs`, with one pass through each model.
+
+    Each run's loss depends only on its own image, so the gradient of their sum is,
+    for each image, the gradient of its own loss; each run steps its own optimizer.
+    """
+    terms = objective_many(pair, inputs)
+    losses = [r.loss(t) for r, t in zip(runs, terms)]
+    for r in runs:
+        r.opt.zero_grad(set_to_none=True)
+    (losses[0] if len(losses) == 1 else torch.stack(losses).sum()).backward()
+    for r in runs:
+        r.opt.step()
+    for r, loss, t in zip(runs, losses, terms):
+        r.record(loss, t)
+
+
+def run_together(pair: Pair, runs, batch, on_done=None, on_error=None):
+    """Optimize every run of the iterable `runs`, up to `batch` of them per pass.
+
+    Runs are started as places free up: when one ends (its own stop rule) the next
+    takes its place at the next step, so the batch stays full until the runs run
+    out. `on_done(run)` is called as each one ends. With `on_error`, a step of
+    several runs that fails (most likely out of GPU memory) is retried one run at
+    a time and the batch is halved from then on; a run that fails alone ends with
+    `on_error(run, exception)` while the others go on. Without it, errors raise.
+    """
+    pending = iter(runs)
+    active, more = [], True
+    while True:
+        stepping, inputs = [], []
+
+        def start(r):
+            x = r.inputs()
+            if x is None:
+                on_done and on_done(r)
+            else:
+                stepping.append(r)
+                inputs.append(x)
+
+        for r in active:
+            start(r)
+        while more and len(stepping) < batch:
+            r = next(pending, None)
+            if r is None:
+                more = False
+            else:
+                start(r)
+        if not stepping:
+            return
+        active = []
+        for k in range(0, len(stepping), batch):
+            runs_k, inputs_k = stepping[k : k + batch], inputs[k : k + batch]
+            try:
+                step_together(pair, runs_k, inputs_k)
+                active += runs_k
+                continue
+            except Exception as e:
+                if on_error is None:
+                    raise
+                failed = e
+            if len(runs_k) == 1:
+                on_error(runs_k[0], failed)
+                continue
+            batch = max(1, len(runs_k) // 2)
+            print(f"  a step of {len(runs_k)} frames together failed ({type(failed).__name__}: "
+                  f"{failed}); retrying it one frame at a time, then going on {batch} at a time")
+            del failed
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            for r, x in zip(runs_k, inputs_k):
+                try:
+                    step_together(pair, [r], [x])
+                    active.append(r)
+                except Exception as e1:
+                    on_error(r, e1)
 
 
 # ---------------------------------------------------------------------------
@@ -652,7 +985,7 @@ def optimize(pair: Pair, init, poses, node_mask, args, mask=None, log=print):
 
 @torch.no_grad()
 def recover(pair: Pair, image, poses):
-    """Run the image forward the way `sleap-nn track` does; return what it finds.
+    """Run the image forward the way `sleap-nn predict` does; return what it finds.
 
     Pass `image` as uint8 (1, C, H, W) to match it bit for bit.
 
@@ -678,9 +1011,7 @@ def recover(pair: Pair, image, poses):
     if pair.instance is None or len(centroids) == 0:
         return result
     st = pair.instance
-    crops, bboxes, _ = crop_instances(
-        pair, image, centroids.to(image.device), as_sleap_nn=True
-    )
+    crops, bboxes, _ = crop_instances(pair, image, centroids.to(image.device))
     cms, _ = run_stage(st, crops)
     peaks, vals = find_global_peaks(
         cms.cpu(), threshold=PEAK_THRESHOLD, refinement="integral",
@@ -1007,39 +1338,226 @@ def parse_args(argv=None):
     g.add_argument("--seed", type=int, default=0)
     g.add_argument("--device", default="auto", help="auto, cuda, mps or cpu")
     g.add_argument("--log-every", type=int, default=25)
+    g.add_argument(
+        "--check-every", type=int, default=25,
+        help="read the image back as a saved PNG every N steps and keep the one that "
+        "reads best (0 = never; the last step's image is kept)",
+    )
+    g.add_argument(
+        "--patience", type=int, default=100,
+        help="stop once this many steps pass with no better read-back (0 = run all --steps)",
+    )
+    g.add_argument(
+        "--precision", choices=("auto", "fp32", "bf16"), default="auto",
+        help="bf16 (CUDA only; 'auto' picks it there) optimizes with the models in "
+        "bf16 and channels-last, 2.6x faster on an A100; every read-back is fp32",
+    )
 
-    ap.add_argument("--out", required=True, help="output folder")
+    ap.add_argument("--out", required=True, help="output folder (with --jobs: one subfolder per job)")
+    ap.add_argument(
+        "--jobs",
+        help="run many poses/frames in one process, loading the models once: a file "
+        "of one JSON object per line, each setting any of the options above for "
+        'its run, e.g. {"name": "cam4_f926", "frame": 926, "video_index": 3, '
+        '"video": "/path/cam4.mp4", "steps": 200}; the command line gives the defaults',
+    )
+    ap.add_argument("--redo", action="store_true", help="with --jobs: rerun jobs that already have a report.json")
+    ap.add_argument(
+        "--batch", type=int, default=0,
+        help="with --jobs: optimize up to this many frames at once, one pass through the "
+        "networks for all of them (a frame that stops makes room for the next job); "
+        f"0 = {CUDA_BATCH} on CUDA, 1 elsewhere",
+    )
+    ap.add_argument(
+        "--shard", metavar="K/N",
+        help="with --jobs: run only every N-th job starting at K (0-based), e.g. one "
+        "shard per GPU of a Slurm array: --shard $SLURM_ARRAY_TASK_ID/$N",
+    )
     args = ap.parse_args(argv)
     if not (args.centroid or args.instance):
         ap.error("give --centroid, --instance, or both")
-    if not (args.slp or args.pose):
-        ap.error("give a pose: --slp with --frame, or --pose")
-    if args.slp and args.frame is None:
-        ap.error("--slp needs --frame")
-    if args.init in ("frame", "background", "exemplar") and not args.slp:
-        ap.error(f"--init {args.init} needs --slp and --frame (and a readable video)")
+    if args.shard:
+        try:
+            k, n = (int(x) for x in args.shard.split("/"))
+            assert 0 <= k < n
+        except (ValueError, AssertionError):
+            ap.error("--shard is K/N with 0 <= K < N, e.g. 0/4")
+        if not args.jobs:
+            ap.error("--shard needs --jobs")
+    if not args.jobs:
+        try:
+            check_job(args)
+        except SystemExit as e:
+            ap.error(str(e))
     return args
+
+
+def check_job(args):
+    """What one run needs; raises SystemExit naming what is missing."""
+    if not (args.slp or args.pose):
+        raise SystemExit("give a pose: --slp with --frame, or --pose")
+    if args.slp and args.frame is None:
+        raise SystemExit("--slp needs --frame")
+    if args.init in ("frame", "background", "exemplar") and not args.slp:
+        raise SystemExit(f"--init {args.init} needs --slp and --frame (and a readable video)")
+
+
+# Settings a --jobs line may set; anything else in a line is refused.
+JOB_KEYS = {
+    "name", "slp", "frame", "video_index", "video", "which", "animals", "pose", "init",
+    "background_frames", "margin", "size", "steps", "lr", "levels", "finest", "jitter",
+    "augment", "tv", "keep", "centroid_weight", "instance_weight", "seed", "check_every",
+    "patience", "precision",
+}
+
+
+def read_jobs(path):
+    """One JSON object per line (blank lines and # comments skipped)."""
+    jobs = []
+    for n, line in enumerate(Path(path).read_text().splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        job = json.loads(line)
+        unknown = set(job) - JOB_KEYS
+        if unknown:
+            raise SystemExit(f"{path}:{n}: unknown setting(s) {sorted(unknown)}")
+        jobs.append(job)
+    return jobs
 
 
 def main(argv=None):
     sys.stdout.reconfigure(line_buffering=True)  # progress shows up live in a log file
     args = parse_args(argv)
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
     device = pick_device(args.device)
-    torch.manual_seed(args.seed)
 
     print(f"Loading models on {device} ...")
     t0 = time.time()
     pair = load_pair(args.centroid, args.instance, device)
     print(f"  loaded in {time.time() - t0:.0f} s; nodes: {', '.join(pair.node_names)}")
+    cache = {}
+    if not args.jobs:
+        run_one(pair, args, device, cache)
+        return
+    run_jobs(pair, args, device, cache)
+
+
+def run_jobs(pair: Pair, args, device, cache):
+    """--jobs: every job of the file (or of this shard), up to --batch of them at a time.
+
+    With --batch above 1 the frames being optimized share each pass through the
+    networks (`run_together`): each keeps its own random views, optimizer,
+    read-backs and stop rule, and when one stops the next job takes its place.
+    Jobs asking for different --precision run in separate groups.
+    """
+    jobs = read_jobs(args.jobs)
+    shard = ""
+    if args.shard:
+        k, n = (int(x) for x in args.shard.split("/"))
+        jobs = [j for i, j in enumerate(jobs) if i % n == k]
+        shard = f"_{k}of{n}"
+    todo = []
+    for k, job in enumerate(jobs):
+        a = argparse.Namespace(**{**vars(args), **job})
+        name = job.get("name") or f"job{k:04d}"
+        a.out = str(Path(args.out) / name)
+        if (Path(a.out) / "report.json").exists() and not args.redo:
+            print(f"[{k + 1}/{len(jobs)}] {name}: already done, skipped")
+            continue
+        todo.append((k, name, a))
+    batch = resolve_batch(device, args.batch)
+    done = []
+    t_all = time.time()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+    def failed(name, e):
+        print(f"  {name} FAILED: {e}")
+        done.append({"name": name, "error": str(e)})
+
+    def runs(items):
+        for k, name, a in items:
+            print(f"[{k + 1}/{len(jobs)}] {name}")
+            t = time.time()
+            try:
+                check_job(a)
+                with exact_forward(pair):  # no bf16 for the start image either
+                    job = prepare_job(pair, a, device, cache)
+                log = print if batch == 1 else (lambda text, name=name: print(f"  {name}:{text[1:]}"))
+                run = BackwardRun(pair, job.init, job.poses_t, job.node_mask, a, job.mask, log)
+            except (SystemExit, Exception) as e:  # one bad job must not stop a sweep
+                failed(name, e)
+                continue
+            run.job, run.name, run.started = job, name, t
+            yield run
+
+    def finish(run):
+        image, kept = run.result()
+        seconds = time.time() - run.t0
+        stats = {
+            "optimize_seconds": round(seconds, 2),
+            "steps_run": run.steps_run(),
+            "kept_step": kept,
+            "seconds_per_step": round(seconds / max(run.steps_run(), 1), 4),
+            "checks": run.checks,
+        }
+        try:
+            if batch > 1:
+                print(f"  {run.name}: done, {run.steps_run()} steps, keeping step {kept}")
+            finish_job(pair, run.job, image, run.history, run.snapshots, stats)
+            done.append({"name": run.name, "seconds": round(time.time() - run.started, 1)})
+        except (SystemExit, Exception) as e:
+            failed(run.name, e)
+
+    groups = {}
+    for item in todo:
+        groups.setdefault(resolve_precision(device, item[2].precision), []).append(item)
+    for precision, items in groups.items():
+        with fast_forward(pair, device, precision):
+            run_together(pair, runs(items), batch, on_done=finish,
+                         on_error=lambda run, e: failed(run.name, e))
+    failed_n = sum("error" in d for d in done)
+    peak = ""
+    if torch.cuda.is_available():
+        peak = f", peak GPU memory {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB"
+    print(f"{len(done)} job(s) run in {time.time() - t_all:.0f} s, {failed_n} failed"
+          + (f", {batch} at a time" if batch > 1 else "") + peak)
+    (Path(args.out) / f"jobs_done{shard}.json").write_text(json.dumps(done, indent=1))
+
+
+def run_one(pair: Pair, args, device, cache):
+    """One backward run: one frame's (or JSON file's) poses into `args.out`.
+
+    `cache` keeps what jobs of a sweep share — open videos, median backgrounds —
+    so each is opened or computed once per process.
+    """
+    job = prepare_job(pair, args, device, cache)
+    image, history, snapshots = optimize(pair, job.init, job.poses_t, job.node_mask, args, job.mask)
+    stats = {
+        "optimize_seconds": round(optimize.last_seconds, 2),
+        "steps_run": optimize.last_steps_run,
+        "kept_step": optimize.last_kept_step,
+        "seconds_per_step": round(optimize.last_seconds / max(optimize.last_steps_run, 1), 4),
+        "checks": optimize.last_checks,
+    }
+    finish_job(pair, job, image, history, snapshots, stats)
+
+
+def prepare_job(pair: Pair, args, device, cache):
+    """Everything a run needs before optimizing: poses, frame size, start image, mask."""
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    torch.manual_seed(args.seed)
     channels = max(s.in_channels for s in (pair.centroid, pair.instance) if s is not None)
 
     # The pose(s), and whatever can say how big the frame is.
     poses, size, frame = None, None, None
     if args.slp:
         poses, video = poses_from_slp(args.slp, args.frame, args.video_index, pair.node_names, args.which)
-        reader = open_video(video, args.video)
+        key = ("video", str(args.video or getattr(video, "filename", "")))
+        if key not in cache:
+            cache[key] = open_video(video, args.video)
+        reader = cache[key]
         if reader is not None:
             frame = reader[args.frame]
             size = (frame.shape[1], frame.shape[0])
@@ -1053,7 +1571,8 @@ def main(argv=None):
         poses, json_size = poses_from_json(args.pose, pair.node_names)
         size = json_size or size
     if args.animals:
-        keep = [int(i) for i in args.animals.split(",")]
+        given = args.animals if isinstance(args.animals, list) else str(args.animals).split(",")
+        keep = [int(i) for i in given]
         poses = [poses[i] for i in keep]
     if args.size:
         size = tuple(args.size)
@@ -1079,9 +1598,12 @@ def main(argv=None):
         init = to_tensor(frame, channels, device)
     elif args.init in ("background", "exemplar"):
         t = time.time()
-        bg = median_background(reader, args.background_frames)
+        bkey = ("background", key, args.background_frames)
+        if bkey not in cache:
+            cache[bkey] = median_background(reader, args.background_frames)
+            print(f"  median background of {args.background_frames} frames ({time.time() - t:.0f} s)")
+        bg = cache[bkey]
         cv2.imwrite(str(out / "background.png"), bg[..., 0] if bg.shape[2] == 1 else bg[..., ::-1])
-        print(f"  median background of {args.background_frames} frames ({time.time() - t:.0f} s)")
         if args.init == "background":
             init = to_tensor(bg, channels, device)
         else:
@@ -1100,8 +1622,23 @@ def main(argv=None):
     print(f"{len(poses)} animal(s), {W}x{H} px, {channels} channel(s), init {args.init}")
 
     mask = edit_mask(poses, (W, H), args.margin, device)
-    image, history, snapshots = optimize(pair, init, poses_t, node_mask, args, mask)
+    return argparse.Namespace(args=args, out=out, poses=poses, poses_t=poses_t, node_mask=node_mask,
+                              init=init, mask=mask, channels=channels, W=W, H=H, device=device)
 
+
+def finish_job(pair: Pair, job, image, history, snapshots, stats):
+    """Write a finished run's image, figures, .slp and report.json into its folder.
+
+    Every model pass in it is sleap-nn's fp32 one, even when called inside
+    `fast_forward` (as `run_jobs` does while other frames are still optimizing).
+    """
+    with exact_forward(pair):
+        _finish_job(pair, job, image, history, snapshots, stats)
+
+
+def _finish_job(pair: Pair, job, image, history, snapshots, stats):
+    args, out, poses, poses_t, node_mask = job.args, job.out, job.poses, job.poses_t, job.node_mask
+    channels, W, H, device = job.channels, job.W, job.H, job.device
     # Quantize like a saved image would be, then run it forward as sleap-nn would.
     saved_u8 = (image * 255).round().to(torch.uint8)
     saved = saved_u8.float() / 255
@@ -1135,6 +1672,7 @@ def main(argv=None):
         "nodes": pair.node_names,
         "size": [W, H],
         "final": history[-1] if history else None,
+        **stats,
         "history": history,
         "target_poses": np.where(np.isfinite(target), target, None).tolist(),
     }
