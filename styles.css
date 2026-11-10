@@ -866,6 +866,14 @@ body {
   justify-content: center;
 }
 
+/* A zoomed pane shows the zoom badge, and Tab can land on an item of its menu that
+   a short pane has clipped. With `overflow: hidden` the browser would scroll the
+   pane to show that item, and the picture stayed shifted after the menu closed.
+   `clip` clips the same but cannot scroll. */
+.video-cell.zoomed {
+  overflow: clip;
+}
+
 .video-cell .canvas-wrapper {
   position: relative;
   display: inline-block;

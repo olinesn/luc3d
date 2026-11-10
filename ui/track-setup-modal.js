@@ -11,11 +11,17 @@
  * every user passes through before tracking a session is this question, so the
  * weights are laid out under it, editable, with the values the run will use.
  *
- * A LEAF on purpose: it imports nothing, takes the current values in and hands
+ * A LEAF on purpose: it imports nothing but the focus helpers (themselves
+ * import-free but for `keyboard-target.js`), takes the current values in and hands
  * the answer back, and commits nothing itself. `pose/tracker.js` writes the
  * count (`setTrackerNumAnimals`) and the weights (`setNodeWeights`) — the same
  * two writers as the toolbar's Animals field and the Tracking Wizard — so there
  * is no second path to either setting, and no import cycle with the tracker.
+ *
+ * Cancel gives keyboard focus back to what opened it (the Track button or a menu
+ * item), so the next Tab does not start over at the top of the page. Continue keeps
+ * only the place (`returnPlaceTo`): the run starts now, and nothing stops a second
+ * one starting on top of it, so focus must not sit on the control that starts it.
  *
  * Track All's copy also carries the image ID-switch check that can follow the
  * run (`autoImageSwitchCheck` and its four options, the Tracking Wizard's own
@@ -28,6 +34,8 @@
  * while the session has never been asked (`numAnimalsAnswered`). Track Frame
  * Range collects the count in its own dialog and never reaches this one.
  */
+
+import { keyboardFocus, returnFocusTo, returnPlaceTo } from './toolbar-menu-keys.js';
 
 /**
  * Show the dialog. Resolves with the answer on Continue / Enter, or `null` on
@@ -55,6 +63,7 @@ export function showTrackSetupModal(opts) {
     if (document.querySelector('.track-setup-modal')) return Promise.resolve(null);
     var nodes = Array.isArray(opts.nodes) ? opts.nodes : [];
     var animals = (typeof opts.animals === 'number' && opts.animals >= 1) ? opts.animals : null;
+    var opener = keyboardFocus();
 
     return new Promise(function (resolve) {
         var overlay = document.createElement('div');
@@ -153,6 +162,8 @@ export function showTrackSetupModal(opts) {
             if (done) return;
             done = true;
             document.removeEventListener('keydown', onKey, true);
+            if (answer) returnPlaceTo(opener);
+            else returnFocusTo(opener);
             overlay.remove();
             resolve(answer);
         }
@@ -164,12 +175,16 @@ export function showTrackSetupModal(opts) {
         }
 
         // Capture phase, and the keys are consumed: Esc and Enter belong to the
-        // dialog while it is up, not to whatever app shortcut shares them.
+        // dialog while it is up, not to whatever app shortcut shares them. A held
+        // Enter's repeats are no answer: a keypress on the Track button would
+        // otherwise run through the dialog into a run, and so would one held on
+        // Cancel, which has given focus back to that button.
         function onKey(e) {
             if (e.key === 'Escape') {
                 e.preventDefault(); e.stopPropagation(); finish(null);
             } else if (e.key === 'Enter' && e.target !== cancelBtn) {
-                e.preventDefault(); e.stopPropagation(); proceed();
+                e.preventDefault(); e.stopPropagation();
+                if (!e.repeat) proceed();
             }
         }
         document.addEventListener('keydown', onKey, true);
