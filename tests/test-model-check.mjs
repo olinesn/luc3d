@@ -185,5 +185,19 @@ const edge = mc.parseModelCheck(JSON.stringify([
 ])).rows;
 eq(mc.matchAnimals(edge, [inst(A0), inst(A1)]).get(1).status, 'verified', 'a 0.04 px rounding slack passes');
 
+// ---- The region an entry zooms to ----
+eq(mc.frameRegion([]), null, 'no box, no region');
+eq(mc.frameRegion([null]), null, 'a box-less animal, no region');
+// One 200 x 40 animal: a margin of 120 px each side (60% of its larger side).
+let g = mc.frameRegion([{ x0: 100, y0: 200, x1: 300, y1: 240 }]);
+eq([g.x0, g.x1, g.y0, g.y1].join(), [-20, 420, 80, 360].join(), 'margin of 60% of the larger side, centred');
+// The animal and the neighbour its nodes were read on: both inside.
+g = mc.frameRegion([{ x0: 100, y0: 100, x1: 160, y1: 400 }, { x0: 500, y0: 300, x1: 560, y1: 350 }]);
+ok(g.x0 < 100 && g.x1 > 560 && g.y0 < 100 && g.y1 > 400, 'covers both animals');
+eq([g.x0, g.y1].join(), [100 - 180, 400 + 180].join(), 'margin from the larger animal (300 px side)');
+// A tiny animal still gets the minimum square.
+g = mc.frameRegion([{ x0: 10, y0: 10, x1: 12, y1: 12 }]);
+eq([g.x1 - g.x0, g.y1 - g.y0].join(), [mc.MODEL_CHECK_MIN_FRAME_PX, mc.MODEL_CHECK_MIN_FRAME_PX].join(), 'tiny animal: minimum square');
+
 console.log(`\ntest-model-check: ${passed} passed, ${failed} failed`);
 if (failed) { failures.forEach((f) => console.error(' - ' + f)); process.exit(1); }

@@ -28,7 +28,7 @@ import { formatFrameNumber } from './frame-readout.js';
 import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 import {
     parseModelCheck, scanCameras, matchScanCameras, scanCameraKey, rowKey, reviewEntries, rowCauses,
-    matchAnimals, describeNode, formatPx, baseName, CAUSE_LABELS, CAUSE_TEXT, SPLITS, MATCH_STATUS_TEXT,
+    matchAnimals, describeNode, formatPx, baseName, frameRegion, CAUSE_LABELS, CAUSE_TEXT, SPLITS, MATCH_STATUS_TEXT,
 } from '../pose/model-check.js';
 import { setModelCheckHighlight, updateModelCheckHighlight } from './model-check-highlight.js';
 
@@ -36,7 +36,7 @@ var FILTER_KEY = 'modelCheckFilter';
 var _check = null;   // {fileName, loadedAt, rows, skipped, camMatch: Map, byFrame: Map, current, sessions}
 var _nav = {};
 
-/** ui-wiring registers `{goToFrame(frame), showView(camera), switchSession(idx) -> Promise}`. */
+/** ui-wiring registers `{goToFrame(frame), showView(camera), switchSession(idx) -> Promise, zoomTo(camera, x0, y0, x1, y1)}`. */
 export function setModelCheckNavigator(nav) { _nav = nav || {}; }
 
 /** @returns the loaded check (tests), or null. */
@@ -53,8 +53,8 @@ function plural(n, one, many) { return count(n) + ' ' + (n === 1 ? one : (many |
 function readFilter() {
     try {
         var f = JSON.parse(localStorage.getItem(FILTER_KEY) || '{}');
-        return { split: typeof f.split === 'string' ? f.split : 'all', cause: typeof f.cause === 'string' ? f.cause : 'all' };
-    } catch (e) { return { split: 'all', cause: 'all' }; }
+        return { split: typeof f.split === 'string' ? f.split : 'all', cause: typeof f.cause === 'string' ? f.cause : 'all', zoom: f.zoom !== false };
+    } catch (e) { return { split: 'all', cause: 'all', zoom: true }; }
 }
 function writeFilter(f) {
     try { localStorage.setItem(FILTER_KEY, JSON.stringify(f)); } catch (e) { /* best effort */ }
@@ -419,6 +419,8 @@ export function refreshModelCheckPanel() {
         '<span class="model-check-pos">' + (at >= 0 ? count(at + 1) + ' of ' : '') + plural(list.length, 'animal') + '</span>' +
         '<button class="panel-btn" id="modelCheckPrev" title="Previous entry (Shift+M)"' + (list.length ? '' : ' disabled') + '>◂ Prev</button>' +
         '<button class="panel-btn id-switch-next" id="modelCheckNext" title="Next entry (M)"' + (list.length ? '' : ' disabled') + '>Next ▸</button>' +
+        '<label class="model-check-zoom" title="Zoom the view in on each animal you select (the animal and the ones its body parts were read on)">' +
+        '<input type="checkbox" id="modelCheckZoom"' + (f.zoom ? ' checked' : '') + '> Zoom in</label>' +
         '<button class="panel-btn" id="modelCheckClose" title="Forget this model check">Close</button>' +
         '</div>' +
         '<div class="model-check-list" id="modelCheckList">' +
@@ -430,6 +432,9 @@ export function refreshModelCheckPanel() {
     });
     host.querySelector('#modelCheckCause').addEventListener('change', function (e) {
         var nf = readFilter(); nf.cause = e.target.value; writeFilter(nf); refreshModelCheckPanel();
+    });
+    host.querySelector('#modelCheckZoom').addEventListener('change', function (e) {
+        var nf = readFilter(); nf.zoom = !!e.target.checked; writeFilter(nf);
     });
     host.querySelector('#modelCheckPrev').addEventListener('click', function () { stepModelCheck(-1); });
     host.querySelector('#modelCheckNext').addEventListener('click', function () { stepModelCheck(1); });
@@ -477,6 +482,7 @@ export async function goToEntry(row) {
         session: r.cam.session, camera: r.cam.camera, frame: row.frame,
         label: 'animal ' + row.animal + (r.name ? ' · ' + r.name : '') + ' · ' + (isFinite(row.maxPx) ? formatPx(row.maxPx) : 'missed'),
         locate: function () { return locate(row); },
+        onLocated: function (loc) { if (readFilter().zoom) frameAnimal(r.cam.camera, loc); },
     });
     refreshModelCheckPanel();
     var list = entries(), at = list.indexOf(row);
@@ -490,6 +496,25 @@ export async function goToEntry(row) {
     } else {
         setStatus(where, 'success');
     }
+}
+
+/** The video-pixel box of an instance's placed nodes, or null. */
+function instanceBox(inst) {
+    var b = null;
+    for (var k = 0; k < (inst.numNodes || 0); k++) {
+        if (inst.hasPoint && !inst.hasPoint(k)) continue;
+        var x = inst.getX(k), y = inst.getY(k);
+        if (!isFinite(x) || !isFinite(y)) continue;
+        if (!b) b = { x0: x, y0: y, x1: x, y1: y };
+        else { b.x0 = Math.min(b.x0, x); b.y0 = Math.min(b.y0, y); b.x1 = Math.max(b.x1, x); b.y1 = Math.max(b.y1, y); }
+    }
+    return b;
+}
+
+function frameAnimal(camera, loc) {
+    if (!_nav.zoomTo) return;
+    var g = frameRegion([instanceBox(loc.target)].concat(loc.others.map(function (o) { return instanceBox(o.inst); })));
+    if (g) _nav.zoomTo(camera, g.x0, g.y0, g.x1, g.y1);
 }
 
 /** What the highlight draws, from the instances as they are now (null while the frame is not loaded). */

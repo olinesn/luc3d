@@ -4,6 +4,9 @@
  * on each misread node, and, where the node was read on another labelled node, a
  * dashed line to that node (and a thin box around the neighbour it belongs to).
  *
+ * A ring carries its node's name only while the overlay is not already naming
+ * user nodes (Visibility ▸ user label size 0).
+ *
  * Drawn on its OWN canvas in the view's `.canvas-wrapper` (`.model-check-canvas`),
  * like ui/id-switch-highlight.js: the wrapper's CSS transform carries zoom / pan /
  * rotation, the overlay redraws never clear it, and the overlay-video export does
@@ -21,7 +24,7 @@
 import { state } from './app-state.js';
 import { makeVideoToCanvasTransform } from './overlays.js';
 
-var _target = null;     // {session, camera, frame, label, locate: () => {target, nodes, others} | null}
+var _target = null;     // {session, camera, frame, label, locate: () => {target, nodes, others} | null, onLocated?}
 var _raf = 0;
 var _canvases = new WeakMap();
 var _drawn = null;      // {canvas, sig} — what is on screen
@@ -32,12 +35,14 @@ export var MODEL_CHECK_COLORS = Object.freeze({ animal: '255, 140, 40', node: '2
 
 /**
  * Select what to mark, or `null` to stop.
- * @param {?{session, camera: string, frame: number, label: string,
+ * `onLocated(loc, view)` (optional) runs once, the first time `locate()` finds the
+ * animal on its frame (a lazy frame may arrive later than the seek).
+ * @param {?{session, camera: string, frame: number, label: string, onLocated?: Function,
  *   locate: () => ?{target: Instance, nodes: Array<{k: number, name: string, ref?: {inst: Instance, j: number}}>,
  *   others: Array<{inst: Instance, label: string}>}}} target
  */
 export function setModelCheckHighlight(target) {
-    _target = target || null;
+    _target = target ? Object.assign({}, target, { located: false }) : null;
     _lastSig = '';
     clear();
     updateModelCheckHighlight(state.currentFrame);
@@ -83,8 +88,10 @@ function canvasFor(v) {
         v.wrapper.appendChild(c);
         _canvases.set(v, c);
     }
-    var zs = v.zoom && v.zoom.scale ? v.zoom.scale : 1;
-    var w = Math.max(1, Math.round((v.videoWidth || 1) * zs)), h = Math.max(1, Math.round((v.videoHeight || 1) * zs));
+    var zs = v.zoom && v.zoom.scale ? v.zoom.scale : 1, vw = v.videoWidth || 1, vh = v.videoHeight || 1;
+    // The overlay's own limits (ui/rendering.js): a zoomed-in 4K view would pass a canvas's maximum side.
+    zs = Math.min(zs, 16384 / vw, 16384 / vh, Math.sqrt(268435456 / (vw * vh)));
+    var w = Math.max(1, Math.round(vw * zs)), h = Math.max(1, Math.round(vh * zs));
     if (c.width !== w) c.width = w;
     if (c.height !== h) c.height = h;
     return c;
@@ -113,8 +120,13 @@ function tick() {
     var v = viewOf(_target.camera);
     var c = v && canvasFor(v);
     var loc = c ? _target.locate() : null;
+    // Once per selection, the first time the animal is there to draw: let the panel frame it.
+    if (loc && loc.target && !_target.located) {
+        _target.located = true;
+        if (_target.onLocated) _target.onLocated(loc, v);
+    }
     // What the picture depends on; nothing to do when it has not changed.
-    var sig = c ? [c.width, c.height, c.offsetWidth, v.zoom && v.zoom.scale].join(',') : '';
+    var sig = c ? [c.width, c.height, c.offsetWidth, v.zoom && v.zoom.scale, userNodeNamesShown()].join(',') : '';
     if (loc && loc.target) {
         var b = bbox(loc.target);
         sig += '|' + (b ? [b.x0, b.y0, b.x1, b.y1].join(',') : '') + '|' + loc.nodes.map(function (n) {
@@ -140,11 +152,16 @@ function label(ctx, text, x, y, fs, s, rgb) {
     ctx.fillText(text, x + 4 * s, y);
 }
 
+function userNodeNamesShown() {
+    var el = typeof document !== 'undefined' ? document.getElementById('visUserLabelSize') : null;
+    return !!el && parseInt(el.value, 10) > 0;
+}
+
 function paint(v, c, loc) {
     var ctx = c.getContext('2d');
     var toC = makeVideoToCanvasTransform(v.videoWidth, v.videoHeight, c.width, c.height);
     var zs = v.zoom && v.zoom.scale ? v.zoom.scale : 1;
-    // Lines and text in SCREEN pixels, as ui/id-switch-highlight.js does.
+    // Lines and text in SCREEN pixels, as ui/id-switch-highlight.js does (holds with the size cap too).
     var s = c.offsetWidth > 0 ? c.width / (c.offsetWidth * zs) : (toC.scale || 1), pad = 8 * s, fs = Math.round(12 * s);
     var box = function (inst, rgb, dash, width, text) {
         var b = bbox(inst);
@@ -156,6 +173,9 @@ function paint(v, c, loc) {
         ctx.setLineDash([]);
         if (text) label(ctx, text, x, Math.max(fs + 2 * s, y - 5 * s), fs, s, rgb);
     };
+    // The overlay already names a user instance's nodes unless the Visibility tab's user label size is 0
+    // (ui/rendering.js): a second name beside each ring only doubles the clutter.
+    var named = userNodeNamesShown();
     ctx.save();
     loc.others.forEach(function (o) { box(o.inst, MODEL_CHECK_COLORS.other, [6 * s, 5 * s], 1.5 * s, o.label); });
     box(loc.target, MODEL_CHECK_COLORS.animal, [], 2.5 * s, _target.label);
@@ -175,7 +195,7 @@ function paint(v, c, loc) {
         ctx.beginPath(); ctx.arc(cp.x, cp.y, r, 0, 2 * Math.PI); ctx.stroke();
         ctx.lineWidth = 2 * s; ctx.strokeStyle = 'rgb(' + MODEL_CHECK_COLORS.node + ')';
         ctx.beginPath(); ctx.arc(cp.x, cp.y, r, 0, 2 * Math.PI); ctx.stroke();
-        label(ctx, n.name, cp.x + r + 2 * s, cp.y + fs / 2, Math.round(fs * 0.9), s, MODEL_CHECK_COLORS.node);
+        if (!named) label(ctx, n.name, cp.x + r + 2 * s, cp.y + fs / 2, Math.round(fs * 0.9), s, MODEL_CHECK_COLORS.node);
     });
     ctx.restore();
     _drawn = { canvas: c };

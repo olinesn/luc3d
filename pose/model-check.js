@@ -414,3 +414,25 @@ export var MATCH_STATUS_TEXT = Object.freeze({
     unmatched: 'Not matched to an instance',
     pending: 'Not checked yet: the frame is not loaded',
 });
+
+/** Smallest side of the zoomed region, video px: a lone curled-up animal still shows its surroundings. */
+export var MODEL_CHECK_MIN_FRAME_PX = 240;
+
+/**
+ * The region to zoom to for a located entry: the animal and the animals its
+ * nodes were read on, with a margin of 60% of the larger animal side, at least
+ * MODEL_CHECK_MIN_FRAME_PX square, centred on them; null without a box.
+ */
+export function frameRegion(boxes) {
+    var b = null, side = 0;
+    boxes.forEach(function (x) {
+        if (!x) return;
+        side = Math.max(side, x.x1 - x.x0, x.y1 - x.y0);
+        b = b ? { x0: Math.min(b.x0, x.x0), y0: Math.min(b.y0, x.y0), x1: Math.max(b.x1, x.x1), y1: Math.max(b.y1, x.y1) }
+            : { x0: x.x0, y0: x.y0, x1: x.x1, y1: x.y1 };
+    });
+    if (!b) return null;
+    var m = 0.6 * side, cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+    var hw = Math.max((b.x1 - b.x0) / 2 + m, MODEL_CHECK_MIN_FRAME_PX / 2), hh = Math.max((b.y1 - b.y0) / 2 + m, MODEL_CHECK_MIN_FRAME_PX / 2);
+    return { x0: cx - hw, y0: cy - hh, x1: cx + hw, y1: cy + hh };
+}

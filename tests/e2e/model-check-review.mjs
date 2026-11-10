@@ -19,7 +19,8 @@
  *     positions; back f0 a0 not matched (labels do not fit); mid f0 a1 by file
  *     order only.
  *  4. The selected animal is marked on its view's own canvas, around that
- *     animal and not the other; leaving the frame clears it.
+ *     animal and not the other; leaving the frame clears it. The view zooms in
+ *     on it and the neighbour it was read on (unless Zoom in is off).
  *  5. Split and cause filters narrow the list and are kept in localStorage.
  *  6. Loading changes nothing in the project (not marked unsaved).
  *  7. A camera more than one project camera fits is asked about; Esc cancels
@@ -86,6 +87,11 @@ try {
         AS.state.totalFrames = 3; AS.state.fps = 30;
         sp.populateViewStrip();
         AS.paneManager.addAllViewsAsGrid();
+        // Zoom is the video controller's, which a load without videos leaves unset: build one as startup does.
+        if (!AS.videoController) {
+            const { VideoController } = await import('/loading/video.js'), { setVideoController } = await import('/ui/app-state.js');
+            setVideoController(new VideoController(AS.state, { log: () => {} }));
+        }
         AS.state.isDirty = false;
     });
     const loadSlp = async (lazy) => {
@@ -203,6 +209,17 @@ try {
     // The mark covers animal 1 (the target, with its label above) and reaches animal 0's Ear_L (the dashed line + its box).
     check(m1.length === 1 && boxes.length === 2 && m1[0].box[2] >= boxes[1][2] && m1[0].box[0] <= boxes[1][0] + 1,
         'it surrounds the misread animal', { mark: m1[0] && m1[0].box, boxes });
+    // Zoom in: the view frames the animal and the one its Ear_L was read on, both whole on screen.
+    const zoomOf = (cam) => page.evaluate((cam) => { const v = window.__lucid.state.views.find(w => w.name === cam); return v.zoom ? v.zoom.scale : 1; }, cam);
+    const onScreen = (cam, B) => page.evaluate(([cam, B]) => {
+        const v = window.__lucid.state.views.find(w => w.name === cam);
+        const cell = v.canvas.closest('.video-cell').getBoundingClientRect(), c = v.canvas.getBoundingClientRect();
+        const sx = (x) => c.left + x / v.videoWidth * c.width, sy = (y) => c.top + y / v.videoHeight * c.height;
+        return B.every(b => sx(b[0]) >= cell.left && sx(b[2]) <= cell.right && sy(b[1]) >= cell.top && sy(b[3]) <= cell.bottom);
+    }, [cam, B]);
+    const z1 = await zoomOf('top');
+    check(z1 > 1.2, 'selecting an entry zooms in on its animal', z1);
+    check(await onScreen('top', boxes), 'the animal and its neighbour are both whole in the view');
     if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });
     await page.keyboard.press('ArrowRight'); await page.waitForTimeout(300);
     check((await mark()).length === 0, 'leaving the frame clears the mark');
@@ -223,6 +240,15 @@ try {
     // a click on an entry whose camera did not match says so
     await clickEntry(3); await page.waitForTimeout(200);
     check(/Camera not matched/.test(await status()), 'an entry on an unmatched camera says why', [await status(), await entries()]);
+
+    // Zoom in off (browser-local): a selection leaves the zoom alone.
+    await page.click('#modelCheckZoom');
+    check(await page.evaluate(() => JSON.parse(localStorage.getItem('modelCheckFilter')).zoom) === false, 'the Zoom in choice is browser-local');
+    await page.evaluate(() => { const AS = window.__lucid; AS.state.views.forEach(v => AS.videoController ? AS.videoController.resetZoom(v) : null); });
+    const z0 = await zoomOf('top');
+    await clickEntry(2); await page.waitForTimeout(400);
+    check(await zoomOf('top') === z0, 'with Zoom in off, selecting does not zoom', [z0, await zoomOf('top')]);
+    await page.click('#modelCheckZoom');
 
     // ---- 5. filters
     await page.selectOption('#modelCheckSplit', 'training');

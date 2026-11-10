@@ -7,6 +7,11 @@
  * Run:
  *   SLP=/path/labels.slp SCAN=/path/scan.json node tests/e2e/_real-model-check.mjs
  *   LAZY=1 …   opens the .slp as a lazy project (Load Project) instead of Load SLP
+ *   VIDEOS=/dir …  answers the video prompt with every .mp4 under that folder, read in
+ *                  place (the file chooser gets their paths; nothing is copied), in
+ *                  headless Chrome (Playwright's Chromium cannot decode H.264)
+ *   SHOTS=/dir …   with VIDEOS: selects each entry in turn and saves the view as
+ *                  <dir>/entry-NN.png (the whole page for the first one)
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -20,7 +25,11 @@ const SLP = process.env.SLP, SCAN = process.env.SCAN;
 if (!SLP || !SCAN) { console.error('Set SLP and SCAN'); process.exit(2); }
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 1200));
-const browser = await chromium.launch();
+const VIDEOS = process.env.VIDEOS ? (function walk(d) {
+    return fs.readdirSync(d, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(path.join(d, e.name))
+        : /\.mp4$/i.test(e.name) && !e.name.startsWith('.') ? [path.join(d, e.name)] : []);
+})(process.env.VIDEOS) : null;
+const browser = await chromium.launch(VIDEOS ? { channel: 'chrome' } : {});
 try {
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     page.on('pageerror', e => console.log('pageerror', String(e).slice(0, 300)));
@@ -39,13 +48,23 @@ try {
         })();
     }, [path.basename(SLP), !!process.env.LAZY]);
     let done;
-    for (let i = 0; i < 1200 && !done; i++) {
-        const s = await page.evaluate(() => {
-            const b = [...document.querySelectorAll('button')].find(x => /Skip|Later/i.test(x.textContent || ''));
-            if (b) b.click();
-            return { done: window.__loadDone, prompt: !!document.getElementById('videoSelectOverlay') };
-        });
-        if (s.prompt) await page.keyboard.press('Escape');
+    let gaveVideos = false;
+    for (let i = 0; i < 3000 && !done; i++) {
+        const s = await page.evaluate((withVideos) => {
+            const prompt = document.getElementById('videoSelectOverlay');
+            if (!(withVideos && prompt)) {
+                const b = [...document.querySelectorAll('button')].find(x => /Skip|Later/i.test(x.textContent || ''));
+                if (b) b.click();
+            }
+            return { done: window.__loadDone, prompt: !!prompt };
+        }, !!VIDEOS && !gaveVideos);
+        if (s.prompt && VIDEOS && !gaveVideos) {
+            gaveVideos = true;
+            const chooser = page.waitForEvent('filechooser');
+            await page.locator('#videoSelectOverlay button', { hasText: 'Select Video Files' }).click();
+            await (await chooser).setFiles(VIDEOS);
+            console.log('videos given:', VIDEOS.map(v => path.basename(v)).join(', '));
+        } else if (s.prompt) await page.keyboard.press('Escape');
         done = s.done;
         await page.waitForTimeout(100);
     }
@@ -75,6 +94,31 @@ try {
     const tally = {};
     out.rows.forEach(r => { const k = r.split(' | ')[1].split(':')[0]; tally[k] = (tally[k] || 0) + 1; });
     console.log('tally:', JSON.stringify(tally, null, 1));
+    if (VIDEOS && process.env.SHOTS) {
+        fs.mkdirSync(process.env.SHOTS, { recursive: true });
+        const views = await page.evaluate(() => window.__lucid.state.views.map(v => ({ name: v.name, decoder: !!v.decoder, w: v.videoWidth, h: v.videoHeight })));
+        console.log('views:', JSON.stringify(views));
+        await page.keyboard.press('v'); await page.waitForTimeout(500);
+        for (let i = 0; i < out.rows.length; i++) {
+            await page.evaluate((i) => document.querySelectorAll('#modelCheckList .model-check-row')[i].click(), i);
+            // Wait for the frame to be decoded and the mark drawn.
+            await page.waitForFunction(async () => {
+                const h = (await import('/ui/model-check-highlight.js')).getModelCheckHighlight();
+                return h && h.drawn;
+            }, null, { timeout: 30000 }).catch(() => {});
+            await page.waitForTimeout(1200);
+            const info = await page.evaluate(() => {
+                const S = window.__lucid.state, v = S.views.find(x => x.wrapper && x.wrapper.offsetWidth > 0 && x.wrapper.getBoundingClientRect().width > 50);
+                const r = v ? v.wrapper.closest('.dv-content-container, .view-pane, .pane') || v.wrapper : null;
+                const b = r ? r.getBoundingClientRect() : null;
+                return { status: document.getElementById('statusText').textContent, frame: S.currentFrame,
+                    box: b ? { x: b.x, y: b.y, width: b.width, height: b.height } : null };
+            });
+            const file = path.join(process.env.SHOTS, 'entry-' + String(i).padStart(2, '0') + '.png');
+            await page.screenshot(i === 0 || !info.box ? { path: file } : { path: file, clip: info.box });
+            console.log(path.basename(file), '|', info.status);
+        }
+    }
     // SHOT=/path.png [ENTRY=n]: views for the cameras (no video, sized from the file's video shape),
     // single-view mode, entry n selected, a screenshot.
     if (process.env.SHOT) {

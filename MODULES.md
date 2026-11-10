@@ -4483,6 +4483,10 @@ The tab is `ui/model-check-panel.js`.
   "Nose read on the background", "Neck read near its own label, just past the bar".
 - `CAUSE_TEXT` (the sweep's wording), `CAUSE_LABELS` (filter names), `SPLITS`,
   `MATCH_STATUS_TEXT`, `formatPx`, `baseName`.
+- `frameRegion(boxes)` — the video-pixel region a selected entry zooms to: the
+  union of the animals' boxes (the misread one and the ones its nodes were read
+  on) plus 60% of the largest animal side on every side, at least
+  `MODEL_CHECK_MIN_FRAME_PX` (240) square; null without a box.
 
 **Imports from project modules.** None.
 
@@ -9702,8 +9706,12 @@ and how many distances were checked.
 **Selecting** (`goToEntry`, click, Prev / Next, `stepModelCheck(±1)` = **M** /
 **Shift+M**, `ACTION_CATALOG` `modelCheckNext` / `modelCheckPrev`, wrapping):
 switches session when needed, solos the camera in single-view mode (else focuses
-its pane), goes to the frame, marks the animal (`ui/model-check-highlight.js`)
-and writes "Model check k of n: camera, frame, animal" (or why it is not matched,
+its pane), goes to the frame, marks the animal (`ui/model-check-highlight.js`),
+zooms the view in on it and the neighbours its nodes were read on once the
+animal is there to draw (`onLocated` → `frameRegion` → the navigator's `zoomTo`
+→ `videoController.zoomToVideoRect`; the toolbar's **Zoom in** box turns it off,
+kept as `zoom` in `localStorage.modelCheckFilter`; nothing zooms without a video
+controller, as with no videos loaded) and writes "Model check k of n: camera, frame, animal" (or why it is not matched,
 or that the camera is hidden) on the status line. An entry whose camera did not
 match only says why.
 
@@ -9724,8 +9732,9 @@ hydration show at once.
 `refreshModelCheckPanel`, `openModelCheckPanel`, `stepModelCheck`, `goToEntry`,
 `updateModelCheckFrame(frame)` (every frame change, ui-wiring
 `updateSeekbarVisual`), `setModelCheckNavigator({goToFrame, showView,
-switchSession})` (ui-wiring registers `navigateToFrame`, `setSoloView` /
-`activatePanelForView` and `switchSession`, keeping this a leaf),
+switchSession, zoomTo})` (ui-wiring registers `navigateToFrame`, `setSoloView` /
+`activatePanelForView`, `switchSession` and `zoomToVideoRect` on the camera's
+view, keeping this a leaf),
 `projectCameras`, `getModelCheck` (tests).
 
 **Imports from project modules.** `ui/app-state.js` (`state`),
@@ -9737,9 +9746,11 @@ switchSession})` (ui-wiring registers `navigateToFrame`, `setSoloView` /
 **Imported by.** `ui/ui-wiring.js`.
 
 **Coverage.** `tests/e2e/model-check-review.mjs` (menu + file chooser, report,
-order, M / Shift+M, solo view, the mark, filters, nothing dirty, the ambiguity
-question, a lazy project, Close); real data: `tests/e2e/_real-model-check.mjs`
-(`SLP=… SCAN=…`, `LAZY=1`, `SHOT=`).
+order, M / Shift+M, solo view, the mark, the zoom and its switch, filters,
+nothing dirty, the ambiguity question, a lazy project, Close); real data:
+`tests/e2e/_real-model-check.mjs` (`SLP=… SCAN=…`, `LAZY=1`, `SHOT=`;
+`VIDEOS=<folder>` answers the video prompt with its mp4s in place, in headless
+Chrome, and `SHOTS=<dir>` saves every entry's view).
 
 ---
 
@@ -9747,7 +9758,8 @@ question, a lazy project, Close); real data: `tests/e2e/_real-model-check.mjs`
 
 **Purpose.** The selected Model Check entry's mark in its camera's view: a box
 around the misread animal labelled "animal N · name · worst px", a red ring on
-each misread node (named), a dashed line from it to the labelled node it was read
+each misread node (named only while the overlay is not already naming user
+nodes: Visibility ▸ user label size 0), a dashed line from it to the labelled node it was read
 on, and a thin grey box around that neighbour ("animal M · name"). Only where the
 entry's animal is matched; neighbours only on a verified row.
 
@@ -9757,10 +9769,13 @@ from the wrapper's transform, overlay redraws never clear it, exports leave it
 out; lines and text sized in screen pixels. Static: a requestAnimationFrame loop
 runs only while the active session is on the entry's frame and repaints only when
 the canvas size or the positions it drew change (a node dragged, a lazy frame
-hydrated). Leaving the frame clears it.
+hydrated). Leaving the frame clears it. The canvas follows the zoom up to the
+overlay's own limits (16,384 px a side, 2^28 px; `ui/rendering.js`). `onLocated`
+runs once per selection, the first time `locate()` finds the animal (the panel
+zooms then: a lazy frame can arrive after the seek).
 
-**Key exports.** `setModelCheckHighlight({session, camera, frame, label, locate})
-| null`, `updateModelCheckHighlight(frame)`, `getModelCheckHighlight()` (tests),
+**Key exports.** `setModelCheckHighlight({session, camera, frame, label, locate,
+onLocated?}) | null`, `updateModelCheckHighlight(frame)`, `getModelCheckHighlight()` (tests),
 `MODEL_CHECK_COLORS`.
 
 **Imports from project modules.** `ui/app-state.js` (`state`), `ui/overlays.js`
@@ -14900,7 +14915,12 @@ corners and centre through `_boxPointAt`, sizes the new uniform scale from the
 corners' extent in SCREEN axes (`R·u`, so any rotation and a per-axis 1:1 start
 state work), then `_panToDraw`s the centre to the container centre (a plain
 `(x − off) / s` drops the flex term and the rotation). Covered by
-`tests/e2e/box-zoom-letterbox.mjs`.
+`tests/e2e/box-zoom-letterbox.mjs`. `zoomToVideoRect(view, x0, y0, x1, y1)`
+does the same for a rectangle in VIDEO pixels (corners scaled into the canvas
+box, then the same screen-axis extent); both end in `_fitBoxExtent` (scale
+clamped to [min, 10], centre panned to the cell centre, constrain, apply,
+`onZoomChange`). The Model Check review uses it to frame the animal it selects;
+false while the view is not laid out.
 
 **Native resolution (1:1).** View ▸ Native Resolution / `Shift+0`
 (`setNativeResolution`, `toggleNativeResolution`) shows a view at ONE VIDEO
@@ -15084,7 +15104,7 @@ How it behaves:
   `setupSeekbar`, `setupKeyboardHandlers` (NOT called by the app — the live
   transport and zoom keys, `Shift+0` included, are in `ui/ui-wiring.js`), `initZoom`, `applyZoom`,
   `zoomVideo` (returns true when the step snapped to 1:1), `resetZoom`,
-  `zoomToRect`, `zoomAllVideos`, `nativeZoomScales(view)` (`{x, y}` or null
+  `zoomToRect`, `zoomToVideoRect`, `zoomAllVideos`, `nativeZoomScales(view)` (`{x, y}` or null
   while not laid out), `setNativeResolution(on)`, `toggleNativeResolution()`,
   `nativeResolutionActive()`, `zoomPercent(view)` (% of 1:1, or null),
   `setZoomPercent(view, pct)` (the badge presets), `reapplyZoom`,

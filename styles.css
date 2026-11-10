@@ -8345,6 +8345,7 @@ details[open] > summary.origin-rebase-block-title::before {
 .model-check-unmatched li { margin: 2px 0; overflow-wrap: anywhere; }
 .model-check-toolbar select { font-size: 11px; max-width: 46%; }
 .model-check-pos { font-size: 12px; margin-right: auto; font-variant-numeric: tabular-nums; }
+.model-check-zoom { font-size: 12px; display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
 .model-check-row {
   cursor: pointer; padding: 6px 16px 6px 13px; border-bottom: 1px solid var(--border-color);
   border-left: 3px solid #ff8c28;
