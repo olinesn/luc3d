@@ -13,6 +13,8 @@
  *     images start in a file written before sleap-io.js recorded sizes.
  *  5. Red and blue: what a video says, else the file format's default.
  *  6. Uncompressed pixels: nothing trimmed, and the size from the dataset's shape.
+ *  7. What a save needs to say again: the file's list entry for each video and the JSON
+ *     of its source video, from an attribute or a dataset. None of it stops a read.
  *
  * Run: node tests/run-mjs-tests.mjs slp-package-reader
  */
@@ -241,6 +243,42 @@ function flatVideo(images, frameNumbers, sizes) {
     assert.equal(readerOn(variableLength(ROWS, BigInt64Array.from([1n, 2n]), {})).getVideos()[0].format, 'png', 'rows and no format attribute: PNG');
     assert.equal(readerOn(variableLength(ROWS, BigInt64Array.from([1n, 2n]), { format: { value: 'JPG' } })).getVideos()[0].format, 'jpg', 'whatever its case');
     assert.deepEqual(Array.from(reader.getFrame('video0', 0).bytes), pixels, 'the dark last pixel stays');
+}
+
+// --- 7. what a save needs to say again
+
+{
+    const entry = { filename: '.', backend: { filename: '.', dataset: 'video0/video', grayscale: true } };
+    const other = { filename: '.', backend: { filename: '.', dataset: 'video7/video' } };
+    const objects = variableLength(ROWS, BigInt64Array.from([7n, 3n]), INT64_ATTRS);
+    objects.videos_json = { value: [JSON.stringify(other), 'not json', JSON.stringify(entry)] };
+    objects['video0/source_video'] = { attrs: { json: { value: '{"filename":"a.mp4"}' } } };
+    let reader = readerOn(objects);
+    let [info] = reader.getVideos();
+    assert.deepEqual(info.listEntry, entry, 'the entry naming this group, wherever it is in the list');
+    assert.equal(info.sourceVideoJson, '{"filename":"a.mp4"}', 'word for word');
+    assert.equal(reader.rawDataset('video0'), objects['video0/video'], 'the dataset itself');
+    assert.throws(() => reader.rawDataset('video9'), /not found/);
+
+    objects['video0/source_video/json'] = { value: '{"filename":"long.mp4"}' };
+    [info] = readerOn(objects).getVideos();
+    assert.equal(info.sourceVideoJson, '{"filename":"long.mp4"}', 'a dataset, when too long for an attribute');
+    objects['video0/source_video/json'] = { value: ['{"filename":"list.mp4"}'] };
+    [info] = readerOn(objects).getVideos();
+    assert.equal(info.sourceVideoJson, '{"filename":"list.mp4"}', 'or a dataset of one, as the JS writer stores it');
+}
+{
+    const objects = variableLength(ROWS, BigInt64Array.from([7n, 3n]), INT64_ATTRS);
+    const [none] = readerOn(objects).getVideos();
+    assert.equal(none.listEntry, null, 'no list: none');
+    assert.equal(none.sourceVideoJson, null, 'no source video: none');
+    // Whatever shape these are in, the images still open: a save then writes its own.
+    objects.videos_json = { get value() { throw new Error('unreadable'); } };
+    objects['video0/source_video'] = { get attrs() { throw new Error('unreadable'); } };
+    const [bad] = readerOn(objects).getVideos();
+    assert.deepEqual([bad.listEntry, bad.sourceVideoJson, bad.frameCount], [null, null, 2], 'an unreadable list or source video stops nothing');
+    objects.videos_json = { value: null };
+    assert.equal(readerOn(objects).getVideos()[0].listEntry, null, 'nor a list with no rows');
 }
 
 console.log('slp-package-reader: all passed');
