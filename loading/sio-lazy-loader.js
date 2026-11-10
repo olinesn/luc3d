@@ -101,6 +101,8 @@ export class SioLazyLoader {
          * `SioLazyLoader` for the SAME cameras later (e.g. the multi-session
          * streaming save's pass-2 restream, after pass-1 evicted this loader's
          * parsed columnar data — see `saveAllSessionsStreaming` in save-load.js).
+         * File ▸ Save does not: reading a `File` fails once a save in place has
+         * overwritten it.
          */
         this.sourceFiles = new Map();
         /** @type {Map<string, Map<number, number>>} camName -> (videoFrameIdx -> store row) */
@@ -138,8 +140,8 @@ export class SioLazyLoader {
         /**
          * True once a store has been edited IN MEMORY (`remapTracksFromIdentity`,
          * `deleteInstanceRows`) — i.e. the columns no longer match the source
-         * files. The multi-session save's pass 2 re-opens those files, so it
-         * keeps this loader's frame + instance columns from pass 1 when set
+         * files. A multi-session save that evicts re-opens those files in pass 2,
+         * so it keeps this loader's frame + instance columns from pass 1 when set
          * (`commitSessionForMultiSessionSave`, import-export/save-load.js).
          * `_unifyTracks`' load-time re-index does NOT set it: a re-open repeats it.
          */
