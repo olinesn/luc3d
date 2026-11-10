@@ -8,8 +8,8 @@
  * call would cost the user their ethogram, labels, predictions and states, all of which
  * can be unsaved.
  *
- * It opens a project on each route (eager, lazy), adds all four, and sends it the real
- * 3.0 file through every loader that can reach it. Each must refuse, keep the same
+ * It opens a project on each route (eager, lazy), adds all four, and sends it a real
+ * 3.0 file marked 4.0 through every loader that can reach it. Each must refuse, keep the same
  * session object and leave the saved form of the behavior state exactly as it was. A
  * readable file then does replace them, so these checks can fail.
  *
@@ -25,14 +25,14 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const PORT = Number(process.env.PORT || 8392);
-const FIXTURE = path.join(repoRoot, 'tests', 'fixtures', 'slp-format-30', 'py_written_30_columnar.slp');
+const FIXTURE = path.join(repoRoot, 'tests', 'fixtures', 'slp-format-30', 'py_written_40_too_new.slp');
 const VIDEO = path.join(repoRoot, 'tests', 'fixtures', 'barcode-60', 'barcode-60.mp4');
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-refused-behavior-'));
 
 let fails = 0;
 const check = (c, m, extra) => { console.log((c ? '  ✓ ' : '  ✗ ') + m + (c || extra === undefined ? '' : ' — ' + extra)); if (!c) fails++; };
 
-const REFUSED = /^mice\.slp uses SLP format 3\.0, which is newer than this version of LUC3D supports/;
+const REFUSED = /^mice\.slp uses SLP format 4\.0, which is newer than this version of LUC3D supports/;
 const EAGER = "return (await import('/import-export/slp-import.js')).handleLoadSlpFile(f);";
 const LAZY = "return (await import('/loading/session-loader.js')).handleLoadProjectSlpLazy(f);";
 const ROUTED = "return (await import('/import-export/save-load.js')).handleLoadProject(f);";

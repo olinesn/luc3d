@@ -2834,7 +2834,9 @@ export function parseSlpH5(file, onProgress, opts) {
                 if (onProgress) onProgress(msg.message);
             } else if (msg.type === 'result') {
                 worker.terminate();
-                resolve(msg.data);
+                // This worker reads the 2.x tables only, and the typed reader's result
+                // has the same shape (`opts.columnar` callers fall back to `frames`).
+                resolve(msg.data && msg.data.needsTypedReader ? parseSlpViaSleapIO(file, onProgress) : msg.data);
             } else if (msg.type === 'error') {
                 worker.terminate();
                 var workerErr = new Error(msg.message);
@@ -2857,11 +2859,12 @@ export function parseSlpH5(file, onProgress, opts) {
 }
 
 /**
- * Refuse a `.slp` file too new to read WITHOUT reading the rest of it, for a
- * loader that clears the open project before its read: the readers refuse such a
- * file themselves, but by then that project would be gone for nothing. Costs one
- * worker start and a metadata read, so the loaders that change nothing before
- * they read don't use it.
+ * Refuse a `.slp` file LUC3D can't read (too new, or compressed with a filter this
+ * HDF5 build doesn't have) WITHOUT reading the rest of it, for a loader that clears
+ * the open project before its read: the readers refuse such a file themselves, but
+ * by then that project would be gone for nothing. Costs one worker start and a
+ * read of each dataset's header, so the loaders that change nothing before they
+ * read don't use it.
  *
  * Any other failure resolves: it belongs to the real read, in that read's words.
  *
@@ -3079,6 +3082,8 @@ export async function parseSlpViaSleapIO(file, onProgress, opts) {
         sessions: sessions,
         identities: identities,
         suggestions: suggestions,
+        // What a LUC3D save would leave out of this file (slp-not-kept.js).
+        notKept: labels.lucidNotKept || [],
         // The file's whole provenance dict (slp-provenance.js picks each
         // session's part).
         provenance: labels.provenance || null,
@@ -3090,7 +3095,7 @@ export async function parseSlpViaSleapIO(file, onProgress, opts) {
 /**
  * Whether the raw worker can stand in for the typed reader on `file`: not when it holds
  * what only the typed reader can read (grouping and 3D in `/session_data`, an identity
- * catalog or labels on detections), and not when that can't be told.
+ * catalog or labels on detections, the 3.0 layout), and not when that can't be told.
  */
 async function rawWorkerCanStandIn(file) {
     var h5;
@@ -3102,7 +3107,13 @@ async function rawWorkerCanStandIn(file) {
         return false;
     }
     var keys = h5.keys();
+    var formatId = 0;
+    try {
+        var formatAttr = (await h5.getAttrs('metadata')).format_id;
+        formatId = Number(formatAttr && formatAttr.value !== undefined ? formatAttr.value : formatAttr);
+    } catch (e) { /* no /metadata: nothing says it is 3.0 */ }
     h5.close().catch(function () { /* the answer is already in */ });
+    if (formatId >= 3) return false;
     return !['session_data', 'identity', 'categories', 'embeddings'].some(function (k) { return keys.indexOf(k) >= 0; });
 }
 
@@ -3124,7 +3135,7 @@ export async function parseSlpWithRawFallback(file, onProgress) {
     try {
         return await parseSlpViaSleapIO(file, onProgress);
     } catch (err) {
-        // Too new for this reader is too new for the raw worker as well.
+        // A file this reader refuses is one the raw worker refuses as well.
         if (isNewerSlpFormatError(err) || (err && err.failedRead) || !(await rawWorkerCanStandIn(file))) throw err;
         console.warn('[slp-read] sleap-io.js streaming read failed — falling back to the raw h5wasm worker:', err);
         return await parseSlpH5(file, onProgress);

@@ -205,9 +205,10 @@ async function luc3dLoad(page, bytes, name) {
     await putBytes(page, '__file', bytes);
     await page.evaluate((n) => {
         window.__loadDone = false;
-        (async () => {
-            await (await import('/import-export/slp-import.js')).handleLoadSlpFile(new File([window.__file], n));
-        })().then(() => { window.__loadDone = true; }, e => { window.__loadDone = 'ERR ' + (e && e.stack || e); });
+        (async () => (await import('/import-export/slp-import.js')).handleLoadSlpFile(new File([window.__file], n)))().then(
+            // A file that did not open resolves false, and the last project stays open.
+            (opened) => { window.__loadDone = opened === false ? 'REFUSED ' + document.getElementById('statusText').textContent : true; },
+            e => { window.__loadDone = 'ERR ' + (e && e.stack || e); });
     }, name);
     for (let i = 0; i < 240; i++) {
         const s = await page.evaluate(() => {
@@ -216,7 +217,10 @@ async function luc3dLoad(page, bytes, name) {
             return { done: window.__loadDone, prompt: !!document.getElementById('videoSelectOverlay') };
         });
         if (s.prompt) await page.keyboard.press('Escape');
-        if (s.done) return s.done;
+        if (s.done) {
+            if (s.done !== true) console.log(`  LUC3D did not open ${name}: ${s.done}`);
+            return s.done;
+        }
         await page.waitForTimeout(250);
     }
     return 'timeout';

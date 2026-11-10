@@ -15,6 +15,7 @@
  * Messages OUT:
  *   { type: 'progress', message: string }
  *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions, suggestions, provenance } }
+ *   { type: 'result', data: { needsTypedReader: true } } — a file in the 3.0 layout: see `usesColumnTables`
  *   { type: 'metadata', data: { skeleton, trackNames, nodeNames, nFrames, nTracks, nNodes, videos } }
  *   { type: 'frameData', frameIdx, requestId, instances }
  *   { type: 'framesData', startIdx, endIdx, requestId, frames }
@@ -22,7 +23,7 @@
  */
 
 import * as h5wasm from '../lib/h5wasm/hdf5_hl.js';   // local vendored 0.10.3 ESM
-import { checkSlpFormatAttrs, isNewerSlpFormatError } from './slp-format-check.js';
+import { checkSlpFormatAttrs, checkSlpFilters, isNewerSlpFormatError } from './slp-format-check.js';
 
 var h5wasmReady = false;
 var FS = null;
@@ -153,12 +154,19 @@ async function parseSlp(file) {
 
         // FAIL LOUDLY on a file too new to read, before reading anything else: its
         // tables are not where this code looks, each `f.get()` below turns that
-        // into null, and the result would be an ordinary one with 0 frames.
+        // into null, and the result would be an ordinary one with 0 frames. The same
+        // for a dataset HDF5 can't decompress here, which would read as garbage.
         var metadataAttrs = null;
         try { metadataAttrs = f.get('metadata').attrs; } catch (e) { /* none: see below */ }
         checkSlpFormatAttrs(metadataAttrs, file.name);
+        checkSlpFilters(f, file.name);
         if (formatOnly) {
             postMessage({ type: 'result', data: {} });
+            return;
+        }
+        // Python's 3.0 layout: `parseSlpH5` reads such a file with the typed reader.
+        if (usesColumnTables(f, metadataAttrs)) {
+            postMessage({ type: 'result', data: { needsTypedReader: true } });
             return;
         }
 
@@ -599,6 +607,20 @@ async function parseSlp(file) {
     }
 }
 
+/**
+ * Whether a file keeps its tables as Python's 3.0 layout does, a group of columns with
+ * no id column. This worker reads the 2.x tables (and the old split-field export, which
+ * has one); it would read these as 0 frames. One reader of that layout is enough, and
+ * the typed reader also checks that its tables agree with each other.
+ */
+function usesColumnTables(f, metadataAttrs) {
+    var attr = metadataAttrs ? metadataAttrs.format_id : null;
+    if (attr && Number(attr.value) >= 3) return true;
+    var frames = null;
+    try { frames = f.get('frames'); } catch (e) { /* none */ }
+    return !!frames && frames.type === 'Group' && frames.keys().indexOf('frame_id') < 0;
+}
+
 // --- Skeletons ---
 
 /**
@@ -960,6 +982,7 @@ function openH5Lazy(file) {
 
         var h5path = '/work/' + file.name;
         lazyFile = new h5wasm.File(h5path, 'r');
+        checkSlpFilters(lazyFile, file.name);
 
         progress('Reading metadata...');
 

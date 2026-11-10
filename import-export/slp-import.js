@@ -58,6 +58,7 @@ import {
     remapFrameIdentityTrackSlots, typedSessionGroups,
 } from './file-edits.js';
 import {
+    noteNotKept,
     showLoading, hideLoading, setStatus, clearDirty, markDirty, ensureNo3dImportBlockingLoad,
 } from './save-load.js';
 
@@ -1324,6 +1325,7 @@ export async function handleLoadSlpFile(slpFile) {
         // The file's provenance (e.g. campy-live-export's records), written back on save.
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), slpSessIdx);
+        session.fileNotKept = slpData.notKept || null;
         // What the file says about each camera's video, for a save with none loaded.
         session.fileVideos = new Map();
         for (var fvk in videoIdxToCameraName) {
@@ -1903,6 +1905,8 @@ export async function handleLoadSlpFile(slpFile) {
         if (outsideNote) campyWarn.push(outsideNote);
         setStatus('SLP loaded (' + statusParts.join(', ') + ')'
             + (campyWarn.length ? ' — ' + campyWarn.join('; ') : ''), campyWarn.length ? 'warning' : 'success');
+
+        noteNotKept(state.sessions);
 
         // One skeleton per project: a multi-session .slp otherwise carries a
         // per-session skeleton each. Prompt for a single unifying skeleton file,
