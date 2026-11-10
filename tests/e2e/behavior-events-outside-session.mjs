@@ -31,6 +31,11 @@
  *     of one session, a camera the folder loader makes by filename, File ▸ Add SLP (a video of
  *     ANOTHER file at the same place in its list stays apart), a project mixing lazy and
  *     eager, a two-pass save, two saves in a row, and files real Python wrote.
+ *  J. No session and a calibration file beside the `.slp`: the folder loader says which video
+ *     is which camera, so its order decides the first camera, never the file's. Only that
+ *     camera's events are labels, each other stays on its camera, a video matching no camera
+ *     stays on its own entry. The save gives the file a calibrated session, whose rule (a bout
+ *     on any of its cameras is the session's) applies from the next time it is opened.
  *
  * Kinds of event on the other video: a bout, a "not" label (its type must keep saying
  * what it negates), a prediction with framewise scores, an event with no animal.
@@ -565,6 +570,11 @@ const ONE_VIDEO_BOTH_WANT = [
     entry('other.mp4', posesOf(2), [300, 310, 320, 330]),
 ];
 
+/** A calibration file beside a `.slp`, listing these cameras in this order. */
+const calibrationFor = (names) => names.map((name, i) => `[cam_${i}]\nname = "${name}"\nsize = [64, 64]\n` +
+    'matrix = [[500.0, 0.0, 32.0], [0.0, 500.0, 32.0], [0.0, 0.0, 1.0]]\ndistortions = [0.0, 0.0, 0.0, 0.0, 0.0]\n' +
+    `rotation = [0.0, ${0.1 * i}, 0.0]\ntranslation = [${10 * i}.0, 0.0, 0.0]\n`).join('\n');
+
 /** I: a calibration file beside the `.slp`: the folder loader makes a camera of a video no session names, by its filename. */
 async function cameraByFilename() {
     console.log('\n-- I. the single .slp folder makes a camera of a video no session names --');
@@ -575,9 +585,7 @@ async function cameraByFilename() {
     });
     const source = await getBytes(page, '__built');
     await page.close();
-    const calibration = ['s0_cam0', 's0_cam1'].map((name, i) => `[cam_${i}]\nname = "${name}"\nsize = [64, 64]\n` +
-        'matrix = [[500.0, 0.0, 32.0], [0.0, 500.0, 32.0], [0.0, 0.0, 1.0]]\ndistortions = [0.0, 0.0, 0.0, 0.0, 0.0]\n' +
-        `rotation = [0.0, ${0.1 * i}, 0.0]\ntranslation = [${10 * i}.0, 0.0, 0.0]\n`).join('\n');
+    const calibration = calibrationFor(['s0_cam0', 's0_cam1']);
 
     const one = await openAndSave('single .slp folder', source, calibration);
     check(eq(one.read.entries, [entry('session 0 first camera', posesOf(0), [10]), entry('session 0 camera 1', posesOf(1), [300])]),
@@ -673,19 +681,70 @@ async function twoPassSave() {
     check(eq(here, [entry('other.mp4', posesOf(2), [300, 310, 320, 330])]), 'that video: once, its poses and bouts both on it', read.entries);
 }
 
-/** I: File ▸ Save twice with the project open: nothing a save leaves behind adds an entry. */
-async function savedTwiceInARow(loader) {
-    console.log(`\n-- I. two saves in a row, ${loader} --`);
+/** File ▸ Save twice with the project open: nothing a save leaves behind adds an entry or moves a bout. */
+async function savedTwiceInARow(loader, spec = ONE_VIDEO_BOTH, want = ONE_VIDEO_BOTH_WANT, calibration = undefined) {
+    console.log(`\n-- two saves in a row, ${loader} --`);
     const page = await newAppPage();
-    await page.evaluate(buildFile, ONE_VIDEO_BOTH);
+    await page.evaluate(buildFile, spec);
     await page.evaluate(() => { window.__file = window.__built; });
-    await LOADERS[loader](page, await getBytes(page, '__built'));
+    await LOADERS[loader](page, await getBytes(page, '__built'), calibration);
     await settleLoad(page, loader);
     await page.evaluate(saveInPage);
     await page.evaluate(saveInPage);
     const read = await page.evaluate(readFile);
     await page.close();
-    check(eq(read.entries, ONE_VIDEO_BOTH_WANT), 'one entry per video, its poses and bouts both on it', read.entries);
+    check(eq(read.entries, want), 'one entry per video, its poses and bouts both on it', read.entries);
+}
+
+const FIRST_CAMERA = 'session 0 first camera', SECOND_CAMERA = 'session 0 camera 1';
+
+/**
+ * J: a file with no session, opened by the folder loader with a calibration file beside it.
+ * @param {string[]} cameraNames the calibration's cameras, in its order
+ * @param {{shows: number[], videos: string[], saved: Array, reopenedShows: number[], reopenedSaved: Array}} want
+ *   what it shows and what a save holds, entry by entry; then the same once that save is opened again
+ */
+async function calibrationBeside(title, spec, cameraNames, want) {
+    console.log(`\n-- J. ${title} --`);
+    const page = await newAppPage();
+    await page.evaluate(buildFile, spec);
+    const source = await getBytes(page, '__built');
+    await page.close();
+    const calibration = calibrationFor(cameraNames);
+    const firstFrames = (shown) => shown[0].bouts.map(b => b[1]);
+
+    const one = await openAndSave('single .slp folder', source, calibration);
+    check(eq(firstFrames(one.shown), want.shows), 'it shows only the first camera\'s bouts', one.shown);
+    check(eq(one.read.videos, want.videos), 'saved: the cameras in the calibration\'s order, then the other videos', one.read.videos);
+    check(eq(one.read.entries, want.saved), 'each bout on its own video, with that video\'s poses', one.read.entries);
+    forPython.push([`${title}, first save`, one.saved, one.read]);
+    await savedTwiceInARow('single .slp folder', spec, want.saved, calibration);
+
+    const two = await openAndSave('single .slp folder', one.saved, calibration);
+    check(eq(firstFrames(two.shown), want.reopenedShows), 'opened again: a calibrated session\'s, whichever camera a bout is on', two.shown);
+    check(eq(two.read.videos, want.videos), 'saved: the same list', two.read.videos);
+    check(eq(two.read.entries, want.reopenedSaved), 'each video still one entry, with its poses', two.read.entries);
+    forPython.push([`${title}, saved after opening it again`, two.saved, two.read]);
+}
+
+/** J: every kind of event, on the camera that is not the first and on no video. */
+async function calibrationBesideEveryKind() {
+    console.log('\n-- J. every kind of event, the calibration in another order than the videos --');
+    const page = await newAppPage();
+    await page.evaluate(buildFile, {
+        videos: ['camA.mp4', 'camB.mp4'], sessions: [],
+        events: [
+            { type: 'rear', video: 'camB.mp4', start: 10, end: 19, subject: 'a', source: 'manual' },
+            { type: 'rear', video: null, start: 500, end: 501, subject: 'a', source: 'manual' },
+        ].concat(OTHER.map(e => Object.assign({}, e, { video: 'camA.mp4' }))),
+    });
+    const source = await getBytes(page, '__built');
+    await page.close();
+    const one = await openAndSave('single .slp folder', source, calibrationFor(['camB', 'camA']));
+    check(eq(one.shown, [{ bouts: [['rear', 10, 19, 1], ['rear', 500, 501, 1]], predicted: 0 }]), 'it shows the first camera\'s bout and the event with no video', one.shown);
+    check(eq(one.read.events, [rearOn(FIRST_CAMERA, 10, 19)].concat(OTHER_READ(SECOND_CAMERA), [rearOn(FIRST_CAMERA, 500, 501)])),
+        'saved: the other camera\'s events unchanged and on that camera', one.read.events);
+    check(negatesOf(one.read, 'not rear') === 'rear', 'a "not" still says what it negates', one.read.types);
 }
 
 /** Each event as [video, start], in frame order. */
@@ -804,6 +863,46 @@ try {
         await mixedProject();
         await twoPassSave();
         for (const loader of Object.keys(LOADERS)) await savedTwiceInARow(loader);
+    }
+    if (runs('J')) {
+        const twoCameras = { videos: ['camA.mp4', 'camB.mp4'], sessions: [], events: [rearAt('camA.mp4', 10), rearAt('camB.mp4', 300)] };
+        await calibrationBeside('the calibration in another order than the videos', twoCameras, ['camB', 'camA'], {
+            shows: [300], videos: ['camB.mp4', 'camA.mp4'],
+            saved: [entry(FIRST_CAMERA, posesOf(1), [300]), entry(SECOND_CAMERA, posesOf(0), [10])],
+            reopenedShows: [10, 300],
+            reopenedSaved: [entry(FIRST_CAMERA, posesOf(1), [10, 300]), entry(SECOND_CAMERA, posesOf(0), [])],
+        });
+        await calibrationBeside('the calibration in the videos\' order', twoCameras, ['camA', 'camB'], {
+            shows: [10], videos: ['camA.mp4', 'camB.mp4'],
+            saved: [entry(FIRST_CAMERA, posesOf(0), [10]), entry(SECOND_CAMERA, posesOf(1), [300])],
+            reopenedShows: [10, 300],
+            reopenedSaved: [entry(FIRST_CAMERA, posesOf(0), [10, 300]), entry(SECOND_CAMERA, posesOf(1), [])],
+        });
+        // Its first video matches no camera, so the file's order is off even with the cameras in the videos' order.
+        await calibrationBeside('a video matching no camera, first in the file', {
+            videos: ['other.mp4', 'camA.mp4', 'camB.mp4'], sessions: [],
+            events: [rearAt('other.mp4', 200), rearAt('camA.mp4', 10), rearAt('camB.mp4', 300)],
+        }, ['camA', 'camB'], {
+            shows: [10], videos: ['camA.mp4', 'camB.mp4', 'other.mp4'],
+            saved: [entry(FIRST_CAMERA, posesOf(1), [10]), entry(SECOND_CAMERA, posesOf(2), [300]), entry('other.mp4', posesOf(0), [200])],
+            reopenedShows: [10, 300],
+            reopenedSaved: [entry(FIRST_CAMERA, posesOf(1), [10, 300]), entry(SECOND_CAMERA, posesOf(2), []), entry('other.mp4', posesOf(0), [200])],
+        });
+        await calibrationBeside('no video for the first camera', { videos: ['camB.mp4'], sessions: [], events: [rearAt('camB.mp4', 300)] }, ['camA', 'camB'], {
+            shows: [], videos: ['camA.mp4', 'camB.mp4'],
+            saved: [entry(FIRST_CAMERA, [], []), entry(SECOND_CAMERA, posesOf(0), [300])],
+            reopenedShows: [300],
+            reopenedSaved: [entry(FIRST_CAMERA, [], [300]), entry(SECOND_CAMERA, posesOf(0), [])],
+        });
+        // campy names every video `0.mp4`, so no video matches a camera. They stay outside the session, however often it is saved.
+        const zeroes = [entry(FIRST_CAMERA, [], []), entry(SECOND_CAMERA, [], []), entry('0.mp4', posesOf(0), [10]), entry('0.mp4', posesOf(1), [300])];
+        await calibrationBeside('every video named 0.mp4, so none matches a camera', {
+            videos: ['x', 'y'], filename: '0.mp4', sessions: [], events: [rearAt('x', 10), rearAt('y', 300)],
+        }, ['camA', 'camB'], {
+            shows: [], videos: ['camA.mp4', 'camB.mp4', '0.mp4', '0.mp4'],
+            saved: zeroes, reopenedShows: [], reopenedSaved: zeroes,
+        });
+        await calibrationBesideEveryKind();
     }
 
     console.log('\n-- real Python reads the saves --');

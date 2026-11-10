@@ -48,6 +48,10 @@
 //     one recording (a sleap-app project of separate videos), though LUC3D opens them as if
 //     they were, so only the first camera's events are labels here. The two must read
 //     alike: a save gives a file with no session exactly that session.
+//     That first camera is the file's first video, unless the loader matched the videos to
+//     cameras of its own, from a calibration file beside the `.slp` (`cameraPlaces`); a video
+//     it matched to no camera stays on that video. A save then gives the file a calibrated
+//     session, so from the next open every camera's events are that session's.
 // Each event goes to one session, an event with no video to the first. A label keeps
 // only its note: other per-event metadata and names written by other tools are not
 // carried through a LUC3D save.
@@ -298,22 +302,27 @@ function placeholderCameraPlaces(rawSession) {
  * @param {number} idx the session
  * @param {boolean} [onlyThisSession] the loader opens this session and no other of the
  *   file, so it also keeps the other sessions' events
+ * @param {?Map<number, number>} [cameraPlaces] from a loader that matched the file's videos to
+ *   cameras of its own: each such video -> that camera's place. Its poses are on that camera,
+ *   so with no session this replaces the file's order, and a kept video the session has no
+ *   place for goes back on that camera.
  * @returns {{videos: Set<number>, keep: Set<number>, cameras: ?Map<number, number>, noVideo: boolean}}
  *   `videos` whose events are this session's, `keep` whose events it only keeps;
  *   `cameras`: with no calibration, each of its cameras' videos -> that camera's place in the
  *   session (never the file's video number, which a second session's cameras do not start at);
  *   `noVideo`: it reads the events with no video
  */
-export function sessionEventScope(rawSessions, nVideos, idx, onlyThisSession) {
+export function sessionEventScope(rawSessions, nVideos, idx, onlyThisSession, cameraPlaces) {
     var sessions = rawSessions || [];
     var videos = new Set(), keep = new Set();
     if (sessions.length === 0) {
-        var inFileOrder = new Map();
-        for (var k = 0; k < nVideos; k++) {
-            (k === 0 ? videos : keep).add(k);
-            inFileOrder.set(k, k);
+        var cameras = cameraPlaces;
+        if (!cameras) {
+            cameras = new Map();
+            for (var c = 0; c < nVideos; c++) cameras.set(c, c);   // one camera per video, in the file's order
         }
-        return { videos: videos, keep: keep, cameras: inFileOrder, noVideo: true };
+        for (var k = 0; k < nVideos; k++) (cameras.get(k) === 0 ? videos : keep).add(k);
+        return { videos: videos, keep: keep, cameras: cameras, noVideo: true };
     }
     var own = sessionVideoIdxs(sessions[idx]);
     var places = own ? placeholderCameraPlaces(sessions[idx]) : null;
@@ -325,6 +334,13 @@ export function sessionEventScope(rawSessions, nVideos, idx, onlyThisSession) {
     for (var v = 0; v < nVideos; v++) {
         if (own ? own.has(v) : idx === 0 && !others.has(v)) (!places || places.get(v) === 0 ? videos : keep).add(v);
         else if (others.has(v) ? onlyThisSession : idx === 0) keep.add(v);
+    }
+    if (cameraPlaces) {
+        keep.forEach(function (kept) {
+            if (!cameraPlaces.has(kept) || (places && places.has(kept))) return;
+            if (!places) places = new Map();
+            places.set(kept, cameraPlaces.get(kept));
+        });
     }
     return { videos: videos, keep: keep, cameras: places, noVideo: idx === 0 };
 }
