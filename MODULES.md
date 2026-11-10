@@ -4487,10 +4487,12 @@ The tab is `ui/model-check-panel.js`.
   union of the animals' boxes (the misread one and the ones its nodes were read
   on) plus 60% of the largest animal side on every side, at least
   `MODEL_CHECK_MIN_FRAME_PX` (240) square; null without a box.
+- `spreadLabels(ys, gap, lo, hi)` — heights for a column of labels: each as close
+  to its ring's height as it can be, `gap` apart, inside [lo, hi] when they fit.
 
 **Imports from project modules.** None.
 
-**Imported by.** `ui/model-check-panel.js`.
+**Imported by.** `ui/model-check-panel.js`, `ui/model-check-highlight.js`.
 
 **Coverage.** `tests/test-model-check.mjs` (NaN, malformed rows, read_on, camera
 matching incl. campy `0.mp4` and multi-session ambiguity, filters and order,
@@ -9761,8 +9763,10 @@ Chrome, and `SHOTS=<dir>` saves every entry's view).
 
 **Purpose.** The selected Model Check entry's mark in its camera's view: a box
 around the misread animal labelled "animal N · name · worst px", a red ring on
-each misread node (named), a dashed line from it to the labelled node it was read
-on, and a thin grey box around that neighbour ("animal M · name"). Only where the
+each misread node, its name in a column beside the animals joined to the ring by
+a thin line (`spreadLabels` keeps the names a line apart; written beside the
+rings they covered each other where misread parts cluster), a dashed line from it to the labelled node it was read
+on, and a thin grey box around that neighbour ("animal M · name", below its box). Only where the
 entry's animal is matched; neighbours only on a verified row.
 
 **How.** Its own canvas per view (`.model-check-canvas` in the view's
@@ -9788,7 +9792,7 @@ onLocated?}) | null`, `modelCheckQuietsLabels(view, frame)`, `updateModelCheckHi
 `MODEL_CHECK_COLORS`.
 
 **Imports from project modules.** `ui/app-state.js` (`state`), `ui/overlays.js`
-(`makeVideoToCanvasTransform`).
+(`makeVideoToCanvasTransform`), `pose/model-check.js` (`spreadLabels`).
 
 **Imported by.** `ui/model-check-panel.js`, `ui/rendering.js`.
 

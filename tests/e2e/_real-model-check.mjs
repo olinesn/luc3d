@@ -11,7 +11,8 @@
  *                  place (the file chooser gets their paths; nothing is copied), in
  *                  headless Chrome (Playwright's Chromium cannot decode H.264)
  *   SHOTS=/dir …   with VIDEOS: selects each entry in turn and saves the view as
- *                  <dir>/entry-NN.png (the whole page for the first one)
+ *                  <dir>/entry-NN.png (the whole page for the first one); GRID=1 keeps
+ *                  the grid of views instead of single-view mode
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -98,7 +99,7 @@ try {
         fs.mkdirSync(process.env.SHOTS, { recursive: true });
         const views = await page.evaluate(() => window.__lucid.state.views.map(v => ({ name: v.name, decoder: !!v.decoder, w: v.videoWidth, h: v.videoHeight })));
         console.log('views:', JSON.stringify(views));
-        await page.keyboard.press('v'); await page.waitForTimeout(500);
+        if (!process.env.GRID) { await page.keyboard.press('v'); await page.waitForTimeout(500); }
         for (let i = 0; i < out.rows.length; i++) {
             await page.evaluate((i) => document.querySelectorAll('#modelCheckList .model-check-row')[i].click(), i);
             // Wait for the frame to be decoded and the mark drawn.
@@ -107,8 +108,9 @@ try {
                 return h && h.drawn;
             }, null, { timeout: 30000 }).catch(() => {});
             await page.waitForTimeout(1200);
-            const info = await page.evaluate(() => {
-                const S = window.__lucid.state, v = S.views.find(x => x.wrapper && x.wrapper.offsetWidth > 0 && x.wrapper.getBoundingClientRect().width > 50);
+            const info = await page.evaluate(async () => {
+                const S = window.__lucid.state, h = (await import('/ui/model-check-highlight.js')).getModelCheckHighlight();
+                const v = S.views.find(x => h && (x.cameraName || x.name) === h.camera && x.wrapper && x.wrapper.offsetWidth > 0);
                 const r = v ? v.wrapper.closest('.dv-content-container, .view-pane, .pane') || v.wrapper : null;
                 const b = r ? r.getBoundingClientRect() : null;
                 return { status: document.getElementById('statusText').textContent, frame: S.currentFrame,

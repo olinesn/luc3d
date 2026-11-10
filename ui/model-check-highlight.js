@@ -24,6 +24,7 @@
 
 import { state } from './app-state.js';
 import { makeVideoToCanvasTransform } from './overlays.js';
+import { spreadLabels } from '../pose/model-check.js';
 
 var _target = null;     // {session, camera, frame, label, locate: () => {target, nodes, others} | null, onLocated?}
 var _raf = 0;
@@ -181,15 +182,25 @@ function paint(v, c, loc) {
         ctx.setLineDash([]); ctx.lineWidth = width + 2 * s; ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)'; ctx.strokeRect(x, y, w, h);
         ctx.setLineDash(dash); ctx.lineWidth = width; ctx.strokeStyle = 'rgb(' + rgb + ')'; ctx.strokeRect(x, y, w, h);
         ctx.setLineDash([]);
-        if (text) label(ctx, text, x, Math.max(fs + 2 * s, y - 5 * s), fs, s, rgb);
+        // The animal's label above its box, a neighbour's below it: the two seldom collide.
+        if (text) label(ctx, text, x, below ? y + h + fs + 4 * s : Math.max(fs + 2 * s, y - 5 * s), fs, s, rgb);
+        return { x0: x, y0: y, x1: x + w, y1: y + h };
     };
+    var below = true;
     ctx.save();
-    loc.others.forEach(function (o) { box(o.inst, MODEL_CHECK_COLORS.other, [6 * s, 5 * s], 1.5 * s, o.label); });
-    box(loc.target, MODEL_CHECK_COLORS.animal, [], 2.5 * s, _target.label);
+    var area = null, grow = function (b) {
+        if (!b) return;
+        area = area ? { x0: Math.min(area.x0, b.x0), y0: Math.min(area.y0, b.y0), x1: Math.max(area.x1, b.x1), y1: Math.max(area.y1, b.y1) } : b;
+    };
+    loc.others.forEach(function (o) { grow(box(o.inst, MODEL_CHECK_COLORS.other, [6 * s, 5 * s], 1.5 * s, o.label)); });
+    below = false;
+    grow(box(loc.target, MODEL_CHECK_COLORS.animal, [], 2.5 * s, _target.label));
+    var rings = [];
     loc.nodes.forEach(function (n) {
         var p = pt(loc.target, n.k);
         if (!p) return;
         var cp = toC(p.x, p.y), r = 7 * s;
+        rings.push({ name: n.name, x: cp.x, y: cp.y, r: r });
         var q = n.ref ? pt(n.ref.inst, n.ref.j) : null;
         if (q && (q.x !== p.x || q.y !== p.y)) {
             var cq = toC(q.x, q.y);
@@ -202,8 +213,24 @@ function paint(v, c, loc) {
         ctx.beginPath(); ctx.arc(cp.x, cp.y, r, 0, 2 * Math.PI); ctx.stroke();
         ctx.lineWidth = 2 * s; ctx.strokeStyle = 'rgb(' + MODEL_CHECK_COLORS.node + ')';
         ctx.beginPath(); ctx.arc(cp.x, cp.y, r, 0, 2 * Math.PI); ctx.stroke();
-        label(ctx, n.name, cp.x + r + 2 * s, cp.y + fs / 2, Math.round(fs * 0.9), s, MODEL_CHECK_COLORS.node);
     });
+    // The names, in a column beside the animals, each joined to its ring: misread parts
+    // cluster, so names written beside their rings covered each other and the boxes.
+    if (rings.length && area) {
+        var lfs = Math.round(fs * 0.9), gapX = 16 * s, lineH = lfs + 7 * s;
+        ctx.font = '600 ' + lfs + 'px system-ui, sans-serif';
+        var wMax = Math.max.apply(null, rings.map(function (g) { return ctx.measureText(g.name).width; })) + 8 * s;
+        var right = area.x1 + gapX + wMax <= c.width || area.x0 - gapX - wMax < 0;
+        var colX = right ? area.x1 + gapX : area.x0 - gapX - wMax;
+        var ys = spreadLabels(rings.map(function (g) { return g.y; }), lineH, lineH, c.height - 4 * s);
+        rings.forEach(function (g, i) {
+            var ly = ys[i], ax = right ? colX : colX + wMax;
+            var dx = ax - g.x, dy = ly - g.y, d = Math.hypot(dx, dy) || 1;
+            ctx.setLineDash([]); ctx.lineWidth = 1 * s; ctx.strokeStyle = 'rgba(' + MODEL_CHECK_COLORS.node + ', 0.85)';
+            ctx.beginPath(); ctx.moveTo(g.x + dx / d * g.r, g.y + dy / d * g.r); ctx.lineTo(ax, ly); ctx.stroke();
+            label(ctx, g.name, colX, ly + lfs / 2 - s, lfs, s, MODEL_CHECK_COLORS.node);
+        });
+    }
     ctx.restore();
     _drawn = { canvas: c };
 }

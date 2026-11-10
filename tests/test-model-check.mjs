@@ -199,5 +199,11 @@ eq([g.x0, g.y1].join(), [100 - 180, 400 + 180].join(), 'margin from the larger a
 g = mc.frameRegion([{ x0: 10, y0: 10, x1: 12, y1: 12 }]);
 eq([g.x1 - g.x0, g.y1 - g.y0].join(), [mc.MODEL_CHECK_MIN_FRAME_PX, mc.MODEL_CHECK_MIN_FRAME_PX].join(), 'tiny animal: minimum square');
 
+// ---- The ring names' column
+eq(mc.spreadLabels([10, 12, 11, 100], 10, 0, 1000).join(), '10,30,20,100', 'close names pushed apart, in their own order');
+eq(mc.spreadLabels([95, 96, 97], 10, 0, 100).join(), '80,90,100', 'a column past the bottom is pulled back inside');
+eq(mc.spreadLabels([50, 300], 10, 0, 1000).join(), '50,300', 'names with room stay at their rings');
+eq(mc.spreadLabels([], 10, 0, 100).length, 0, 'no rings, no names');
+
 console.log(`\ntest-model-check: ${passed} passed, ${failed} failed`);
 if (failed) { failures.forEach((f) => console.error(' - ' + f)); process.exit(1); }

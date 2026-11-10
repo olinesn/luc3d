@@ -436,3 +436,23 @@ export function frameRegion(boxes) {
     var hw = Math.max((b.x1 - b.x0) / 2 + m, MODEL_CHECK_MIN_FRAME_PX / 2), hh = Math.max((b.y1 - b.y0) / 2 + m, MODEL_CHECK_MIN_FRAME_PX / 2);
     return { x0: cx - hw, y0: cy - hh, x1: cx + hw, y1: cy + hh };
 }
+
+/**
+ * Places a column of labels as close as it can to the heights they name, none
+ * closer than `gap` to the next, inside [lo, hi] when they fit there. `ys` are
+ * the wanted heights in any order; returns the placed heights in the same order.
+ * Top-down pass pushing each label below the one above, then a bottom-up pass
+ * pulling the column back inside `hi`. Pure (tests).
+ */
+export function spreadLabels(ys, gap, lo, hi) {
+    var order = ys.map(function (y, i) { return i; }).sort(function (a, b) { return ys[a] - ys[b]; });
+    var out = ys.slice(), prev = -Infinity;
+    order.forEach(function (i) { out[i] = Math.max(ys[i], lo, prev + gap); prev = out[i]; });
+    var next = Infinity;
+    for (var k = order.length - 1; k >= 0; k--) {
+        var i = order[k];
+        out[i] = Math.min(out[i], hi, next - gap);
+        next = out[i];
+    }
+    return out;
+}
