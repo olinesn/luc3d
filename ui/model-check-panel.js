@@ -36,7 +36,7 @@ var FILTER_KEY = 'modelCheckFilter';
 var _check = null;   // {fileName, loadedAt, rows, skipped, camMatch: Map, byFrame: Map, current, sessions}
 var _nav = {};
 
-/** ui-wiring registers `{goToFrame(frame), showView(camera), switchSession(idx) -> Promise, zoomTo(camera, x0, y0, x1, y1), redraw()}`. */
+/** ui-wiring registers `{goToFrame(frame), showView(camera), switchSession(idx) -> Promise, zoomTo(camera, x0, y0, x1, y1), redraw(), reviewLayout(on)}`. */
 export function setModelCheckNavigator(nav) { _nav = nav || {}; }
 
 /** Set the mark, then redraw the overlays: its view and frame leave out their node names (`modelCheckQuietsLabels`). */
@@ -247,6 +247,8 @@ export async function loadModelCheckText(text, fileName) {
     _check = { fileName: fileName || 'scan.json', loadedAt: new Date(), rows: parsed.rows, skipped: parsed.skipped,
         camMatch: camMatch, byFrame: byFrame, current: null };
     var rep = matchReport();
+    // Room for the video: the review hides the 3D viewer and the Timeline (Close brings them back).
+    if (rep.matched && _nav.reviewLayout) _nav.reviewLayout(true);
     openModelCheckPanel();
     refreshModelCheckPanel();
     var misread = parsed.rows.filter(function (r) { return r.misread; }).length;
@@ -316,6 +318,7 @@ function askCameras(ambiguous, camMatch) {
 export function closeModelCheck() {
     _check = null;
     setMark(null);
+    if (_nav.reviewLayout) _nav.reviewLayout(false);
     refreshModelCheckPanel();
 }
 

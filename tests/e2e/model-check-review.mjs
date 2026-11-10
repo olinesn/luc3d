@@ -28,7 +28,8 @@
  *     the load, a pick matches it.
  *  8. Lazy project (Load Project): rows on frames not loaded are matched from
  *     the store, and the mark appears once the frame is hydrated.
- *  9. Close forgets it.
+ *  9. Close forgets it, and brings back the 3D viewer and Timeline that
+ *     loading hid (1.).
  * 10. An eager load (Load SLP) names a camera-frame's animals in the file's
  *     order, as the lazy store does (`_fileRow`, pose-data.js `tagFileRow`): the
  *     eager reader lists grouped instances before ungrouped ones.
@@ -163,6 +164,11 @@ try {
         'the tab says nothing is loaded yet');
 
     // ---- 1. the menu item and the report
+    const panes = () => page.evaluate(() => ({
+        viewport3d: !document.getElementById('viewport3dContainer').classList.contains('collapsed'),
+        timeline: !document.getElementById('timelineContainer').classList.contains('collapsed'),
+    }));
+    const panesBefore = await panes();
     const chooser = page.waitForEvent('filechooser');
     await page.evaluate(() => document.getElementById('menuLoadModelCheck').click());
     await (await chooser).setFiles(SCAN_PATH);
@@ -175,6 +181,9 @@ try {
         .test(document.querySelector('.model-check-unmatched').textContent)), 'the unmatched camera is named, with why');
     check(/held-out:\s*4 of 4 animals misread/i.test(text) && /training:\s*2 of 40 animals misread/i.test(text), 'per-split counts');
     check(await page.evaluate(() => !window.__lucid.state.isDirty), 'loading the check leaves the project unchanged (not unsaved)');
+    const panesLoaded = await panes();
+    check(panesBefore.viewport3d && !panesLoaded.viewport3d && !panesLoaded.timeline,
+        'loading hides the 3D viewer and the Timeline, for the video', { panesBefore, panesLoaded });
 
     // ---- 2. worst first
     let e = await entries();
@@ -306,6 +315,9 @@ try {
     await page.click('#modelCheckClose');
     check(/No model check loaded/.test(await panelText()), 'Close forgets the check');
     check((await mark()).length === 0, 'and clears the mark');
+    const panesClosed = await panes();
+    check(panesClosed.viewport3d === panesBefore.viewport3d && panesClosed.timeline === panesBefore.timeline,
+        'Close brings back the panes it hid', { panesBefore, panesClosed });
 
     // ---- 8. lazy project
     console.log('\n-- lazy project --');

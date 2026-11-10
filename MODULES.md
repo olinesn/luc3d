@@ -9730,6 +9730,12 @@ a lazy project's store rows (`lazyLoader.getFrameSync`, file order) for a frame
 not loaded. Re-resolved on every render and draw (cheap), so edits and
 hydration show at once.
 
+**Room for the video.** A load that matches any row hides the 3D viewer and the
+Timeline (`reviewLayout(true)`: ui-wiring's `modelCheckReviewLayout` records
+which of the two it closed); Close reopens only those, and only if still hidden
+(`reviewLayout(false)`). A second load while one is open changes nothing. Never
+stored.
+
 **Nothing is saved.** The check lives in this module until Close or reload: no
 `markDirty`, nothing on the session, nothing in the `.slp`.
 
@@ -9737,9 +9743,10 @@ hydration show at once.
 `refreshModelCheckPanel`, `openModelCheckPanel`, `stepModelCheck`, `goToEntry`,
 `updateModelCheckFrame(frame)` (every frame change, ui-wiring
 `updateSeekbarVisual`), `setModelCheckNavigator({goToFrame, showView,
-switchSession, zoomTo, redraw})` (ui-wiring registers `navigateToFrame`,
-`setSoloView` / `activatePanelForView`, `switchSession`, `zoomToVideoRect` on the
-camera's view and `drawAllOverlays`, keeping this a leaf),
+switchSession, zoomTo, redraw, reviewLayout})` (ui-wiring registers
+`navigateToFrame`, `setSoloView` / `activatePanelForView`, `switchSession`,
+`zoomToVideoRect` on the camera's view, `drawAllOverlays` and
+`modelCheckReviewLayout`, keeping this a leaf),
 `projectCameras`, `getModelCheck` (tests).
 
 **Imports from project modules.** `ui/app-state.js` (`state`),
@@ -9751,7 +9758,8 @@ camera's view and `drawAllOverlays`, keeping this a leaf),
 **Imported by.** `ui/ui-wiring.js`.
 
 **Coverage.** `tests/e2e/model-check-review.mjs` (menu + file chooser, report,
-order, M / Shift+M, solo view, the mark, the zoom and its switch, filters,
+order, M / Shift+M, solo view, the mark, the zoom and its switch, the 3D viewer
+and Timeline hidden on load and back on Close, filters,
 nothing dirty, the ambiguity question, a lazy project, Close); real data:
 `tests/e2e/_real-model-check.mjs` (`SLP=… SCAN=…`, `LAZY=1`, `SHOT=`;
 `VIDEOS=<folder>` answers the video prompt with its mp4s in place, in headless
@@ -11483,7 +11491,10 @@ environment file is too new, rather than triangulating from the readable cameras
   File ▸ **Load Model Check…** (`menuLoadModelCheck`) calls `openModelCheckFile`
   with `pickFiles({accept: '.json'})` (`ui/model-check-panel.js`);
   `setModelCheckNavigator` gets `navigateToFrame`, `setSoloView` (else
-  `activatePanelForView`) and `switchSession`; `modelCheckNext` / `modelCheckPrev`
+  `activatePanelForView`), `switchSession`, `zoomTo` (`zoomToVideoRect`),
+  `redraw` (`drawAllOverlays`) and `reviewLayout` (`modelCheckReviewLayout`:
+  hides the 3D viewer and Timeline on load through `toggle3DViewport` /
+  `collapseTimeline`, reopens only those on Close); `modelCheckNext` / `modelCheckPrev`
   (M / Shift+M) call `stepModelCheck(±1)`; `updateSeekbarVisual` calls
   `updateModelCheckFrame` beside `updateIdSwitchProgress`.
 - Color-by toggle: the Tracks / Identity control is in the top toolbar

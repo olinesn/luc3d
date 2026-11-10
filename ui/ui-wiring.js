@@ -16,6 +16,7 @@ import { state, videoController, interactionManager, viewport3d, timeline, paneM
 // items, toolbar button) resolve to the new implementation.
 import {
     toggleTimeline,
+    collapseTimeline,
     fitTimelineToData,
     syncTimelineToggleButton,
     installTimelineShortcuts,
@@ -34,7 +35,7 @@ import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
          populateTimelineVisibility } from './info-panel.js';
-import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js';
+import { consumeInfoPanelStale, collapseViewport3D, isViewport3DVisible } from './panel-visibility.js';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
@@ -936,6 +937,7 @@ export function setupMenus() {
             if (v && videoController) videoController.zoomToVideoRect(v, x0, y0, x1, y1);
         },
         redraw: function () { drawAllOverlays(state.currentFrame); },
+        reviewLayout: modelCheckReviewLayout,
     });
     refreshModelCheckPanel();
     document.getElementById('menuLoadModelCheck').addEventListener('click', function () {
@@ -3456,6 +3458,26 @@ export function update3DViewportToggleBtn() {
     var container = document.getElementById('viewport3dContainer');
     var btn = document.getElementById('viewport3dToggleBtn');
     if (container && btn) syncPanelToggleBtn(btn, container.classList.contains('collapsed'), '3D viewer', '\\');
+}
+
+/**
+ * The Model Check review's layout: loading a check hides the 3D viewer and the
+ * Timeline, so the video gets the room (the review steps through 2D labels);
+ * Close brings back only what it hid, and only if it is still hidden. Either
+ * can be reopened meanwhile with its own button. Nothing is stored.
+ */
+var _modelCheckHid = null;
+function modelCheckReviewLayout(on) {
+    if (on) {
+        if (_modelCheckHid) return;
+        _modelCheckHid = { timeline: collapseTimeline(), viewport3d: false };
+        if (isViewport3DVisible()) { toggle3DViewport(); _modelCheckHid.viewport3d = true; }
+    } else if (_modelCheckHid) {
+        var tl = document.getElementById('timelineContainer');
+        if (_modelCheckHid.timeline && tl && tl.classList.contains('collapsed')) toggleTimeline();
+        if (_modelCheckHid.viewport3d && !isViewport3DVisible()) toggle3DViewport();
+        _modelCheckHid = null;
+    }
 }
 
 /**
