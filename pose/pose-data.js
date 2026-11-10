@@ -1137,6 +1137,28 @@ export function lazyPlaceholderXY(numNodes) {
     return a;
 }
 
+/**
+ * A hand-labelled instance's row among its camera-frame's instances in the file
+ * it was read from (`_fileRow`), set by the eager readers (Load SLP, the
+ * single-SLP folder loader) and carried to the instance that replaces it when
+ * groups are rebuilt. The eager readers put grouped instances before ungrouped
+ * ones, so the frame's lists are not in file order; the Model Check tab
+ * (ui/model-check-panel.js) needs the file's order to name "animal N" the way a
+ * tool reading the file does. Lazy projects have `_rawInstIndex` instead.
+ * In memory only, never saved; user instances only (a few per labelled frame),
+ * so the millions of predictions carry nothing.
+ * @param {Instance} inst
+ * @param {number} row
+ */
+export function tagFileRow(inst, row) {
+    if (inst && inst.type === 'user') inst._fileRow = row;
+}
+
+/** Carry `_fileRow` from the pass-1 instance `from` to its replacement `inst`. */
+export function adoptFileRow(inst, from) {
+    if (inst && from && from._fileRow != null && inst.type === 'user') inst._fileRow = from._fileRow;
+}
+
 /** Is `xy` the shared placeholder for its node count? @param {Float64Array} xy */
 export function isLazyPlaceholderXY(xy) {
     return xy != null && _lazyPlaceholders.get(xy.length >> 1) === xy;

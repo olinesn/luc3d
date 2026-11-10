@@ -4339,11 +4339,51 @@ export class VideoController {
             if (ry > maxY) maxY = ry;
         }
 
-        var newScale = Math.min(containerW / (maxX - minX), containerH / (maxY - minY));
+        var centre = this._boxPointAt(view, (x1 + x2) / 2, (y1 + y2) / 2, fr);
+        this._fitBoxExtent(view, maxX - minX, maxY - minY, centre, containerW, containerH, fr);
+    }
+
+    /**
+     * Zoom `view` so the VIDEO-pixel rectangle (x0, y0)–(x1, y1) fills its
+     * cell, centred, as a box zoom drawn around it would (the Model Check
+     * review frames the animal it selects). Returns false when the view is not
+     * laid out yet.
+     */
+    zoomToVideoRect(view, x0, y0, x1, y1) {
+        if (!view.zoom) this.initZoom(view);
+        var canvas = view.canvas;
+        var container = canvas && canvas.closest ? canvas.closest('.video-cell') : null;
+        if (!container || !(view.videoWidth > 0) || !(view.videoHeight > 0)) return false;
+        var fr = this._zoomFrame(view);
+        // Canvas-box points (unscaled CSS px) of the rectangle's corners.
+        var kx = 2 * fr.cX / view.videoWidth, ky = 2 * fr.cY / view.videoHeight;
+        if (!(kx > 0) || !(ky > 0) || !(container.clientWidth > 0) || !(container.clientHeight > 0)) return false;
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        var corners = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
+        for (var i = 0; i < 4; i++) {
+            var ux = corners[i][0] * kx, uy = corners[i][1] * ky;
+            var rx = fr.ca * ux - fr.sa * uy, ry = fr.sa * ux + fr.ca * uy;
+            if (rx < minX) minX = rx;
+            if (rx > maxX) maxX = rx;
+            if (ry < minY) minY = ry;
+            if (ry > maxY) maxY = ry;
+        }
+        if (!(maxX - minX > 0) || !(maxY - minY > 0)) return false;
+        this._fitBoxExtent(view, maxX - minX, maxY - minY, [(x0 + x1) / 2 * kx, (y0 + y1) / 2 * ky],
+            container.clientWidth, container.clientHeight, fr);
+        return true;
+    }
+
+    /**
+     * The fit both box zooms share: the scale that fits an extent of w × h
+     * (canvas-box px, already turned into screen axes) to the container,
+     * clamped to [min, 10], with canvas-box point `centre` at its centre.
+     */
+    _fitBoxExtent(view, w, h, centre, containerW, containerH, fr) {
+        var z = view.zoom;
+        var newScale = Math.min(containerW / w, containerH / h);
         var minScale = this._getMinScale(view);
         var clampedScale = Math.max(minScale, Math.min(10, newScale));
-
-        var centre = this._boxPointAt(view, (x1 + x2) / 2, (y1 + y2) / 2, fr);
         this._panToDraw(view, centre[0], centre[1], clampedScale, clampedScale,
             containerW / 2, containerH / 2, fr);
         z.scale = clampedScale;

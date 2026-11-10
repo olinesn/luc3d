@@ -25,7 +25,7 @@ import {
 } from '../ui/app-state.js';
 
 import {
-    Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
+    Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity, tagFileRow,
 } from '../pose/pose-data.js';
 import {
     makePlaceholderCamera, hasRealCalibration, ensurePlaceholderCameras, cameraNamesFromVideos, cameraNamesInUse,
@@ -2381,6 +2381,7 @@ export async function handleLoadSessionFolderSingleSlp() {
                 // instances). See nulledNodesFromOcclusion.
                 var _nn = nulledNodesFromOcclusion(instData.points, instData.occluded, inst.type);
                 if (_nn) inst.nulledNodes = _nn;
+                tagFileRow(inst, ii);
                 fg.addInstance(camName, inst);
             }
         }

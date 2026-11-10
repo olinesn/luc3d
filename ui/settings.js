@@ -53,6 +53,9 @@ const ACTION_CATALOG = [
     { id: 'firstLastFrame', label: 'First / Last frame', category: 'Navigation', binding: 'Home / End', editable: false, dispatched: false },
     { id: 'playPause', label: 'Play / Pause', category: 'Navigation', binding: 'Space', editable: false, dispatched: false },
     { id: 'gotoFrame', label: 'Go to frame number', category: 'Navigation', binding: 'Mod+Shift+J', editable: false, dispatched: false },
+    // ui/model-check-panel.js: the Model Check tab's entries (File ▸ Load Model Check…).
+    { id: 'modelCheckNext', label: 'Next Model Check entry', category: 'Navigation', binding: 'm', editable: true, dispatched: true },
+    { id: 'modelCheckPrev', label: 'Previous Model Check entry', category: 'Navigation', binding: 'Shift+m', editable: true, dispatched: true },
 
     // --- Editing ---
     { id: 'addInstanceSmart', label: 'Add instance (smart init)', category: 'Editing', binding: 'Mod+I', editable: true, dispatched: true },
