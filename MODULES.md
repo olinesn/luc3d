@@ -7254,6 +7254,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `./node-tooltip.js` — `syncNodeTooltipFrame`, first thing in
   `drawAllOverlays`: a node tooltip about another frame names a node that has
   moved out from under the pointer.
+- `./model-check-highlight.js` — `modelCheckQuietsLabels(view, frame)`: the
+  selected Model Check entry's view and frame draw with user and reprojected
+  node names off (that draw only; the Visibility settings stay as they are).
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/save-load.js`,
@@ -9732,9 +9735,9 @@ hydration show at once.
 `refreshModelCheckPanel`, `openModelCheckPanel`, `stepModelCheck`, `goToEntry`,
 `updateModelCheckFrame(frame)` (every frame change, ui-wiring
 `updateSeekbarVisual`), `setModelCheckNavigator({goToFrame, showView,
-switchSession, zoomTo})` (ui-wiring registers `navigateToFrame`, `setSoloView` /
-`activatePanelForView`, `switchSession` and `zoomToVideoRect` on the camera's
-view, keeping this a leaf),
+switchSession, zoomTo, redraw})` (ui-wiring registers `navigateToFrame`,
+`setSoloView` / `activatePanelForView`, `switchSession`, `zoomToVideoRect` on the
+camera's view and `drawAllOverlays`, keeping this a leaf),
 `projectCameras`, `getModelCheck` (tests).
 
 **Imports from project modules.** `ui/app-state.js` (`state`),
@@ -9758,8 +9761,7 @@ Chrome, and `SHOTS=<dir>` saves every entry's view).
 
 **Purpose.** The selected Model Check entry's mark in its camera's view: a box
 around the misread animal labelled "animal N · name · worst px", a red ring on
-each misread node (named only while the overlay is not already naming user
-nodes: Visibility ▸ user label size 0), a dashed line from it to the labelled node it was read
+each misread node (named), a dashed line from it to the labelled node it was read
 on, and a thin grey box around that neighbour ("animal M · name"). Only where the
 entry's animal is matched; neighbours only on a verified row.
 
@@ -9774,16 +9776,24 @@ overlay's own limits (16,384 px a side, 2^28 px; `ui/rendering.js`). `onLocated`
 runs once per selection, the first time `locate()` finds the animal (the panel
 zooms then: a lazy frame can arrive after the seek).
 
+**Node names.** With five animals on top of each other the overlay's own node
+names buried the mark, so `modelCheckQuietsLabels(view, frame)` — true on the
+entry's view and frame while its animal is located — makes `ui/rendering.js`
+draw that view with user and reprojected node names off, for that draw only (the
+Visibility settings are never written). The panel redraws the overlays whenever
+the mark changes (`setMark`, navigator `redraw`).
+
 **Key exports.** `setModelCheckHighlight({session, camera, frame, label, locate,
-onLocated?}) | null`, `updateModelCheckHighlight(frame)`, `getModelCheckHighlight()` (tests),
+onLocated?}) | null`, `modelCheckQuietsLabels(view, frame)`, `updateModelCheckHighlight(frame)`, `getModelCheckHighlight()` (tests),
 `MODEL_CHECK_COLORS`.
 
 **Imports from project modules.** `ui/app-state.js` (`state`), `ui/overlays.js`
 (`makeVideoToCanvasTransform`).
 
-**Imported by.** `ui/model-check-panel.js`.
+**Imported by.** `ui/model-check-panel.js`, `ui/rendering.js`.
 
-**Coverage.** `tests/e2e/model-check-review.mjs` (on the entry's view only,
+**Coverage.** `tests/e2e/model-check-review.mjs` (no overlay node names on the
+entry's view and frame, kept elsewhere; on the entry's view only,
 around the animal, cleared off the frame, redrawn on return, after hydration).
 
 ---

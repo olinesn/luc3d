@@ -4,8 +4,9 @@
  * on each misread node, and, where the node was read on another labelled node, a
  * dashed line to that node (and a thin box around the neighbour it belongs to).
  *
- * A ring carries its node's name only while the overlay is not already naming
- * user nodes (Visibility ▸ user label size 0).
+ * Each ring carries its node's name; the overlay's own node names are left out
+ * on that view and frame (`modelCheckQuietsLabels`, read by ui/rendering.js), as
+ * five animals' names buried the mark.
  *
  * Drawn on its OWN canvas in the view's `.canvas-wrapper` (`.model-check-canvas`),
  * like ui/id-switch-highlight.js: the wrapper's CSS transform carries zoom / pan /
@@ -46,6 +47,20 @@ export function setModelCheckHighlight(target) {
     _lastSig = '';
     clear();
     updateModelCheckHighlight(state.currentFrame);
+}
+
+/**
+ * True while `view` draws the selected entry's frame and the animal is there to
+ * mark: ui/rendering.js then leaves out the overlay's node names (user and
+ * reprojected) on that view for that draw, so the rings name the misread parts
+ * and nothing else does. Every other view and frame keeps the Visibility
+ * settings; nothing is written to them.
+ */
+export function modelCheckQuietsLabels(view, frame) {
+    if (!_target || frame !== _target.frame || state.session !== _target.session) return false;
+    if ((view.cameraName || view.name) !== _target.camera) return false;
+    var loc = _target.locate();
+    return !!(loc && loc.target);
 }
 
 /** @returns {?{camera, frame, label}} (tests) */
@@ -126,7 +141,7 @@ function tick() {
         if (_target.onLocated) _target.onLocated(loc, v);
     }
     // What the picture depends on; nothing to do when it has not changed.
-    var sig = c ? [c.width, c.height, c.offsetWidth, v.zoom && v.zoom.scale, userNodeNamesShown()].join(',') : '';
+    var sig = c ? [c.width, c.height, c.offsetWidth, v.zoom && v.zoom.scale].join(',') : '';
     if (loc && loc.target) {
         var b = bbox(loc.target);
         sig += '|' + (b ? [b.x0, b.y0, b.x1, b.y1].join(',') : '') + '|' + loc.nodes.map(function (n) {
@@ -152,11 +167,6 @@ function label(ctx, text, x, y, fs, s, rgb) {
     ctx.fillText(text, x + 4 * s, y);
 }
 
-function userNodeNamesShown() {
-    var el = typeof document !== 'undefined' ? document.getElementById('visUserLabelSize') : null;
-    return !!el && parseInt(el.value, 10) > 0;
-}
-
 function paint(v, c, loc) {
     var ctx = c.getContext('2d');
     var toC = makeVideoToCanvasTransform(v.videoWidth, v.videoHeight, c.width, c.height);
@@ -173,9 +183,6 @@ function paint(v, c, loc) {
         ctx.setLineDash([]);
         if (text) label(ctx, text, x, Math.max(fs + 2 * s, y - 5 * s), fs, s, rgb);
     };
-    // The overlay already names a user instance's nodes unless the Visibility tab's user label size is 0
-    // (ui/rendering.js): a second name beside each ring only doubles the clutter.
-    var named = userNodeNamesShown();
     ctx.save();
     loc.others.forEach(function (o) { box(o.inst, MODEL_CHECK_COLORS.other, [6 * s, 5 * s], 1.5 * s, o.label); });
     box(loc.target, MODEL_CHECK_COLORS.animal, [], 2.5 * s, _target.label);
@@ -195,7 +202,7 @@ function paint(v, c, loc) {
         ctx.beginPath(); ctx.arc(cp.x, cp.y, r, 0, 2 * Math.PI); ctx.stroke();
         ctx.lineWidth = 2 * s; ctx.strokeStyle = 'rgb(' + MODEL_CHECK_COLORS.node + ')';
         ctx.beginPath(); ctx.arc(cp.x, cp.y, r, 0, 2 * Math.PI); ctx.stroke();
-        if (!named) label(ctx, n.name, cp.x + r + 2 * s, cp.y + fs / 2, Math.round(fs * 0.9), s, MODEL_CHECK_COLORS.node);
+        label(ctx, n.name, cp.x + r + 2 * s, cp.y + fs / 2, Math.round(fs * 0.9), s, MODEL_CHECK_COLORS.node);
     });
     ctx.restore();
     _drawn = { canvas: c };

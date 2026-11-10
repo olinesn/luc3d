@@ -20,7 +20,8 @@
  *     order only.
  *  4. The selected animal is marked on its view's own canvas, around that
  *     animal and not the other; leaving the frame clears it. The view zooms in
- *     on it and the neighbour it was read on (unless Zoom in is off).
+ *     on it and the neighbour it was read on (unless Zoom in is off), and the
+ *     overlay names no node there (the rings name the misread ones).
  *  5. Split and cause filters narrow the list and are kept in localStorage.
  *  6. Loading changes nothing in the project (not marked unsaved).
  *  7. A camera more than one project camera fits is asked about; Esc cancels
@@ -225,6 +226,26 @@ try {
     check((await mark()).length === 0, 'leaving the frame clears the mark');
     await page.keyboard.press('ArrowLeft'); await page.waitForTimeout(300);
     check((await mark()).length === 1, 'coming back redraws it');
+    // Node names: the overlay names no node on the entry's view and frame (the rings name the misread
+    // ones); the other views keep the Visibility setting (user label size 12 by default).
+    const overlayNames = () => page.evaluate(async () => {
+        const AS = window.__lucid, names = AS.state.session.skeleton.nodes.map(n => n.name || n);
+        const seen = new Map(), orig = CanvasRenderingContext2D.prototype.fillText;
+        CanvasRenderingContext2D.prototype.fillText = function (t) {
+            const v = AS.state.views.find(w => w.overlayCanvas === this.canvas);
+            if (v && names.includes(t)) seen.set(v.name, (seen.get(v.name) || 0) + 1);
+            return orig.apply(this, arguments);
+        };
+        try { (await import('/ui/rendering.js')).drawAllOverlays(AS.state.currentFrame); }
+        finally { CanvasRenderingContext2D.prototype.fillText = orig; }
+        return Object.fromEntries(seen);
+    });
+    let nm = await overlayNames();
+    check(!nm.top && Object.keys(nm).length > 0, "no overlay node names on the entry's view, the others keep theirs", nm);
+    await page.keyboard.press('ArrowRight'); await page.waitForTimeout(300);
+    nm = await overlayNames();
+    check(nm.top > 0, 'off its frame the view names its nodes again', nm);
+    await page.keyboard.press('ArrowLeft'); await page.waitForTimeout(300);
     await page.keyboard.press('Shift+M'); await page.waitForTimeout(300);
     e = await entries();
     check(e[1].cur, 'Shift+M goes back one');

@@ -935,6 +935,7 @@ export function setupMenus() {
             var v = (state.views || []).find(function (w) { return (w.cameraName || w.name) === camera; });
             if (v && videoController) videoController.zoomToVideoRect(v, x0, y0, x1, y1);
         },
+        redraw: function () { drawAllOverlays(state.currentFrame); },
     });
     refreshModelCheckPanel();
     document.getElementById('menuLoadModelCheck').addEventListener('click', function () {

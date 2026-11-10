@@ -36,6 +36,7 @@ import {
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
 } from './frame-counters.js';
 import { behaviorBoxesAt } from './behavior-coding.js';
+import { modelCheckQuietsLabels } from './model-check-highlight.js';
 
 // ============================================
 // Reproj/Error visibility
@@ -585,6 +586,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             }
         }
 
+        // The selected Model Check entry's view and frame: no node names but the mark's own.
+        var quietLabels = modelCheckQuietsLabels(view, vFrameGroup ? vFrameGroup.frameIdx : frameIdx);
+
         drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, vGroups, state.session, {
             colorByIdentity: state.colorByIdentity,
             trailLength: state.trailLength,
@@ -599,9 +603,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             showReprojected: vis.showReprojected,
             reprojNodeColor: vis.reprojNodeColor,
             showErrors: vis.showErrors,
-            userOpts: vis.userOpts,
+            userOpts: quietLabels ? Object.assign({}, vis.userOpts, { showLabels: false }) : vis.userOpts,
             predictedOpts: vis.predictedOpts,
-            reprojOpts: vis.reprojOpts,
+            reprojOpts: quietLabels ? Object.assign({}, vis.reprojOpts, { showLabels: false }) : vis.reprojOpts,
             videoWidth: view.videoWidth,
             videoHeight: view.videoHeight,
             canvasWidth: view.overlayCanvas.width,

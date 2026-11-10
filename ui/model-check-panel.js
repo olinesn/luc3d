@@ -36,8 +36,14 @@ var FILTER_KEY = 'modelCheckFilter';
 var _check = null;   // {fileName, loadedAt, rows, skipped, camMatch: Map, byFrame: Map, current, sessions}
 var _nav = {};
 
-/** ui-wiring registers `{goToFrame(frame), showView(camera), switchSession(idx) -> Promise, zoomTo(camera, x0, y0, x1, y1)}`. */
+/** ui-wiring registers `{goToFrame(frame), showView(camera), switchSession(idx) -> Promise, zoomTo(camera, x0, y0, x1, y1), redraw()}`. */
 export function setModelCheckNavigator(nav) { _nav = nav || {}; }
+
+/** Set the mark, then redraw the overlays: its view and frame leave out their node names (`modelCheckQuietsLabels`). */
+function setMark(target) {
+    setModelCheckHighlight(target);
+    if (_nav.redraw) _nav.redraw();
+}
 
 /** @returns the loaded check (tests), or null. */
 export function getModelCheck() { return _check; }
@@ -309,7 +315,7 @@ function askCameras(ambiguous, camMatch) {
 /** Forget the loaded check. */
 export function closeModelCheck() {
     _check = null;
-    setModelCheckHighlight(null);
+    setMark(null);
     refreshModelCheckPanel();
 }
 
@@ -467,7 +473,7 @@ export async function goToEntry(row) {
     _check.current = rowKey(row);
     var r = resolveRow(row);
     if (!r.cam) {
-        setModelCheckHighlight(null);
+        setMark(null);
         refreshModelCheckPanel();
         setStatus('Model check: ' + r.reason, 'warning');
         return;
@@ -478,7 +484,7 @@ export async function goToEntry(row) {
     }
     if (_nav.showView) _nav.showView(r.cam.camera);
     if (_nav.goToFrame) _nav.goToFrame(row.frame);
-    setModelCheckHighlight({
+    setMark({
         session: r.cam.session, camera: r.cam.camera, frame: row.frame,
         label: 'animal ' + row.animal + (r.name ? ' · ' + r.name : '') + ' · ' + (isFinite(row.maxPx) ? formatPx(row.maxPx) : 'missed'),
         locate: function () { return locate(row); },
