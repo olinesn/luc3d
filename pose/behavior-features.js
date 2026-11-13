@@ -41,6 +41,12 @@
 //   <node> speed, turning speed                 ±SPEED_HALF_SECONDS
 //   elongation, missing nodes
 //   nearest animal distance / min node distance / head–head distance
+//   <channel>                                   a value measured outside the poses,
+//                                               per animal and frame (`spec.channels`
+//                                               names them; each chunk carries
+//                                               `chunk.channels[a]`, frames × K;
+//                                               NaN without them) — e.g. tail
+//                                               motion from video, pose/tail-motion.js
 // Per ordered actor → target pair (the relational features):
 //   centroid distance, head–head distance, head–tail base distance (actor's
 //   head to target's tail base), min node distance, target bearing (|angle| of
@@ -225,7 +231,13 @@ export function featureCatalog(spec) {
             }
         }
     });
-    animalBases = animalBases.concat(nodeBases);
+    // Channels measured outside the poses (spec.channels, e.g. pose/tail-motion.js), last, so a
+    // spec without them gives exactly the catalog it always did.
+    var channelBases = [];
+    (spec.channels || []).forEach(function (c, k) {
+        channelBases.push(addBase(c.name, 'animal', 'channel', c.unit || '', { channel: k }));
+    });
+    animalBases = animalBases.concat(nodeBases, channelBases);
 
     function addFeature(list, base, stat, window, band, unit) {
         var name = base.name;
@@ -252,9 +264,9 @@ export function featureCatalog(spec) {
 
 var _catalogCache = { key: null, value: null };
 
-/** `featureCatalog`, cached for the last spec seen (same node list, roles and mode). */
+/** `featureCatalog`, cached for the last spec seen (same node list, roles, mode and channels). */
 export function catalogFor(spec) {
-    var key = JSON.stringify([spec.mode, spec.nodeNames, spec.edges, spec.roles, spec.used, spec.paws]);
+    var key = JSON.stringify([spec.mode, spec.nodeNames, spec.edges, spec.roles, spec.used, spec.paws, spec.channels || null]);
     if (_catalogCache.key !== key) _catalogCache = { key: key, value: featureCatalog(spec) };
     return _catalogCache.value;
 }
@@ -561,6 +573,12 @@ function animalBase(spec, base, ctx, all, nearest) {
     case 'missing':
         for (t = 0; t < L; t++) out[t] = used.length - ctx.present[t];
         break;
+    case 'channel': {
+        // a value measured elsewhere (spec.channels; chunk.channels[a], L × K): NaN without one
+        var K = (spec.channels || []).length, X = ctx.ch;
+        for (t = 0; t < L; t++) out[t] = X ? X[t * K + base.channel] : NaN;
+        break;
+    }
     case 'nearCent': case 'nearMin': case 'nearHH':
         for (t = 0; t < L; t++) {
             var j = nearest[t];
@@ -705,7 +723,10 @@ export function computeFeatureChunk(spec, chunk, request, memo) {
     var only = Array.isArray(request.only) ? request.only : null;
     var contexts = memo ? (memo.contexts || (memo.contexts = new Array(nA))) : new Array(nA);
     var ctxOf = function (a) {
-        if (!contexts[a]) contexts[a] = animalContext(spec, chunk.data[a], L, (spec.bodyLength || [])[a]);
+        if (!contexts[a]) {
+            contexts[a] = animalContext(spec, chunk.data[a], L, (spec.bodyLength || [])[a]);
+            contexts[a].ch = chunk.channels ? chunk.channels[a] || null : null;
+        }
         return contexts[a];
     };
     var needsAll = pairNames.length > 0 || animalNames.some(function (nm) { return /^near/.test(cat.bases.get(cat.byName.get(nm).base).kind); });
@@ -797,6 +818,16 @@ export function sliceChunkData(data, chunk, framesStride, skip) {
         }
         return out;
     });
+}
+
+/**
+ * Slice per-animal channel values (`channels[a]`: T × K, the frames of
+ * `spec.channels`) for one chunk, as `sliceChunkData` slices poses (frames
+ * `skip` marks blanked). Null without channels.
+ */
+export function sliceChunkChannels(channels, chunk, K, skip) {
+    if (!channels || !(K > 0)) return null;
+    return sliceChunkData(channels, chunk, K, skip);
 }
 
 /**

@@ -65,6 +65,7 @@ import {
 import { showBehaviorTrainModal } from './behavior-train-modal.js';
 import { onModelsChange, behaviorModels } from '../pose/behavior-classifier.js';
 import { showBehaviorRulesModal } from './behavior-rules-modal.js';
+import { showTailMotionModal } from './tail-motion.js';
 import { behaviorConfirm } from './behavior-confirm.js';
 import { renderStatesSection, setupBehaviorStates } from './behavior-states.js';
 import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.js';
@@ -850,6 +851,7 @@ export function setupBehaviorUi(deps) {
     on('menuBehaviorDetect', function () { detectAllFrames(); });
     on('menuBehaviorDetectAll', function () { detectAllSessions(); });
     on('menuBehaviorRules', showBehaviorRulesModal);
+    on('menuBehaviorTailMotion', showTailMotionModal);
     on('menuBehaviorTrain', showBehaviorTrainModal);
     on('menuBehaviorExportModels', function () { exportClassifiers(); });
     on('menuBehaviorImportModels', showImportClassifiers);

@@ -107,7 +107,8 @@ export function runJob(job, shared) {
     if (job.kind === 'trees') return trainTrees(shared, job.trees);
     if (job.kind === 'clusterTrees') return trainClusterTrees(shared, job.trees);
     if (job.kind === 'knn') return knnRows(shared, job.range, job.k);
-    const chunk = { start: job.chunk.start, end: job.chunk.end, padStart: job.chunk.padStart, padEnd: job.chunk.padEnd, data: job.data };
+    const chunk = { start: job.chunk.start, end: job.chunk.end, padStart: job.chunk.padStart, padEnd: job.chunk.padEnd, data: job.data,
+                    channels: job.channels || null };
     if (job.kind === 'scores') return scoreDetectorsChunk(job.spec, chunk, job.plan, job.extra);
     if (job.kind === 'rows') return extractTrainingRows(job.spec, chunk, job.request);
     if (job.kind === 'forest') return scoreForestsChunk(job.spec, chunk, job.plan, shared);
@@ -165,10 +166,11 @@ export async function runBehaviorChunks(count, makeJob, onDone, opts) {
                     slot.w.postMessage({ type: 'shared', key: shared.key, value: shared.value });
                     slot.sharedKey = shared.key;
                 }
-                const { data, ...rest } = job;
+                const { data, channels, ...rest } = job;
                 const list = data || [];
-                slot.w.postMessage(Object.assign({ type: 'job', id: i, sharedKey: shared ? shared.key : null }, rest, { data: list }),
-                    list.map((a) => a.buffer));
+                const chans = channels || null;
+                slot.w.postMessage(Object.assign({ type: 'job', id: i, sharedKey: shared ? shared.key : null }, rest, { data: list, channels: chans }),
+                    list.map((a) => a.buffer).concat(chans ? chans.map((a) => a.buffer) : []));
             };
             const settle = (slot, i, result) => {
                 jobs.delete(i);

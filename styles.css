@@ -8991,6 +8991,18 @@ div.track-summary-steps { padding-left: 0; }
   font-size: 12px;
 }
 
+/* Behavior ▸ Tail Motion from Video… (ui/tail-motion.js) */
+.tail-motion-modal .tail-motion-camera {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0;
+}
+.tail-motion-modal .tail-motion-camera select {
+    flex: 1;
+    min-width: 0;
+}
+
 /* Behavior ▸ Import Labels… / Export Labels… (one scroller: the modal itself) */
 .multi-frame-modal.behavior-io-modal {
   max-width: 600px;

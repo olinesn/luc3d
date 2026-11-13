@@ -39,7 +39,7 @@ import { trainTree, treeScratch, treeSeed, scoreRows, scoreBinnedRows, presentFr
 export var BIN_SECONDS = 0.1;
 
 /** Base features that say how well an animal was tracked rather than what it did. */
-var NOT_BEHAVIOR = ['missing'];
+var NOT_BEHAVIOR = ['missing', 'channel'];   // channel: measured outside the poses (tail motion), not clustered on
 
 /** A bin's length in frames at this frame rate: at least one. */
 export function binFrames(fps) {

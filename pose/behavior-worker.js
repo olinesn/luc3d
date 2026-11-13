@@ -16,7 +16,8 @@
  *                                    next one (key null drops it)
  *   { type: 'job', id, kind: 'scores'|'features'|'rows'|'forest'|'trees'|'binrows'|'knn'|'clusterTrees'|'clusterLabels',
  *     sharedKey, spec, chunk: {start, end, padStart, padEnd}, data: Float32Array[] (one per animal,
- *     [padStart, padEnd)), plan?, extra?, request?, trees?, range?, k? }
+ *     [padStart, padEnd)), channels?: Float32Array[] (per animal, the same frames × K values of
+ *     `spec.channels`), plan?, extra?, request?, trees?, range?, k? }
  * Messages out:
  *   { type: 'done', id, result }   (every typed array transferred)
  *   { type: 'error', id, message }
@@ -49,7 +50,8 @@ self.onmessage = function (e) {
         else if (m.kind === 'clusterTrees') result = trainClusterTrees(shared.value, m.trees);
         else if (m.kind === 'knn') result = knnRows(shared.value, m.range, m.k);
         else {
-            var chunk = { start: m.chunk.start, end: m.chunk.end, padStart: m.chunk.padStart, padEnd: m.chunk.padEnd, data: m.data };
+            var chunk = { start: m.chunk.start, end: m.chunk.end, padStart: m.chunk.padStart, padEnd: m.chunk.padEnd, data: m.data,
+                          channels: m.channels || null };
             if (m.kind === 'scores') result = scoreDetectorsChunk(m.spec, chunk, m.plan, m.extra);
             else if (m.kind === 'rows') result = extractTrainingRows(m.spec, chunk, m.request);
             else if (m.kind === 'forest') result = scoreForestsChunk(m.spec, chunk, m.plan, shared.value);

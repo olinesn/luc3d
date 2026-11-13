@@ -70,7 +70,8 @@ import {
     FOREST_VERSION, DEFAULT_FOREST_PARAMS, binEdges, binColumn, finalizeForest, scoreBinnedRows, forestHash, mix32,
     classifierFeatureNames, featureRefs, missingFeatures, scoreForestsChunk, presentFrames,
 } from './behavior-forest.js';
-import { planChunks, featurePadFrames, sliceChunkData, FEATURE_SPEC_VERSION } from './behavior-features.js';
+import { planChunks, featurePadFrames, sliceChunkData, sliceChunkChannels, FEATURE_SPEC_VERSION } from './behavior-features.js';
+import { isTailMotionFeature } from './tail-motion.js';
 import { scoresToBouts, secondsToFrames, framePrf, prCurve, boutPrf, exclusiveScores } from './behavior-postprocess.js';
 import { runBehaviorChunks, runJob } from './behavior-pool.js';
 import { behaviorById, exclusivePeers, behaviorPost } from './behavior-ethogram.js';
@@ -424,7 +425,14 @@ function rowKey(frame, actor, target) {
 function specPrint(ctx, names) {
     var sp = ctx.spec;
     return hex(fnv(JSON.stringify([FEATURE_SPEC_VERSION, POSE_CHECK_VERSION, FOREST_VERSION, sp.mode, sp.nodeNames, sp.edges, sp.roles,
-        sp.used, sp.paws, sp.fps, sp.floor, sp.bodyLength, ctx.input.animals, ctx.input.numFrames > 0 ? 1 : 0]) + '|' + names.join(SEP)));
+        sp.used, sp.paws, sp.fps, sp.floor, sp.bodyLength, ctx.input.animals, ctx.input.numFrames > 0 ? 1 : 0]
+        .concat(sp.channels ? [sp.channels, ctx.channelsKey || null] : [])) + '|' + names.join(SEP)));
+}
+
+/** A chunk's channel values (`ctx.channels`, `ctx.spec.channels`), as the jobs take them; null without. */
+function channelsFor(ctx, chunk) {
+    var K = ctx.spec && ctx.spec.channels ? ctx.spec.channels.length : 0;
+    return sliceChunkChannels(ctx.channels, chunk, K, ctx.broken ? ctx.broken.masks : null);
 }
 
 /** A print of one chunk's poses (every animal, the padded range) and the frames skipped there. */
@@ -672,7 +680,7 @@ async function sourceRows(src, ctx, setKey, names, refs, keys, opts) {
             arr[3 * j] = +p[0]; arr[3 * j + 1] = animalIndex.get(p[1]); arr[3 * j + 2] = p[2] ? animalIndex.get(p[2]) : -1;
         });
         return { kind: 'rows', spec: ctx.spec, chunk: td.chunk, data: sliceChunkData(input.data, td.chunk, N * D, ctx.broken ? ctx.broken.masks : null),
-                 request: { sets: [{ refs: refs, rows: arr }] } };
+                 channels: channelsFor(ctx, td.chunk), request: { sets: [{ refs: refs, rows: arr }] } };
     }, function (i, res) {
         var td = todo[i];
         if (!res) return;
@@ -1123,7 +1131,10 @@ export function modelProblems(model, ctx) {
     var out = [];
     if (!model || !ctx) return ['no model'];
     var miss = missingFeatures(ctx.catalog, model.features, model.social);
-    if (miss.length) out.push(miss.length.toLocaleString('en-US') + ' of its features are not measured here (' + miss[0] + (miss.length > 1 ? ', …' : '') + ')');
+    if (miss.length) {
+        out.push(miss.length.toLocaleString('en-US') + ' of its features are not measured here (' + miss[0] + (miss.length > 1 ? ', …' : '') + ')' +
+            (miss.some(isTailMotionFeature) ? ' — it uses tail motion: Behavior ▸ Tail Motion from Video… first' : ''));
+    }
     if (model.social && ctx.input.animals.length < 2) out.push('social, but only one animal');
     return out;
 }
@@ -1154,7 +1165,7 @@ export async function predictModels(ctx, models, opts) {
     var done = 0;
     var res = await runBehaviorChunks(chunks.length, function (i) {
         return { kind: 'forest', spec: ctx.spec, chunk: chunks[i], data: sliceChunkData(input.data, chunks[i], N * D, ctx.broken ? ctx.broken.masks : null),
-                 plan: { models: plan } };
+                 channels: channelsFor(ctx, chunks[i]), plan: { models: plan } };
     }, function (i, out) {
         var ch = chunks[i];
         if (!out) return;
@@ -1199,7 +1210,8 @@ export function predictModelsAtFrame(ctx, models, frame) {
     var pad = featurePadFrames(ctx.spec);
     var chunk = { start: frame, end: frame + 1, padStart: Math.max(0, frame - pad), padEnd: Math.min(input.numFrames, frame + 1 + pad) };
     var out = runJob({ kind: 'forest', spec: ctx.spec, chunk: chunk,
-        data: sliceChunkData(input.data, chunk, input.nodeNames.length * input.dim, ctx.broken ? ctx.broken.masks : null), plan: { models: plan } }, forests);
+        data: sliceChunkData(input.data, chunk, input.nodeNames.length * input.dim, ctx.broken ? ctx.broken.masks : null),
+        channels: channelsFor(ctx, chunk), plan: { models: plan } }, forests);
     plan.forEach(function (p) {
         Object.keys(out.scores[p.behaviorId] || {}).forEach(function (k) {
             var q = k.split('>');

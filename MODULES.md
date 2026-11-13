@@ -2781,19 +2781,28 @@ limits the animal features to some animals, and a `memo` object reused across
 calls on one chunk builds each animal's context once — the classifier kernels
 (`pose/behavior-forest.js`) compute one animal at a time, so only one
 animal's ~1,800 columns exist at once.
+Channels: `spec.channels` (`[{name, unit}]`) names values measured outside the
+poses, per animal and frame (tail motion from video, `pose/tail-motion.js`);
+each becomes an animal base feature (kind `channel`) with the usual window
+statistics, appended AFTER every other base so a spec without channels gives
+exactly the old catalog (names and order: trained models are untouched).
+A chunk carries them as `chunk.channels[a]` (frames × K over the padded range,
+sliced with `sliceChunkChannels`, broken frames blanked like the poses); a
+chunk without them reads NaN. `catalogFor`'s key includes the channels.
 
 **Exports.** `FEATURE_SPEC_VERSION`, `WINDOW_SECONDS`, `WINDOW_STATS`, `BANDS`,
 `SPEED_HALF_SECONDS`, `BAND_HALF_SECONDS`, `VIEW_HALF_ANGLE`, `STAT_SEP`,
 `TARGET_PREFIX`, `halfFrames`, `windowLabel`, `bandLabel`, `featurePadFrames`,
 `featureCatalog`, `catalogFor` (cached), `windowStat`, `bandPower`,
-`computeFeatureChunk`, `planChunks`, `sliceChunkData`, `resolveFeatureName`,
+`computeFeatureChunk`, `planChunks`, `sliceChunkData`, `sliceChunkChannels`, `resolveFeatureName`,
 `featureNamesFor`.
 
 **Imports.** None. **Imported by** `pose/behavior-rules.js`,
 `pose/behavior-pool.js`, `pose/behavior-worker.js`, `ui/behavior-detect.js`,
 `ui/behavior-rules-modal.js`, `pose/behavior-forest.js`, `pose/behavior-classifier.js`,
-`pose/behavior-predictions.js` (`FEATURE_SPEC_VERSION`), `import-export/behavior-model-io.js`.
-**Tests.** `tests/test-behavior-features.mjs`
+`pose/behavior-predictions.js` (`FEATURE_SPEC_VERSION`), `import-export/behavior-model-io.js`,
+`pose/tail-motion.js` (`catalogFor`).
+**Tests.** `tests/test-tail-motion.mjs` §6 (channels), `tests/test-behavior-features.mjs`
 (catalog, window stats vs brute force, band power, chunked = one pass,
 invariance under rotation + translation with an explicit and a fitted floor,
 NaN masking, meaning, skipped frames §9).
@@ -3052,7 +3061,8 @@ jobs. `trainClusterTrees`: a cluster's trees against everything else (`trainTree
 seeded from (seed, cluster, tree)). `heldOutAgreement`: the share of held-out rows whose
 best forest is their own cluster's. `randomView`: rows on two random orthonormal directions,
 the second layout's start. Pure, and imports only the features and forests, so the behavior
-worker runs exactly this.
+worker runs exactly this. `discoveryFeatureNames` leaves out channels (tail motion: not
+clustered on, and discovery's jobs carry no channel values).
 
 **Exports.** `BIN_SECONDS`, `binFrames`, `binCenters(T, w)`, `discoveryFeatureNames(catalog)`,
 `speedFeatures(catalog, names)`, `binRowsChunk(spec, chunk, {names, w, rows})`,
@@ -3108,7 +3118,8 @@ DOM-free.
 ### pose/behavior-pool.js
 
 **Purpose.** Run behavior chunk jobs (`{kind: 'scores'|'features'|'rows'|'forest'|'trees'|'binrows'|'knn'|'clusterTrees'|'clusterLabels',
-spec, chunk, data, plan?, extra?, request?, trees?, range?, k?}`) on a pool of module workers
+spec, chunk, data, channels?, plan?, extra?, request?, trees?, range?, k?}`; `channels`: the chunk's
+`spec.channels` values per animal, transferred with `data` and set on the chunk) on a pool of module workers
 (`pose/behavior-worker.js`) — the `pose/triangulation-pool.js` pattern:
 `min(hardwareConcurrency − 1, 8)` workers, kept between runs and terminated
 after 30 s idle, one run owns the pool at a time (a concurrent one goes
@@ -3150,7 +3161,7 @@ training rows (`extractTrainingRows`) or classifier scores
 array of the result transferred. Same pure code as the main thread; no bare
 imports in its graph. In `{type: 'shared', key, value}` (kept until the next;
 key null drops it) and `{type: 'job', id, kind, sharedKey, spec, chunk, data,
-plan?, extra?, request?, trees?}`; out `{type: 'done', id, result}` or
+channels?, plan?, extra?, request?, trees?}`; out `{type: 'done', id, result}` or
 `{type: 'error', id, message}`.
 
 **Imports.** `./behavior-features.js`, `./behavior-rules.js`, `./behavior-forest.js`.
@@ -3258,6 +3269,11 @@ within 0.15 of the threshold, joined across 3-frame gaps, the most total
 uncertainty first) and `disagreementSegments` ('missed': labelled present
 outside every predicted bout; 'false': labelled "not" inside one; longest
 first). `topFeatures`, `trainingRowsComputed` (rows computed, not cached).
+Channels (`ctx.channels`, tail motion): the 'rows' and 'forest' jobs carry each chunk's
+slice (`channelsFor`); the row cache's spec print includes `spec.channels` and
+`ctx.channelsKey` (what was measured), so rows learned with other or no tail motion are
+never reused. `modelProblems` adds where to get tail motion when the missing features
+are tail motion's.
 
 **Exports.** `GATE_FRAMES`, `GATE_BOUTS`, `MAX_TRAINING_ROWS`, `ROW_BUDGET_CELLS`,
 `TRAIN_CHUNK_FRAMES`, `PREDICT_CHUNK_FRAMES`, `MAX_FOLDS`, `onModelsChange`,
@@ -3272,7 +3288,8 @@ first). `topFeatures`, `trainingRowsComputed` (rows computed, not cached).
 
 **Imports.** `./behavior-forest.js`, `./behavior-features.js`,
 `./behavior-postprocess.js`, `./behavior-pool.js`, `./behavior-ethogram.js`,
-`./behavior-labels.js`, `./behavior-predictions.js`, `./behavior-tensor.js`.
+`./behavior-labels.js`, `./behavior-predictions.js`, `./behavior-tensor.js`,
+`./tail-motion.js` (`isTailMotionFeature`).
 **Imported by** `ui/behavior-detect.js`, `ui/behavior-train.js`,
 `ui/behavior-train-modal.js`, `ui/behavior-panel.js`,
 `import-export/behavior-metadata.js` (reset, `noteLabelsChanged`),
@@ -3282,6 +3299,55 @@ F1 > 0.9, same hash on retraining, by session with two sessions, the row cache,
 the cap, a mutual social behavior, exclusive groups, staleness, model files,
 active learning), `tests/e2e/behavior-classifier.mjs`; timing
 `tests/e2e/_bench-behavior-classifier.mjs`.
+
+### pose/tail-motion.js
+
+**Purpose.** Pixel motion along each animal's tail in one camera's video — the
+math (DOM-free) and the in-memory store; `ui/tail-motion.js` decodes the video.
+Why: on the HardFight recordings the 3D tail points place the tail well enough,
+but their own shake finds tail rattle poorly (trained F1 0.13 / 0.18 / 0.36);
+pixels in a band around that tail did better (0.44-0.51 / 0.04-0.24 /
+0.49-0.57, side-session study 2026-11-13, whose Python this follows). Per
+animal and frame: a crop `TAIL_MOTION_CROP` (256) px wide, centred on the tail
+base and turned so the body axis (tail base → neck, else head) points up
+(OpenCV's getRotationMatrix2D convention, `cropAffine`), `TAIL_MOTION_SIDE`
+(2.4) × the larger of the median head–tail base and base–tip lengths across
+(`cropSide`); centre and angle gap-filled, unwrapped and Gaussian-smoothed
+(sigma 2 frames, `cropTrack`, as scipy's gaussian_filter1d). Bands: within
+`TAIL_BAND`/2 crop px of the tail polyline (`tailMotionNodes`: the chain from the
+base through the tail nodes past it, by the edges, else by distance from the
+base) on this frame or the two before, and within `BODY_BAND`/2 of the body's
+edges, minus pixels within `OTHER_BAND`/2 of another animal's skeleton on this
+frame (`capsulePixels`: OpenCV's thick line). Raw per animal-frame
+(`TAIL_MOTION_RAW` = 4): mean |I_t − I_t−1| and |I_t − 2 I_t−1 + I_t−2| over each
+band, each frame's crop sampled bilinearly from its own luma (0 outside,
+`sampleLuma`); NaN under `MIN_BAND_PIXELS` or before frame 2.
+`createTailMotionPass({P2s, T, N, nodes, side})` takes frames in order
+(`push(t, {Y, W, H, stride, off})`; keeps the last three; a gap starts over).
+Channels for the classifiers (`TAIL_MOTION_CHANNELS`, 5): log1p of the four and
+tail minus body flicker (`tailMotionChannelValues`). Store:
+`setTailMotion(session, rec)` / `tailMotionOf` / `clearTailMotion` (a WeakMap,
+memory only, never the .slp), `tailMotionGeneration()` (moves on every set or
+clear). `withTailMotionChannels(ctx)`: the behavior context with
+`spec.channels`, per-animal `channels` by identity NAME (NaN for an animal
+without values), `channelsKey` and the catalog — unchanged without a record for
+this many frames. `isTailMotionFeature(name)`.
+
+**Exports.** `TAIL_MOTION_VERSION`, `TAIL_MOTION_CROP`, `TAIL_MOTION_SIDE`,
+`TAIL_MOTION_SIGMA`, `TAIL_BAND`, `BODY_BAND`, `OTHER_BAND`, `MIN_BAND_PIXELS`,
+`TAIL_MOTION_RAW`, `TAIL_MOTION_CHANNELS`, `tailMotionNodes`, `fillGaps`,
+`unwrapAngles`, `gaussianSmooth`, `cropTrack`, `medianOf`, `cropSide`,
+`cropAffine`, `capsulePixels`, `sampleLuma`, `createTailMotionPass`,
+`tailMotionChannelValues`, `isTailMotionFeature`, `setTailMotion`,
+`tailMotionOf`, `clearTailMotion`, `tailMotionGeneration`,
+`withTailMotionChannels`.
+
+**Imports.** `./behavior-features.js` (`catalogFor`). **Imported by**
+`ui/tail-motion.js`, `ui/behavior-detect.js`, `pose/behavior-classifier.js`.
+**Tests.** `tests/test-tail-motion.mjs` (nodes, crop track, bands and sampling,
+a drawn shaking tail, another animal left out, channels, the feature engine's
+channels, store and contexts, a classifier that learns what only the channels
+show), `tests/e2e/behavior-tail-motion.mjs`.
 
 ### pose/triangulation.js
 
@@ -12730,7 +12796,7 @@ banner also names classifier runs whose training labels changed ("train again")
 or whose model was replaced. Skips rendering while hidden.
 `setupBehaviorUi` (from `setupMenus`) binds the menu (including Import Labels… /
 Export Labels…, `ui/behavior-io-modal.js`, Detect Behaviors, Detect in All
-Sessions, Detection Settings…, Train Classifiers…, Export / Import
+Sessions, Detection Settings…, Tail Motion from Video… (`ui/tail-motion.js`), Train Classifiers…, Export / Import
 Classifiers…, Export for keypoint-MoSeq… / Import keypoint-MoSeq Results…,
 `ui/behavior-kpms-modal.js`), the toolbar menu's Label Behaviors mode item, tab buttons and
 catalog handler, wires detection (`setupBehaviorDetection`) and states
@@ -12750,7 +12816,7 @@ states of a session just left (so `switchSession` needs no hook).
 `./info-tip.js`, `./plane-definition.js` (`ICON_INFO`),
 `./panel-visibility.js`, `./section-state.js`, `./settings.js`,
 `./rendering.js`, `./behavior-train.js`, `./behavior-train-modal.js`, `./behavior-states.js`,
-`./behavior-kpms-modal.js`, `./behavior-discovery-modal.js`, `../pose/behavior-ethogram.js`,
+`./behavior-kpms-modal.js`, `./behavior-discovery-modal.js`, `./tail-motion.js` (`showTailMotionModal`), `../pose/behavior-ethogram.js`,
 `../pose/behavior-labels.js`, `../pose/behavior-predictions.js`, `../pose/behavior-classifier.js`,
 `../import-export/save-load.js`. **Imported by** `ui/ui-wiring.js`,
 `ui/info-panel.js`. **Tests.** `tests/e2e/behavior-labelling.mjs` §4, `tests/e2e/behavior-rules.mjs` §2–4,
@@ -12923,9 +12989,12 @@ default when one is set —, else `fitFloor` with the cameras' centers; a choice
 that cannot be honoured falls back to the fit and says so), builds the
 feature spec and marks the broken-tracking frames to skip (`ctx.broken` from
 `brokenPoseFrames`, recomputed by `refreshBehaviorContext`; every slice of
-poses here passes its masks); `cachedBehaviorContext` keeps the last one a
+poses here passes its masks); both attach the session's tail motion when it has
+one for this many frames (`withTailMotionChannels`, `pose/tail-motion.js`: `spec.channels`,
+`ctx.channels`, `ctx.channelsKey`), and every job here carries its chunk's channel values
+(`channelsOf`); `cachedBehaviorContext` keeps the last one a
 minute, dropped by any edit (markDirty), another session or other settings /
-fps / floor.
+fps / floor, or tail motion set or cleared (`tailMotionGeneration`).
 `detectOnContext(session, ctx, ui)` scores every behavior on every frame: with
 its CLASSIFIER when it has one that can run on this context
 (`pose/behavior-classifier.js` `predictModels`; bouts by `deriveBouts` — its
@@ -12967,12 +13036,13 @@ every template: 1.9 s; This frame 8 ms on the cached context.
 call-time), `../pose/behavior-ethogram.js`, `../pose/behavior-tensor.js`,
 `../pose/behavior-features.js`, `../pose/behavior-rules.js`,
 `../pose/behavior-pool.js`, `../pose/behavior-predictions.js`, `../pose/behavior-classifier.js`,
+`../pose/tail-motion.js` (`withTailMotionChannels`, `tailMotionGeneration`),
 `../import-export/save-load.js` (`onMarkDirty`). No top-level side effects
 (registration happens in `setupBehaviorDetection`), so import cycles through
 save-load are safe. **Imported by** `ui/behavior-panel.js`, `ui/behavior-coding.js`, `ui/behavior-mode.js`, `ui/behavior-io-modal.js`,
 `ui/behavior-timeline.js`, `ui/behavior-rules-modal.js`, `ui/run-buttons.js`,
-`ui/ui-wiring.js`, `ui/behavior-train.js`, `ui/behavior-train-modal.js`. **Tests.**
-`tests/e2e/behavior-rules.mjs`, `tests/e2e/behavior-classifier.mjs` §2; timing
+`ui/ui-wiring.js`, `ui/behavior-train.js`, `ui/behavior-train-modal.js`, `ui/tail-motion.js`. **Tests.**
+`tests/e2e/behavior-rules.mjs`, `tests/e2e/behavior-classifier.mjs` §2, `tests/e2e/behavior-tail-motion.mjs` §2; timing
 `tests/e2e/_bench-behavior-detect.mjs`, `tests/e2e/_bench-behavior-classifier.mjs`.
 
 ### ui/behavior-train.js
@@ -13196,6 +13266,42 @@ closes both.
 `ui/behavior-panel.js`, `ui/behavior-states.js`. **Tests.**
 `tests/e2e/behavior-kpms-roundtrip.mjs` §1–2; real data
 `tests/e2e/_real-kpms-roundtrip.mjs`.
+
+### ui/tail-motion.js
+
+**Purpose.** Behavior ▸ Tail Motion from Video…: measure how fast each
+animal's tail moves in one camera's video (`pose/tail-motion.js`) so the
+classifiers get five more channels per animal. `tailMotionCameras(session,
+ctx)`: the views with a decoder, their calibration camera and tilt from the
+floor's normal (degrees), and whether the decoder can stream (mediabunny);
+`suggestTailMotionCamera` (the streamable one looking most straight down).
+`posesInCamera(input, camera)`: identified 3D projected through the camera
+(`reprojectPointCamera`, lens distortion included; behind the camera dropped),
+or that camera's own 2D (2D poses from another camera are refused, saying which).
+`frameLuma(vf, slot)`: a VideoFrame's Y plane (planar YUV / NV12 as they are; RGB
+converted, BT.601; else drawn), into a reused buffer. `computeTailMotion(session,
+cameraName, {ctx?, backend?, onProgress?, isCancelled?})` streams every frame once in
+order (`sink.samplesAtTimestamps` over all of `_frameTimes`, three luma buffers in
+rotation), yields to paint every 40 ms, and keeps the record (`setTailMotion`:
+camera, animals, raw, crop size, frames read, seconds, tail chain); `{cancelled}`
+keeps nothing. `showTailMotionModal()`: camera select (tilt shown), animals,
+frames, how the poses are placed, the kept measurement (Forget / Measure again);
+Esc closes; refuses with a status when no video is loaded or no animal has an
+identity. `runTailMotion` shows the progress card (Esc cancels) and a status line.
+The record is in memory only: compute it again after reopening.
+
+**Exports.** `TAIL_MOTION_INFO`, `formatDuration`, `tailMotionCameras`,
+`suggestTailMotionCamera`, `posesInCamera`, `frameLuma`, `computeTailMotion`,
+`showTailMotionModal`, `runTailMotion`.
+
+**Imports.** `./app-state.js`, `./behavior-detect.js` (`cachedBehaviorContext`),
+`./loading-overlay.js`, `./info-tip.js`, `./plane-definition.js` (`ICON_INFO`),
+`../import-export/save-load.js` (`setStatus`), `../pose/triangulation-core.js`
+(`reprojectPointCamera`, `cameraDepth`), `../pose/tail-motion.js`. **Imported by**
+`ui/behavior-panel.js`. **Tests.** `tests/e2e/behavior-tail-motion.mjs` (a real
+H.264 video with B-frames: every frame read, a shaking tail measured and a still
+one not, the context's channels on workers = inline, a classifier with and
+without tail motion, the menu and the dialog).
 
 ## loading/
 

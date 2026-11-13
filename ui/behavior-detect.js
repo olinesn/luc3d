@@ -43,7 +43,8 @@ import { behaviors, behaviorById, featureSettings } from '../pose/behavior-ethog
 import {
     collectBehaviorInput, resolveBody, fitFloor, floorFromPlane, floorFromOrigin, featureSpec, brokenPoseFrames,
 } from '../pose/behavior-tensor.js';
-import { featurePadFrames, planChunks, sliceChunkData, catalogFor, TARGET_PREFIX } from '../pose/behavior-features.js';
+import { featurePadFrames, planChunks, sliceChunkData, sliceChunkChannels, catalogFor, TARGET_PREFIX } from '../pose/behavior-features.js';
+import { withTailMotionChannels, tailMotionGeneration } from '../pose/tail-motion.js';
 import { planDetectors, detectorBouts, orderedPairs, combineMutual } from '../pose/behavior-rules.js';
 import { runBehaviorChunks, runJob } from '../pose/behavior-pool.js';
 import {
@@ -237,13 +238,19 @@ export function buildBehaviorContext(session, opts) {
     var floorInfo = resolveFloor(input, body, settings, session);
     var fps = sessionFps(session);
     var spec = featureSpec(input, body, floorInfo.floor, fps);
-    return { session: session, input: input, body: body, floorInfo: floorInfo, spec: spec, catalog: catalogFor(spec), fps: fps,
-             broken: brokenPoseFrames(input, body, spec.bodyLength, fps) };
+    return withTailMotionChannels({ session: session, input: input, body: body, floorInfo: floorInfo, spec: spec, catalog: catalogFor(spec), fps: fps,
+             broken: brokenPoseFrames(input, body, spec.bodyLength, fps) });
 }
 
 /** A context's frames to skip, as `sliceChunkData` takes them. */
 function skipOf(ctx) {
     return ctx.broken ? ctx.broken.masks : null;
+}
+
+/** A chunk's channel values (tail motion), as the jobs take them; null without. */
+function channelsOf(ctx, chunk) {
+    var K = ctx.spec && ctx.spec.channels ? ctx.spec.channels.length : 0;
+    return sliceChunkChannels(ctx.channels, chunk, K, skipOf(ctx));
 }
 
 /** "skipped broken tracking on 0.9% of frames" for a status line ('' when nothing was). */
@@ -263,7 +270,7 @@ var _ctxCache = null;
 var _editGen = 0;
 
 function contextKey(session) {
-    return JSON.stringify([featureSettings(), detectionFps(), numFramesOf(session), floorKey()]);
+    return JSON.stringify([featureSettings(), detectionFps(), numFramesOf(session), floorKey(), tailMotionGeneration()]);
 }
 
 /** `buildBehaviorContext`, reusing the last one while nothing changed. */
@@ -296,8 +303,8 @@ export function refreshBehaviorContext(ctx) {
     var floorInfo = resolveFloor(ctx.input, body, settings, ctx.session);
     var fps = sessionFps(ctx.session);
     var spec = featureSpec(ctx.input, body, floorInfo.floor, fps);
-    return Object.assign({}, ctx, { body: body, floorInfo: floorInfo, spec: spec, catalog: catalogFor(spec), fps: fps,
-                                    broken: brokenPoseFrames(ctx.input, body, spec.bodyLength, fps) });
+    return withTailMotionChannels(Object.assign({}, ctx, { body: body, floorInfo: floorInfo, spec: spec, catalog: catalogFor(spec), fps: fps,
+                                    broken: brokenPoseFrames(ctx.input, body, spec.bodyLength, fps), channels: null, channelsKey: null }));
 }
 
 // ----------------------------------------------------------------------------
@@ -397,7 +404,8 @@ export async function detectOnContext(session, ctx, ui) {
         var detail = plan.plans.length + ' detector' + (plan.plans.length === 1 ? '' : 's') + ' · ' + where;
         var doneFrames = 0;
         await runBehaviorChunks(chunks.length, function (i) {
-            return { kind: 'scores', spec: ctx.spec, chunk: chunks[i], data: sliceChunkData(input.data, chunks[i], N * D, skipOf(ctx)), plan: jobPlan };
+            return { kind: 'scores', spec: ctx.spec, chunk: chunks[i], data: sliceChunkData(input.data, chunks[i], N * D, skipOf(ctx)),
+                     channels: channelsOf(ctx, chunks[i]), plan: jobPlan };
         }, function (i, res) {
             var ch = chunks[i];
             if (!res) return;
@@ -609,7 +617,7 @@ export function detectThisFrame() {
     });
     var skip = skipOf(ctx);
     var res = runJob({ kind: 'scores', spec: ctx.spec, chunk: chunk, data: sliceChunkData(input.data, chunk, input.nodeNames.length * input.dim, skip),
-        plan: { request: plan.request, plans: plan.plans }, extra: { columns: names } });
+        channels: channelsOf(ctx, chunk), plan: { request: plan.request, plans: plan.plans }, extra: { columns: names } });
     var rows = [];
     plan.plans.forEach(function (p) {
         Object.keys(res.scores[p.behaviorId]).forEach(function (k) {
@@ -684,7 +692,7 @@ export async function computeFeatureColumns(ctx, names, opts) {
     var chunks = planChunks(T, featurePadFrames(ctx.spec), CHUNK_FRAMES);
     await runBehaviorChunks(chunks.length, function (i) {
         return { kind: 'features', spec: ctx.spec, chunk: chunks[i], data: sliceChunkData(input.data, chunks[i], N * D, skipOf(ctx)),
-                 request: { animal: animalNames, pair: pairNames, pairs: pairs } };
+                 channels: channelsOf(ctx, chunks[i]), request: { animal: animalNames, pair: pairNames, pairs: pairs } };
     }, function (i, res) {
         if (!res) return;
         var st = chunks[i].start;
