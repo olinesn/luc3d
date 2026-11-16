@@ -77,6 +77,11 @@ import {
 import { SioLazyLoader } from './sio-lazy-loader.js';
 import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js';
 import { unionTrackNames, remapTrackIdx } from './track-union.js';
+// Per-camera `.slp` data into a session (DOM-free, shared with the command-line LUCID).
+import {
+    addColumnarFramesToSession, addCameraSlpDataToSession, moveInstancesToUnlinked, cameraDirMatches,
+} from '../import-export/slp-session-build.js';
+export { addColumnarFramesToSession };
 import {
     readCampyRecording, campyCameraFor, orderByCampyCameras, preferCampyVideo, campyVideoFile,
     compareCampyCameraNames, compareCalibrationSha256, sha256Hex, frameRatesDisagree,
@@ -3177,53 +3182,6 @@ export async function handleLoadProjectSlpLazy(slpFile) {
 }
 
 /**
- * Add one camera's parsed poses to `session` from the worker's COLUMNAR result
- * (`parseSlpH5(file, null, { columnar: true })`; layout documented at
- * `buildColumnarFrames` in loading/slp-import-worker.js).
- *
- * Exactly what the nested-`frames` loop in `handleLoadSessionFolderPerCamera`
- * does per instance — same track remap + `resolveImportTrackIdx`, same
- * `score || 1.0`, same occlusion — but each Instance's coordinates come from one
- * flat buffer. Each instance gets its OWN `Float64Array` (a `slice`, not a
- * `subarray` view): a view would pin the whole camera buffer, and structured-
- * cloning a view (e.g. posting an instance to a worker) copies its entire
- * underlying buffer.
- *
- * `trackRemap` maps this camera's OWN track index to the session's
- * (`unionTrackNames`, `loading/track-union.js`); an index it does not cover is
- * trackless (`remapTrackIdx`), never kept raw — a raw index would name
- * whichever session track happens to sit there.
- *
- * `ownVideo` (optional): only that video's frames are this camera's
- * (`ownVideoOfColumnar`, import-export/outside-frames.js).
- */
-export function addColumnarFramesToSession(session, camName, col, trackRemap, ownVideo) {
-    var nn = col.numNodes;
-    var stride = nn * 2;
-    for (var f = 0; f < col.nFrames; f++) {
-        // Another video's frame in this camera's file is not this camera's.
-        if (ownVideo !== undefined && col.videoIdx && col.videoIdx[f] !== ownVideo) continue;
-        var frameIdx = col.frameIdx[f];
-        if (!session.frameGroups.has(frameIdx)) {
-            session.addFrameGroup(new FrameGroup(frameIdx));
-        }
-        var fg = session.getFrameGroup(frameIdx);
-        for (var i = col.instOffsets[f], end = col.instOffsets[f + 1]; i < end; i++) {
-            var rawTrackIdx = col.trackIdx[i];
-            var remappedTrackIdx = remapTrackIdx(trackRemap, rawTrackIdx);
-            var instType = col.type[i] === 1 ? 'predicted' : 'user';
-            var trackIdx = resolveImportTrackIdx(session, remappedTrackIdx, instType);
-            var instance = new Instance(col.xy.slice(i * stride, (i + 1) * stride),
-                trackIdx, instType, col.score[i] || 1.0);
-            instance.setOccludedFrom(col.occluded.subarray(i * nn, (i + 1) * nn));
-            if (col.pointScore && instType === 'predicted') instance.setPointScores(col.pointScore, i * nn);
-            if (col.trackingScore && col.trackingScore[i]) instance.trackingScore = col.trackingScore[i];
-            fg.addInstance(camName, instance);
-        }
-    }
-}
-
-/**
  * Status-line text for the annotation files a folder load could not read. The
  * names alone don't say why, and the way past a file too new to read is the
  * user's to take, so that reason goes first, once: a folder's files all come from
@@ -3427,7 +3385,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 for (var dirName in cameraDirs) {
                     var dirLower = cameraDirs[dirName].dirNameLower;
                     console.log('[session-folder] Matching cam "' + cam.name + '" (lower: "' + camLower + '") vs dir "' + dirName + '" (lower: "' + dirLower + '"): exact=' + (dirLower === camLower) + ' cam+=' + (dirLower === 'cam' + camLower) + ' strip=' + (dirLower.replace('cam', '') === camLower));
-                    if (dirLower === camLower || dirLower === 'cam' + camLower || dirLower.replace('cam', '') === camLower) {
+                    if (cameraDirMatches(dirLower, camLower)) {
                         // Include even if no videos — will show as "None" in assignment panel
                         matchedCameraDirs.push({
                             dirName: dirName,
@@ -3774,50 +3732,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
             var trackRemap = trackUnion.remapByCam.get(camName) || new Int32Array(0);
 
-            // A camera is one video, the first its file lists with frames.
-            var ownVideo = slpData.columnar ? ownVideoOfColumnar(slpData.columnar, slpData)
-                : (slpData.frames ? ownVideoOfFrames(slpData.frames, slpData) : undefined);
-
-            // What this camera's file says about its video, for a save with none loaded.
-            var ownFileVideo = slpData.videos && slpData.videos[ownVideo !== undefined ? ownVideo : 0];
-            if (ownFileVideo && !ownFileVideo.embedded) {
-                if (!state.session.fileVideos) state.session.fileVideos = new Map();
-                state.session.fileVideos.set(camName, ownFileVideo);
-            }
-
-            if (slpData.columnar) {
-                addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap, ownVideo);
-                keepOutsideColumnarFrames(state.session, slpData, ownVideo, camName);
-            } else if (slpData.frames) {
-                keepOutsideFrames(state.session, slpData, new Set([ownVideo]));
-                keepCameraOtherSkeletonFrames(state.session, slpData, ownVideo, camName);
-                for (var fri = 0; fri < slpData.frames.length; fri++) {
-                    var frameData = slpData.frames[fri];
-                    if (frameData.videoIdx !== ownVideo) continue;
-                    var frameIdx = frameData.frameIdx !== undefined ? frameData.frameIdx : (frameData.frame_idx !== undefined ? frameData.frame_idx : fri);
-                    if (!state.session.frameGroups.has(frameIdx)) {
-                        state.session.addFrameGroup(new FrameGroup(frameIdx));
-                    }
-                    var fg = state.session.getFrameGroup(frameIdx);
-                    if (frameData.instances) {
-                        for (var ii = 0; ii < frameData.instances.length; ii++) {
-                            var inst = frameData.instances[ii];
-                            var rawTrackIdx = inst.trackIdx !== undefined ? inst.trackIdx : (inst.track_idx !== undefined ? inst.track_idx : 0);
-                            var remappedTrackIdx = remapTrackIdx(trackRemap, rawTrackIdx);
-                            var instType = inst.type || (inst.from_predicted !== undefined ? 'predicted' : 'user');
-                            var trackIdx = resolveImportTrackIdx(state.session, remappedTrackIdx, instType);
-                            var instance = new Instance(inst.points || [], trackIdx, instType, inst.score || 1.0);
-                            if (inst.occluded) instance.setOccludedFrom(inst.occluded);
-                            if (inst.pointScores) instance.setPointScores(inst.pointScores);
-                            if (inst.trackingScore) instance.trackingScore = inst.trackingScore;
-                            if (inst.fileLabels) instance.fileLabels = inst.fileLabels;
-                            fg.addInstance(camName, instance);
-                        }
-                    }
-                }
-            }
-            // A file with no frames is read as its first video (`SioLazyLoader.open`).
-            keepSuggestions(slpData, [{ session: state.session, cameraByVideo: { [ownVideo === undefined ? 0 : ownVideo]: camName } }]);
+            // Its instances into the session's FrameGroups, with what its file holds
+            // beyond them kept for the save (DOM-free, import-export/slp-session-build.js,
+            // shared with the command-line LUCID).
+            addCameraSlpDataToSession(state.session, camName, slpData, trackRemap);
         }
 
         // Integrate lazy loader metadata into session. The folder is routed as ONE
@@ -4091,19 +4009,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         // Instance type (user/predicted) is preserved on the Instance object.
         if (state.session) {
             showLoading('Preparing instances...');
-            var ulUserCount = 0, ulPredCount = 0;
-            for (var [fgIdx, fgObj] of state.session.frameGroups) {
-                for (var [cn, instances] of fgObj.instances) {
-                    for (var instItem of instances) {
-                        var ulInst = new UnlinkedInstance(instItem, cn);
-                        fgObj.addUnlinkedInstance(cn, ulInst);
-                        if (instItem.type === 'predicted') ulPredCount++;
-                        else ulUserCount++;
-                    }
-                    fgObj.instances.set(cn, []);
-                }
-            }
-            console.log('[session-folder] Prepared unlinked instances:', ulUserCount, 'user,', ulPredCount, 'predicted');
+            var ulCounts = moveInstancesToUnlinked(state.session);
+            console.log('[session-folder] Prepared unlinked instances:', ulCounts.user, 'user,', ulCounts.predicted, 'predicted');
         }
 
         // 5b. Load skeleton JSON override if found in session folder

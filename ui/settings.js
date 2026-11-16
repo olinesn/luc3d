@@ -121,26 +121,44 @@ const _handlers = new Map();
 
 let _settings = loadSettings();
 
+// The stored settings object (the localStorage JSON's shape), with every part
+// checked: anything missing or malformed falls back to its default.
+function settingsFromParsed(parsed) {
+    return {
+        triangulationMethod: parsed.triangulationMethod === 'ba' ? 'ba' : 'dlt',
+        keybindings: (parsed.keybindings && typeof parsed.keybindings === 'object') ? parsed.keybindings : {},
+        nodeWeights: (parsed.nodeWeights && typeof parsed.nodeWeights === 'object') ? parsed.nodeWeights : {},
+        cameraWeights: (parsed.cameraWeights && typeof parsed.cameraWeights === 'object') ? parsed.cameraWeights : {},
+        trackingThresholds: (parsed.trackingThresholds && typeof parsed.trackingThresholds === 'object') ? parsed.trackingThresholds : {},
+        smoothingParams: (parsed.smoothingParams && typeof parsed.smoothingParams === 'object') ? parsed.smoothingParams : {},
+    };
+}
+
 function loadSettings() {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-            const parsed = JSON.parse(raw);
-            return {
-                triangulationMethod: parsed.triangulationMethod === 'ba' ? 'ba' : 'dlt',
-                keybindings: (parsed.keybindings && typeof parsed.keybindings === 'object') ? parsed.keybindings : {},
-                nodeWeights: (parsed.nodeWeights && typeof parsed.nodeWeights === 'object') ? parsed.nodeWeights : {},
-                cameraWeights: (parsed.cameraWeights && typeof parsed.cameraWeights === 'object') ? parsed.cameraWeights : {},
-                trackingThresholds: (parsed.trackingThresholds && typeof parsed.trackingThresholds === 'object') ? parsed.trackingThresholds : {},
-                smoothingParams: (parsed.smoothingParams && typeof parsed.smoothingParams === 'object') ? parsed.smoothingParams : {},
-            };
-        }
+        if (raw) return settingsFromParsed(JSON.parse(raw));
     } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
     return {
         triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {},
         nodeWeights: {}, cameraWeights: {}, trackingThresholds: {}, smoothingParams: {},
     };
 }
+
+/**
+ * Replace the settings in effect with `obj` — the same JSON the app keeps in
+ * localStorage (`triangulationMethod`, `nodeWeights`, `cameraWeights`,
+ * `trackingThresholds`, ...), read with the same checks — WITHOUT storing it.
+ * For the command-line LUCID (cli/track.mjs `--settings`), which has no
+ * storage; every getter below then answers from it, clamped as usual.
+ * @param {Object|null} obj  null = the defaults
+ */
+export function useSettingsSnapshot(obj) {
+    _settings = settingsFromParsed(obj && typeof obj === 'object' ? obj : {});
+}
+
+/** The key the app stores its settings under (the JSON `useSettingsSnapshot` reads). */
+export const SETTINGS_STORAGE_KEY = STORAGE_KEY;
 
 function persist() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(_settings)); } catch (e) { /* ignore */ }

@@ -41,6 +41,14 @@ python3 scripts/offline_deps.py install
 python3 server.py --offline
 ```
 
+## Command line
+`cli/track.mjs` runs Track All, Triangulate All and Save in plain Node (no
+browser, no video), e.g. on a cluster:
+```bash
+node cli/track.mjs --slp rec/*/*.predictions.slp --calibration rec/calibration.toml --num-animals 3 --out rec/tracked.slp
+```
+Usage, settings and Slurm notes: [`cli/README.md`](cli/README.md).
+
 ## Web Deployment
 
 <a href="https://luc3d.sleap.ai/" target="_blank" rel="noopener noreferrer">Access the live site here</a>
