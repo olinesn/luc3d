@@ -34,6 +34,7 @@ import { updateInfoPanel } from './info-panel.js';
 import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js';
 import { createGroupSolver } from '../pose/triangulation-pool.js';
+import { createIdentityGroupingRun, groupFrameByIdentity } from '../pose/triangulate-all-core.js';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
@@ -347,193 +348,21 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     }
     await yieldToPaint();
 
-    var totalGrouped = 0;
-    var totalTriangulated = 0;
-    // 3D provenance, reported at the end: groups whose existing 3D was reused
-    // as-is vs. groups that genuinely had to be solved, and with what.
-    var reused3d = 0, solvedBa = 0, solvedDlt = 0;
     // Solves run on the worker pool (pose/triangulation-pool.js); the regrouping
-    // itself stays on the main thread. Results land in submission order.
+    // itself stays on the main thread. Results land in submission order. The
+    // per-frame grouping and the counts (groups built, 3D kept vs solved and
+    // with what) are pose/triangulate-all-core.js's, shared with the
+    // command-line LUCID.
     var gSolver = createGroupSolver(cameras,
         { method: prefMethod, triangulateOnly: true, expectedGroups: totalFrames });
-    var gSettingsKey = triangulationSettingsKey(cameras);
-    function applyIdentitySolve(group, triResult) {
-        group.points3d = pooledPoints3d(triResult.points3d);   // slab-pooled (pose-data.js)
-        group.triangulationMethod = triResult.method;
-        group.solveSettings = gSettingsKey;
-        if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
-    }
+    var gRun = createIdentityGroupingRun(session, cameras, prefMethod, gSolver);
 
     // Memory-bounded sweep over every frame (windows + release on lazy sessions),
     // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
     var processedFrames;
     try {
     processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
-        // `fg` is undefined for a frame that has 3D grouping but no resident 2D
-        // (the sweep's contract — see `sweepLazyFrameWindows`). Without this guard
-        // the very next line throws a TypeError, which aborts the whole operation
-        // PART-WAY THROUGH — after step 2 below has already deleted the
-        // instanceGroups of every frame processed so far. Losing 3D on an
-        // arbitrary prefix of the project is the worst possible failure here.
-        if (!fg) return;
-
-        // 1. Collect all instances, bucket by identityId
-        //    identityId -> { camName -> Instance }
-        var idBuckets = {};
-
-        // Collect ALL instances (with or without identity)
-        var allInstancesByCam = {};  // camName -> Instance[]
-
-        // From grouped instances
-        for (var [camName, instances] of fg.instances) {
-            for (var ii = 0; ii < instances.length; ii++) {
-                var inst = instances[ii];
-                if (!allInstancesByCam[camName]) allInstancesByCam[camName] = [];
-                allInstancesByCam[camName].push(inst);
-
-                var identityId = session.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx);
-                if (identityId == null) continue;
-                if (!idBuckets[identityId]) idBuckets[identityId] = {};
-                if (!idBuckets[identityId][camName]) idBuckets[identityId][camName] = inst;
-            }
-        }
-
-        // From unlinked instances
-        for (var [camName2, ulList] of fg.unlinkedInstances) {
-            for (var ui = 0; ui < ulList.length; ui++) {
-                var ulInst = ulList[ui].instance;
-                if (!allInstancesByCam[camName2]) allInstancesByCam[camName2] = [];
-                allInstancesByCam[camName2].push(ulInst);
-
-                // Unlinked rows take the UNLINKED resolver — a trackless one
-                // keeps its identity on the instance, not in the trackIdx-keyed
-                // map (luc3d #201) — so grouping by identity can re-form
-                // exactly what an ungroup took apart.
-                var identityId2 = session.getIdentityIdForUnlinkedInstance
-                    ? session.getIdentityIdForUnlinkedInstance(camName2, ulInst, frameIdx)
-                    : session.getIdentityIdForTrack(camName2, ulInst.trackIdx, frameIdx);
-                if (identityId2 == null) continue;
-                if (!idBuckets[identityId2]) idBuckets[identityId2] = {};
-                if (!idBuckets[identityId2][camName2]) idBuckets[identityId2][camName2] = ulInst;
-            }
-        }
-
-        // 1b. IDENTITY FALLBACK + DESTRUCTION GUARD (the "Triangulate All deleted
-        //     my 3D" bug). Step 2 below deletes this frame's instanceGroups —
-        //     and with them their `points3d` — BEFORE knowing whether step 3 can
-        //     rebuild anything. Step 3 only builds a group when
-        //     `getIdentityIdForTrack(cam, inst.trackIdx, frameIdx)` resolves on
-        //     >= 2 cameras. On a reopened project that lookup can come back null
-        //     for every instance (identity is carried on `group.identityId`, and
-        //     the per-frame track->identity entries do not necessarily key by the
-        //     trackIdx the rehydrated instances carry), so the frame lost all of
-        //     its 3D, IDs and reprojections and got nothing back. Measured on the
-        //     real 180,210-frame project: groups 3 -> 0 on every probe frame.
-        //
-        //     So: (a) fall back to the identity already recorded on the existing
-        //     group for that instance, which is the same identity this operation
-        //     is trying to group by; and (b) if after that NOTHING would be
-        //     rebuilt, leave the frame completely alone rather than emptying it.
-        //     Grouping that cannot improve a frame must not destroy it.
-        var _existing = session.instanceGroups.get(frameIdx);
-        if (_existing && _existing.length) {
-            for (var _eg = 0; _eg < _existing.length; _eg++) {
-                var _grp = _existing[_eg];
-                if (_grp.identityId == null || _grp.identityId < 0) continue;
-                for (var [_ecam, _einst] of _grp.instances) {
-                    if (!_einst) continue;
-                    // Only fills gaps — a resolvable per-frame identity still wins.
-                    if (!idBuckets[_grp.identityId]) idBuckets[_grp.identityId] = {};
-                    if (!idBuckets[_grp.identityId][_ecam]) idBuckets[_grp.identityId][_ecam] = _einst;
-                }
-            }
-        }
-        var _wouldBuild = 0;
-        for (var _bk in idBuckets) {
-            if (Object.keys(idBuckets[_bk]).length >= 2) _wouldBuild++;
-        }
-        if (_wouldBuild === 0) {
-            if (_existing && _existing.length) {
-                console.warn('[groupByIdentity] frame ' + frameIdx + ': no identity resolved on >=2 ' +
-                    'cameras; keeping the ' + _existing.length + ' existing group(s) rather than deleting them.');
-            }
-            return;
-        }
-
-        // 2. Clear existing groups and instances for this frame
-        session.instanceGroups.delete(frameIdx);
-        for (var [cn] of fg.instances) fg.instances.set(cn, []);
-        for (var [cn2] of fg.unlinkedInstances) fg.unlinkedInstances.set(cn2, []);
-
-        // Re-add instances. Grouping is by identity, so instances the tracker
-        // explicitly marked "no identity" (-1) cannot join a group — they stay
-        // in the unlinked/ungrouped pool (visible under "Ungrouped Instances")
-        // rather than being silently re-linked. Everything else is re-added as
-        // linked so the identity buckets below can form their groups.
-        for (var cn3 in allInstancesByCam) {
-            for (var ai = 0; ai < allInstancesByCam[cn3].length; ai++) {
-                var reInst = allInstancesByCam[cn3][ai];
-                if (session.isExplicitNoIdentity &&
-                    session.isExplicitNoIdentity(cn3, reInst.trackIdx, frameIdx)) {
-                    fg.addUnlinkedInstance(cn3, new UnlinkedInstance(reInst, cn3));
-                } else {
-                    fg.addInstance(cn3, reInst);
-                }
-            }
-        }
-
-        // 3. Create InstanceGroups from identity buckets
-        for (var idStr in idBuckets) {
-            var identityId3 = parseInt(idStr);
-            var bucket = idBuckets[idStr];
-            var camNames = Object.keys(bucket);
-
-            if (camNames.length < 2) continue;
-
-            // Create InstanceGroup
-            var groupId = session.instanceGroups.size + totalGrouped;
-            var trackIdx = bucket[camNames[0]].trackIdx;
-            var group = new InstanceGroup(groupId, identityId3);
-
-            for (var ci2 = 0; ci2 < camNames.length; ci2++) {
-                group.addInstance(camNames[ci2], bucket[camNames[ci2]]);
-            }
-
-            // Add to session
-            if (!session.instanceGroups.has(frameIdx)) {
-                session.instanceGroups.set(frameIdx, []);
-            }
-            session.instanceGroups.get(frameIdx).push(group);
-
-            // 3D: ADOPT rather than re-solve when this rebuild reproduced a group
-            // that already existed with identical membership AND whose 3D was
-            // already produced by `prefMethod` — i.e. when re-solving would be a
-            // provable no-op. Everything else is solved with `prefMethod`.
-            //
-            // This used to unconditionally re-solve with the DEFAULT option, i.e.
-            // DLT, and stamp `triangulationMethod = 'dlt'`, regardless of the
-            // user's setting. Running "Group by Identity" (or Triangulate All ▸
-            // DLT, which routes here) after a BA Triangulate All therefore
-            // silently downgraded the whole project's 3D to DLT — and save/export
-            // read `group.points3d`, so the exported file stopped matching what
-            // the user had computed and was looking at.
-            var prior = findEquivalentPriorGroup(_existing, group);
-            if (adoptPrior3d(group, prior, prefMethod, gSettingsKey)) {
-                reused3d++;
-            } else {
-                // Still `triangulateOnly` (reprojections are recomputed on demand
-                // when drawing); that skips the reprojection/error passes, not the
-                // solve, so BA still runs when BA is what was asked for. Solved on
-                // the worker pool (bit-identical; applied in submission order).
-                gSolver.submit(group, cameras, applyIdentitySolve.bind(null, group));
-            }
-            group.markClean();
-
-            totalGrouped++;
-            totalTriangulated++;
-        }
-        return gSolver.throttle();
-
+        return groupFrameByIdentity(session, frameIdx, fg, gRun);
     }, {
         onLoadProgress: function (done, total) {
             showLoadingProgress('Loading frames', done, total, { step: 1, steps: gSteps });
@@ -541,7 +370,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         onProgress: function (done, total) {
             showLoadingProgress('Grouping & triangulating', done, total, {
                 step: gSteps, steps: gSteps,
-                detail: gMethodLabel + ' · ' + reused3d.toLocaleString() + ' existing solutions kept' +
+                detail: gMethodLabel + ' · ' + gRun.reused3d.toLocaleString() + ' existing solutions kept' +
                     (gSolver.parallel ? ' · ' + gSolver.workers + ' workers' : ''),
             });
         },
@@ -563,6 +392,8 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     // "Triangulate", which calls update3DViewport(frameIdx) at its tail.
     update3DViewport(state.currentFrame);
     updateInfoPanel();
+    var totalGrouped = gRun.totalGrouped, totalTriangulated = gRun.totalTriangulated;
+    var reused3d = gRun.reused3d, solvedBa = gRun.solvedBa, solvedDlt = gRun.solvedDlt;
     // Name the 3D's provenance so a run that kept BA solutions can't be mistaken
     // for one that silently re-solved them with DLT.
     setStatus('Grouped ' + totalGrouped + ' identity groups, triangulated ' +

@@ -52,6 +52,7 @@ import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-me
 import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { buildSaveProvenance } from './slp-provenance.js';
+import { buildProjectSlpLabels } from './slp-labels-build.js';
 import { withCompactSave } from './compact-save.js';
 import { showCompactSaveModal } from '../ui/compact-save-modal.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
@@ -699,15 +700,6 @@ async function buildSlpBytes(opts) {
     var SIO = window.SleapIO;
     var onProgress = opts.onProgress || null;
 
-    var allLabeledFrames = [];
-    var allVideos = [];
-    var allSessions = [];
-    var allSkeletons = [];
-    var allTracks = [];
-    var allIdentities = [];
-    var seenSkeletonNames = new Set();
-    var seenTrackNames = new Set();
-
     var sessionsToExport = sessionsToSave();
 
     // Every path below writes one video per `session.cameras` entry and picks
@@ -812,85 +804,17 @@ async function buildSlpBytes(opts) {
     // The eager writer below runs without a break: show its one step first.
     if (onProgress) await onProgress('eager');
 
-    for (var si = 0; si < sessionsToExport.length; si++) {
-        var sess = sessionsToExport[si];
-
-        // Debug: count 3D data in this session
-        var dbgGroupCount = 0, dbgWith3d = 0;
-        for (var [_dbgFi, _dbgGroups] of sess.instanceGroups) {
-            for (var _dbgG of _dbgGroups) {
-                dbgGroupCount++;
-                if (someValidPoint3d(_dbgG.points3d)) dbgWith3d++;
-            }
-        }
-        console.log('[save-slp] Session', si, '(' + sess.name + '):', sess.frameGroups.size, 'frames,',
-            dbgGroupCount, 'instance groups,', dbgWith3d, 'with 3D points,',
-            sess.cameras.length, 'cameras:', sess.cameras.map(function(c){return c.name;}).join(', '));
-
-        // Find views and videoFiles for this session
-        var sessViews = state.views.filter(function (v) {
+    // Every session's Labels, merged (import-export/slp-labels-build.js,
+    // shared with the command-line LUCID): the views and video files of each
+    // session's cameras.
+    var labels = buildProjectSlpLabels(sessionsToExport, function (sess) {
+        return state.views.filter(function (v) {
             return sess.cameras.some(function (c) { return c.name === v.name; });
         });
-        var sessVideoFiles = state.videoFiles.filter(function (vf) {
+    }, function (sess) {
+        return state.videoFiles.filter(function (vf) {
             return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
         });
-
-        var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
-
-        // Merge into combined Labels
-        allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
-        allVideos = allVideos.concat(sessLabels.videos || []);
-        for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
-            var skel = sessLabels.skeletons[sk];
-            if (!seenSkeletonNames.has(skel.name)) {
-                allSkeletons.push(skel);
-                seenSkeletonNames.add(skel.name);
-            }
-        }
-        for (var ti = 0; ti < (sessLabels.tracks || []).length; ti++) {
-            var trk = sessLabels.tracks[ti];
-            if (!seenTrackNames.has(trk.name)) {
-                allTracks.push(trk);
-                seenTrackNames.add(trk.name);
-            }
-        }
-        allIdentities = allIdentities.concat(sessLabels.identities || []);
-        allSessions = allSessions.concat(sessLabels.sessions || []);
-    }
-
-    // Re-point every instance's track to the canonical (deduped) Track object
-    // for its NAME. buildSlpLabelsAllViews creates a fresh SIO.Track array per
-    // session, but the allTracks dedup above keeps only the FIRST session's
-    // object per shared name. sleap-io serializes each instance's track via
-    // labels.tracks.indexOf(instance.track) using OBJECT IDENTITY, so a later
-    // session's instance still pointing at its own (discarded) Track object
-    // would serialize as -1 (trackless) — dropping the track on any shared-name
-    // track. Mapping every instance.track to the canonical object makes indexOf
-    // resolve it to the correct global slot. (Tracks are then re-localized to
-    // each session's own list by NAME on load — see slp-import.js.)
-    var canonicalTrackByName = {};
-    for (var ctI = 0; ctI < allTracks.length; ctI++) {
-        canonicalTrackByName[allTracks[ctI].name] = allTracks[ctI];
-    }
-    for (var lfI = 0; lfI < allLabeledFrames.length; lfI++) {
-        var lfInsts = allLabeledFrames[lfI].instances || [];
-        for (var inI = 0; inI < lfInsts.length; inI++) {
-            var sioInst = lfInsts[inI];
-            if (sioInst && sioInst.track && canonicalTrackByName[sioInst.track.name]) {
-                sioInst.track = canonicalTrackByName[sioInst.track.name];
-            }
-        }
-    }
-
-    var labels = new SIO.Labels({
-        labeledFrames: allLabeledFrames,
-        videos: allVideos,
-        skeletons: allSkeletons,
-        tracks: allTracks,
-        identities: allIdentities,
-        sessions: allSessions,
-        // Keeps the loaded files' provenance (slp-provenance.js).
-        provenance: buildSaveProvenance(sessionsToExport),
     });
 
     // PR 5.2: export sleap-io.js's canonical bytes directly. The typed graph

@@ -7,6 +7,7 @@
 // playback-rate helper. Extracted from app.js per the consolidated
 // Pass 3 plan, Module 9.
 
+import { triangulateAllRoute } from '../pose/triangulate-all-core.js';
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
          getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js';
@@ -3124,10 +3125,11 @@ export function setupUI() {
     // (or the default when given none).
     wireActionMenu('triangulateDropdown', {
         all: function () {
-            var method = getDefaultTriangulationMethod();
-            if (method === 'ba') {
+            // pose/triangulate-all-core.js `triangulateAllRoute` (the CLI reads it too).
+            var route = triangulateAllRoute(getDefaultTriangulationMethod(), state.session);
+            if (route === 'ba') {
                 triangulateAllFrames('ba');
-            } else if (state.session && state.session.identities.length > 0) {
+            } else if (route === 'identity') {
                 groupByIdentityAndTriangulateAll('dlt');
             } else {
                 triangulateAllFrames('dlt');

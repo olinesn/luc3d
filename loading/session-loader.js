@@ -67,6 +67,11 @@ import {
 import { SioLazyLoader } from './sio-lazy-loader.js';
 import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js';
 import { unionTrackNames, remapTrackIdx } from './track-union.js';
+// Per-camera `.slp` data into a session (DOM-free, shared with the command-line LUCID).
+import {
+    addColumnarFramesToSession, addCameraSlpDataToSession, moveInstancesToUnlinked, cameraDirMatches,
+} from '../import-export/slp-session-build.js';
+export { addColumnarFramesToSession };
 import {
     readCampyRecording, campyCameraFor, orderByCampyCameras, preferCampyVideo, campyVideoFile,
     compareCampyCameraNames, compareCalibrationSha256, sha256Hex, frameRatesDisagree,
@@ -3159,46 +3164,6 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
     }
 }
 
-/**
- * Add one camera's parsed poses to `session` from the worker's COLUMNAR result
- * (`parseSlpH5(file, null, { columnar: true })`; layout documented at
- * `buildColumnarFrames` in loading/slp-import-worker.js).
- *
- * Exactly what the nested-`frames` loop in `handleLoadSessionFolderPerCamera`
- * does per instance — same track remap + `resolveImportTrackIdx`, same
- * `score || 1.0`, same occlusion — but each Instance's coordinates come from one
- * flat buffer. Each instance gets its OWN `Float64Array` (a `slice`, not a
- * `subarray` view): a view would pin the whole camera buffer, and structured-
- * cloning a view (e.g. posting an instance to a worker) copies its entire
- * underlying buffer.
- *
- * `trackRemap` maps this camera's OWN track index to the session's
- * (`unionTrackNames`, `loading/track-union.js`); an index it does not cover is
- * trackless (`remapTrackIdx`), never kept raw — a raw index would name
- * whichever session track happens to sit there.
- */
-export function addColumnarFramesToSession(session, camName, col, trackRemap) {
-    var nn = col.numNodes;
-    var stride = nn * 2;
-    for (var f = 0; f < col.nFrames; f++) {
-        var frameIdx = col.frameIdx[f];
-        if (!session.frameGroups.has(frameIdx)) {
-            session.addFrameGroup(new FrameGroup(frameIdx));
-        }
-        var fg = session.getFrameGroup(frameIdx);
-        for (var i = col.instOffsets[f], end = col.instOffsets[f + 1]; i < end; i++) {
-            var rawTrackIdx = col.trackIdx[i];
-            var remappedTrackIdx = remapTrackIdx(trackRemap, rawTrackIdx);
-            var instType = col.type[i] === 1 ? 'predicted' : 'user';
-            var trackIdx = resolveImportTrackIdx(session, remappedTrackIdx, instType);
-            var instance = new Instance(col.xy.slice(i * stride, (i + 1) * stride),
-                trackIdx, instType, col.score[i] || 1.0);
-            instance.setOccludedFrom(col.occluded.subarray(i * nn, (i + 1) * nn));
-            if (col.pointScore && instType === 'predicted') instance.setPointScores(col.pointScore, i * nn);
-            fg.addInstance(camName, instance);
-        }
-    }
-}
 
 export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos, folderHandle) {
     try {
@@ -3387,7 +3352,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 for (var dirName in cameraDirs) {
                     var dirLower = cameraDirs[dirName].dirNameLower;
                     console.log('[session-folder] Matching cam "' + cam.name + '" (lower: "' + camLower + '") vs dir "' + dirName + '" (lower: "' + dirLower + '"): exact=' + (dirLower === camLower) + ' cam+=' + (dirLower === 'cam' + camLower) + ' strip=' + (dirLower.replace('cam', '') === camLower));
-                    if (dirLower === camLower || dirLower === 'cam' + camLower || dirLower.replace('cam', '') === camLower) {
+                    if (cameraDirMatches(dirLower, camLower)) {
                         // Include even if no videos — will show as "None" in assignment panel
                         matchedCameraDirs.push({
                             dirName: dirName,
@@ -3722,31 +3687,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
             var trackRemap = trackUnion.remapByCam.get(camName) || new Int32Array(0);
 
-            if (slpData.columnar) {
-                addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap);
-            } else if (slpData.frames) {
-                for (var fri = 0; fri < slpData.frames.length; fri++) {
-                    var frameData = slpData.frames[fri];
-                    var frameIdx = frameData.frameIdx !== undefined ? frameData.frameIdx : (frameData.frame_idx !== undefined ? frameData.frame_idx : fri);
-                    if (!state.session.frameGroups.has(frameIdx)) {
-                        state.session.addFrameGroup(new FrameGroup(frameIdx));
-                    }
-                    var fg = state.session.getFrameGroup(frameIdx);
-                    if (frameData.instances) {
-                        for (var ii = 0; ii < frameData.instances.length; ii++) {
-                            var inst = frameData.instances[ii];
-                            var rawTrackIdx = inst.trackIdx !== undefined ? inst.trackIdx : (inst.track_idx !== undefined ? inst.track_idx : 0);
-                            var remappedTrackIdx = remapTrackIdx(trackRemap, rawTrackIdx);
-                            var instType = inst.type || (inst.from_predicted !== undefined ? 'predicted' : 'user');
-                            var trackIdx = resolveImportTrackIdx(state.session, remappedTrackIdx, instType);
-                            var instance = new Instance(inst.points || [], trackIdx, instType, inst.score || 1.0);
-                            if (inst.occluded) instance.setOccludedFrom(inst.occluded);
-                            if (inst.pointScores) instance.setPointScores(inst.pointScores);
-                            fg.addInstance(camName, instance);
-                        }
-                    }
-                }
-            }
+            // Its instances into the session's FrameGroups (DOM-free,
+            // import-export/slp-session-build.js, shared with the command-line LUCID).
+            addCameraSlpDataToSession(state.session, camName, slpData, trackRemap);
         }
 
         // Integrate lazy loader metadata into session. The folder is routed as ONE
@@ -4021,19 +3964,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         // Instance type (user/predicted) is preserved on the Instance object.
         if (state.session) {
             showLoading('Preparing instances...');
-            var ulUserCount = 0, ulPredCount = 0;
-            for (var [fgIdx, fgObj] of state.session.frameGroups) {
-                for (var [cn, instances] of fgObj.instances) {
-                    for (var instItem of instances) {
-                        var ulInst = new UnlinkedInstance(instItem, cn);
-                        fgObj.addUnlinkedInstance(cn, ulInst);
-                        if (instItem.type === 'predicted') ulPredCount++;
-                        else ulUserCount++;
-                    }
-                    fgObj.instances.set(cn, []);
-                }
-            }
-            console.log('[session-folder] Prepared unlinked instances:', ulUserCount, 'user,', ulPredCount, 'predicted');
+            var ulCounts = moveInstancesToUnlinked(state.session);
+            console.log('[session-folder] Prepared unlinked instances:', ulCounts.user, 'user,', ulCounts.predicted, 'predicted');
         }
 
         // 5b. Load skeleton JSON override if found in session folder

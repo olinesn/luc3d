@@ -3,7 +3,8 @@
 In-depth reference for every ES module in the LUCID codebase. Use this to
 locate which module owns a given concern before editing. 
 
-The codebase is split across four directories plus two root files:
+The codebase is split across four directories plus two root files (and the
+command-line LUCID in `cli/`):
 
 - `pose/` — data model, triangulation/reprojection math, cross-view tracker.
 - `ui/` — DOM-side controllers, overlays, panes, modals, viewport.
@@ -1859,6 +1860,8 @@ line (the worker plus the main thread).
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
 
+**The pass itself is `pose/track-all-core.js`** (DOM-free, shared with the command-line LUCID): detections, the tracker run, the commit, the threshold snapshot `thr`, the auto-detected animal count and the range helpers. This module imports them and keeps the page side.
+
 **Track All closes the Timeline and the 3D viewer.** On success, a full Track
 All calls `collapseTimeline()` (`ui/timeline-controller.js`) and
 `collapseViewport3D(viewport3d)` (`ui/panel-visibility.js`) — there is no 3D pose
@@ -2301,6 +2304,32 @@ the benchmark harness (`scripts/bench/speed_test.mjs`, `bench_driver.mjs`) and
 `track3dWeight`) are hidden from the Tracking Wizard.
 
 ---
+
+### pose/track-all-core.js
+
+**Purpose.** Track All's tracking pass without the page: build each frame's
+detections (`buildTrackerDetections`, honouring the detection filter), step the
+`CrossViewTracker`, and commit its targets as identities, per-frame identity
+entries and InstanceGroups (`commitTrackedFrame`). Split out of
+`pose/tracker.js` unchanged, so the app and the command-line LUCID
+(`cli/track.mjs`) run the same code; `pose/tracker.js` keeps the dialog, the
+progress card, the tracker worker and the summary box. DOM-free.
+
+**Key exports.** `thr(id)` / `snapshotTrackingThresholds()` (the run's
+threshold snapshot, also read by the legacy bench matcher in `pose/tracker.js`),
+`createTrackerRun(session, cameras, maxTargets, identityPool)`,
+`stepTrackerFrame(session, run, fi)`, `trackFramesInline(session, run, frames)`
+(the inline loop, = `trackFrameListProgress` without progress or worker),
+`buildTrackerDetections`, `commitTrackedFrame`, `crossViewHyperparams`,
+`computeMaxInstancesPerView`, `nextGroupId`, `clearTrackingState(session)` (Track
+All's reset), `clearTrackingStateInRange(session, lo, hi)` and
+`trackableFrameBounds(session)` (Track Frame Range).
+
+**Imports.** `./cross-view-tracker.js`, `./pose-data.js`,
+`./detection-filter-stats.js`, `../ui/settings.js` (DOM-free). **Imported by**
+`pose/tracker.js` (re-exports `commitTrackedFrame`, `trackableFrameBounds`),
+`cli/track.mjs`. **Tests.** `tests/test-track-triangulate-cores.mjs`,
+`tests/e2e/cli-parity.mjs`, `tests/e2e/track-all-worker.mjs`.
 
 ### pose/cross-view-tracker.js
 
@@ -2792,6 +2821,8 @@ walked until the next run.
 math, fundamental-matrix / epipolar utilities, Hungarian assignment. Also
 hosts the lazy-H5 frame loader and the user-facing triangulation orchestration
 (single-frame, all-frames, multi-frame range).
+
+**Triangulate All's per-group step, identity grouping, prior-3D adoption, eager sweep and the resident frame sweep are `pose/triangulate-all-core.js`** (DOM-free, shared with the command-line LUCID); this module imports and re-exports them and keeps the progress card, the lazy windows and the redraws.
 
 **The pure math lives in `pose/triangulation-core.js`** (DLT, refinement,
 reprojection, errors, `triangulateAndReproject`, `invert3x3`, and the tracker's
@@ -3377,6 +3408,33 @@ Frame / All / Multi-Frame, reprojection-error visualization, lazy SLP
 loading, "Triangulation needed" badge.
 
 ---
+
+### pose/triangulate-all-core.js
+
+**Purpose.** Triangulate All without the page. The per-group step
+(`prepareGroupStep`: camera-name fix-ups and the >=2-usable-views gate;
+`applyGroupStep`; `triangulateGroupStep`), the solve-settings key
+(`triangulationSettingsKey`), identity grouping after Track All
+(`ensureGroupsFromIdentities`), adoption of an identical prior group's 3D
+(`findEquivalentPriorGroup`, `adoptPrior3d`), the eager Triangulate All sweep
+(`framesToTriangulate`, `dropGroupsDerivedReprojections`,
+`triangulateFramesEager(session, cameras, frames, solver, hooks)`), Group by
+Identity & Triangulate (`createIdentityGroupingRun`, `groupFrameByIdentity`, the
+per-frame body `ui/export-modals.js` sweeps; `groupByIdentityAndTriangulateResident`),
+the fully resident frame sweep (`sweepResidentFrames`, the non-windowed branch of
+`sweepLazyFrameWindows`) and the toolbar's choice of pass
+(`triangulateAllRoute(method, session)`: `'ba'` | `'identity'` | `'dlt'`). Split
+out of `pose/triangulation.js` and `ui/export-modals.js` unchanged, so the app
+and the command-line LUCID (`cli/track.mjs`) run the same code. Importing it
+registers the solver core's settings hooks (as `pose/triangulation.js` did).
+DOM-free.
+
+**Imports.** `./pose-data.js`, `./triangulation-core.js`, `../ui/settings.js`.
+**Imported by** `pose/triangulation.js` (re-exports `triangulationSettingsKey`,
+`ensureGroupsFromIdentities`, `findEquivalentPriorGroup`, `adoptPrior3d`),
+`ui/export-modals.js`, `ui/ui-wiring.js` (`triangulateAllRoute`),
+`cli/track.mjs`. **Tests.** `tests/test-track-triangulate-cores.mjs`,
+`tests/e2e/cli-parity.mjs`.
 
 ### pose/lazy-residency.js
 
@@ -4607,6 +4665,8 @@ clicks, alignment and fit at 1400 and 640 px, the frame editor, an FPS edit).
 **Purpose.** Modal dialogs for bulk-triangulation and export (Group-by-Track,
 Group-by-Identity, multi-frame triangulation, SLP per-session, SLP by-camera,
 SLP all-sessions, JSON labels, points3d H5, reproj H5).
+
+`groupByIdentityAndTriangulateAll`'s per-frame grouping and its counts are `pose/triangulate-all-core.js` (`createIdentityGroupingRun`, `groupFrameByIdentity`); this module keeps the progress card and the status line.
 
 **Key exports.**
 - `showGroupByTrackModal()` — modal that bulk-groups by trackIdx, then
@@ -7188,6 +7248,18 @@ through the hub's `triangulatePlaneAndReport` / `fitPlaneAndReport`.
 
 **Imported by** `ui/plane-definition.js`.
 
+### ui/plane-state.js
+
+**Purpose.** The `planeState` (plane model, editor selection, display sizes) and
+`originState` (Set Origin wizard step, the defined origin `frame`) objects,
+moved unchanged out of `ui/plane-definition.js` and `ui/origin-definition.js`
+(which re-export them) so `import-export/plane-metadata.js` — and through it the
+command-line LUCID — loads without the page. DOM-free.
+
+**Imports.** `../pose/plane-data.js` (`PlaneModel`). **Imported by**
+`ui/plane-definition.js`, `ui/origin-definition.js`,
+`import-export/plane-metadata.js`.
+
 ### ui/plane-definition.js
 
 > **This module was SPLIT.** The panel's parts and three cross-cutting helpers
@@ -7224,6 +7296,8 @@ the user marks up; this module owns how the user *draws* that plane and owns
 nothing about the solve. The data model (`PlaneNodePool`, `PlaneSkeleton`,
 `PlaneInstance`, `PlaneModel`) lives in `pose/plane-nodes.js` +
 `pose/plane-data.js` and is partly re-exported here.
+
+`planeState` is declared in `ui/plane-state.js` (DOM-free) and re-exported here.
 
 The pool, the planes and the origin frame live in app-session memory; the
 per-view 2D lives on the active `Session`. **All of it is persisted** by
@@ -7837,6 +7911,8 @@ the Planes section's "+ Add" deliberately have neither paragraph nor ⓘ.
 
 **Purpose.** "Set Origin Mode" — the wizard that collects the two inputs
 `pose/origin-frame.js` needs, applies the result, and reports it.
+
+`originState` is declared in `ui/plane-state.js` (DOM-free) and re-exported here.
 
 **The wizard.** Three steps, because both inputs are picked in the 3D scene and
 each must be committed before the next is meaningful:
@@ -9774,6 +9850,8 @@ of every keyboard shortcut**
 survive reloads. The catalog is the single source of truth for the Settings ▸
 Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
 
+**No storage (the command-line LUCID).** `useSettingsSnapshot(obj)` replaces the settings in effect with `obj` — the JSON stored under `SETTINGS_STORAGE_KEY` (`lucid.settings.v1`), read with the same checks and clamps — without persisting it; `null` = the defaults. Without `localStorage` the module loads its defaults (its read is in a try).
+
 **Catalog entries.** `{ id, label, category, binding, editable, dispatched }`.
 `binding` is a "+"-joined accelerator (modifier tokens: `Mod` = Ctrl-or-Cmd,
 `Ctrl`, `Cmd`/`Meta`, `Shift`, `Alt`/`Option`/`Opt`; last token is the key) for
@@ -11089,6 +11167,8 @@ drive a private timer-based stepper (`startNoVideoPlayback` /
 `stopNoVideoPlayback` / `toggleNoVideoPlayback`) that advances frames at
 `state.fps` over `[0, totalFrames-1]`, rendering each via `navigateToFrame` and
 stopping at the last frame; the step transport buttons/keys stop it first.
+
+The toolbar's Triangulate All picks its pass with `triangulateAllRoute` (`pose/triangulate-all-core.js`), which the command-line LUCID reads too.
 
 **Key exports.**
 - Menu / setup: `setupMenus`, `setupUI`. The menu bar ends with a **Help**
@@ -12871,6 +12951,8 @@ session, per-camera SLPs, single-SLP, multi-session, video-only,
 calibration-only. Owns view/grid layout, video selection prompts,
 filesystem enumeration, decoder rebuild.
 
+The per-camera folder loader's instance loop, its folder-to-camera rule and its move-to-unlinked step are `addCameraSlpDataToSession`, `cameraDirMatches` and `moveInstancesToUnlinked` in `import-export/slp-session-build.js` (with `addColumnarFramesToSession`, re-exported here), shared with the command-line LUCID.
+
 **Compact copies.** The single-SLP folder loader and the lazy project reopen end on `withCompactNote` (`import-export/compact-save.js`): a file saved as a compact copy opens with a warning status saying its keypoints and 3D were rounded.
 
 **Key exports.**
@@ -14504,6 +14586,8 @@ project state, so it is saved, and plane edits mark the project dirty. Same
 shape and the same three invariants as `import-export/visibility-metadata.js`;
 one module owns the key list so a writer and a reader cannot drift.
 
+Reads `planeState` / `originState` from `ui/plane-state.js` (no longer from the two UI modules), so it loads without the page.
+
 **The scope split, and why one payload is written N times.** `metadata.lucid` is
 per SESSION, but the plane model is not:
 - The **node pool, the planes, the 3D Mesh Objects and the origin frame are
@@ -14695,6 +14779,8 @@ the shared table first and SLEAP's **separate** edge-type id space (1 = regular,
 SLP-LABELS bytes-builder used by export, points3d / reproj H5 builders,
 parser stubs that spawn `slp-import-worker.js`. The "low-level" file
 layer.
+
+**Moved out, re-exported here:** `parseSlpH5`, `parseSlpViaSleapIO`, `instancePointsMatch`, `instanceMatchesPoints` to `import-export/slp-read.js`; `parseCalibrationTOML` / `parseCalibrationJSON` to `import-export/calibration-parse.js`; `makePooledSioInstances`, `buildSlpLabelsAllViews` to `import-export/slp-labels-build.js` — all DOM-free, shared with the command-line LUCID.
 
 **Per-camera export is STREAMED on a lazy project (`exportCameraSlpStreaming`).**
 The eager builders iterate `session.frameGroups` — the RESIDENT map — so on a
@@ -15168,6 +15254,8 @@ saveAs, saveCompactCopy, saveProjectSlp, saveProject), load dispatcher
 (`handleLoadProject`), session-frame serialization helpers, the
 loading-overlay/status-text UI helpers.
 
+`buildSlpBytes`'s eager branch builds its `Labels` with `buildProjectSlpLabels` (`import-export/slp-labels-build.js`, shared with the command-line LUCID), passing each session's views and video files.
+
 **Key exports.**
 - **Save Compact Copy.** `saveCompactCopy({pickFile?})` (File menu): the warning
   dialog (`ui/compact-save-modal.js`, which opens the save picker inside its own
@@ -15394,11 +15482,74 @@ the status bar at the bottom.
 
 ---
 
+### import-export/slp-read.js
+
+**Purpose.** Read a `.slp` into the `slpData` shape the importers build sessions
+from: `parseSlpViaSleapIO` (sleap-io.js's streaming reader, from
+`globalThis.SleapIO`) and `parseSlpH5` (the raw `loading/slp-import-worker.js`,
+`{ columnar: true }` for per-camera folders), plus the dedup matchers
+`instancePointsMatch` / `instanceMatchesPoints`. Moved unchanged from
+`import-export/file-io.js` (which re-exports them). Both readers run in a Worker
+whose files resolve against `document.baseURI`, or without a page against
+`setAppBaseURI(url)` (`appBaseURI()`). DOM-free.
+
+**Imported by** `import-export/file-io.js`, `import-export/slp-session-build.js`,
+`cli/track.mjs`.
+
+### import-export/calibration-parse.js
+
+**Purpose.** `parseCalibrationTOML(text)` (sleap-io / anipose `[cam_N]`
+sections) and `parseCalibrationJSON(text)` -> `Camera[]`. Moved unchanged from
+`import-export/file-io.js` (which re-exports both). DOM-free. **Imported by**
+`import-export/file-io.js`, `cli/track.mjs`.
+
+### import-export/slp-session-build.js
+
+**Purpose.** Build LUCID sessions from a parsed `.slp`, DOM-free, shared by the
+app's loaders and the command-line LUCID. From `import-export/slp-import.js`:
+`parseSlpForImport`, `reconstructInstanceGroupsFromDicts`,
+`reconstructInstanceGroupsFromSession(Lazy)`, `restoreGroupingAndUnlink`, and
+`buildSessionFromSlpData(slpData, sessIdx, skeleton, {onProgress})` — one
+session's cameras (calibration, else one per video), skeleton and tracks, the
+three `metadata.lucid` readers (visibility, smoothing, planes; call
+`resetPlaneState()` before a load), file provenance, every 2D instance, then
+grouping and 3D; returns `{session, cameras, videoIdxToCameraName,
+sessionHas3d}`. From `loading/session-loader.js` (per-camera folders):
+`addColumnarFramesToSession`, `addCameraSlpDataToSession(session, cam, slpData,
+trackRemap)`, `moveInstancesToUnlinked(session)` and `cameraDirMatches(dir,
+cam)`. Reads sleap-io.js from `globalThis.SleapIO`.
+
+**Imports.** `../pose/pose-data.js`, `./slp-read.js`,
+`./import-track-resolve.js`, `./smoothing-metadata.js`,
+`./visibility-metadata.js`, `./plane-metadata.js`,
+`./frame-identity-metadata.js`, `./slp-provenance.js`,
+`../loading/track-union.js`. **Imported by** `import-export/slp-import.js`,
+`loading/session-loader.js`, `cli/track.mjs`. **Tests.**
+`tests/test-track-triangulate-cores.mjs`, `tests/test-cli-track.mjs`,
+`tests/e2e/cli-parity.mjs` (and every load e2e).
+
+### import-export/slp-labels-build.js
+
+**Purpose.** Turn sessions into a sleap-io.js `Labels` for saving, DOM-free:
+`buildSlpLabelsAllViews(session, views, videoFiles)` and
+`makePooledSioInstances` (moved unchanged from `import-export/file-io.js`,
+re-exported there), and `buildProjectSlpLabels(sessions, viewsFor,
+videoFilesFor)` — the eager branch of `save-load.js` `buildSlpBytes`: every
+session's labels merged, skeletons and tracks deduplicated by name, provenance
+from `buildSaveProvenance`. Reads sleap-io.js from `globalThis.SleapIO`. Bytes are
+unchanged (`tests/e2e/save-golden-digest.mjs`).
+
+**Imports.** the four `metadata.lucid` writers, `./slp-provenance.js`,
+`../pose/pose-data.js`. **Imported by** `import-export/file-io.js`,
+`import-export/save-load.js`, `cli/track.mjs`.
+
 ### import-export/slp-import.js
 
 **Purpose.** SLP/H5 project import + 3D-points-overlay import. Three
 workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
+
+**Session building moved to `import-export/slp-session-build.js`** (DOM-free, shared with the command-line LUCID): `parseSlpForImport`, the grouping reconstructors, `restoreGroupingAndUnlink` (re-exported here) and `buildSessionFromSlpData` (each session's cameras, tracks, `metadata.lucid` readers, 2D and grouping), which `handleLoadSlpFile` calls per session before opening its videos.
 
 **Compact copies.** `handleLoadSlpFile`'s end-of-load status goes through `withCompactNote` (`import-export/compact-save.js`): a compact copy opens with a warning saying what was rounded.
 
@@ -15710,6 +15861,56 @@ compatibility check, track merging, frame merging, group rebuild.
 
 **User-facing features.** Backs File ▸ Load SLP's merge path (`handleAddSlp`) — merging an SLP into
 an existing session without overwriting it.
+
+---
+
+## cli/
+
+The command-line LUCID: Track All, Triangulate All and save in plain Node, for
+cluster array jobs. Usage and the Spock notes: `cli/README.md`.
+
+### cli/track.mjs
+
+**Purpose.** `node cli/track.mjs --slp <project.slp | per-camera .slp files>
+[--calibration calibration.toml] --num-animals N|auto --out tracked.slp
+[--frames a-b] [--no-triangulate] [--settings settings.json]`. Loads like File ▸
+Load SLP (`buildSessionFromSlpData`) or Load Session Folder
+(`parseSlpH5` columnar + `addCameraSlpDataToSession` + `moveInstancesToUnlinked`,
+files matched to calibration cameras by folder, then file name, or `CAM=path`),
+tracks like `runTrackingPass` (whole project, or Track Frame Range with
+`--frames`, 0-based), triangulates by `triangulateAllRoute` and saves like
+`buildSlpBytes`'s eager branch, writing the input's video references. Eager
+only. Not run (they read the videos): the ID-switch checks after Track All and
+the tail-mark pass. `--settings` takes the app's stored settings JSON
+(`useSettingsSnapshot`). Exports `parseArgs`, `main`.
+
+**Imports.** `./node-resolve.mjs`, `./node-platform.mjs`, and the DOM-free app
+modules above. **Tests.** `tests/test-cli-track.mjs`, `tests/e2e/cli-parity.mjs`,
+`tests/e2e/_real-cli-parity.mjs` (real data).
+
+### cli/node-platform.mjs
+
+**Purpose.** The browser APIs the app's readers use, for Node.
+`installNodePlatform()` sets `globalThis.Worker` = `NodeWebWorker` (a Web Worker
+on `node:worker_threads`: `blob:` classic scripts such as sleap-io.js's I/O
+worker, and module workers such as `loading/slp-import-worker.js`) and hides
+Node's `localStorage`; returns the repository root for `document.baseURI`.
+`DiskFile` is a lazily read `File` for a path, posted to a worker as its path.
+`setWorkerConsoleQuiet(q)`.
+
+### cli/node-worker-bootstrap.mjs
+
+**Purpose.** The worker side of `NodeWebWorker`: `self`, `postMessage`,
+`onmessage`, `importScripts` (global scope), `WorkerGlobalScope` (Emscripten's
+worker test) and `FileReaderSync` over a revived `DiskFile`, which h5wasm's
+WORKERFS reads through (with the cold-read patch).
+
+### cli/node-resolve.mjs
+
+**Purpose.** `index.html`'s import map for Node (`module.registerHooks`, Node >=
+22.15): bare specifiers to `lib/`, CDN URLs to their `offline-deps.json` copies,
+and a stub that throws on use for one that is not vendored (`yaml` unless
+`scripts/offline_deps.py install` ran; sleap-io.js reads `.slp` without it).
 
 ---
 
