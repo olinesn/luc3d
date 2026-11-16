@@ -334,6 +334,7 @@ export async function handleLoadSlpFile(slpFile) {
             { onProgress: function (msg) { showLoading(msg); }, claimedVideos: claimedVideos, videoReaders: videoReaders });
         var cameras = built.cameras;
         var videoIdxToCameraName = built.videoIdxToCameraName;
+        var sessVideoIndices = built.sessVideoIndices;
         var session = built.session;
         lastSessionHas3d = built.sessionHas3d && session.cameras.length >= 2;
 

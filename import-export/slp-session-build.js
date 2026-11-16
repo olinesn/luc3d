@@ -923,7 +923,8 @@ export function makeCameraNamesUnique(cameras, videoIdxToCameraName) {
  *   `claimedVideos` and `videoReaders` are the load's, shared by its sessions
  *   (outside-frames.js `noteVideoReaders`).
  * @returns {Promise<{session: Session, cameras: Camera[], videoIdxToCameraName: Object,
- *   sessionHas3d: boolean}>}
+ *   sessVideoIndices: Set<number>, sessionHas3d: boolean}>}  `sessVideoIndices`:
+ *   the video indices this session's cameras read (empty = every video).
  */
 export async function buildSessionFromSlpData(slpData, slpSessIdx, skeleton, opts) {
     opts = opts || {};
@@ -1180,7 +1181,8 @@ export async function buildSessionFromSlpData(slpData, slpSessIdx, skeleton, opt
     }
     session.triangulationResults = new Map();
 
-    return { session: session, cameras: cameras, videoIdxToCameraName: videoIdxToCameraName, sessionHas3d: sessionHas3d };
+    return { session: session, cameras: cameras, videoIdxToCameraName: videoIdxToCameraName,
+        sessVideoIndices: sessVideoIndices, sessionHas3d: sessionHas3d };
 }
 
 /**
