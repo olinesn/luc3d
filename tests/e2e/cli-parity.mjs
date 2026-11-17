@@ -22,8 +22,12 @@
  *     (`--settings`): Triangulate All runs `triangulateAllFrames('ba')`.
  *  C. The same project, Track Frame Range 100–299 then Triangulate All vs
  *     `--frames 100-299`.
- *  D. Negative control: B's CLI output against a DLT run of the CLI on the
- *     same project differs (the comparison sees the 3D), and A's against B's.
+ *  D. Track All's ID-switch check by body size: a 120 s scene on a skeleton
+ *     with the size nodes; the app checks at its fps (the clips' 30), the CLI
+ *     at `--fps`; both save the same ID Switches checklist (`idSwitchReview`,
+ *     in the digest). Without `--fps` the CLI skips the check and saves none.
+ *  E. Negative control: B's CLI output against a DLT run of the CLI on the
+ *     same project differs (the comparison sees the 3D), and A's against C's.
  * Not compared: video paths and shapes (the app writes the videos it opened,
  * the CLI the ones the input referenced) and provenance timestamps.
  *
@@ -208,8 +212,49 @@ try {
         /\n299\n  G /.test(C.b.text) && /\n300\n  \n  U /.test(C.b.text),
         'C: frames 100 and 299 are tracked, 99 and 300 are not (the range is 0-based and inclusive)');
 
-    // ---- D. negative controls ----
-    console.log('\n-- D. negative controls --');
+    // ---- D. Track All's ID-switch check by body size ----
+    // A 120 s scene (the check needs 60 s of tracking) on a skeleton with the size nodes.
+    // The app checks at its fps box's rate (the clips' 30 fps); the CLI at --fps.
+    console.log('\n-- D. ID-switch check by body size (--fps) --');
+    const sizeDir = path.join(tmp, 'scene-size');
+    const sizeScene = await writeCliScene(sizeDir, { frames: 3600, sizeSkeleton: true, seed: 11 });
+    page = await openApp();
+    await page.evaluate(() => {
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.multiple = true; inp.webkitdirectory = true; inp.id = '__dir';
+        inp.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(inp);
+    });
+    await page.setInputFiles('#__dir', sizeDir);
+    const appFps = await page.evaluate(async () => {
+        const sl = await import('/loading/session-loader.js');
+        await sl.handleLoadSessionFolderPerCamera(Array.from(document.getElementById('__dir').files), true);
+        return window.__lucid.state.session ? window.__lucid.state.fps : null;
+    });
+    check(appFps > 0, 'app: loaded the 120 s scene, fps ' + appFps);
+    check(await trackAll(page, sizeScene.animals), 'app: Track All finished (and ran its size check)');
+    await triangulateAll(page);
+    await save(page, out('D-app.slp'));
+    check(page.errs.length === 0, 'app: no page errors', page.errs);
+    await page.context().close();
+    const sizeFiles = sizeScene.cameras.map(c => path.join(sizeDir, c, c + '.predictions.slp'));
+    r = cli(['--slp', ...sizeFiles, '--calibration', path.join(sizeDir, 'calibration.toml'),
+        '--num-animals', String(sizeScene.animals), '--fps', String(appFps), '--out', out('D-cli.slp')]);
+    check(r.status === 0 && /ID-switch check \(body size\): .* close encounters at /.test(r.stderr),
+        'CLI: --fps ran the size check: ' + ((r.stderr.match(/ID-switch check.*$/m) || [''])[0]));
+    const D = await compare('D', out('D-app.slp'), out('D-cli.slp'));
+    const reviewOf = (d) => (d.text.match(/^idSwitchReview (.*)$/m) || [])[1];
+    const rv = reviewOf(D.a) && JSON.parse(reviewOf(D.a));
+    check(rv && rv.checks && rv.checks.size && rv.checks.size.encounters > 0 && reviewOf(D.a) === reviewOf(D.b),
+        'D: both saved the same ID Switches checklist (' + (rv ? rv.checks.size.encounters + ' close encounters, ' +
+        rv.checks.size.points.length + ' flagged' : 'none') + ')');
+    r = cli(['--slp', ...sizeFiles, '--calibration', path.join(sizeDir, 'calibration.toml'),
+        '--num-animals', String(sizeScene.animals), '--out', out('D-cli-nofps.slp')]);
+    check(r.status === 0 && /body size\): skipped .*--fps/.test(r.stderr) && !reviewOf(await digestSlp(out('D-cli-nofps.slp'))),
+        'CLI: without --fps the check is skipped, said so, and nothing is saved for it');
+
+    // ---- E. negative controls ----
+    console.log('\n-- E. negative controls --');
     r = cli(['--slp', projectFile, '--num-animals', '3', '--out', out('B-cli-dlt.slp'), '--quiet']);
     const dlt = await digestSlp(out('B-cli-dlt.slp'));
     check(!compare3d(dlt, B.b, REL_TOL_3D).ok, 'a DLT run differs from the Refined one in 3D (the comparison sees the 3D)');

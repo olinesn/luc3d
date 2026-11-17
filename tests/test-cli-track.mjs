@@ -11,7 +11,10 @@
  *  3. --no-triangulate leaves Track All's own 3D;
  *  4. --frames a-b tracks only a..b (0-based, inclusive);
  *  5. CAMERA=path names a camera; usage errors exit 2 with a message;
- *  6. the platform: DiskFile reads lazily and slices like a File, and the
+ *  6. --fps runs Track All's ID-switch check by body size and saves its
+ *     checklist, without changing the tracking; --no-size-check, the settings'
+ *     autoSwitchCheck 0 and a missing --fps skip it; a bad --fps is refused.
+ *  7. the platform: DiskFile reads lazily and slices like a File, and the
  *     import map resolves the page's bare specifiers.
  */
 import fs from 'node:fs';
@@ -94,7 +97,43 @@ try {
     r = run(['--help']);
     check(r.status === 0 && /FRAMES ARE 0-BASED/.test(r.stdout), '--help says frames are 0-based');
 
-    console.log('-- 6. the Node platform --');
+    console.log('-- 6. ID-switch check by body size --');
+    const sizeDir = path.join(tmp, 'rec-size');
+    const sizeScene = await writeCliScene(sizeDir, { frames: 2400, sizeSkeleton: true, seed: 11 });
+    const sizeCams = sizeScene.cameras.map(c => path.join(sizeDir, c, c + '.predictions.slp'));
+    const sizeArgs = (...more) => ['--slp', ...sizeCams, '--calibration', path.join(sizeDir, 'calibration.toml'), '--num-animals', '3', ...more];
+    const reviewOf = (d) => { const m = d.text.match(/^idSwitchReview (.*)$/m); return m ? JSON.parse(m[1]) : null; };
+    const noReview = (d) => d.text.replace(/^(idSwitchReview|lucidKeys) .*\n/mg, '');
+    r = run(sizeArgs('--fps', '30', '--out', path.join(tmp, 's1.slp')));
+    const s1 = await digestSlp(path.join(tmp, 's1.slp')), rv = reviewOf(s1);
+    check(r.status === 0 && /ID-switch check \(body size\): .* close encounters at 30 fps/.test(r.stderr),
+        '--fps 30 runs the check: ' + ((r.stderr.match(/ID-switch check.*$/m) || [''])[0]));
+    check(rv && rv.v === 1 && rv.checks.size && rv.checks.size.fps === 30 && rv.checks.size.fpsFromVideo === false &&
+        rv.checks.size.encounters > 0 && /lucidKeys .*idSwitchReview/.test(s1.text),
+        'its checklist is saved (metadata.lucid.idSwitchReview): ' + (rv ? rv.checks.size.encounters + ' encounters, ' + rv.checks.size.points.length + ' points' : 'none'));
+    r = run(sizeArgs('--fps', '30', '--no-size-check', '--out', path.join(tmp, 's2.slp')));
+    const s2 = await digestSlp(path.join(tmp, 's2.slp'));
+    check(r.status === 0 && !/ID-switch check/.test(r.stderr) && !reviewOf(s2), '--no-size-check: no check, no checklist');
+    check(!firstDifference(noReview(s1), noReview(s2)) && compare3d(s1, s2, 0).ok, 'the check changes nothing else in the file');
+    fs.writeFileSync(path.join(tmp, 'nocheck.json'), JSON.stringify({ trackingThresholds: { autoSwitchCheck: 0 } }));
+    r = run(sizeArgs('--fps', '30', '--settings', path.join(tmp, 'nocheck.json'), '--out', path.join(tmp, 's3.slp')));
+    check(r.status === 0 && !/ID-switch check/.test(r.stderr) && !reviewOf(await digestSlp(path.join(tmp, 's3.slp'))),
+        'settings autoSwitchCheck 0 (the Tracking Wizard\'s box unticked): no check');
+    r = run(sizeArgs('--out', path.join(tmp, 's4.slp')));
+    check(r.status === 0 && /body size\): skipped .*--fps/.test(r.stderr) && !reviewOf(await digestSlp(path.join(tmp, 's4.slp'))),
+        'without --fps: skipped, and it says why');
+    const shortDir = path.join(tmp, 'rec-short');
+    const shortScene = await writeCliScene(shortDir, { frames: 900, sizeSkeleton: true, seed: 11 });
+    r = run(['--slp', ...shortScene.cameras.map(c => path.join(shortDir, c, c + '.predictions.slp')), '--calibration',
+        path.join(shortDir, 'calibration.toml'), '--num-animals', '3', '--fps', '30', '--out', path.join(tmp, 's5.slp')]);
+    check(r.status === 0 && /body size\): skipped — needs at least 60 s of tracking/.test(r.stderr), 'a 30 s recording: skipped, as in the app');
+    r = run(['--slp', ...cams, '--calibration', calib, '--num-animals', '3', '--fps', '30', '--out', path.join(tmp, 's6.slp')]);
+    check(r.status === 0 && /body size\): skipped — The skeleton has too few of the size nodes/.test(r.stderr),
+        'a skeleton without the size nodes: skipped, and it says why');
+    r = run(sizeArgs('--fps', 'fast', '--out', path.join(tmp, 'x.slp')));
+    check(r.status === 2 && /--fps must be a positive number/.test(r.stderr), 'a bad --fps is refused');
+
+    console.log('-- 7. the Node platform --');
     const f = new DiskFile(calib);
     const text = fs.readFileSync(calib, 'utf8');
     check(f.size === Buffer.byteLength(text) && (await f.text()) === text, 'DiskFile: size and text');

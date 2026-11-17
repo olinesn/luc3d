@@ -45,7 +45,7 @@ python3 server.py --offline
 `cli/track.mjs` runs Track All, Triangulate All and Save in plain Node (no
 browser, no video), e.g. on a cluster:
 ```bash
-node cli/track.mjs --slp rec/*/*.predictions.slp --calibration rec/calibration.toml --num-animals 3 --out rec/tracked.slp
+node cli/track.mjs --slp rec/*/*.predictions.slp --calibration rec/calibration.toml --num-animals 3 --fps 30 --out rec/tracked.slp
 ```
 Usage, settings and Slurm notes: [`cli/README.md`](cli/README.md).
 

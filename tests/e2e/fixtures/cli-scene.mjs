@@ -15,6 +15,10 @@
  *
  * Node only (writes the `.slp` files with sleap-io.js through the CLI's Node
  * platform). `writeCliScene(dir, opts)` returns { dir, cameras, frames, animals }.
+ * opts: `frames` (600), `seed` (7), `sizeSkeleton` (false): a skeleton named
+ * with the body-size check's nodes (pose/id-switch-check.js SIZE_BONES) instead
+ * of the demo mouse's, so Track All's ID-switch check by body size can run.
+ * Without it the output is unchanged.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,7 +44,10 @@ export async function writeCliScene(dir, opts) {
     const SIO = await import(new URL('lib/sleap-io/index.browser.js', baseURI).href);
     const demo = await import('../../../demo-data.js');
     const cams = demo.createDemoCalibration();
-    const skel = demo.createDemoSkeleton();
+    const skel = opts.sizeSkeleton
+        ? { name: 'mouse', nodes: ['Nose', 'Ear_L', 'Ear_R', 'Head', 'Neck', 'Trunk', 'TTI', 'Tail_0'],
+            edges: [[0, 3], [1, 3], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7]] }
+        : demo.createDemoSkeleton();
     const NN = skel.nodes.length;
 
     let s = seed >>> 0;

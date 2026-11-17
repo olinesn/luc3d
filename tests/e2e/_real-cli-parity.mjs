@@ -11,6 +11,10 @@
  *
  *   node tests/e2e/_real-cli-parity.mjs <recording-folder> <animals> [pattern]
  *
+ * Both run Track All's ID-switch check by body size: the app at its fps box's
+ * rate (30 with the videos deferred), the CLI at `--fps` (FPS=, default 30); the
+ * script refuses to compare if the two differ.
+ *
  * `<recording-folder>/calibration.toml` and `<recording-folder>/<cam>/*<pattern>`
  * (default `.predictions.slp`); copy the folder locally first (a cold cloud
  * file reads slowly). Headless; prints both run times.
@@ -28,6 +32,7 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const DIR = path.resolve(process.argv[2] || '');
 const ANIMALS = Number(process.argv[3] || 0);
 const PATTERN = process.argv[4] || '.predictions.slp';
+const FPS = Number(process.env.FPS || 30);
 const PORT = Number(process.env.PORT || 8474);
 if (!fs.existsSync(path.join(DIR, 'calibration.toml')) || !ANIMALS) {
     console.error('usage: node tests/e2e/_real-cli-parity.mjs <recording-folder> <animals> [pattern]');
@@ -52,7 +57,7 @@ console.log(camFiles.length + ' cameras');
 
 let t = Date.now();
 const r = spawnSync(process.execPath, [path.join(repoRoot, 'cli', 'track.mjs'), '--slp', ...camFiles,
-    '--calibration', path.join(stage, 'calibration.toml'), '--num-animals', String(ANIMALS),
+    '--calibration', path.join(stage, 'calibration.toml'), '--num-animals', String(ANIMALS), '--fps', String(FPS),
     '--out', path.join(tmp, 'cli.slp')], { encoding: 'utf8' });
 console.log(r.stderr.trim().split('\n').map(l => '  cli: ' + l.slice(0, 200)).join('\n'));
 console.log('CLI ' + ((Date.now() - t) / 1000).toFixed(1) + ' s, exit ' + r.status);
@@ -90,9 +95,10 @@ try {
         tr.setTrackerNumAnimals(n);
         await tr.trackAll();
         document.querySelectorAll('.track-summary-modal, .modal-overlay').forEach(e => e.remove());
-        return { lazy: !!s.lazyLoader, cams: s.cameras.length };
+        return { lazy: !!s.lazyLoader, cams: s.cameras.length, fps: window.__lucid.state.fps };
     }, ANIMALS);
     if (info.error) throw new Error('the app did not load the folder: ' + info.error);
+    if (info.fps !== FPS) throw new Error('the app checked ID switches at ' + info.fps + ' fps, the CLI at ' + FPS + ': set FPS=' + info.fps);
     await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('tbTriangulateAll').click(); });
     await page.waitForFunction(() => /^(Grouped|Triangulated)/.test(document.getElementById('statusText').textContent));
     const dl = page.waitForEvent('download');
@@ -104,12 +110,11 @@ try {
     server.kill();
 }
 const a = await digestSlp(path.join(tmp, 'app.slp')), b = await digestSlp(path.join(tmp, 'cli.slp'));
-// The app's automatic ID-switch checks (Track All runs the size check on a
-// recording of 60 s or more) write `idSwitchReview`; the CLI does not run them.
-const keysLine = (d) => (d.text.match(/^lucidKeys .*$/m) || [''])[0];
-if (keysLine(a) !== keysLine(b)) console.log('metadata.lucid keys differ (the CLI runs no ID-switch check):\n  app ' + keysLine(a) + '\n  cli ' + keysLine(b));
-const strip = (d) => d.text.replace(/^lucidKeys .*$/mg, '');
-const diff = firstDifference(strip(a), strip(b));
+// Both ran Track All's body-size ID-switch check, so the digests include the
+// checklist it saved (`idSwitchReview`).
+const review = (d) => (d.text.match(/^idSwitchReview .*$/m) || ['(none)'])[0];
+console.log('ID-switch checklist: ' + (review(a) === review(b) ? 'identical' : 'DIFFERENT') + ', ' + review(a).slice(0, 160));
+const diff = firstDifference(a.text, b.text);
 const c3 = compare3d(a, b, 1e-9);
 console.log((diff ? 'DIFFERENT' : 'IDENTICAL') + ' identities, per-frame identities, groups, members and unlinked poses: ' +
     a.groups.toLocaleString('en-US') + ' groups, ' + a.with3d.toLocaleString('en-US') + ' with 3D, identities ' + a.identities.join(','));

@@ -48,6 +48,14 @@ Options:
                             still covers the project. FRAMES ARE 0-BASED, like
                             the .slp frame_idx and the sleap / sleap-nn CLIs
                             (the app's frame readout counts from 1).
+  --fps <rate>              the recording's frame rate. Track All then checks
+                            the new identities for switches by body size, as
+                            the app does after Track All (Tracking Wizard:
+                            "Check ID switches after tracking (body size)");
+                            the result is the app's ID Switches tab. The app
+                            reads the rate from the video; without --fps the
+                            check is skipped. Needs 60 s or more of tracking.
+  --no-size-check           do not run that check
   --no-triangulate          stop after Track All
   --settings <file.json>    tracking / triangulation settings: the JSON the app
                             keeps in its browser storage under "lucid.settings.v1"
@@ -60,8 +68,7 @@ Options:
   -h, --help                this help
 
 The output opens in LUCID as if Track All and Triangulate All had been run and
-the project saved. Not run (they need the videos): the ID-switch checks Track
-All runs afterwards, and the tail-mark pass.
+the project saved. Not run (it needs the videos): the ID-switch check by images.
 `;
 
 function fail(msg, code) {
@@ -72,7 +79,7 @@ function fail(msg, code) {
 /** Parse argv into options (exits on a usage error). */
 export function parseArgs(argv) {
     const o = { slp: [], calibration: null, numAnimals: undefined, out: null, frames: null,
-        triangulate: true, settings: null, quiet: false, verbose: false, help: false };
+        triangulate: true, settings: null, fps: null, sizeCheck: true, quiet: false, verbose: false, help: false };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         const value = () => {
@@ -96,7 +103,12 @@ export function parseArgs(argv) {
             if (!m) fail('--frames must be a-b (0-based, inclusive), not "' + v + '"');
             o.frames = { start: Number(m[1]), end: Number(m[2]) };
             if (o.frames.end < o.frames.start) fail('--frames: the end is before the start');
-        } else if (a === '--no-triangulate') o.triangulate = false;
+        } else if (a === '--fps') {
+            const v = value();
+            if (!/^\d+(\.\d+)?$/.test(v) || !(Number(v) > 0)) fail('--fps must be a positive number, not "' + v + '"');
+            o.fps = Number(v);
+        } else if (a === '--no-size-check') o.sizeCheck = false;
+        else if (a === '--no-triangulate') o.triangulate = false;
         else if (a === '--settings') o.settings = value();
         else if (a === '--quiet') o.quiet = true;
         else if (a === '--verbose') o.verbose = true;
@@ -163,6 +175,8 @@ export async function main(argv) {
     const { unionTrackNames } = await import('../loading/track-union.js');
     const { hasRealCalibration } = await import('../pose/placeholder-cameras.js');
     const trackCore = await import('../pose/track-all-core.js');
+    const { checkSizeSwitches } = await import('../pose/id-switch-check.js');
+    const switchReview = await import('../ui/id-switch-review.js');
     const triCore = await import('../pose/triangulate-all-core.js');
     const { createGroupSolver } = await import('../pose/triangulation-pool.js');
     const { buildProjectSlpLabels } = await import('../import-export/slp-labels-build.js');
@@ -292,6 +306,32 @@ export async function main(argv) {
         log(label + 'Track All: ' + res.numIdentities + ' identities (' + effectiveNumAnimals + ' animals' +
             (userNumAnimals ? '' : ', auto-detected') + ') across ' + frameIndices.length.toLocaleString('en-US') + ' frames' +
             (opts.frames ? ' (' + lo + '-' + hi + ', 0-based)' : '') + ' in ' + ((performance.now() - tt) / 1000).toFixed(1) + ' s');
+        // Then the ID-switch check by body size, as Track All runs it (pose/tracker.js, Tracking Wizard
+        // `autoSwitchCheck`, on by default), on the tracker's 3D, before Triangulate All. After a range it
+        // covers the whole session, as in the app. The image check needs the videos and is not run.
+        if (res.numIdentities > 1 && opts.sizeCheck && settings.getTrackingThreshold('autoSwitchCheck') > 0) {
+            const head = label + 'ID-switch check (body size): ';
+            const fps = opts.fps || (session.fps > 0 ? session.fps : 0);
+            if (!fps) log(head + 'skipped — give the recording\'s frame rate with --fps (the app reads it from the video)');
+            else if (!switchReview.hasTrackedIdentities(session)) log(head + 'skipped — no tracked 3D skeletons');
+            else {
+                const tc = performance.now();
+                let r;
+                try { r = await checkSizeSwitches(session, { fps }); }
+                catch (e) { r = { ok: false, reason: 'failed — ' + e.message, failed: true }; }
+                r.elapsedMs = performance.now() - tc;
+                if (r.ok) {
+                    r.fpsFromVideo = false;
+                    switchReview.recordIdSwitchResults(session, { size: r });
+                    const n = switchReview.idSwitchOnsets(r);
+                    log(head + (n ? n + ' possible switch' + (n === 1 ? '' : 'es') : 'nothing flagged') + ' in ' +
+                        r.encounters.length.toLocaleString('en-US') + ' close encounters at ' + fps + ' fps, in ' +
+                        (r.elapsedMs / 1000).toFixed(1) + ' s' + (n ? ' (listed in the app\'s ID Switches tab)' : ''));
+                } else {
+                    log(head + (r.failed ? '' : 'skipped — ') + r.reason);
+                }
+            }
+        }
         if (session.tailMarkedIdentity || session.identityMarks) {
             log(label + 'Skipped the tail-mark pass (it reads the videos): run Track All in the app for it');
         }

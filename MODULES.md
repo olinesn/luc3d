@@ -9531,8 +9531,9 @@ read a frozen "0/1"),
 `ui/load-graph.js` (`createLoadMeter`, `createLoadGraph`, `setLoadLine`, `cpuCores`),
 `ui/browser-hints.js` (`renderBraveFingerprintingHint`: in Brave with its fingerprinting
 protection on, the note under the CPU and GPU lines — `prog.braveHint(cores)`),
-`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
-`idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
+`ui/id-switch-review.js` (row keys, change-point helpers, `hasTrackedIdentities`,
+`idSwitchRows`, `recordIdSwitchResults` (keeping a run's results on the session,
+shared with the command line), `idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
 `ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`,
 `refreshIdSwitchHighlight`, `ID_SWITCH_SECTION_RGB`).
 
@@ -9568,6 +9569,12 @@ points), `idSwitchMarkers(res)` (+ repeats), `idSwitchOnsets(res)` (the
 change point of the same pair at the same contact as `agree` — "Both": their close
 spells overlap, give or take 1 s; or, without start frames, they end within 1 s —
 the nearest one wins);
+`hasTrackedIdentities(session)` (a group with 3D and an identity: what either check
+reads); `idSwitchRows(st, withRepeats)` (the tab's rows, a "Both" pair once, by frame);
+`recordIdSwitchResults(session, results, navigate?)` -> the cues kept (each check
+that ran replaces its own results, one that did not keeps them; fixes are dropped;
+ticks on rows still listed are kept; the caller marks the project dirty) — used by
+`ui/id-switch-modal.js` and `cli/track.mjs`, so the CLI's checklist is the app's;
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
@@ -16940,15 +16947,19 @@ cluster array jobs. Usage and the Spock notes: `cli/README.md`.
 
 **Purpose.** `node cli/track.mjs --slp <project.slp | per-camera .slp files>
 [--calibration calibration.toml] --num-animals N|auto --out tracked.slp
-[--frames a-b] [--no-triangulate] [--settings settings.json]`. Loads like File ▸
+[--frames a-b] [--fps rate] [--no-size-check] [--no-triangulate] [--settings settings.json]`. Loads like File ▸
 Load SLP (`buildSessionFromSlpData`) or Load Session Folder
 (`parseSlpH5` columnar + `addCameraSlpDataToSession` + `moveInstancesToUnlinked`,
 files matched to calibration cameras by folder, then file name, or `CAM=path`),
 tracks like `runTrackingPass` (whole project, or Track Frame Range with
 `--frames`, 0-based), triangulates by `triangulateAllRoute` and saves like
 `buildSlpBytes`'s eager branch with no video open (each camera's video from the
-file's record of it). Eager only. Not run (they read the videos): the ID-switch checks after Track All and
-the tail-mark pass. `--settings` takes the app's stored settings JSON
+file's record of it). Eager only. After Track All, with `--fps`, it runs the
+ID-switch check by body size as `runTrackingPass` does (`autoSwitchCheck`, on the
+tracker's 3D, before Triangulate All: `checkSizeSwitches` + `recordIdSwitchResults`),
+so the file carries the same `idSwitchReview`; without `--fps` (the app reads the rate
+from the video) it is skipped and says so. Not run (it reads the videos): the image
+check. `--settings` takes the app's stored settings JSON
 (`useSettingsSnapshot`). Exports `parseArgs`, `main`.
 
 **Imports.** `./node-resolve.mjs`, `./node-platform.mjs`, and the DOM-free app

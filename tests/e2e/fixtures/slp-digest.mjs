@@ -82,6 +82,8 @@ export async function digestSlp(file) {
             // Which metadata.lucid keys the file carries (an ID-switch review, planes, ...).
             const meta = slpData.sessions[si] && slpData.sessions[si].metadata && slpData.sessions[si].metadata.lucid;
             out.push('lucidKeys ' + (meta ? Object.keys(meta).sort().join(',') : '-'));
+            // The ID Switches checklist an automatic check left (Track All's body-size check).
+            if (meta && meta.idSwitchReview) out.push('idSwitchReview ' + JSON.stringify(meta.idSwitchReview));
             const fim = [];
             for (const rec of s.frameIdentityEntries()) {
                 fim.push(rec.frameIdx + ':' + rec.camName + ':' + rec.trackIdx + '=' + (rec.identityId === -1 ? '-1' : name.get(rec.identityId)));
