@@ -27,6 +27,8 @@
  *  8. Mutual behaviors: made in the editor, started from one animal and
  *     stopped from the other, stored once per pair, listed and drawn for both,
  *     labelled "↔".
+ *  9. Mark Range Reviewed starts with every animal ticked; an unticked animal
+ *     stays unlabelled.
  *
  * Run: node tests/e2e/behavior-labelling.mjs   (spawns its own http.server; PORT= to move it)
  */
@@ -338,6 +340,26 @@ try {
     check(eq(mu.lists, [1, 1]), 'it is listed for both animals');
     check(eq(mu.rows, [true, true, false]), `and drawn on both animals' timeline rows, not others' (${JSON.stringify(mu.rows)})`);
     check(eq(mu.label, ['sniff · Alice ↔ id_2']), `its video box reads "↔" (${JSON.stringify(mu.label)})`);
+
+    console.log('\n-- 9. Mark Range Reviewed --');
+    const openReviewed = async () => {
+        await page.click('[data-menu="behavior"]');
+        await page.click('#menuBehaviorReviewed');
+        await page.waitForSelector('.behavior-reviewed-modal');
+    };
+    await openReviewed();
+    const ticks = await page.evaluate(() => Array.from(document.querySelectorAll('.behavior-reviewed-modal [data-animal]')).map(c => [c.dataset.animal, c.checked]));
+    check(ticks.length === 3 && ticks.every(t => t[1]), `it starts with every animal ticked, not only the selected one (${JSON.stringify(ticks)})`);
+    await page.keyboard.press('Escape');
+    check(!(await page.isVisible('.behavior-reviewed-modal')), 'Esc closes it');
+    await openReviewed();
+    const left = ticks[2][0], marked = [ticks[0][0], ticks[1][0]];
+    await page.uncheck(`.behavior-reviewed-modal [data-animal="${left}"]`);
+    await page.fill('#behaviorRevFrom', '1901');
+    await page.fill('#behaviorRevTo', '1950');
+    await page.click('#behaviorRevApply');
+    const nots = (await bouts({ behaviorId: 'b1', present: false })).filter(b => b[3] === 1900 && b[4] === 1949).map(b => b[1]).sort();
+    check(eq(nots, marked.slice().sort()), `the range goes "not" for the ticked animals only (${JSON.stringify(nots)}, not ${left})`);
 
     check(errs.length === 0, `no page errors (${errs.join(' | ').slice(0, 300)})`);
     console.log(fails === 0 ? '\nPASS' : `\nFAIL — ${fails} check(s)`);

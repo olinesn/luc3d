@@ -1527,6 +1527,33 @@
 
         <!-- Timeline resize handle -->
         <div class="split-handle horizontal" id="timelineResizeHandle"></div>
+        <!-- Bouts around the playhead (ui/behavior-strip.js): under the camera view and above
+             the Timeline, lined up with the seekbar. Hidden without an ethogram. -->
+        <div class="behavior-strip" id="behaviorStrip" hidden>
+            <div class="behavior-strip-head">
+                <div class="behavior-strip-title" id="behaviorStripTitle">Bouts</div>
+                <div class="behavior-strip-view behavior-strip-ruler" aria-hidden="true">
+                    <canvas id="behaviorStripRulerCanvas"></canvas>
+                </div>
+                <div class="behavior-strip-controls">
+                    <button type="button" class="behavior-strip-btn" id="behaviorStripZoomOut" title="Show more time" aria-label="Show more time">&minus;</button>
+                    <span class="behavior-strip-window" id="behaviorStripWindow" title="Time shown each side of the playhead"></span>
+                    <button type="button" class="behavior-strip-btn" id="behaviorStripZoomIn" title="Show less time" aria-label="Show less time">+</button>
+                    <button type="button" class="plane-section-info" id="behaviorStripInfo" aria-label="About the bouts strip"></button>
+                    <button type="button" class="behavior-strip-btn" id="behaviorStripClose" title="Hide the bouts strip (the Behavior tab brings it back)" aria-label="Hide the bouts strip">&times;</button>
+                </div>
+            </div>
+            <div class="behavior-strip-body" id="behaviorStripBody">
+                <div class="behavior-strip-labels" id="behaviorStripLabels"></div>
+                <div class="behavior-strip-view behavior-strip-lanes">
+                    <canvas id="behaviorStripCanvas" role="img" aria-label="Bouts around the playhead"></canvas>
+                </div>
+            </div>
+            <div class="behavior-strip-playhead" id="behaviorStripPlayhead" aria-hidden="true"></div>
+            <div class="behavior-strip-hover" id="behaviorStripHover" hidden></div>
+            <div class="seekbar-tooltip" id="behaviorStripTooltip" role="tooltip" hidden></div>
+        </div>
+
         <!-- Timeline -->
         <div class="timeline-container" id="timelineContainer">
             <div class="timeline-mode-toggle" id="timelineModeToggle">

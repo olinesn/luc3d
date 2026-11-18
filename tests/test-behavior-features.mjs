@@ -439,6 +439,18 @@ console.log('\n-- 9. broken tracking is skipped --');
     const s4 = brokenPoseFrames(big, body, bodyLengths(big, body), FPS);
     check(same(flagged(s4.masks[2]), flagged(s2.masks[2])) && s4.total === s2.total, 'scaled 3×: the same frames');
 
+    // The tail past its base is never judged, even when the features use it.
+    const withTail = resolveBody(NODES, EDGES, { exclude: [] });
+    check(withTail.used.length === NODES.length && withTail.defaultExcluded.length === 2, 'with no node excluded the features use the tail');
+    const swing = copyWorld(world);
+    for (let t = 300; t <= 304; t++) shift(swing, 1, t, 0, 0, 3 * bl[1], withTail.defaultExcluded);
+    const s5 = brokenPoseFrames(swing, withTail, bl, FPS);
+    check(s5.total === 0 && s5.far[1] === 0, 'a tail 3 BL off the body, used by the features: no frame skipped (' + s5.total + ')');
+    const s6 = brokenPoseFrames(stray, withTail, bl, FPS);
+    check(same(flagged(s6.masks[1]), flagged(s1.masks[1])) && s6.far[1] === s1.far[1], 'a stray nose still is, the same 5 frames as with the tail excluded');
+    const s7 = brokenPoseFrames(swap, withTail, bl, FPS);
+    check(same(flagged(s7.masks[1]), flagged(s3.masks[1])) && s7.jumps[1] === s3.jumps[1], 'and so is a jump');
+
     // No jump is judged across a gap over a second.
     const gap = copyWorld(world);
     gap.data[0].fill(NaN, 900 * N * D, 980 * N * D);

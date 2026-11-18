@@ -12,6 +12,7 @@ import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
 import { persistSectionState } from './section-state.js';
 import { refreshBehaviorPanel } from './behavior-panel.js';
+import { refreshBehaviorStrip } from './behavior-strip.js';
 import { renderRecordingInfo } from './recording-info.js';
 import { buildLazySelect } from './lazy-select.js';
 import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
@@ -1179,6 +1180,9 @@ export function exportSkeletonJSON(skeleton) {
 // ============================================
 
 export function updateInfoPanel() {
+    // The bouts strip over the seekbar is not part of the panel, so it refreshes
+    // before the collapsed-panel return: nothing else tells it of a load or a closed project.
+    refreshBehaviorStrip();
     // Collapsed panel: skip the whole rebuild. This is not a cheap refresh —
     // `populateVideosTable` walks every frame of the session per video row,
     // and `updateFrameInfo` below rebuilds the instance/reprojection tables
