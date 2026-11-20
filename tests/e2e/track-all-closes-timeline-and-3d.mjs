@@ -90,6 +90,10 @@ try {
                  active: document.getElementById('viewport3dToggleBtn').classList.contains('active'),
                  rendering: v ? v._visible !== false : null };
     });
+    // The 3D viewer's width transition has ended, however slowly the page is running
+    // (at machine load 200 it was at 16 of 320 px after 400 ms).
+    const widthSettled = () => page.evaluate(() => Promise.all(
+        document.getElementById('viewport3dContainer').getAnimations().map(a => a.finished.catch(() => {}))));
     const openTimeline = async () => { if ((await tl()).collapsed) await page.click('#timelineToggleBtn'); };
     const open3d = async () => { if ((await v3()).collapsed) await page.click('#viewport3dToggleBtn'); };
     const runTrackAll = async () => {
@@ -110,7 +114,7 @@ try {
         document.getElementById('timelineContainer').style.height = '180px';
         document.getElementById('viewport3dContainer').style.width = '320px';
     });
-    await page.waitForTimeout(400);   // width transition
+    await widthSettled();
     let s = await tl();
     check(!s.collapsed && s.height > 0, `precondition: Timeline is open (${s.height}px)`);
     const openHeight = s.height;
@@ -136,7 +140,7 @@ try {
     check(!s.collapsed && Math.abs(s.height - openHeight) < 1, `reopening restores ${openHeight}px (${s.height}px)`);
     check(s.btnActive, 'and the button reads active again');
     await page.click('#viewport3dToggleBtn');
-    await page.waitForTimeout(400);   // width transition
+    await widthSettled();
     d = await v3();
     check(!d.collapsed && Math.abs(d.width - openWidth) < 1, `reopening the 3D viewer restores ${openWidth}px (${d.width}px)`);
     if (d.rendering !== null) check(d.rendering === true, 'and its render loop resumes');

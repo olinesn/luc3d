@@ -239,7 +239,10 @@ try {
     const rz = await page.evaluate(() => window.__resizes);
     check(rz === 1, `one Timeline.resize() for the expand (${rz})`);
     seq = await paintedHeights();
-    check(seq.every(h => near(h, smallH)), `no other height painted after the expand (${seq.join(' -> ')})`);
+    // Any frame between the reset and the key press taking effect is still collapsed.
+    const afterExpand = seq[0] === 0 ? seq.slice(1) : seq;
+    check(afterExpand.length > 0 && afterExpand.every(h => near(h, smallH)),
+        `no other height painted after the expand (${seq.join(' -> ')})`);
 
     // ---- 6. expand with nothing remembered: fits the rows ---------------------------------
     console.log('\n6. Expand with no remembered height');

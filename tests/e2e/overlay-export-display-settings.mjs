@@ -336,7 +336,12 @@ try {
         Array.from(document.querySelectorAll('#ovExportOverlay button'))
             .find(b => /^Export/i.test(b.textContent.trim())).click();
     });
-    // Wait for the downloads to SETTLE rather than for a guessed count: this
+    // Every tile encodes before the first file arrives, so first wait for the export
+    // to end, which closes the modal. Settling alone gave up when nothing came within
+    // 700 ms, and at machine load 200 the first file took 11 s.
+    await page.waitForFunction(() => !document.getElementById('ovExportOverlay'), null, { timeout: 180000 })
+        .catch(() => check(false, 'the export ended and closed the modal'));
+    // Then wait for the downloads to SETTLE rather than for a guessed count: this
     // session is calibrated, so there is a 3D tile too, and hard-coding "4" quietly
     // truncated the wait and lost whichever file arrived last.
     let seen = -1;

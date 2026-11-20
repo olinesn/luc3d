@@ -11,8 +11,8 @@
  *  2. It follows a change of active pane, and the solo view in single-view mode
  *     — not `lastInteractedView`, which moving the pointer over a view sets.
  *  3. Hovering never calls getFrame (the playback path) or moves the frame.
- *  4. With a slow decoder, a fast sweep decodes only a few frames (newest wins,
- *     nothing queued), ends on the frame under the cursor, and a frame hovered
+ *  4. While a decode runs, a sweep queues nothing: it decodes the frame it started
+ *     on and the newest, ends on the frame under the cursor, and a frame hovered
  *     before is shown from the cache with no new decode.
  *  5. Hidden during a drag and on leave; back on release over the bar; absent
  *     when the view has no image at that frame ("No image at this frame").
@@ -80,7 +80,7 @@ try {
             new Camera(n, K, [0, 0, 0, 0, 0], [0, 0.2 * i, 0], [20 * i, 0, 0], [640, 480]));
         const session = new Session(cams, skel, ['track_0'], 'S1');
 
-        window.__peekDelay = 0;
+        window.__peekHold = null;              // a decode waits for this, if set
         window.__peekMissing = new Set();      // frames with no image (as in an embedded .slp)
         function fakeDecoder(vi) {
             const src = document.createElement('canvas');
@@ -95,7 +95,7 @@ try {
                     d.peeks.push(f);
                     d.inFlight++; d.maxInFlight = Math.max(d.maxInFlight, d.inFlight);
                     try {
-                        if (window.__peekDelay) await new Promise(r => setTimeout(r, window.__peekDelay));
+                        if (window.__peekHold) await window.__peekHold;
                         if (window.__peekMissing.has(f)) return null;
                         paint(f);
                         return createImageBitmap(src, { resizeWidth: Math.round(width), resizeHeight: Math.round(width * 0.75) });
@@ -233,26 +233,27 @@ try {
 
     // ---- 4: a slow decoder — newest wins, nothing queued, cache hits are instant ----
     await page.mouse.move(700, 300);
-    await page.evaluate(() => { window.__peekDelay = 120; });
+    // The decode the sweep starts lasts until the sweep has ended. A fixed decode time would
+    // not stay slow next to the sweep: a busy machine can take 400 ms per mouse move.
+    await page.evaluate(() => { window.__peekHold = new Promise(r => { window.__peekRelease = r; }); });
     await resetLog();
     const sweep = [];
-    const t0 = Date.now();
     for (let k = 0; k <= 30; k++) {
         const sx = xAt(0.05 + k * 0.025);
         sweep.push(frameAt(sx));
         await page.mouse.move(sx, bar.y);
-        await page.waitForTimeout(15);
     }
-    const sweepMs = Date.now() - t0;
     const last = sweep[sweep.length - 1];
+    await page.waitForFunction((t) => document.getElementById('seekbarTooltip').textContent.startsWith(t),
+        `Frame ${last + 1} `, { timeout: 30000 });
+    log = await decoderLog();
+    check(log.camA.peeks.length === 1, `the sweep starts one decode while that one runs (${JSON.stringify(log.camA.peeks)})`);
+    await page.evaluate(() => { window.__peekRelease(); window.__peekHold = null; });
     check(await settled(last), `after a fast sweep it settles on the frame under the cursor (${last})`);
     log = await decoderLog();
     const peeksA = log.camA.peeks;
     check(log.camA.maxInFlight === 1, `one decode at a time (max in flight ${log.camA.maxInFlight})`);
-    // One 120 ms decode after another for the sweep's length, plus the last frame — not one per frame.
-    const bound = Math.ceil(sweepMs / 120) + 1;
-    check(peeksA.length <= bound && peeksA.length <= new Set(sweep).size / 2,
-        `the ${sweepMs} ms sweep over ${new Set(sweep).size} frames decoded only ${peeksA.length} (≤ ${bound}): ${JSON.stringify(peeksA)}`);
+    check(peeksA.length === 2, `the sweep over ${new Set(sweep).size} frames decoded the first and the newest, nothing queued: ${JSON.stringify(peeksA)}`);
     check(peeksA[peeksA.length - 1] === last, 'the last decode is the frame under the cursor');
     await resetLog();
     await page.mouse.move(xAt(0.05 + 30 * 0.025) - 0, bar.y + 1);
@@ -260,7 +261,6 @@ try {
     await settled(again);
     log = await decoderLog();
     check(log.camA.peeks.length === 0, `re-hovering a frame shown before comes from the cache (decodes: ${JSON.stringify(log.camA.peeks)})`);
-    await page.evaluate(() => { window.__peekDelay = 0; });
 
     // ---- 5: drag, leave, release, no image ----
     x = xAt(0.3);
@@ -333,18 +333,21 @@ try {
         const cursor = dec._stepCursor, lastStep = dec._lastStepFrame;
         const keys = Array.from(be.cache.keys());
         out.cursorOpen = !!cursor;
+        // An idle stream closes itself after STEP_CURSOR_IDLE_MS (3 s), and these jumps
+        // can take longer on a busy machine. Stop its clock: only a peek could close it now.
+        if (cursor) { clearTimeout(cursor.timer); cursor.timer = null; }
         out.mb = [];
         for (const f of order) {
             const bmp = await dec.peekFrame(f, 256);
             out.mb.push({ f, got: frameNumber(bmp) });
             if (bmp) bmp.close();
         }
+        out.sameLastStep = dec._lastStepFrame === lastStep;  // read here: the peek below is of that same frame
         const cachedBmp = await dec.peekFrame(11, 128);      // a cached frame: copied, scaled
         out.cachedCopy = { got: frameNumber(cachedBmp), w: cachedBmp.width, h: cachedBmp.height };
         cachedBmp.close();
         out.cacheIntact = !!be.cache.get(11) && be.cache.get(11).width === 256;
         out.sameCursor = dec._stepCursor === cursor;
-        out.sameLastStep = dec._lastStepFrame === lastStep;
         out.sameKeys = JSON.stringify(Array.from(be.cache.keys())) === JSON.stringify(keys);
         out.stepAfter = frameNumber(await dec.getFrame(12));
         out.cursorKept = dec._stepCursor === cursor;
