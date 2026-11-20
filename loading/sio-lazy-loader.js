@@ -167,6 +167,10 @@ export class SioLazyLoader {
         // video no camera names use (`_keepOutsideRowTracks`); `trackNames` stops
         // before them.
         this._tracksPastSession = new Map();
+        // Set when a session of this file nobody opened names rows of a video this
+        // loader's cameras have: `deleteInstanceRows` calls it before renumbering
+        // (`renumberUnopenedMembers`, import-export/unopened-sessions.js).
+        this.onInstanceRowsDeleted = null;
         // The lowest video frame with an instance (openProjectSlp only).
         this.firstLabeledFrame = -1;
         // [old, new] camera names, in order (`renameCamera`): what a fresh open of
@@ -558,9 +562,11 @@ export class SioLazyLoader {
                 this.videos.set(cam, vobj ? { filename: vobj.filename, shape: vobj.shape } : null);
             }
             var fi = Number(frameIdxCol[r]);
+            // A file can list one (video, frame) twice. The first row is the camera's,
+            // the second is written back untouched like any row no camera shows.
             var camRows = this.frameRowByCam.get(cam);
             if (camRows.has(fi)) repeatedFrames++;
-            camRows.set(fi, r);
+            else camRows.set(fi, r);
             if (fi > maxFrameIdx) maxFrameIdx = fi;
             if (Number(endCol[r]) > Number(startCol[r]) && (this.firstLabeledFrame < 0 || fi < this.firstLabeledFrame)) {
                 this.firstLabeledFrame = fi;
@@ -585,9 +591,9 @@ export class SioLazyLoader {
         }
 
         // A file from another tool can hold what this one store cannot show or save:
-        // hydration reads the last row of a repeated frame, `appendStore` writes the
-        // first, and the header has one skeleton. The eager path keeps those poses,
-        // so name what sends the file there.
+        // hydration reads only the first row of a repeated frame, and the header has
+        // one skeleton. The eager path shows those poses, so name what sends the file
+        // there.
         var eagerReason = null;
         if (camToVid.size === 0) {
             eagerReason = 'its recording session does not say which video each camera filmed';
@@ -1851,6 +1857,8 @@ export class SioLazyLoader {
             // Identities, categories, embeddings and annotation links are keyed by row too.
             rekeyStoreRows(store, kill, survBefore);
 
+            if (this.onInstanceRowsDeleted) this.onInstanceRowsDeleted(fd, kill, survBefore);
+
             // ---- 5. Re-range EVERY frame row of this store (not just this
             // camera's): on a shared store the rows of all cameras interleave in
             // one instance column, so every range shifts. Rows are kept, ranges
@@ -1924,6 +1932,7 @@ export class SioLazyLoader {
         this._skeletonByCam.clear();
         this._ownVideoByCam.clear();
         this._tracksPastSession.clear();
+        this.onInstanceRowsDeleted = null;
         this._storeEditedInMemory = false;
         this.rowsAddedInMemory = false;
         this.cache.clear();
