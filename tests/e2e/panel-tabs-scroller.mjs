@@ -81,10 +81,10 @@ try {
             overflowX: getComputedStyle(bar).overflowX,
         };
     });
-    const expected = ['tabInstances', 'tabVisibility', 'tabIdSwitches', 'tabVideos',
+    const expected = ['tabInstances', 'tabVisibility', 'tabIdSwitches', 'tabModelCheck', 'tabVideos',
         'tabCameras', 'tabSkeleton', 'tabSession', 'tabBehavior'];
     check(JSON.stringify(inventory.names) === JSON.stringify(expected),
-        `all 8 tabs are in the bar, in markup order (${inventory.names.join(', ')})`);
+        `all ${expected.length} tabs are in the bar, in markup order (${inventory.names.join(', ')})`);
     check(inventory.hidden.length === 0,
         `no tab is hidden from the bar (was: 5 of 7 demoted into "More")`);
     check(inventory.more === 0, 'no "More ▾" control survives anywhere in the DOM');
@@ -142,18 +142,27 @@ try {
     check(await activeTab() === before,
         'the drag did NOT switch tabs, though it began on the Visibility tab');
 
-    // A press that goes nowhere is still a click.
-    const camTab = await page.locator('.panel-tab[data-tab="tabCameras"]').boundingBox();
+    // A press that goes nowhere is still a click — on a tab the drag scrolled
+    // fully into view (which one depends on how many tabs there are).
+    const target = await page.evaluate(() => {
+        const bar = document.querySelector('.panel-tabs').getBoundingClientRect();
+        const t = [...document.querySelectorAll('.panel-tab')].find(b => {
+            const r = b.getBoundingClientRect();
+            return !b.classList.contains('active') && r.left >= bar.left && r.right <= bar.right;
+        });
+        return t && t.getAttribute('data-tab');
+    });
+    const camTab = await page.locator(`.panel-tab[data-tab="${target}"]`).boundingBox();
     await page.mouse.move(camTab.x + camTab.width / 2, midY);
     await page.mouse.down();
     await page.mouse.move(camTab.x + camTab.width / 2 + 2, midY);   // under the threshold
     await page.mouse.up();
     await page.waitForTimeout(120);
-    check(await activeTab() === 'tabCameras',
-        'a plain click (2px of travel, under the drag threshold) still switches tabs');
-    check(await page.evaluate(() =>
-        document.getElementById('tabCameras').classList.contains('active')),
-    'and the Cameras tab CONTENT is the one shown');
+    check(!!target && await activeTab() === target,
+        `a plain click (2px of travel, under the drag threshold) still switches tabs (${target})`);
+    check(await page.evaluate((t) =>
+        document.getElementById(t).classList.contains('active'), target),
+    'and that tab\'s CONTENT is the one shown');
 
     // ---- §5 a tab selected from code is scrolled into view ----
     await page.evaluate(() => { document.querySelector('.panel-tabs').scrollLeft = 0; });

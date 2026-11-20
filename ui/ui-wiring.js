@@ -16,6 +16,7 @@ import { state, videoController, interactionManager, viewport3d, timeline, paneM
 // items, toolbar button) resolve to the new implementation.
 import {
     toggleTimeline,
+    collapseTimeline,
     fitTimelineToData,
     syncTimelineToggleButton,
     installTimelineShortcuts,
@@ -34,7 +35,7 @@ import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
          populateTimelineVisibility } from './info-panel.js';
-import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js';
+import { consumeInfoPanelStale, collapseViewport3D, isViewport3DVisible } from './panel-visibility.js';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
@@ -99,6 +100,7 @@ import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
 import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js';
+import { openModelCheckFile, setModelCheckNavigator, stepModelCheck, updateModelCheckFrame, refreshModelCheckPanel } from './model-check-panel.js';
 import { setTrackSummaryNavigator } from './track-summary-modal.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
@@ -922,6 +924,25 @@ export function setupMenus() {
     document.getElementById('menuCheckSizeSwitches').addEventListener('click', function () {
         closeMenus();
         runIdSwitchChecks({ size: true, navigateToFrame: navigateToFrame });
+    });
+    // File ▸ Load Model Check…: the Model Check tab (ui/model-check-panel.js) steps through the
+    // animals a model misread. An entry goes to its session, its camera (solo'd in single-view
+    // mode, else the focused pane) and its frame.
+    setModelCheckNavigator({
+        goToFrame: navigateToFrame,
+        showView: function (name) { if (!setSoloView(name)) activatePanelForView(name); },
+        switchSession: switchSession,
+        zoomTo: function (camera, x0, y0, x1, y1) {
+            var v = (state.views || []).find(function (w) { return (w.cameraName || w.name) === camera; });
+            if (v && videoController) videoController.zoomToVideoRect(v, x0, y0, x1, y1);
+        },
+        redraw: function () { drawAllOverlays(state.currentFrame); },
+        reviewLayout: modelCheckReviewLayout,
+    });
+    refreshModelCheckPanel();
+    document.getElementById('menuLoadModelCheck').addEventListener('click', function () {
+        closeMenus();
+        openModelCheckFile(function () { return pickFiles({ accept: '.json' }); });
     });
     // Tracks ▸ Check ID Switches (Images): the same, by appearance — minutes, needs the videos (GPU, else CPU).
     document.getElementById('menuCheckImageSwitches').addEventListener('click', function () {
@@ -2443,6 +2464,8 @@ export function setupUI() {
     // has unwinding to do (Set Origin Mode, the angle dialog, the toolbar lock)
     // and a second entry point would be a second place to forget it.
     setHandler('definePlanes', function () { togglePlaneMode(); });
+    setHandler('modelCheckNext', function () { stepModelCheck(1); });
+    setHandler('modelCheckPrev', function () { stepModelCheck(-1); });
 
     // Single dispatcher for catalog-driven shortcuts. Runs before the structural
     // handlers below; if a catalog action matches it consumes the event.
@@ -3303,6 +3326,7 @@ export function updateSeekbarVisual(frameIdx) {
     setSeekbarMarkerFrames(state.totalFrames);       // no-op unless the frame count changed
     refreshSeekbarTicks();                           // no-op unless the frame count or FPS changed
     updateIdSwitchProgress(frameIdx);                // the ID Switches tab's selected-row bar (no-op without one)
+    updateModelCheckFrame(frameIdx);                 // the Model Check entry's mark in its view (no-op without one)
     updateBehaviorFrame(frameIdx);                   // behavior labels: save cursor, running states, lit buttons
 }
 
@@ -3434,6 +3458,26 @@ export function update3DViewportToggleBtn() {
     var container = document.getElementById('viewport3dContainer');
     var btn = document.getElementById('viewport3dToggleBtn');
     if (container && btn) syncPanelToggleBtn(btn, container.classList.contains('collapsed'), '3D viewer', '\\');
+}
+
+/**
+ * The Model Check review's layout: loading a check hides the 3D viewer and the
+ * Timeline, so the video gets the room (the review steps through 2D labels);
+ * Close brings back only what it hid, and only if it is still hidden. Either
+ * can be reopened meanwhile with its own button. Nothing is stored.
+ */
+var _modelCheckHid = null;
+function modelCheckReviewLayout(on) {
+    if (on) {
+        if (_modelCheckHid) return;
+        _modelCheckHid = { timeline: collapseTimeline(), viewport3d: false };
+        if (isViewport3DVisible()) { toggle3DViewport(); _modelCheckHid.viewport3d = true; }
+    } else if (_modelCheckHid) {
+        var tl = document.getElementById('timelineContainer');
+        if (_modelCheckHid.timeline && tl && tl.classList.contains('collapsed')) toggleTimeline();
+        if (_modelCheckHid.viewport3d && !isViewport3DVisible()) toggle3DViewport();
+        _modelCheckHid = null;
+    }
 }
 
 /**
