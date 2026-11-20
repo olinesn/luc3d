@@ -19,6 +19,7 @@ import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPoints
 // module's graph.
 import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
+import { guardH5Status } from '../loading/h5-status-guard.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { identityCatalogFinder, typedFileLabels, writeFileLabels } from './detection-labels.js';
 import { writePlaneMetadata } from './plane-metadata.js';
@@ -877,10 +878,11 @@ export function downloadTOML(tomlContent, filename) {
 let _h5wasmReady = null;
 
 /**
- * Initialize h5wasm (loads WASM binary once).
+ * Initialize h5wasm (loads WASM binary once). The one way to `window.h5wasm`, because
+ * it is what guards it (`loading/h5-status-guard.js`).
  * @returns {Promise<Object>} The h5wasm module
  */
-async function initH5wasm() {
+export async function initH5wasm() {
     if (typeof h5wasm === 'undefined') {
         throw new Error('h5wasm script not loaded — check CDN script tag');
     }
@@ -891,7 +893,7 @@ async function initH5wasm() {
             new Promise(function(_, reject) {
                 setTimeout(function() { reject(new Error('h5wasm init timed out (15s)')); }, 15000);
             })
-        ]);
+        ]).then(function() { guardH5Status(h5wasm); });
     }
     await _h5wasmReady;
     return h5wasm;
