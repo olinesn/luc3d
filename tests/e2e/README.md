@@ -35,6 +35,13 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
 
 ## Tests
 
+- **`video-file-gone.mjs`** — a video file that goes away while the project is
+  open (real files moved by `rename`, in the real app): the view goes blank and
+  never shows another frame's picture, the status bar says so, stepping costs
+  almost nothing after the first failure, the seekbar preview and playback behave,
+  and everything recovers by itself, frame-accurate, when the file is back. Also
+  without the frame-accurate backend, when the `<video>` has given up, with a read
+  that hangs, and for images embedded in a `.slp`. Needs ffmpeg. A few minutes.
 - **`move-video-lazy-members.mjs`** — moving a view to another session must
   re-solve the origin session's groups from REAL 2D on a lazy project. A
   synthetic 4-camera project is reopened lazily (so non-resident frames' group
