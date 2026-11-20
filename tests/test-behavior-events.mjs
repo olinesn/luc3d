@@ -469,6 +469,57 @@ console.log('\n6e. A session with only placeholder cameras counts as no session'
     check(eq([...sessionEventScope([uncalibrated({}, 2)], 2, 0).videos], [0, 1]), 'cameras naming no video: it reads what no other session names, as before');
 }
 
+console.log('\n6f. Cameras a loader matched to the file\'s videos itself');
+{
+    const rear = new EventType({ name: 'rear' });
+    const a = new Identity({ name: 'a' });
+    const bout = (video, start) => new UserEvent({ type: rear, video, startFrame: start, endFrame: start + 1, subject: a, source: 'manual' });
+    const videoNamed = n => new Video({ filename: n + '.mp4' });
+    const placedBy = (out) => out.events.map(e => [e.video.filename, e.startFrame]).sort((p, q) => p[1] - q[1]);
+
+    // No session; a calibration listing camB then camA; the first video matches no camera.
+    const v = ['other', 'camA', 'camB'].map(videoNamed);
+    const events = [bout(v[0], 200), bout(v[1], 10), bout(v[2], 300), bout(null, 500)];
+    const onCameras = new Map([[1, 1], [2, 0]]);
+    const scope = sessionEventScope([], 3, 0, true, onCameras);
+    check(eq([...scope.videos], [2]) && eq([...scope.keep], [0, 1]), 'no session: the first camera\'s video is the labels, wherever the file lists it');
+    check(scope.cameras.get(1) === 1 && scope.cameras.get(2) === 0 && !scope.cameras.has(0), 'each by its camera\'s place, a video with no camera by none');
+    check(scope.noVideo === true, 'the event with no video is still read');
+    resetBehaviorState();
+    const s = { name: 's' };
+    readBehaviorMetadata(s, null, asFile([rear], events, v), scope);
+    check(eq(exportBoutRows(s).map(r => r[3]), [300, 500]), 'it shows the first camera\'s and the one with no video');
+    const cams = ['camB', 'camA'].map(videoNamed);
+    const out = buildBehaviorEvents(SIO, [{ session: s, video: cams[0], videos: cams, identities: [a] }]);
+    check(eq(placedBy(out), [['camA.mp4', 10], ['other.mp4', 200], ['camB.mp4', 300], ['camB.mp4', 500]]), 'saved: each on its own video');
+    check(out.events.filter(e => e.startFrame !== 200).every(e => cams.includes(e.video)), 'on those cameras\' own videos, not copies');
+
+    // The file's order is what a loader that says nothing gets, as before.
+    const inFileOrder = sessionEventScope([], 3, 0, true);
+    check(eq([...inFileOrder.videos], [0]) && eq([...inFileOrder.keep], [1, 2]) && inFileOrder.cameras.get(2) === 2, 'without it: the file\'s order');
+
+    // No video matches a camera (campy names every video `0.mp4`): none is a label, each stays put.
+    const none = sessionEventScope([], 2, 0, true, new Map());
+    check(none.videos.size === 0 && eq([...none.keep], [0, 1]) && none.cameras.size === 0, 'no match: every video only kept, on no camera');
+    const zeros = [new Video({ filename: '0.mp4' }), new Video({ filename: '0.mp4' })];
+    resetBehaviorState();
+    const n = { name: 'n' };
+    const zeroFile = asFile([rear], [bout(zeros[0], 10), bout(zeros[1], 300)], zeros);
+    readBehaviorMetadata(n, null, zeroFile, none);
+    check(exportBoutRows(n).length === 0, 'and shows none');
+    const listed = new Map(zeroFile.videos.map(rec => [rec, new Video({ filename: '0.mp4' })]));
+    const nOut = buildBehaviorEvents(SIO, [{ session: n, video: cams[0], videos: cams, identities: [a], listedVideos: listed }]);
+    check(nOut.events.length === 2 && nOut.events[0].video === listed.get(zeroFile.videos[0]) && nOut.events[1].video === listed.get(zeroFile.videos[1]),
+        'saved: each on the entry its poses have');
+
+    // With a session: only a kept video the session has no place for goes by the loader.
+    const named = sessionEventScope([{ camcorder_to_video_idx_map: { 0: 0 } }], 3, 0, true, new Map([[0, 0], [1, 1]]));
+    check(eq([...named.videos], [0]) && eq([...named.keep], [1, 2]), 'with a session: the session still says what it reads');
+    check(named.cameras.get(1) === 1 && named.cameras.size === 1, 'and a video only the loader matched goes back on that camera');
+    const unmatched = sessionEventScope([{ camcorder_to_video_idx_map: { 0: 0 } }], 3, 0, true, new Map([[0, 0]]));
+    check(unmatched.cameras === null, 'a kept video it did not match stays on no camera');
+}
+
 console.log('\n7. Renamed elsewhere');
 {
     resetBehaviorState();
