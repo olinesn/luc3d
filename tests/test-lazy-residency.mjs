@@ -28,6 +28,7 @@ const imp = (rel) => import(pathToFileURL(path.join(ROOT, rel)).href);
 
 const { Instance, FrameGroup, UnlinkedInstance, InstanceGroup, lazyPlaceholderXY, isLazyPlaceholderXY } = await imp('pose/pose-data.js');
 const { SioLazyLoader } = await imp('loading/sio-lazy-loader.js');
+const { markRowNotShown, notShownRows } = await imp('loading/poses-not-shown.js');
 const R = await imp('pose/lazy-residency.js');
 const { frameEvictionBlocker, evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency,
         isLazyResidencyHeld, LAZY_PLAYBACK_AHEAD, LAZY_KEEP_BEHIND, LAZY_RESIDENT_CAP,
@@ -92,7 +93,7 @@ function makeLoader(nFrames, spec, opts = {}) {
         for (const cam of CAMS) {
             const d = loader.describeStoreFrame(cam, f), rows = [];
             for (let k = 0; k < d.count; k++) {
-                rows.push({ points: pts(f, k), trackIdx: d.trackIdx[k], type: d.predicted[k] ? 'predicted' : 'user', score: 0.9 });
+                rows.push(d.hidden && d.hidden[k] ? null : { points: pts(f, k), trackIdx: d.trackIdx[k], type: d.predicted[k] ? 'predicted' : 'user', score: 0.9 });
             }
             out.set(cam, rows);
         }
@@ -130,6 +131,7 @@ function hydrate(session, f) {
         const d = session.lazyLoader.describeStoreFrame(cam, f);
         const linked = [];
         for (let k = 0; k < d.count; k++) {
+            if (d.hidden && d.hidden[k]) continue;
             const inst = new Instance(pts(f, k), d.trackIdx[k] >= 0 ? d.trackIdx[k] : null,
                 d.predicted[k] ? 'predicted' : 'user', 0.9);
             inst._rawInstIndex = k;
@@ -259,6 +261,50 @@ group('grouped frames: members survive in instanceGroups, so only the seating is
     eq(frameEvictionBlocker(S, 4, e), 'grouping', 'an unlinked row a group claims would come back linked');
 
     eq(frameEvictionBlocker(S, 0, fg, new Set([g])), 'ui', 'the selected / edit-group group pins its frame');
+}
+
+// ---------------------------------------------------------------------------
+group('a pose the session does not show is in the store and is never resident');
+{
+    // Position 0 of camera A's frames is on a skeleton the session does not show, and
+    // hand-labeled: such a pose does not pin its frame the way a shown one does.
+    const threeRows = (cam) => (cam === 'A' ? [{ track: 0, type: 0 }, { track: 0, type: 1 }, { track: 1, type: 1 }] : twoPredicted());
+    const S = makeSession(6, threeRows);
+    const store = S.lazyLoader.labelsByCam.get('A')._lazyDataStore;
+    ok(notShownRows(store) === null, 'a store with none has no column');
+    for (let f = 0; f < 6; f++) markRowNotShown(store, f * 3);
+    ok(notShownRows(store) instanceof Uint8Array && notShownRows(store).length === 18, 'one flag per instance row');
+
+    const d = S.lazyLoader.describeStoreFrame('A', 2);
+    eq(d.count, 3, 'count is the positions in the file\'s frame');
+    eq(d.nHidden, 1, 'nHidden says how many of them hydration skips');
+    eq(Array.from(d.hidden).join(','), '1,0,0', 'hidden says which');
+    eq(Array.from(d.trackIdx).join(','), '0,0,1', 'track per position, as before');
+    eq(S.lazyLoader.describeStoreFrame('B', 2).hidden, null, 'a camera with none has no mask');
+
+    const fg = hydrate(S, 0);
+    eq(fg.getUnlinkedInstances('A').map(u => u.instance._rawInstIndex).join(','), '1,2', 'hydration keeps the true positions');
+    eq(frameEvictionBlocker(S, 0, fg), null, 'so the frame can be rebuilt, though a row has no instance');
+
+    const stale = hydrate(S, 1);
+    stale.getUnlinkedInstances('A')[0].instance._rawInstIndex = 0;
+    eq(frameEvictionBlocker(S, 1, stale), 'row', 'an instance on such a position is not what hydration would build');
+
+    const gone = hydrate(S, 2);
+    gone.removeUnlinkedById(gone.getUnlinkedInstances('A')[0].id);
+    eq(frameEvictionBlocker(S, 2, gone), 'count', 'a shown pose missing still blocks: its row did not go');
+
+    const member = new Instance(pts(3, 1), 0, 'predicted', 0.9);
+    member._rawInstIndex = 0;
+    eq(member2dReleaseBlocker(member, S.lazyLoader.describeStoreFrame('A', 3), NODES, null), 'row',
+        'a member on such a position keeps its own 2D');
+    member._rawInstIndex = 1;
+    eq(member2dReleaseBlocker(member, S.lazyLoader.describeStoreFrame('A', 3), NODES, null), null,
+        'a member after it gives its 2D back');
+
+    const rows = [];
+    S.lazyLoader.forEachInstanceRow((cam, f, trk, info) => { if (cam === 'A' && f === 4) rows.push(info.offsetInFrame); });
+    eq(rows.join(','), '1,2', 'a whole-project walk skips it and keeps the true offsets');
 }
 
 // ---------------------------------------------------------------------------

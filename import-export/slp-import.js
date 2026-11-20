@@ -46,7 +46,7 @@ import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
 import { adoptIdentityMetadata, adoptTypedLabels } from './detection-labels.js';
 import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
 import {
-    fileSkeletons, groupsAcrossSkeletonsRefusal, headerVideoOfRecord, keepOtherSkeletonFrames, keepOutsideFrames,
+    fileSkeletons, groupLinksPoseNotShown, groupsAcrossSkeletonsRefusal, headerVideoOfRecord, keepGroupAside, keepOtherSkeletonFrames, keepOutsideFrames,
     keptOutsideCounts, noteVideoReaders, outsideFramesNote, sessionSkeletonEntry,
 } from './outside-frames.js';
 import { keepSuggestions } from './kept-suggestions.js';
@@ -680,6 +680,12 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
         var groups = [];
         for (var igi = 0; igi < typedIGs.length; igi++) {
             var typedIG = typedIGs[igi];
+            // A member on a skeleton this session does not show: the group stays
+            // whole, out of the session, and goes back as it was.
+            if (groupLinksPoseNotShown(typedIG, loader)) {
+                keepGroupAside(session, fgFrameIdx, typedIG, loader);
+                continue;
+            }
             var igLucid = (typedIG.metadata && typedIG.metadata.lucid) || {};
             var instanceMetaMap = igLucid.instanceMeta || {};
 
@@ -767,7 +773,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
             groups.push(group);
             restoredGroups++;
         }
-        session.instanceGroups.set(fgFrameIdx, groups);
+        if (groups.length > 0 || typedIGs.length === 0) session.instanceGroups.set(fgFrameIdx, groups);
         typedSession.frameGroups.delete(fgKeys[fki]); // release typed group as we consume it
 
         if (_now() - _ty > _yieldMs) {

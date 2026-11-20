@@ -50,7 +50,9 @@
  * row; the grouping refs and every store frame's output index are then recomputed
  * to account for the prepended overlays plus the skipped store rows. Only edited
  * camera-frames are materialized (minimal at prediction scale); every other frame
- * streams from the columnar store untouched.
+ * streams from the columnar store untouched. An overlay replaces the store's whole
+ * camera-frame, so the poses the session does not show go in it as the store holds
+ * them (`SioLazyLoader.posesNotShownAt`), each on its own skeleton.
  */
 
 import { _buildSioPoints } from './file-io.js';
@@ -185,6 +187,11 @@ function storeVideoIds(store) {
         }
     });
     return Array.from(ids).sort(function (a, b) { return a - b; });
+}
+
+/** Same name, nodes, edges and symmetries: one entry in a header. */
+function skeletonSignature(s) {
+    return JSON.stringify([s.name, s.nodeNames, s.edgeIndices, s.symmetryNames]);
 }
 
 /** Every skeleton id a store's instance rows use. */
@@ -467,7 +474,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
 
         cam.push({
             name: c.name, sioCam: sioCam, videoIndex: videoIndex, framesData: framesData, instancesData: instancesData,
-            rowMap: rowMap, nFrames: nFrames, trackBase: trackBase, identityByName: storeIdentityMap(store),
+            rowMap: rowMap, nFrames: nFrames, trackBase: trackBase, skeletonPairs: null, identityByName: storeIdentityMap(store),
         });
     }
 
@@ -512,6 +519,14 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     }
     // Likewise the identities they name. After this the writer's catalog is fixed.
     var sharedIdentityByName = sharedStoreData ? storeIdentityMap(sharedStoreData) : null;
+    // A group kept aside (outside-frames.js) can name one the session's list lacks.
+    if (session.outsideGroups) {
+        for (var keptOfFrame of session.outsideGroups.values()) {
+            for (var kif = 0; kif < keptOfFrame.length; kif++) {
+                if (keptOfFrame[kif].identity) findDetectionIdentity(keptOfFrame[kif].identity);
+            }
+        }
+    }
     for (var sii = 0; sii < sessionSioIdentities.length; sii++) ctx.allIdentities.push(sessionSioIdentities[sii]);
     // One camera's own file can hold other videos' frames too (`SioLazyLoader.open`).
     if (!_sharedStore && loader._ownVideoByCam) {
@@ -526,25 +541,27 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     }
 
     // ---- Skeletons the stores' rows use ----
-    // `appendStore` writes each row's skeleton id too, so a row on any skeleton
-    // but the session's (the store's first) must find it in the header, or Python
-    // raises IndexError on the file. Same name and same nodes: one entry.
-    function skeletonPairsFor(store) {
+    // `appendStore` writes each row's skeleton id too, so a row on a skeleton the
+    // session does not show must find it in the header, or Python raises IndexError
+    // on the file. Every other row is on the session's, a duplicate's included.
+    function skeletonPairsFor(labels) {
+        var store = labels._lazyDataStore;
+        var otherIds = typeof loader.otherSkeletonIds === 'function' ? loader.otherSkeletonIds(labels) : null;
         return storeSkeletonIds(store).map(function (id) {
-            var other = id > 0 ? (store.skeletons || [])[id] : null;
+            var other = otherIds && otherIds.has(id) ? (store.skeletons || [])[id] : null;
             if (!other) return [id, ctx.allSkeletons.indexOf(skeleton)];
-            var sig = JSON.stringify([other.name, other.nodeNames]);
+            var sig = skeletonSignature(other);
             for (var ski = 0; ski < ctx.allSkeletons.length; ski++) {
-                if (JSON.stringify([ctx.allSkeletons[ski].name, ctx.allSkeletons[ski].nodeNames]) === sig) return [id, ski];
+                if (skeletonSignature(ctx.allSkeletons[ski]) === sig) return [id, ski];
             }
             ctx.allSkeletons.push(other);
             return [id, ctx.allSkeletons.length - 1];
         });
     }
-    var sharedSkeletonPairs = sharedStoreData ? skeletonPairsFor(sharedStoreData) : null;
+    var sharedSkeletonPairs = sharedStoreData ? skeletonPairsFor(sharedLabels) : null;
     if (!_sharedStore) {
         for (var spi = 0; spi < cam.length; spi++) {
-            cam[spi].skeletonPairs = skeletonPairsFor(loader.labelsByCam.get(cam[spi].name)._lazyDataStore);
+            cam[spi].skeletonPairs = skeletonPairsFor(loader.labelsByCam.get(cam[spi].name));
         }
     }
 
@@ -644,6 +661,42 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         return built;
     }
 
+    // Put the camera-frame's poses the session does not show in its overlay, after the
+    // shown ones. The writer resolves a pose's skeleton and track by object, in the
+    // header's list (a miss files it under skeleton 0, or trackless). Returns where each
+    // landed: their position in the file's frame -> their index in `sioInsts`.
+    function addPosesNotShown(camInfo, frameIdx, lucidInsts, sioInsts) {
+        var landed = new Map();
+        if (typeof loader.posesNotShownAt !== 'function') return landed;
+        var poses = loader.posesNotShownAt(camInfo.name, frameIdx);
+        if (poses.length === 0) return landed;
+        var headerSkeleton = new Map(_sharedStore ? sharedSkeletonPairs : camInfo.skeletonPairs);
+        var nShown = sioInsts.length;
+        poses.forEach(function (pose) {
+            var inst = pose.inst;
+            inst.skeleton = ctx.allSkeletons[headerSkeleton.get(numAt(camInfo.instancesData.skeleton, pose.instanceRow))];
+            var trk = numAt(camInfo.instancesData.track, pose.instanceRow, -1);
+            inst.track = trk >= 0 ? ctx.allTracks[camInfo.trackBase + trk] : null;
+            if (inst.identity) inst.identity = findDetectionIdentity(inst.identity);
+            landed.set(pose.offset, sioInsts.length);
+            sioInsts.push(inst);
+        });
+        // A hand-labeled one may come from a prediction the session does show, which
+        // the overlay has rebuilt. One since corrected is no prediction any more.
+        poses.forEach(function (pose) {
+            var from = pose.inst.fromPredicted;
+            if (!from) return;
+            var fromOffset = pose.frameInstances.indexOf(from);
+            if (landed.has(fromOffset)) return;
+            var shown = null;
+            for (var si = 0; si < nShown; si++) {
+                if (lucidInsts[si]._rawInstIndex === fromOffset) shown = sioInsts[si];
+            }
+            pose.inst.fromPredicted = shown instanceof SIO.PredictedInstance ? shown : null;
+        });
+        return landed;
+    }
+
     for (var [fgIdx, fg] of session.frameGroups) {
         for (var oc = 0; oc < cam.length; oc++) {
             var ocInfo = cam[oc];
@@ -664,8 +717,9 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
                 var lt = (linst.trackIdx != null && linst.trackIdx >= 0) ? linst.trackIdx : -1;
                 if (lt >= 0 && !byTrack.has(lt)) byTrack.set(lt, lii);
             }
+            var byOffset = addPosesNotShown(ocInfo, fgIdx, lucidInsts, sioInsts);
             var okey = ocInfo.name + ':' + fgIdx;
-            overlayByKey.set(okey, { lfIndex: overlayLfs.length, byInst: byInst, byTrack: byTrack });
+            overlayByKey.set(okey, { lfIndex: overlayLfs.length, byInst: byInst, byTrack: byTrack, byOffset: byOffset });
             overlaidKeys.add(okey);
             overlayLfs.push(new SIO.LabeledFrame({ video: ctx.allVideos[ocInfo.videoIndex], frameIdx: fgIdx, instances: sioInsts }));
         }
@@ -737,6 +791,8 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         var ov = overlayByKey.get(camName + ':' + frameIdx);
         if (ov) {
             var oi = ov.byInst.get(gInst);
+            // A member sharing its pose with a group kept aside has no instance here.
+            if (oi === undefined && gInst && gInst._rawInstIndex != null) oi = ov.byOffset.get(gInst._rawInstIndex);
             if (oi === undefined) {
                 var gt = (gInst && gInst.trackIdx != null && gInst.trackIdx >= 0) ? gInst.trackIdx : -1;
                 if (gt >= 0) oi = ov.byTrack.get(gt);
@@ -782,7 +838,25 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
         return [lfIndex, instIndex];
     }
 
-    var groupedFrameIdxs = Array.from(session.instanceGroups.keys()).sort(function (a, b) { return a - b; });
+    // A group kept aside (outside-frames.js): each member's output place, as the file
+    // read it unless an overlay moved it. Null when its row was not written.
+    function refForKeptMember(camName, member) {
+        var camInfo = camByName.get(camName);
+        if (!camInfo) return null;
+        var memberFrame = numAt(camInfo.framesData.frame_idx, member.row);
+        var ov = camInfo.rowMap.get(memberFrame) === member.row ? overlayByKey.get(camName + ':' + memberFrame) : null;
+        if (ov) {
+            var landed = ov.byOffset.get(member.offset);
+            return landed === undefined ? null : [ov.lfIndex, landed];
+        }
+        var lfIndex = camInfo.storeOutIndex ? camInfo.storeOutIndex.get(member.row) : undefined;
+        return lfIndex === undefined ? null : [lfIndex, member.offset];
+    }
+
+    var outsideGroups = session.outsideGroups || null;
+    var groupedFrameIdxs = Array.from(outsideGroups
+        ? new Set(Array.from(session.instanceGroups.keys()).concat(Array.from(outsideGroups.keys())))
+        : session.instanceGroups.keys()).sort(function (a, b) { return a - b; });
     for (var gf = 0; gf < groupedFrameIdxs.length; gf++) {
         if (gf % 2000 === 0) {
             if (onProgress) await onProgress('refs', gf, groupedFrameIdxs.length);
@@ -843,6 +917,23 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
                 instance3d: instance3d,
                 identity: identity,
                 metadata: { lucid: igLucidMeta },
+            }));
+        }
+        var keptGroups = outsideGroups ? (outsideGroups.get(frameIdx) || []) : [];
+        for (var kgi = 0; kgi < keptGroups.length; kgi++) {
+            var keptRefs = new CamRefMap();
+            for (var [keptCam, keptMember] of keptGroups[kgi].members) {
+                var keptSioCam = lucidCamToSioCam.get(keptCam);
+                var keptRef = keptSioCam ? refForKeptMember(keptCam, keptMember) : null;
+                if (keptRef) keptRefs.set(keptSioCam, keptRef);
+            }
+            if (keptRefs.keys().length === 0) continue;
+            sioInstanceGroups.push(new SIO.InstanceGroup({
+                instanceRefsByCamera: keptRefs,
+                instance3d: keptGroups[kgi].instance3d,
+                identity: keptGroups[kgi].identity ? findDetectionIdentity(keptGroups[kgi].identity) : undefined,
+                score: keptGroups[kgi].score,
+                metadata: keptGroups[kgi].metadata,
             }));
         }
         if (sioInstanceGroups.length === 0) continue;

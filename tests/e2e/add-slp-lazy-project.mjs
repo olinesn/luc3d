@@ -245,6 +245,13 @@ def frames_on_sk2(v, base):
 c2, o3 = video("camR.mp4"), video("second_skeleton.mp4")
 s = session([("camR", c2, [])], groups=False, tvec_base=95.0)
 save("added_sk2.slp", frames_on(c2, 64000, 2, (T1,)) + frames_on_sk2(o3, 65000), [c2, o3], [s], tracks=(T1,), skeletons=(sk, sk2))
+# A second skeleton on a camera's own video, in that camera's frames.
+c5 = video("camT.mp4")
+s = session([("camT", c5, [])], groups=False, tvec_base=97.0)
+ft = frames_on(c5, 64500, 2, (T1,))
+for lf, extra in zip(ft, frames_on_sk2(c5, 65500)):
+    lf.instances.extend(extra.instances)
+save("added_sk2_camera.slp", ft, [c5], [s], tracks=(T1,), skeletons=(sk, sk2))
 # Smaller than the small project, for the mixed one.
 c3, o4 = video("camS.mp4"), video("small_outside.mp4")
 s = session([("camS", c3, [])], groups=False, tvec_base=96.0)
@@ -591,7 +598,7 @@ const merged = (...lists) => [].concat(...lists).sort();
 try {
     const minimalPkg = path.join(repoRoot, 'tests', 'fixtures', 'slp-embedded', 'minimal_instance.pkg.slp');
     uv(PY_WRITE, [tmp, minimalPkg]);
-    const NAMES = ['project', 'project_plain', 'project_small', 'project_no_session', 'project_for_pkg', 'added', 'added_same', 'added_plain', 'added_all_outside', 'added_sk2', 'added_small', 'camA_alone', 'camB_alone', 'camC_alone', 'camD_alone', 'project_3d', 'added_3d'];
+    const NAMES = ['project', 'project_plain', 'project_small', 'project_no_session', 'project_for_pkg', 'added', 'added_same', 'added_plain', 'added_all_outside', 'added_sk2', 'added_sk2_camera', 'added_small', 'camA_alone', 'camB_alone', 'camC_alone', 'camD_alone', 'project_3d', 'added_3d'];
     const sourcePaths = NAMES.map(n => path.join(tmp, n + '.slp'));
     const rawSources = JSON.parse(uv(PY_READ, sourcePaths.concat(minimalPkg)).trim().split('\n').pop());
     const sources = {};
@@ -770,6 +777,41 @@ try {
             groups: sources.project_small.groups,
             skeletons: [['nose', 'tail'], ['a', 'b', 'c']],
         });
+        await page.close();
+    }
+    if (wants('C')) {
+        // A second skeleton on an added camera's own video: not shown, and a correction
+        // beside such a pose leaves it on its own skeleton with its own nodes.
+        const page = await open('lazy', readFile('project_small'));
+        await addSlp(page, fileOf('added_sk2_camera.slp'));
+        const status = await statusOf(page);
+        check(/2 poses on a camera's video are on another skeleton \("other"\) and are not shown/.test(status), 'a second skeleton on a camera: the status says so', status);
+        const shown = await page.evaluate(async () => {
+            const tri = await import('/pose/triangulation.js');
+            const { state } = await import('/ui/app-state.js');
+            await tri.ensureLazyFrameData(0);
+            const unlinked = state.session.frameGroups.get(0).getUnlinkedInstances('camT');
+            const seen = unlinked.map(u => [u.instance.numNodes, u.instance._rawInstIndex]);
+            const inst = unlinked[0].instance;
+            inst.setPoint(0, 999, 999);
+            inst.type = 'user';
+            inst.modified = true;
+            return seen;
+        });
+        check(eq(shown, [[2, 0]]), 'a second skeleton on a camera: only the session\'s pose is shown', shown);
+        const poses = sources.added_sk2_camera.poses.map(r => {
+            const c = r.split('|');
+            if (c[0] !== 'camT.mp4' || c[1] !== '0' || c[4].split(';').length !== 2) return r;
+            c[2] = 'U';
+            c[4] = '999.000,999.000;' + c[4].split(';')[1];
+            c[5] = '';
+            return c.join('|');
+        });
+        const want = { poses: merged(sources.project_small.poses, poses), groups: sources.project_small.groups, skeletons: [['nose', 'tail'], ['a', 'b', 'c']] };
+        for (const what of ['save 1', 'save 2']) {
+            const saved = await saveAndRead(page);
+            savedForPython(saved.bytes, 'a second skeleton on a camera, a correction, ' + what + ', Python', want);
+        }
         await page.close();
     }
     if (wants('C')) {
