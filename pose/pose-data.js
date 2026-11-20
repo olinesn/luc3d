@@ -1868,6 +1868,12 @@ export class Session {
          */
         this.fileProvenance = null;
         /**
+         * What the .slp this session was loaded from holds that a save leaves out,
+         * by name (`import-export/slp-not-kept.js`). In memory only; null when nothing.
+         * @type {string[]|null}
+         */
+        this.fileNotKept = null;
+        /**
          * Eager loads only: poses of the loaded .slp this session does not show.
          * `frames` are on a video no session names, `otherSkeletonFrames` (the
          * reader's own sleap-io.js instances) on another skeleton, on any video. A

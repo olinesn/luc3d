@@ -223,7 +223,7 @@ sio.Labels(labeled_frames=frames_on(o, 50000, 3, (T1, T3)) + added_frames(cx, 30
 # A file newer than this LUC3D reads: only its format_id says so.
 shutil.copy(os.path.join(out, "added.slp"), os.path.join(out, "added_too_new.slp"))
 with h5py.File(os.path.join(out, "added_too_new.slp"), "r+") as f:
-    f["metadata"].attrs["format_id"] = 3.0
+    f["metadata"].attrs["format_id"] = 4.0
 # The project's own camera and video names, nodes in another order.
 sk_rev = sio.Skeleton(nodes=["tail", "nose"], edges=[("tail", "nose")])
 a2, b2 = video("camA.mp4"), video("camB.mp4")
@@ -1173,7 +1173,7 @@ try {
         // A file too new to read: the reader refuses it before anything changes.
         await addSlp(page, fileOf('added_too_new.slp'));
         const newer = await statusOf(page);
-        check(/uses SLP format 3\.0, which is newer than this version of LUC3D/.test(newer), 'a file too new to read is refused, and says why', newer);
+        check(/uses SLP format 4\.0, which is newer than this version of LUC3D/.test(newer), 'a file too new to read is refused, and says why', newer);
         check(eq(await shape(), before), 'and changes nothing', await shape());
         check(sameRows(beforeRows, await storeRows(page, beforeRows.out)), 'not a row');
 

@@ -77,6 +77,7 @@ import { noteProgress } from './progress-delta.js';
 import { state, viewport3d } from './app-state.js';
 import { setStatus, markDirty, quickSave } from '../import-export/save-load.js';
 import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js';
+import { holdsNotKept } from '../import-export/slp-not-kept.js';
 import { REBASED_CALIBRATION_NAME } from '../loading/calibration-pick.js';
 import { countRebaseTargets, subsetRebaseTally, planOriginRebase, applyOriginRebase } from '../pose/origin-rebase.js';
 // Both circular by design and used only inside function bodies, the same rule
@@ -799,6 +800,13 @@ async function autoSaveAfterRebase() {
     if (!state.slpFileHandle) {
         return {
             note: ' — this project has no file yet, so use File ▸ Save As to write the new 3D to disk',
+            level: 'warning',
+        };
+    }
+    // `quickSave` would ask where, and the picker needs a click this has not got.
+    if (holdsNotKept(state.sessions)) {
+        return {
+            note: ' — a save would leave out part of the file you opened, so use File ▸ Save As to write the new 3D to disk',
             level: 'warning',
         };
     }
