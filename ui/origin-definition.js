@@ -64,30 +64,9 @@ import {
 // button, that one owns what the button does.
 import { showSetCalibrationModal } from './origin-rebase.js';
 
-export const originState = {
-    /** @type {boolean} True while Set Origin Mode is active. */
-    active: false,
-    /** @type {'node'|'axis'|'confirm'} Wizard step; meaningless when inactive. */
-    step: 'node',
-    /** @type {number|null} Plane the picked node belongs to. */
-    planeId: null,
-    /** @type {number|null} Index of the picked node, in PLANE order. */
-    nodeIdx: null,
-    /** @type {number[]|null} The picked node, in old-world coordinates. */
-    originPoint: null,
-    /** @type {number[]|null} The fitted plane's normal at pick time. */
-    normal: null,
-    /** @type {number} Candidate-arrow length, scaled to the plane's extent. */
-    arrowLength: 0,
-    /** @type {'positive'|'negative'|null} Which arrow is chosen. */
-    chosen: null,
-    /**
-     * @type {Object|null} The APPLIED frame from `buildOriginFrame`, or null
-     * while the calibration's own frame is in force. Survives leaving the mode
-     * — that is the point of the whole exercise.
-     */
-    frame: null,
-};
+// The origin state object lives in ./plane-state.js (DOM-free); re-exported here.
+import { originState } from './plane-state.js';
+export { originState };
 
 const STEP_TEXT = {
     node: 'Click any node of a fitted plane in the 3D view. That node becomes the new origin.',

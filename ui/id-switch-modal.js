@@ -40,9 +40,10 @@ import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevi
          inputTensorToPixels, INPUT } from './image-embedder.js';
 import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js';
 import { renderBraveFingerprintingHint } from './browser-hints.js';
-import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
-         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js';
+import { idSwitchRowKey as rowKey, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
+         idSwitchEncounterCount as encounterCount,
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, hasTrackedIdentities, idSwitchRows as listRows,
+         recordIdSwitchResults } from './id-switch-review.js';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -86,15 +87,6 @@ function fmtDuration(sec) {
     if (sec < 90) return Math.max(1, Math.round(sec)) + ' s';
     var min = Math.round(sec / 60);
     return min < 90 ? min + ' min' : Math.floor(min / 60) + ' h ' + (min % 60) + ' min';
-}
-
-/** True when at least one tracked frame has a 3D skeleton with an identity. */
-function hasTrackedIdentities(session) {
-    if (!session || !session.instanceGroups || !(session.identities || []).length) return false;
-    for (var groups of session.instanceGroups.values()) {
-        for (var i = 0; i < groups.length; i++) if (groups[i].points3d && groups[i].identityId >= 0) return true;
-    }
-    return false;
 }
 
 // The viewer's frame navigation, registered once by ui-wiring (setIdSwitchNavigator) so that a
@@ -459,20 +451,10 @@ export async function runIdSwitchChecks(opts) {
             : 'nothing flagged in ' + res.encounters.length + ' close encounters'));
         if (n) level = 'warning';
     }
-    var ran = cues.filter(function (c) { return results[c] && results[c].ok; });
-    if (ran.length) {
-        // A cue that ran replaces its own earlier results; a cue that didn't run (or failed) keeps them.
-        var st = session._idSwitch || (session._idSwitch = { results: {}, reviewed: new Set(), fixes: [], showRepeats: false, current: null });
-        ran.forEach(function (c) { st.results[c] = results[c]; });
-        // Fixes are now part of the identities this run analysed, so they cannot be undone from its rows
-        // (an undo would also rename rows that were scored on the fixed labels). The swaps themselves stay.
-        st.fixes = [];
-        if (deps.navigateToFrame) st.navigate = deps.navigateToFrame;
-        tagAndLink(st.results);
-        var live = new Set(listRows(st, true).map(rowKey));
-        st.reviewed.forEach(function (k) { if (!live.has(k)) st.reviewed.delete(k); });   // keep ticks that still apply
-        markDirty();                                       // new results: the .slp's checklist is out of date
-    }
+    // A cue that ran replaces its own earlier results; a cue that didn't run (or failed) keeps them
+    // (recordIdSwitchResults, shared with the command line).
+    var ran = recordIdSwitchResults(session, results, deps.navigateToFrame);
+    if (ran.length) markDirty();                           // new results: the .slp's checklist is out of date
     refreshIdSwitchPanel(session);      // also when nothing ran: the tab and markers always show this session's results
     var anyFound = ran.some(function (c) { return countOnsets(results[c]) > 0; });
     setStatus((auto && opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + parts.join('; ') +
@@ -494,17 +476,6 @@ export function runSizeSwitchCheck(opts) {
 // ---------------------------------------------------------------------------
 
 function isReviewed(st, m) { return st.reviewed.has(rowKey(m)) || (m.agree ? st.reviewed.has(rowKey(m.agree)) : false); }
-
-/** The rows to list: change points (plus repeats when shown); a "Both" pair appears once, on its size row. */
-function listRows(st, withRepeats) {
-    var rows = [];
-    ['size', 'image'].forEach(function (c) {
-        var r = st.results[c];
-        if (!(r && r.ok)) return;
-        (withRepeats ? markersOf(r) : primaryOf(r)).forEach(function (m) { if (!(c === 'image' && m.agree)) rows.push(m); });
-    });
-    return rows.sort(function (a, b) { return a.frame - b.frame; });
-}
 
 /** Put the session's markers on the seekbar (ui/seekbar-markers.js), reviewed ones dimmed (`reviewed`). */
 function syncMarkers(session) {

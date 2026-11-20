@@ -57,11 +57,10 @@ import {
     serializePlanePlacements, restorePlanePlacements,
     serializeOriginFrame, restoreOriginFrame,
 } from '../pose/plane-serialization.js';
-// Circular by design, and safe for the same reason the rest of this feature's
-// cycles are: every use below is inside a function body, so the bindings are
-// resolved at call time rather than at module evaluation.
-import { planeState } from '../ui/plane-definition.js';
-import { originState } from '../ui/origin-definition.js';
+// The plane and origin state objects (DOM-free, ui/plane-state.js), so this
+// module loads without the page — the command-line LUCID reads and writes
+// planes through it too.
+import { planeState, originState } from '../ui/plane-state.js';
 import { state } from '../ui/app-state.js';
 
 /**

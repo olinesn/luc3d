@@ -10,6 +10,13 @@ Multi-view pose annotation GUI. Vanilla JS ES modules served as static files —
 - `import-export/` — save/load, SLP import/merge, `metadata.lucid` serializers, mesh export.
 - `demo-data.js` (synthetic data), `styles.css` (all styling).
 
+## Command-line LUCID (`cli/`)
+`cli/track.mjs` runs Track All → Triangulate All → save in plain Node, through the app's own modules (usage: `cli/README.md`). It imports only DOM-free modules: `pose/track-all-core.js`, `pose/triangulate-all-core.js`, `import-export/{slp-read,slp-session-build,slp-labels-build,calibration-parse,plane-metadata}.js`, `pose/id-switch-check.js`, `ui/id-switch-review.js`, `ui/settings.js`, `ui/plane-state.js` and what they import.
+- **Keep those modules DOM-free** (no `document`/`window` at import or in the code the CLI calls; read sleap-io.js from `globalThis.SleapIO`, the page's `window.SleapIO`). Page work stays in `pose/tracker.js`, `pose/triangulation.js`, `ui/export-modals.js`, `slp-import.js`, `session-loader.js`, `save-load.js`, which call in. A change to Track All / Triangulate All / loading / saving belongs in the shared module, or the CLI drifts from the app.
+- `cli/node-platform.mjs` gives the readers a Web Worker on `worker_threads` and a lazily read `File`; `cli/node-resolve.mjs` gives Node `index.html`'s import map.
+- Track All's ID-switch check by body size runs with `--fps` (the app reads the rate from the video), through `recordIdSwitchResults`, so the file's `idSwitchReview` is the app's; without `--fps` it is skipped. Not run: the image check (it needs the videos).
+- Test: `tests/e2e/cli-parity.mjs` (app headless vs CLI, same identities/groups; 3D within 1e-9 relative, because Chrome's and Node's V8 can differ by an ulp in `Math.atan2/cos/sin/exp/log`), `tests/test-cli-track.mjs`, `tests/test-track-triangulate-cores.mjs`. Real data: `tests/e2e/_real-cli-parity.mjs <folder> <animals>`.
+
 ## Local Development
 ```bash
 python3 server.py 8080            # Windows: py server.py 8080 (or python3 -m http.server — no --offline)
