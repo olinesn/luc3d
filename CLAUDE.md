@@ -286,6 +286,15 @@ A file's suggestions (`suggestions_json`) stay on their own videos the same way,
 - `smallestEigvec4Inverse` must iterate until it converges, with the Jacobi kernel as fallback. Never loosen `INVERSE_TOL` (1e-15); invariance tests fail. Before changing the solve, A/B Track All identities with `tests/e2e/_diag-trackall-ab.mjs`.
 Test: `tests/e2e/triangulation-frame-invariant.mjs`.
 
+## Fusing a volumetric model's 3D (File ▸ Load Volume 3D, Triangulate ▸ Fuse with volume)
+
+A volumetric model (a 3D UNet over unprojected 2D confidence maps) runs offline on a GPU; `scripts/export_volume3d.py` writes its per-frame, per-animal means and covariances to a `.vol3d.h5` (`import-export/volume3d-file.js`), kept per session by `pose/volume3d.js`. With `options.volume`, `triangulateAndReproject` matches the group to a volume animal, gates each view's 2D by the volume's projection (volume-gated triangulation), re-solves, then fuses with the volume by covariance (`pose/volume-fusion.js`).
+- **Never persisted:** the volume stays in memory (not in the `.slp`; `save-golden-digest.mjs` must not move); the setting is browser-local.
+- **The gate uses the volume's covariance as given; the fusion scales it by `cov_scale`.** Never fuse with the raw covariance: a softmax spread is 17-25× too wide in variance, and the fusion would barely move off DLT.
+- **Every path that stores a group's 3D passes the frame's volume** (This frame, All frames eager and windowed through the pool's `submit(..., volume)`, Range, `reTriangulateGroup`), and a fused group (`group.volumeFused`) is displayed from its stored 3D, never re-solved without the volume.
+- Without `options.volume` (or no animal within `matchMaxMm`) the solve is bit-identical to before.
+Tests: `tests/test-volume-fusion.mjs` (incl. real data against the volfuse study), `tests/e2e/volume-fusion.mjs`.
+
 ## The defined origin moves the CALIBRATION, never the points
 
 Set Origin (`ui/origin-definition.js`, `pose/origin-frame.js`) changes only what is drawn. Never re-bake points, cameras or plane nodes. Any node of a fitted plane can be the origin; UI text says "node", not "corner".
@@ -431,6 +440,8 @@ node tests/e2e/<name>.mjs           # Playwright, one file per behavior
 ## Python scripts
 
 `scripts/json_to_slp.py`, `scripts/json_to_h5.py` (JSON export → `.slp`/HDF5; need h5py, numpy). `scripts/validate_slp_sleap_compat.py` asserts LUCID `.slp` files load in SLEAP (`--compare`, `--metadata-roundtrip`); run with `uv run --with sleap-io --with numpy --with h5py python …`.
+
+`scripts/export_volume3d.py` writes a volumetric model's 3D (frames, means, covariances; `--dlt` measures `cov_scale`) as the `.vol3d.h5` File ▸ Load Volume 3D reads; `--self-test` needs numpy only.
 
 `scripts/sleap_backward.py` runs a SLEAP centroid + centered-instance pair backward (skeleton in, image out) and `scripts/sleap_negatives_compare.py` compares centroid models for seeing animals that aren't there (e.g. with vs without `use_negative_frames`). `scripts/sleap_explain_error.py` explains a real misread: on a hand-labeled frame it says where each wrong node was read (another animal's body part, its own other side, or nothing), then finds the smallest edit of the frame that makes the models read it correctly and reports where that edit went. Run all three with sleap-nn's Python; each file's header explains its use and its measured design choices. On a CUDA GPU the backward and explain tools optimize in bf16 with channels-last weights (`fast_forward`; about 40 s a frame on an A100 against 7-9 min on an M2 Pro), but every read-back is sleap-nn's fp32 pass (`exact_forward`), node for node what `sleap-nn predict` 0.3.5 gives (checked on 100 labeled frames; a uint8 frame must be resized on the CPU, as sleap-nn does: torchvision rounds it differently on CUDA); `sleap_backward.py --jobs` runs many frames in one process and `--shard` splits them over a Slurm array; `sleap_explain_error.py --sweep` reads every labeled frame, tallies what each misread node was read on and explains every misread animal (`--shard`, then `--summarize`; a `.pkg.slp` is read from its own images, its videos keyed by embedded dataset; `--scan-training`/`--explain-limit` sample a big package) and writes `sweep_browser.html`, one self-contained page (no server or CDN; pictures by relative path into `explained/`, never embedded) for browsing every explained animal with filters by split, fixed, cause and an optional `--groups` JSON (video_index → group), built by stdlib-only `scripts/sleap_sweep_browser.py` (`--self-test`), which also holds the tally `sweep_summary.txt` prints; `--sheet` keeps the old one-PNG `sweep_sheet.png`. These copies are the ones developed; `olinesn/sleap-io` holds an older, separately grown branch of the first two under `contrib/synthetic_sessions/`.
 
