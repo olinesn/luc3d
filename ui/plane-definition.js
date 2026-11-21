@@ -204,6 +204,10 @@ import {
 } from './plane-list-panel.js';
 // The EDITOR half of section 2, below the roster in the same <details>.
 import { renderEditor } from './plane-editor-panel.js';
+import {
+    renderOutlinesSection, outlinePointerDown, outlinePointerMove, cancelOutlineTrace,
+    OUTLINES_INFO,
+} from './cage-outline-tool.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
 // The 3D Mesh Objects table lives in its own module and is purely additive —
 // this import and the two calls below are the whole of its coupling to the
@@ -1705,6 +1709,8 @@ export function exitPlaneMode() {
     // locked, and it edits plane geometry, so it must not outlive the mode.
     if (isOriginModeActive()) exitOriginMode();
     closeAngleModal();
+    // An outline being traced is a gesture inside the mode.
+    cancelOutlineTrace(true);
     planeState.active = false;
 
     var bar = document.getElementById('planeModeBar');
@@ -1764,6 +1770,9 @@ export function refreshPlanePanel() {
     // planes above, so it re-renders whenever they do and never holds its own
     // copy of anything.
     refreshMeshObjectsPanel();
+    // The cage outlines (per-view 2D, `ui/cage-outline-tool.js`): listed per
+    // view, so they follow the active session's views.
+    renderOutlinesSection();
     // LAST, so it can override whatever the renders above decided. Everything
     // in this panel edits plane geometry, and the Set Angle dialog is reading
     // that geometry live — see the edit-lock note in `ui/plane-angle.js`.
@@ -1973,6 +1982,10 @@ export function planeInteractionCallbacks() {
     return {
         isPlaneEditMode: isPlaneModeActive,
         getPlaneInstances: getPlaneInstances,
+        // Cage outlines (Define Planes ▸ Outlines) see a click and a hover
+        // before the plane nodes do; see `ui/cage-outline-tool.js`.
+        outlinePointerDown: outlinePointerDown,
+        outlinePointerMove: outlinePointerMove,
         /**
          * Which POOL indices are grabbable on this view. One instance covers
          * the WHOLE pool, so without this filter a node belonging only to an
@@ -2170,6 +2183,7 @@ var PLANE_SECTION_IDS = [
     'planeActionsDetails',
     'planeAppearanceDetails',
     'meshObjectsDetails',
+    'cageOutlinesDetails',
     'originResultDetails',
 ];
 
@@ -2224,6 +2238,13 @@ function wireSectionInfoButtons() {
         btn.innerHTML = ICON_INFO;
         setInfoTip(btn, PLANE_SECTION_INFO[id]);
     });
+    // Outlines' text lives with the tool; read here, at call time, because the
+    // two modules import each other.
+    var outlinesInfo = document.getElementById('cageOutlinesInfo');
+    if (outlinesInfo) {
+        outlinesInfo.innerHTML = ICON_INFO;
+        setInfoTip(outlinesInfo, OUTLINES_INFO);
+    }
 }
 
 export function setupPlaneDefinition() {

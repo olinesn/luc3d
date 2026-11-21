@@ -59,7 +59,10 @@ helpers used by every load path. Calls `init()` at module-load.
   (`isViewport3DVisible()`, `ui/panel-visibility.js`): every session load
   funnels through here, so it never clears the `collapsed` class; when collapsed
   it disposes the old viewport, sets the singleton to `null` and builds no WebGL
-  context — keeping it would show the PREVIOUS session's scene on expand.
+  context — keeping it would show the PREVIOUS session's scene on expand. A new
+  viewport gets the planes (`syncPlanes3D`) and the reference meshes
+  (`syncReferenceMeshes3D`, `ui/reference-meshes.js`, page state that outlives
+  the rebuild) re-applied. `init()` also calls `setupReferenceMeshes()`.
 - `update3DViewport(frameIdx)` — pushes current InstanceGroups into the 3D
   scene; auto-initializes the viewport if calibration is present. Returns
   immediately (no auto-init) when the panel is collapsed; the rebuild is a
@@ -1262,6 +1265,65 @@ checks the **opposite-traversal property directly** rather than comparing
 volumes: a face through the world origin contributes zero signed volume however
 it is wound, so a unit cube at `[0,1]³` measures +1 even with half its rings
 backwards.
+
+---
+
+### pose/cage-outlines.js
+
+**Purpose.** The cage's **outline (silhouette) in each camera view** — a closed
+polygon around the area of the image the cage covers, outer edge only, no
+holes — and its on-disk form. Unlike a plane node it has **no 3D identity**:
+the vertices of two views' outlines are not the same physical points, so it is
+purely per-view 2D. Its consumer is outside the app: the cage-scan tools
+intersect the views' silhouettes through the calibration (a visual hull) and
+fit the cage's planes to them. SESSION-scoped like `planePlacements` (a view
+belongs to a session): the set lives on `Session.cageOutlines`.
+
+**On-disk format** (`metadata.lucid.cageOutlines`, written by
+`import-export/plane-metadata.js`; the cage-scan Python tools read exactly
+this, so do not change it):
+
+    { "version": 1,
+      "views": { "<viewName>": [ { "id": 1, "name": "cage", "points": [[x, y], ...] } ] } }
+
+Points are video pixels (the coordinates of keypoints and plane-node 2D); a
+polygon is closed implicitly (first point not repeated) and written only with
+at least 3 finite points; the union of a view's polygons is the silhouette.
+
+**Key exports.**
+- `class CageOutlineSet` — `views` (`Map<viewName, {id, name, points}[]>`),
+  ids unique across views and never reused. `polygons(view)`,
+  `vertexCount(view)`, `viewNames()`, `isEmpty()`, `getPolygon`,
+  `addPolygon(view, points, name)` (copies; refuses a NaN/Infinity point, fewer
+  than 3 points or an empty view name — the whole polygon, so a non-finite
+  value can never become a vertex), `replaceView` (Retrace; a refused replace
+  keeps the old outline), `removePolygon`, `clearView`, `moveVertex`,
+  `insertVertex(view, id, i, x, y)` (after `i`, so `i = n-1` lands on the
+  closing edge), `deleteVertex` (refused at 3).
+- `nearestOutlineVertex` / `nearestOutlineEdge(set, view, x, y, maxDist)` —
+  hit tests in video px; the edge hit returns the foot of the perpendicular,
+  which is where an inserted vertex goes.
+- `serializeCageOutlines(set)` → the format above, or **null** when there is
+  nothing (never a default; `save-golden-digest.mjs` does not move).
+  `restoreCageOutlines(data)` → always a set; drops a polygon with a
+  non-finite point or fewer than 3 points, renumbers a missing/duplicate id (an
+  outline id is not a reference target, so this cannot misattach anything),
+  keeps file order.
+- `class OutlineTrace` — the outline being traced: `add`, `undo`,
+  `canClose()` (≥ 3), `nearFirst(x, y, r)`.
+- `CAGE_OUTLINES_VERSION`, `DEFAULT_OUTLINE_NAME` (`'cage'`),
+  `MIN_OUTLINE_POINTS`.
+
+**Imports from project modules.** None (Node tests load it directly).
+
+**Imported by.** `import-export/plane-metadata.js`, `ui/cage-outline-tool.js`.
+
+**Tests.** `tests/test-cage-outlines.mjs` (the exact format, NaN refusals,
+garbage input, edits, hit tests, tracing),
+`tests/e2e/cage-outline-roundtrip.mjs`,
+`tests/e2e/plane-persistence-roundtrip.mjs` (both writers, session scope),
+`tests/e2e/reopen-folder-session-settings.mjs` (the folder loader, incl. its
+conflict branch).
 
 ---
 
@@ -5678,6 +5740,13 @@ drift from pose editing. Added surface:
   still SELECTS, so the node stays reachable for un-pinning. Its `indices`
   become `dragInfo.indexFilter`, honoured by `_onDragMove`/`_onDragUp` in
   whole-instance mode, so an Alt+drag moves only the grabbed plane's nodes.
+- The `outlinePointerDown(e, viewName, vx, vy, displayToVideo, im)` /
+  `outlinePointerMove(...)` callbacks (cage outlines, `ui/cage-outline-tool.js`)
+  run FIRST in `onMouseDown` / `onMouseMove`. A consumed mousedown is
+  `preventDefault`ed and marked `_consumedByInteraction` (so the video cell's
+  pan / box-zoom in `loading/video.js` stands down); a move returning `true`
+  ends the move (tracing owns the cursor, and plane hover is cleared), and
+  `'hover'` counts as a hover for the pointer cursor.
 - The `isPlaneDataLocked()` callback, asked before a right-click nulls a plane
   node (a geometry edit, like a drag). True while something reads plane
   geometry live (the Set Angle dialog). Deliberately NOT folded into
@@ -7130,7 +7199,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `ui/plane-definition.js` re-export) on the same canvas — `drawFrameOverlays`
   opens with a `clearRect`, so planes drawn before it would be wiped. Runs on
   every frame and in every mode (planes are static scene geometry). Pinned by
-  `tests/e2e/define-plane-mode.mjs`.
+  `tests/e2e/define-plane-mode.mjs`. The cage outlines follow it on the same
+  canvas (`drawCageOutlines(view)`, `ui/cage-outline-tool.js`).
 
   **The Group menu button and Temporal Smoothing are synced here too.**
   `#tbGroupMenu` (the hover menu holding Group / Edit Group) is `.active` while
@@ -7168,6 +7238,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `computeLazyCameraBaseline`, `createFrameCounterBaselineBuilder`,
   `countFrameCounters`, `nonResidentCameraCounts`, `refreshCountedFrame`.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
+- `./cage-outline-tool.js` — `drawCageOutlines`.
 - `./smoothing-button.js` — `syncSmoothingButton` (every draw).
 - `./run-buttons.js` — `syncRunButtons` (every draw).
   **Circular** (that module imports `drawAllOverlays` back); safe because both
@@ -7867,8 +7938,11 @@ the user made and forgot. Pinned by `define-plane-mode.mjs` §1b.
   counted. Nulled wins when both apply. A **pinned** node gets an extra white
   ring, so a refused drag reads as a lock, not a bug.
 - `refreshPlanePanel()` — rebuilds the panel: `renderEditor`, then the planes
-  table, action row, origin button, angle button, origin result, and finally
-  `refreshMeshObjectsPanel()`. Full DOM rebuild per mutation, deliberately. It
+  table, action row, origin button, angle button, origin result,
+  `refreshMeshObjectsPanel()`, and the Outlines section
+  (`renderOutlinesSection()`, `ui/cage-outline-tool.js`, whose two pointer
+  callbacks `planeInteractionCallbacks` also merges in, and whose trace
+  `exitPlaneMode` cancels). Full DOM rebuild per mutation, deliberately. It
   ends with the private `applyAngleModalLock()`, which disables every control
   in `#planePanel` while the Set Angle dialog is open — LAST, so it overrides
   the renders above, and re-asked every render rather than remembered, so
@@ -8797,6 +8871,115 @@ ID, the PROJECT scope, and three negative controls: untouched projects write no
 key, the feature is additive, and deleting an object keeps its planes and
 nodes); `tests/e2e/mesh-membership-highlight.mjs` (what the 3D viewport draws
 for a selection); `tests/e2e/mesh-object-export.mjs` (the two export buttons).
+
+---
+
+### ui/cage-outline-tool.js
+
+**Purpose.** Define Planes ▸ **Outlines**: trace and edit the cage's outline in
+each camera view, draw it on the 2D overlays, and list it per view. The data is
+`pose/cage-outlines.js` (on `Session.cageOutlines`, created by
+`sessionOutlines()` on first use).
+
+**Gestures** (inside Defining Plane Mode only):
+- A row's **Trace / Retrace** starts a trace on that view: each click adds a
+  vertex (clamped to the video), clicking the first vertex (≥ 3 points) or
+  **Enter** closes it, **Backspace** or a right-click removes the last one,
+  **Esc** cancels. Closing REPLACES the view's outline (`replaceView`). The
+  keys come from a capture-phase `keydown` listener on `window`, added for the
+  trace and removed when it closes or is cancelled — modal keys of one
+  operation, not shortcuts, so no `ACTION_CATALOG` entry; it stops them
+  reaching the app (Backspace would otherwise delete an instance), except that
+  a text field (`isTextEntryTarget`) keeps its own Enter and Backspace.
+- On a closed outline: drag a vertex (document listeners for the drag), Shift+
+  click an edge to insert a vertex there (and drag it), right-click a vertex to
+  delete it (refused at 3, with a status).
+- Every edit `markDirty()`s; leaving the mode (`exitPlaneMode`) and switching
+  session cancel a trace.
+
+**How the clicks reach it.** `outlinePointerDown` / `outlinePointerMove` are
+InteractionManager callbacks (merged in through `planeInteractionCallbacks`),
+run BEFORE the plane-node and pose handling, so `ui/interaction.js` keeps no
+import of the feature. While a view is traced, every click on it is a vertex
+and the move hook owns the cursor (plane nodes there are not grabbable or
+hovered). Otherwise a **plane node at the same spot wins** over an outline
+vertex (`findNearestPlaneNode`, compared by distance): a cage corner is often
+both, and it must stay draggable as a node. The move hook returns `'hover'`
+over a vertex so the manager shows the pointer cursor.
+
+**Drawing.** `drawCageOutlines(view)`, called by `drawAllOverlays` right after
+`drawPlaneOverlays`, on the same canvas and video-to-canvas mapping: an orange
+(`OUTLINE_COLOR`) closed polyline with a light fill, shown with the plane
+bodies (`planeVisibility(...).planes2d`: always in the mode, outside it when
+Visibility ▸ Planes in 2D Views is on); square vertex handles only in the
+mode; the trace as a polyline, a dashed rubber band to the cursor and a ring
+on the first vertex once it can close. A retrace dims the old outline.
+
+**Panel.** `renderOutlinesSection()` rebuilds `#cageOutlinesTable` (View,
+Points, Trace|Retrace + Clear, or Close + Cancel on the view being traced) and
+the one-line `#cageOutlinesHint`; called from `refreshPlanePanel` and after
+every edit. The ⓘ text is `OUTLINES_INFO`, wired by
+`wireSectionInfoButtons` at call time (the two modules import each other).
+
+**Key exports.** `outlineState`, `sessionOutlines`, `startOutlineTrace`,
+`cancelOutlineTrace`, `closeOutlineTrace`, `clearViewOutline`,
+`outlinePointerDown`, `outlinePointerMove`, `drawCageOutlines`,
+`renderOutlinesSection`, `OUTLINE_COLOR`, `OUTLINES_INFO`.
+
+**Imports from project modules.** `./app-state.js`, `./overlays.js`
+(`makeVideoToCanvasTransform`),
+`../pose/cage-outlines.js`, `./plane-definition.js` (`planeState`, `redraw`;
+circular, used in function bodies only), `./plane-visibility.js`,
+`../import-export/save-load.js` (`setStatus`, `markDirty`),
+`./keyboard-target.js` (`isTextEntryTarget`).
+
+**Imported by.** `ui/plane-definition.js`, `ui/rendering.js`.
+
+**Tests.** `tests/e2e/cage-outline-roundtrip.mjs`.
+
+---
+
+### ui/reference-meshes.js
+
+**Purpose.** **Reference meshes**: STL/PLY files drawn in the 3D view as
+reference geometry (File ▸ Load Reference Mesh, Visibility ▸ Reference
+Meshes) — e.g. a 3D scan of the cage aligned into the rig's frame by the
+cage-scan tools, compared by eye with the planes and the triangulated points.
+Coordinates are taken as **calibration world coordinates** (the frame of
+`points3d` and plane-node `xyz`), units as the calibration's; nothing is
+transformed.
+
+**Display only.** Never written to the `.slp`, never marks the project dirty,
+gone on reload. The entries outlive a rebuilt 3D viewport (every project load
+rebuilds it) because `setup3DViewport` calls `syncReferenceMeshes3D`.
+
+**Loading.** `loadReferenceMeshFile(file)` reads through
+`readBlobArrayBuffer` (cold-read guard), parses with `parseMeshAsync`
+(`import-export/mesh-import.js`) under the progress card, yielding to paint
+between chunks (a 2M-triangle STL loads without a long freeze), then adds,
+draws and fits the view to it; a file that cannot be read sets an error status
+and adds nothing.
+
+**Key exports.** `referenceMeshState` (`{entries, nextId}`; an entry is
+`{id, name, mesh, visible, color, opacity}`), `addReferenceMesh(name, mesh)`,
+`getReferenceMesh`, `removeReferenceMesh`, `setReferenceMeshVisible`,
+`setReferenceMeshColor`, `setReferenceMeshOpacity`, `syncReferenceMeshes3D`,
+`loadReferenceMeshFile`, `loadReferenceMeshInteractive` (the menu item and the
+section's button; several files at once), `renderReferenceMeshList`,
+`setupReferenceMeshes`, `REFERENCE_MESH_COLORS`, `DEFAULT_REFERENCE_OPACITY`
+(0.5). The list row: show box, colour (disabled for a file with vertex
+colours, which are drawn as they are), name, triangle or point count, ×, and an
+opacity slider.
+
+**Imports from project modules.** `./app-state.js` (`viewport3d`),
+`../import-export/file-io.js` (`pickFiles`), `../loading/cold-read-guard.js`,
+`../import-export/mesh-import.js`, `./loading-overlay.js`,
+`../import-export/save-load.js` (`setStatus`).
+
+**Imported by.** `pose/initialization.js` (`setupReferenceMeshes`,
+`syncReferenceMeshes3D`), `ui/ui-wiring.js` (`loadReferenceMeshInteractive`).
+
+**Tests.** `tests/e2e/reference-mesh-load.mjs`.
 
 ---
 
@@ -11257,7 +11440,9 @@ be overwritten with whatever project is open. Set Env refuses as a whole if any
 environment file is too new, rather than triangulating from the readable cameras.
 
 **Key exports.**
-- Menu / setup: `setupMenus`, `setupUI`. The menu bar ends with a **Help**
+- Menu / setup: `setupMenus`, `setupUI`. File ▸ Load Reference Mesh
+  (STL/PLY) (`#menuLoadReferenceMesh`) calls `loadReferenceMeshInteractive`
+  (`ui/reference-meshes.js`). The menu bar ends with a **Help**
   dropdown (Docs, Settings) after Hot Keys; Docs / Settings are ALSO direct
   buttons at its right end (`menuBarDocs` / `menuBarSettings`, sharing
   `openDocs` / `openSettings`). `updateTriangulateButtonLabels` names the
@@ -11757,6 +11942,13 @@ via the options bag.
 - `Viewport3D` — class. Selected methods: `setFrame(instanceGroups)`,
   `setSelectedInstance`, `setEnvironment`, `clearEnvironment`,
   `setPlanes`, `clearPlanes`, `setMeshMembership`, `clearMeshMembership`,
+  `setReferenceMeshes(entries)` (the reference meshes of
+  `ui/reference-meshes.js`, in the `referenceMeshes` group in calibration world
+  coordinates: a drawn entry keeps its GPU buffers and only restyles —
+  visibility, colour, opacity < 1 = transparent without depth write — a new one
+  is built from the parser's typed arrays without a copy (normals computed once
+  and kept on the mesh), a missing one is disposed; `fitToScene` counts the
+  bounding-box corners of the visible ones),
   `setSelectedPlaneNode`, `clearSelectedPlaneNode`,
   `setAnglePreview`, `clearAnglePreview`, `setPlaneRoles`, `clearPlaneRoles`,
   `setOriginPickMode`, `setOriginCandidates`,
@@ -13535,7 +13727,8 @@ filesystem enumeration, decoder rebuild.
   on them by node ID only if `planeMetadataConflict` finds the file's nodes and
   planes in the open model under the same IDs and names; otherwise the 2D is
   dropped and the status bar says so (plane-node IDs restart at 1 in every
-  project). Covered by `tests/e2e/reopen-folder-session-settings.mjs`. Views are
+  project); its cage outlines are read either way (`readCageOutlineMetadata`:
+  an outline names no node). Covered by `tests/e2e/reopen-folder-session-settings.mjs`. Views are
   ordered by **calibration camera index**, not enumeration order, so panes don't
   reshuffle on reload.
   `handleEmptySession()` creates a blank, video-less session and makes it
@@ -15461,6 +15654,46 @@ either side of `__`, ignoring case; else unmatched). DOM-free.
 `ui/behavior-kpms-modal.js`. **Tests.** `tests/test-kpms-io.mjs` §1–7 (§6 reads
 `tests/fixtures/kpms/`, what a real keypoint-MoSeq 0.8.4 fit wrote —
 `make_fixture.sh` remakes it), `tests/e2e/behavior-kpms-roundtrip.mjs`.
+### import-export/mesh-import.js
+
+**Purpose.** STL and PLY files read into **typed arrays** for the 3D view's
+reference meshes (`ui/reference-meshes.js`). DOM-free and import-free.
+
+**What it reads.** STL binary (recognised by size, 84 + 50·n — many binary
+writers start the header with "solid" too) and ASCII (loops of more than 3
+vertices fan-triangulated); facet normals are RECOMPUTED (stored ones are often
+zero), so a soup is flat-shaded. PLY ascii / binary_little_endian /
+binary_big_endian: vertex x, y, z of any numeric type, optional nx/ny/nz and
+red/green/blue (uchar, or float 0..1 scaled), faces as `list <count> <index>`
+named `vertex_indices` or `vertex_index`, polygons fan-triangulated; other
+elements and properties are read past. A PLY with vertices and no faces comes
+back as **points**.
+
+**Bad data is dropped and counted, never drawn**: a triangle with a non-finite
+vertex or an out-of-range index, a face of fewer than 3 vertices, a non-finite
+point (compacted away from a point cloud; left at 0 and unreferenced in a
+mesh, and kept out of the bbox). A file that cannot be read at all throws
+`MeshParseError` with a reason (not STL/PLY, no `end_header`, unknown format,
+no x/y/z, truncated, nothing finite).
+
+**Key exports.** `parseMesh(input, {name, chunk})` → `{format, kind:
+'mesh'|'points', positions: Float32Array, indices: Uint32Array|null, normals:
+Float32Array|null, colors: Uint8Array|null, vertexCount, triangleCount, bbox,
+dropped: {triangles, vertices}}`; `parseMeshSteps` (the generator both entry
+points drain: yields `{done, total, unit}` every `chunk` rows, default
+`MESH_PARSE_CHUNK` = 250,000); `parseMeshAsync(input, opts, onProgress,
+yieldFn)`; `detectMeshFormat`; `MeshParseError`. Binary STL computes its
+normals inside the chunked loop, so a big file never blocks in a second pass.
+
+**Imports from project modules.** None. **Imported by.**
+`ui/reference-meshes.js`.
+
+**Tests.** `tests/test-mesh-import.mjs` (fixtures built byte by byte: both STL
+kinds, all three PLY encodings incl. an endianness negative control, a points
+cloud, NaN/out-of-range dropping, malformed files, the async path),
+`tests/e2e/reference-mesh-load.mjs`.
+
+---
 
 ### import-export/plane-metadata.js
 
@@ -15483,8 +15716,16 @@ per SESSION, but the plane model is not:
 
 **Key exports.**
 - `PLANE_METADATA_KEYS` — `planeNodes`, `planes`, `meshObjects`,
-  `planePlacements`, `planeOrigin`. Exported so the slim-metadata / golden-digest
+  `planePlacements`, `planeOrigin`, `cageOutlines`. Exported so the slim-metadata / golden-digest
   guards can assert a project that never opened the feature carries none of them.
+- `cageOutlines` is the session's cage outlines (`pose/cage-outlines.js`,
+  `Session.cageOutlines`): SESSION-scoped 2D like the placements but tied to no
+  plane node, so `writePlaneMetadata` writes it whatever the model holds, and
+  `readPlaneMetadata` reads it first, before its model guard, assigning it
+  unconditionally (a session without outlines comes back with an empty set).
+  `readCageOutlineMetadata(session, lucid)` is that read on its own, for the
+  single-SLP folder load's conflict branch: it refuses a foreign file's PLANE 2D
+  (node IDs) but still reads its outlines, which name no node.
 - `writePlaneMetadata(lucid, session)` — mutate a `metadata.lucid` dict in place;
   returns the same dict. Reads the pool / planes off the module singleton and the
   2D off `session.planePlacements`, so saving a BACKGROUND session writes its own
