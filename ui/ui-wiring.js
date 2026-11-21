@@ -132,6 +132,8 @@ import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
 } from './track-identity-ops.js';
 import { setSessionRotation } from './video-filters.js';
+import { refreshOutlinePanel, flagOutlineUnderPointer } from './outline-flags-panel.js';
+import { toggleOutlineBrush } from './outline-brush.js';
 
 // ============================================
 // Rename Track / Identity modal
@@ -2409,6 +2411,9 @@ export function setupUI() {
     setHandler('togglePredicted', function () { toggleVisCheckbox('visPredicted'); });
     setHandler('toggleReproj', function () { toggleVisCheckbox('visReprojections'); });
     setHandler('toggleErrors', function () { toggleVisCheckbox('visErrors'); });
+    setHandler('toggleOutlines', function () { toggleVisCheckbox('visOutlines'); });
+    setHandler('flagOutline', function () { flagOutlineUnderPointer(); });
+    setHandler('outlineBrush', function () { toggleOutlineBrush(); });
     setHandler('singleViewMode', function () { enterSingleViewMode(); showViewIndicator(); });
     setHandler('gridMode', function () { setGridMode(); showViewIndicator(); });
     // Triangulate uses the Settings default method (DLT/BA).
@@ -2594,6 +2599,13 @@ export function setupUI() {
     setupVisSlider('visReprojBrightness', 'visReprojBrightnessVal', 'pct');
     setupVisSlider('visReprojLabelSize', 'visReprojLabelSizeVal');
     setupVisSlider('visReprojLabelAlpha', 'visReprojLabelAlphaVal', 'float');
+    setupVisSlider('visOutlineFill', 'visOutlineFillVal', 'pct');
+    // Animal outlines: what is painted only, plus the Outlines tab's on/off line.
+    var visOutlinesEl = document.getElementById('visOutlines');
+    if (visOutlinesEl) visOutlinesEl.addEventListener('change', function () {
+        drawAllOverlays(state.currentFrame);
+        refreshOutlinePanel();
+    });
 
     // Checkbox toggles. `visUnlinkedBadge` only changes what is PAINTED — it
     // cannot hide the instance a selection points at, so the deselect sweep below
@@ -2684,9 +2696,10 @@ export function setupUI() {
         'visReprojBrightness', 'visReprojLabelSize', 'visReprojLabelAlpha',
         'vis3dLabelSize', 'vis3dSphereSize', 'vis3dPyramidLength',
         'vis3dNodeSize', 'vis3dEdgeWeight', 'vis3dBrightness',
+        'visOutlineFill',
     ];
     var visCheckIds = ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
-        'visUnlinkedBadge',
+        'visUnlinkedBadge', 'visOutlines',
         'vis3dLabelShow', 'vis3dSphereShow', 'vis3dPyramidShow',
         'vis3dNodeShow', 'vis3dEdgeShow'].concat(planeVisCheckIds);
     var visStyleIds = [

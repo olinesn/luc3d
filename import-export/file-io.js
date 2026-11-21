@@ -18,6 +18,7 @@ import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPoints
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
 import { writeVisibilityMetadata } from './visibility-metadata.js';
+import { writeOutlineFlagsMetadata } from './outline-flags-metadata.js';
 import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { identityCatalogFinder, typedFileLabels, writeFileLabels } from './detection-labels.js';
@@ -2341,6 +2342,8 @@ export function buildSlpLabelsAllViews(session, views, videoFiles, outside) {
     // when it holds a non-default value, so an untouched project's bytes are
     // unchanged (tests/e2e/save-golden-digest.mjs).
     writeVisibilityMetadata(sioSession.metadata.lucid, session);
+    // Flags on bad animal outlines (Outlines tab), only when there are some.
+    writeOutlineFlagsMetadata(sioSession.metadata.lucid, session);
     // Define Planes state: the project-scoped pool/planes/origin (identical in
     // every session's dict) plus THIS session's per-view 2D. Same omit-the-
     // defaults rule, so a project that never opened the feature is unchanged.

@@ -58,6 +58,7 @@ import { points3dNodeCount } from '../pose/pose-data.js';
 import { headerVideoForOutsideFrames } from './outside-frames.js';
 import { suggestionsForSave, suggestionsInFileOrder } from './kept-suggestions.js';
 import { writeVisibilityMetadata } from './visibility-metadata.js';
+import { writeOutlineFlagsMetadata } from './outline-flags-metadata.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { identityCatalogFinder, storeRowLabels, writeFileLabels } from './detection-labels.js';
 import { writePlaneMetadata } from './plane-metadata.js';
@@ -575,6 +576,8 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     // default, so untouched projects serialize byte-identically. Must stay in
     // lockstep with the eager writer in `file-io.js` (both call the one helper).
     writeVisibilityMetadata(sioSession.metadata.lucid, session);
+    // Flags on bad animal outlines (Outlines tab), only when there are some.
+    writeOutlineFlagsMetadata(sioSession.metadata.lucid, session);
     // Define Planes state — the streaming mirror of the eager writer in
     // `file-io.js` (both call the one helper, so they cannot drift).
     writePlaneMetadata(sioSession.metadata.lucid, session);

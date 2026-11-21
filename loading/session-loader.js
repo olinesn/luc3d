@@ -115,6 +115,7 @@ import {
 } from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from '../import-export/visibility-metadata.js';
+import { readOutlineFlagsMetadata } from '../import-export/outline-flags-metadata.js';
 import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js';
 import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
 import { readBehaviorMetadata, resetBehaviorState } from '../import-export/behavior-metadata.js';
@@ -2335,6 +2336,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         var startsProject = state.sessions.length === 0;
         if (startsProject) { resetPlaneState(); resetBehaviorState(); }
         readVisibilityMetadata(session, sessLucid);
+        readOutlineFlagsMetadata(session, sessLucid);   // flags on bad outlines
         readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         // Behavior labels. Into an open project the file's ethogram is merged
         // by behavior name and its bouts remapped onto the project's ids.
@@ -3027,6 +3029,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // Session-scoped Visibility-panel state — the lazy-reopen mirror of the
         // eager read in import-export/slp-import.js.
         readVisibilityMetadata(session, lucid);
+        readOutlineFlagsMetadata(session, lucid);   // flags on bad outlines
         readSmoothingMetadata(session, lucid);   // Temporal Smoothing's last run
         // Ethogram + behavior bouts. Only this file's first session opens here.
         readBehaviorMetadata(session, lucid, fileEventsOf(labels),

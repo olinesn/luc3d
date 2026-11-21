@@ -80,6 +80,7 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
+import { readOutlineFlagsMetadata } from './outline-flags-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { readBehaviorMetadata, resetBehaviorState } from './behavior-metadata.js';
 import { sessionEventScope } from './behavior-events.js';
@@ -1331,6 +1332,7 @@ export async function handleLoadSlpFile(slpFile) {
             if (fileVideo && !fileVideo.embedded) session.fileVideos.set(videoIdxToCameraName[fvk], fileVideo);
         }
         readVisibilityMetadata(session, earlyVisibility);
+        readOutlineFlagsMetadata(session, earlyVisibility);   // flags on bad outlines
         // Temporal Smoothing's last run (the groups' sources come with the 3D).
         readSmoothingMetadata(session, earlyVisibility);
         // The ethogram (first session read) and this session's behavior bouts.

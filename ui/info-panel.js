@@ -18,6 +18,7 @@ import { buildLazySelect } from './lazy-select.js';
 import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
          setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js';
 import { refreshIdSwitchPanel } from './id-switch-modal.js';
+import { refreshOutlinePanel } from './outline-flags-panel.js';
 import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
          setProjectSkeleton, getProjectSkeleton } from './app-state.js';
@@ -1231,6 +1232,8 @@ export function updateInfoPanel() {
     populateTimelineVisibility(state.session);
     // The ID Switches tab (and its timeline markers) for this session.
     refreshIdSwitchPanel(state.session);
+    // The Outlines tab (cameras' empty arenas, flags on bad outlines).
+    refreshOutlinePanel();
     // The Behavior tab (skips itself while hidden).
     refreshBehaviorPanel();
 
