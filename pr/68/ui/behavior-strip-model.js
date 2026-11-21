@@ -32,9 +32,9 @@
 // format, all free of the DOM, so Node tests load it directly
 // (`tests/test-behavior-strip.mjs`).
 
-import { chooseTickSteps, formatTickLabel, stepDecimals } from './seekbar-ticks.js?v=1d68f817d36a';
-import { seekbarTooltipText } from './seekbar-tooltip.js?v=1d68f817d36a';
-import { formatFrameNumber } from './frame-readout.js?v=1d68f817d36a';
+import { chooseTickSteps, formatTickLabel, stepDecimals } from './seekbar-ticks.js?v=727b0d803ba6';
+import { seekbarTooltipText } from './seekbar-tooltip.js?v=727b0d803ba6';
+import { formatFrameNumber } from './frame-readout.js?v=727b0d803ba6';
 
 /** How much time the strip can show, in seconds each side of the playhead. */
 export var STRIP_ZOOM_STEPS = [0.5, 1, 2, 3, 5, 10, 20, 30, 60, 120];

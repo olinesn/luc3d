@@ -139,7 +139,7 @@ import {
     isPoints3dSmoothed,
     unsmoothedPoints3d,
     clearPoints3dSmoothed,
-} from './pose-data.js?v=1d68f817d36a';
+} from './pose-data.js?v=727b0d803ba6';
 import {
     ATA_DEFAULT_K,
     ATA_DEFAULT_HMAX,
@@ -147,9 +147,9 @@ import {
     ataSmoothSeriesInto,
     dltPointCovarianceInto,
     secondDifferenceSigma,
-} from './adaptive-temporal-averaging.js?v=1d68f817d36a';
-import { cameraIncludedInSolves, solveReprojErrorThreshold } from './triangulation-core.js?v=1d68f817d36a';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from './lazy-residency.js?v=1d68f817d36a';
+} from './adaptive-temporal-averaging.js?v=727b0d803ba6';
+import { cameraIncludedInSolves, solveReprojErrorThreshold } from './triangulation-core.js?v=727b0d803ba6';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from './lazy-residency.js?v=727b0d803ba6';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
 const NO_IDENTITY = -1;
@@ -328,7 +328,11 @@ export function smoothSignalInto(src, dst, segments, opts, scratchV, scratchW) {
     }
 }
 
-/** `smoothMethod` values (Settings stores a number): 0 = windows, 1 = adaptive. */
+/**
+ * `smoothMethod` values (Settings stores a number): 0 = windows, 1 = adaptive.
+ * Params without one resolve to the windows (direct callers, tests); the app's
+ * default, Adaptive, is Settings' (`ui/settings.js` `getSmoothingParam`).
+ */
 export const SMOOTH_METHOD_WINDOWS = 'windows';
 export const SMOOTH_METHOD_ADAPTIVE = 'adaptive';
 

@@ -23,20 +23,20 @@
 //             pose/behavior-predictions.js, import-export/behavior-model-io.js,
 //             loading/cold-read-guard.js, import-export/save-load.js
 
-import { state } from './app-state.js?v=1d68f817d36a';
-import { showLoading, showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=1d68f817d36a';
-import { buildBehaviorContext, cachedBehaviorContext, detectionEnv, detectionFps } from './behavior-detect.js?v=1d68f817d36a';
-import { requestBehaviorRepaint, setReviewFocus, goToBehaviorFrame, BOUT_LEAD_IN_SECONDS, behaviorUi } from './behavior-coding.js?v=1d68f817d36a';
-import { behaviors, behaviorById, setBehaviorPost, exclusivePeers } from '../pose/behavior-ethogram.js?v=1d68f817d36a';
-import { labelBouts } from '../pose/behavior-labels.js?v=1d68f817d36a';
+import { state } from './app-state.js?v=727b0d803ba6';
+import { showLoading, showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=727b0d803ba6';
+import { buildBehaviorContext, cachedBehaviorContext, detectionEnv, detectionFps } from './behavior-detect.js?v=727b0d803ba6';
+import { requestBehaviorRepaint, setReviewFocus, goToBehaviorFrame, BOUT_LEAD_IN_SECONDS, behaviorUi } from './behavior-coding.js?v=727b0d803ba6';
+import { behaviors, behaviorById, setBehaviorPost, exclusivePeers } from '../pose/behavior-ethogram.js?v=727b0d803ba6';
+import { labelBouts } from '../pose/behavior-labels.js?v=727b0d803ba6';
 import {
     trainBehaviorClassifiers, setBehaviorModel, behaviorModelOf, behaviorModels, labelCounts, gateProblems, labelledWithoutNot,
     uncertainSegments, disagreementSegments, deriveBouts, modelBoutSettings,
-} from '../pose/behavior-classifier.js?v=1d68f817d36a';
-import { behaviorRunOf, replaceRunBouts, runConfigPrint, runModelHash } from '../pose/behavior-predictions.js?v=1d68f817d36a';
-import { buildModelFile, parseModelFile, modelFileProblems, adoptModelFile, modelFileName, MODEL_FILE_SUFFIX } from '../import-export/behavior-model-io.js?v=1d68f817d36a';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=1d68f817d36a';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=1d68f817d36a';
+} from '../pose/behavior-classifier.js?v=727b0d803ba6';
+import { behaviorRunOf, replaceRunBouts, runConfigPrint, runModelHash } from '../pose/behavior-predictions.js?v=727b0d803ba6';
+import { buildModelFile, parseModelFile, modelFileProblems, adoptModelFile, modelFileName, MODEL_FILE_SUFFIX } from '../import-export/behavior-model-io.js?v=727b0d803ba6';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=727b0d803ba6';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=727b0d803ba6';
 
 function n(x) { return Number(x || 0).toLocaleString('en-US'); }
 

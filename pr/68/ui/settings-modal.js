@@ -45,16 +45,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=1d68f817d36a';
-import { getActiveSession, state, timeline } from './app-state.js?v=1d68f817d36a';
-import { drawAllOverlays } from './rendering.js?v=1d68f817d36a';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=1d68f817d36a';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=1d68f817d36a';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=1d68f817d36a';
-import { installModalGeometry } from './modal-geometry.js?v=1d68f817d36a';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=1d68f817d36a';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=1d68f817d36a';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=1d68f817d36a';
+} from './settings.js?v=727b0d803ba6';
+import { getActiveSession, state, timeline } from './app-state.js?v=727b0d803ba6';
+import { drawAllOverlays } from './rendering.js?v=727b0d803ba6';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=727b0d803ba6';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=727b0d803ba6';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=727b0d803ba6';
+import { installModalGeometry } from './modal-geometry.js?v=727b0d803ba6';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=727b0d803ba6';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=727b0d803ba6';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=727b0d803ba6';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -789,8 +789,8 @@ export function showSettingsModal(initialPanel) {
     smHint.className = 'settings-kbd-hint';
     smHint.style.marginTop = '0';
     smHint.style.marginBottom = '8px';
-    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation, by one of two methods: fixed ' +
-        'windows (a median first, then a Gaussian; both off (0) by default) or adaptive windows. ' +
+    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation, by one of two methods: adaptive ' +
+        'windows (the default) or fixed windows (a median first, then a Gaussian; both off (0) by default). ' +
         '2D labels and predictions never change; the reprojections follow the smoothed 3D. ' +
         'Run it from the toolbar\'s Smooth ▾ (a click runs all frames; its menu also has This frame, the method and ' +
         'Remove smoothing). Changes here apply when you click Apply.';

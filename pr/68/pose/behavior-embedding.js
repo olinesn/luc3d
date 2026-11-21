@@ -52,8 +52,8 @@
 //
 // Depends on: pose/id-switch-check.js (`symmetricEigen`, `fitPCA`), pose/hdbscan.js
 
-import { symmetricEigen, fitPCA } from './id-switch-check.js?v=1d68f817d36a';
-import { hdbscanLinkage, condenseTree, selectClusters, bestTreeOverlaps } from './hdbscan.js?v=1d68f817d36a';
+import { symmetricEigen, fitPCA } from './id-switch-check.js?v=727b0d803ba6';
+import { hdbscanLinkage, condenseTree, selectClusters, bestTreeOverlaps } from './hdbscan.js?v=727b0d803ba6';
 
 /** B-SOiD's share of the variance to keep. */
 export var VARIANCE_KEPT = 0.7;
