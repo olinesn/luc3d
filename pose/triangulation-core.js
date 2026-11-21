@@ -18,6 +18,7 @@
 
 import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js';
 import { jacobiEigen } from './plane-fit.js';
+import { matchVolumeAnimal, gateObservations, fuseWithVolume } from './volume-fusion.js';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
@@ -1514,6 +1515,23 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     }
     let points3d = triangulateFrom(allObservations);
 
+    // Volume-gated triangulation (opt-in: `options.volume`, one frame of a volumetric model's output, see
+    // pose/volume-fusion.js and pose/volume3d.js). The group is matched to one of the frame's volume animals
+    // by the plain solve above; then each view's detection of a node enters only if it lies near the volume's
+    // node projected into that view, and the group is solved again from what passed. Gating BEFORE the
+    // solve: the reprojection-threshold rule below still runs on the survivors, unchanged.
+    const volume = options && options.volume;
+    const volCams = volume ? cameraNames.map(function (n) { return cameraMap[n]; }) : null;
+    let volAnimal = -1, volGated = 0;
+    if (volume && volume.n > 0) {
+        volAnimal = matchVolumeAnimal(points3d, volume);
+        if (volAnimal >= 0) {
+            volGated = gateObservations(volume, volAnimal, allObservations, allObservationsRaw, volCams, included,
+                reprojectPointCamera, numKeypoints);
+            if (volGated > 0) points3d = triangulateFrom(allObservations);
+        }
+    }
+
     // Robust triangulation (opt-in via the Tracking Wizard's "Reprojection error
     // threshold (px)"): iteratively drop any 2D node whose reprojection error in a
     // view exceeds the threshold, then re-triangulate that node from the remaining
@@ -1571,9 +1589,20 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         }
     }
 
+    // Fusion with the volume (after the gate and the threshold rule): each solved node becomes the product of
+    // Gaussians of its solve and the volume's; a node left without a solve takes the volume's mean.
+    let volumeInfo = null;
+    if (volume && volAnimal >= 0) {
+        const fz = fuseWithVolume(points3d, volume, volAnimal, allObservations, allObservationsRaw, volCams, included,
+            reprojectPointCamera, numKeypoints);
+        volumeInfo = { animal: volAnimal, gated: volGated, fused: fz.fused, filled: fz.filled };
+    }
+
     // Fast path: skip reprojections/errors when only 3D points are needed (bulk ops)
     if (options && options.triangulateOnly) {
-        return { points3d: points3d, reprojections: {}, errors: {}, meanError: null, method: method };
+        const fast = { points3d: points3d, reprojections: {}, errors: {}, meanError: null, method: method };
+        if (volumeInfo) fast.volume = volumeInfo;
+        return fast;
     }
 
     // Steps 3-5: reproject into every camera and score (`_reprojectAndScore`,
@@ -1581,7 +1610,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     // already-solved 3D).
     const scored = _reprojectAndScore(instanceGroup, cameraNames, cameraMap, projMatrices,
         points3d, allObservations, numKeypoints);
-    return {
+    const out = {
         points3d: points3d,
         reprojections: scored.reprojections,
         errors: scored.errors,
@@ -1590,6 +1619,8 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         meanErrorUndistorted: scored.meanErrorUndistorted,
         method: method
     };
+    if (volumeInfo) out.volume = volumeInfo;   // only when the volume was used: plain results stay as they were
+    return out;
 }
 
 /**
@@ -1662,12 +1693,14 @@ export function reprojectStoredPoints3d(instanceGroup, cameras, options) {
  * them all onto the main thread only for the sweep to drop them.
  */
 export function triangulationSummary(result) {
-    return {
+    const out = {
         points3d: result.points3d,
         meanError: result.meanError,
         meanErrorUndistorted: result.meanErrorUndistorted,
         method: result.method,
     };
+    if (result.volume) out.volume = result.volume;
+    return out;
 }
 
 /** Fill `cameraNames` / `projMatrices` / `cameraMap` from `cameras`, in order. */

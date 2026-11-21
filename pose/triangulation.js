@@ -25,6 +25,7 @@ import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } 
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
+import { volumeForFrame } from './volume3d.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
 import { nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
@@ -1998,7 +1999,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
             // Camera-name fixup + >=2-usable-view gate + points3d/usedCameras
             // stores are shared with the other two paths (see
             // `_triangulateGroupStep`).
-            var step = _triangulateGroupStep(group, cameras, method);
+            var step = _triangulateGroupStep(group, cameras, method, volumeForFrame(session, f));
             if (!step) continue;
             group.markClean();
             totalGroups++;
@@ -2217,8 +2218,14 @@ export function reTriangulateGroup(instanceGroup) {
     // move re-refines consistently (e.g. a BA group stays BA); a group with no
     // recorded method (e.g. 3D loaded from file) takes the user's global default.
     var method = resolveTriangulationMethod(instanceGroup);
-    var result = triangulateAndReproject(instanceGroup, groupCameras, { method: method });
+    // An edit re-solves a group on the shown frame: with that frame's volume when the group is one of its
+    // groups (so editing a fused group does not quietly drop the volume).
+    var shownGroups = state.session.instanceGroups && state.session.instanceGroups.get(state.currentFrame);
+    var volume = (shownGroups && shownGroups.indexOf(instanceGroup) >= 0)
+        ? volumeForFrame(state.session, state.currentFrame) : null;
+    var result = triangulateAndReproject(instanceGroup, groupCameras, { method: method, volume: volume || undefined });
     instanceGroup.triangulationMethod = result.method;
+    instanceGroup.volumeFused = !!result.volume;
     instanceGroup.solveSettings = triangulationSettingsKey(cameras);
 
     // Only update if we got valid results
@@ -2444,8 +2451,10 @@ export function triangulateCurrentFrame(method) {
             const groupCamNames = group.cameraNames;
             const groupCameras = cameras.filter(c => groupCamNames.indexOf(c.name) >= 0);
 
-            const result = triangulateAndReproject(group, groupCameras, { method: method });
+            const result = triangulateAndReproject(group, groupCameras,
+                { method: method, volume: volumeForFrame(session, frameIdx) || undefined });
             group.triangulationMethod = result.method;
+            group.volumeFused = !!result.volume;
             group.solveSettings = triangulationSettingsKey(cameras);
 
             // Watch for a NaN-poisoned solve. An all-NaN triple is now just the
@@ -2617,10 +2626,10 @@ async function _encourageGC(totalMB) {
  *
  * @returns {{result: Object, groupCameras: Array}|null}
  */
-function _triangulateGroupStep(group, cameras, method) {
+function _triangulateGroupStep(group, cameras, method, volume) {
     var prep = _prepareGroupStep(group, cameras);
     if (!prep) return null;
-    var result = triangulateAndReproject(group, prep.groupCameras, { method: method });
+    var result = triangulateAndReproject(group, prep.groupCameras, { method: method, volume: volume || undefined });
     _applyGroupStep(group, prep, result);
     return { result: result, groupCameras: prep.groupCameras };
 }
@@ -2675,6 +2684,9 @@ function _prepareGroupStep(group, cameras) {
 /** Store a solve's result on the group (the tail of `_triangulateGroupStep`). */
 function _applyGroupStep(group, prep, result) {
     group.triangulationMethod = result.method;
+    // In memory: this group's 3D came from a solve fused with a volume (pose/volume3d.js), so the display
+    // reprojects it instead of re-solving it without the volume (ui/rendering.js's reprojection fill).
+    group.volumeFused = !!(result && result.volume);
     group.solveSettings = prep.settingsKey;
     group.points3d = pooledPoints3d(result.points3d);   // one slab, not one ArrayBuffer per group
     group.usedCameras = prep.usedCameras;
@@ -2988,7 +3000,8 @@ async function sweepTriangulateAllFrames(session, cameras, method) {
             for (var gi = 0; gi < list.length; gi++) {
                 var prep = _prepareGroupStep(list[gi], cameras);
                 if (!prep) { stats.skipped++; continue; }
-                solver.submit(list[gi], prep.groupCameras, applyResult.bind(null, list[gi], prep, frameState));
+                solver.submit(list[gi], prep.groupCameras, applyResult.bind(null, list[gi], prep, frameState),
+                    volumeForFrame(session, fi));
             }
             solver.mark(function () { if (frameState.any) stats.frames++; });
             return solver.throttle();
@@ -3124,7 +3137,7 @@ export async function triangulateAllFrames(method) {
             var prep = _prepareGroupStep(group, cameras);
             if (!prep) continue;
             solver.submit(group, prep.groupCameras,
-                applyGroupResult.bind(null, group, prep, frameState));
+                applyGroupResult.bind(null, group, prep, frameState), volumeForFrame(state.session, frameIdx));
         }
         solver.mark(function () {
             if (frameState.any) triangulatedFrames.push(frameIdx);
