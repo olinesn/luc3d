@@ -7388,6 +7388,80 @@ kbd {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* --- Cage outlines (ui/cage-outline-tool.js) ------------------------------ */
+
+/* Fixed layout so a long view name ellipsizes instead of pushing the two
+   buttons past the panel's edge. */
+#cageOutlinesTable {
+  table-layout: fixed;
+  width: 100%;
+}
+
+#cageOutlinesTable .outline-view-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#cageOutlinesTable .outline-count {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+#cageOutlinesTable .outline-actions {
+  display: flex;
+  gap: 4px;
+}
+
+#cageOutlinesTable .outline-row-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 2px 4px;
+  font-size: 11px;
+}
+
+/* --- Reference meshes (ui/reference-meshes.js), Visibility panel --------- */
+
+.ref-mesh-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.ref-mesh-row .ref-mesh-color {
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  background: none;
+  flex: 0 0 auto;
+}
+
+.ref-mesh-row .ref-mesh-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ref-mesh-row .ref-mesh-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ref-mesh-row .ref-mesh-remove {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  font-size: 14px;
+  line-height: 1;
+  min-width: 0;
+  color: var(--error-color);
+}
+
 /* --- Blocking / confirming dialog (ui/plane-definition.js) ---------------- */
 
 .plane-confirm-overlay {

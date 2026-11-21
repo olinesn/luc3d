@@ -114,6 +114,11 @@ async function buildProjectSlp(spec) {
         P.placePlaneOnView(other, 'camA', 100, 16);
         const inst = model.getInstance('camA');
         nodes.forEach((n, k) => inst.setPoint(model.pool.indexOf(n.id), 90 + 10 * k, 10 + k));
+        // A cage outline too: it names no plane node, so the loader reads it
+        // even when it refuses this file's plane 2D.
+        const CO = await import('/pose/cage-outlines.js');
+        s.cageOutlines = new CO.CageOutlineSet();
+        s.cageOutlines.addPolygon('camA', [[5, 2], [250, 3], [240, 30], [8, 29.5]]);
     }
     const labels = fileio.buildSlpLabelsAllViews(s, views,
         spec.cams.map(n => ({ name: n, assignedCamera: n, videoPath: n + '.mp4' })));
@@ -154,6 +159,7 @@ async function settingsOf(sessionIdx) {
         project: { planeNodes: planes.planeNodes, planes: planes.planes,
                    meshObjects: planes.meshObjects, planeOrigin: planes.planeOrigin },
         placements: planes.planePlacements || null,
+        outlines: planes.cageOutlines || null,
     };
 }
 
@@ -240,6 +246,10 @@ try {
         [[s0, 110, 9], [b0, 130, 22]].forEach(([n, x, y]) => iB.setPoint(model.pool.indexOf(n.id), x, y));
         iB.nulledNodes.add(model.pool.indexOf(s1.id));
         model.meshObjects.createObject('cage').addPlane(floor.id);
+        // The cage's outline, on one view (Define Planes ▸ Outlines).
+        const CO = await import('/pose/cage-outlines.js');
+        AS.state.session.cageOutlines = new CO.CageOutlineSet();
+        AS.state.session.cageOutlines.addPolygon('camB', [[3, 1.5], [200, 2], [210, 30], [4.25, 28]]);
         const frame = (await import('/pose/origin-frame.js')).buildOriginFrame([10, 10, 0], [0, 0, 1]);
         frame.sourcePlane = 'floor'; frame.sourceNode = 's1';
         O.originState.frame = frame;
@@ -343,6 +353,8 @@ try {
         'the plane pool, planes, mesh object and origin read back exactly');
     check(eq(got.placements, expected.placements),
         'and this session\'s per-view 2D, every point on its own node, the nulled one still nulled');
+    check(!!expected.outlines && eq(got.outlines, expected.outlines),
+        `and its cage outline (got ${JSON.stringify(got.outlines)})`);
     check(reopened.attached, 'the plane model is drawing this session\'s 2D');
     check(eq(stale.planes, ['stale-plane']) && stale.sessions === 0,
         'negative control: the empty app held a stale plane before the load');
@@ -373,6 +385,8 @@ try {
         `the open planes are kept — not wiped, no node duplicated (pool ${added.poolSize})`);
     check(eq(second.visibility, expected.visibility), 'the added session gets its own Visibility settings');
     check(eq(second.placements, expected.placements), 'and its 2D, seated on the open project\'s nodes');
+    check(eq(second.outlines, expected.outlines) && eq(first.outlines, expected.outlines),
+        'each session has its own copy of the cage outline');
     check(eq(first.placements, expected.placements), 'while the first session\'s 2D is untouched');
     check(/^Loaded session/.test(added.status), `no conflict reported (status "${added.status}")`);
 
@@ -402,10 +416,12 @@ try {
     const foreign = await page.evaluate(async () => {
         const AS = await import('/ui/app-state.js');
         const P = await import('/ui/plane-definition.js');
+        const PM = await import('/import-export/plane-metadata.js');
         const s = AS.state.sessions[2];
         return {
             sessions: AS.state.sessions.length,
             placements: s ? s.planePlacements.size : -1,
+            outlines: s ? (PM.writePlaneMetadata({}, s).cageOutlines || null) : null,
             brightness: s ? s.videoBrightness : null,
             planes: P.planeModel().planes.map(p => p.name),
             status: document.getElementById('statusText') ? document.getElementById('statusText').textContent : '',
@@ -422,6 +438,8 @@ try {
     check(typeof unguarded.conflict === 'string', `planeMetadataConflict flags it ("${unguarded.conflict}")`);
     check(foreign.sessions === 3, `the session was still added (got ${foreign.sessions})`);
     check(foreign.placements === 0, `but none of its 2D was seated (got ${foreign.placements} placed views)`);
+    check(eq(foreign.outlines, otherKeys.lucid.cageOutlines) && !!foreign.outlines,
+        `its cage outline is still read: it names no plane node (got ${JSON.stringify(foreign.outlines)})`);
     check(eq(foreign.planes, ['floor', 'wall']) && eq(afterForeign.project, expected.project),
         `the open project's planes are unchanged (got ${JSON.stringify(foreign.planes)})`);
     check(eq(foreign.brightness, { camA: 30 }),
