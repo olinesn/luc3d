@@ -1,0 +1,284 @@
+// ui/behavior-timeline.js — behavior labels on the timeline: the "Behavior"
+// row group (one row per animal, see `Timeline.setBehaviorRowsProvider`), the
+// "States" group after it (keypoint-MoSeq's syllables: ui/behavior-states.js
+// `stateTimelineRows`) and the menu a Shift+drag range opens to label that
+// range.
+//
+// A row shows the behavior selected in the Behavior tab, or — with none
+// selected — every behavior that has bouts or predictions, as thin stacked
+// lanes. Present bouts are drawn in the behavior's color, explicit "not"
+// labels as a faint gray (that is what was reviewed), and a running state
+// grows to the playhead: its segment is `live`, which the Timeline draws to
+// its own playhead, repainting only when the bar grows by a device pixel and
+// never while collapsed (ui/timeline.js `_liveBarsMoved`), so a frame change
+// alone repaints nothing here. PREDICTED bouts (pose/behavior-predictions.js)
+// sit in a band under their lane's labels, as opaque as they are confident
+// (alpha follows the bout's score), fainter still while stale. Projects with
+// no ethogram and no bouts get no Behavior group at all.
+//
+// Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-detect.js,
+//             pose/behavior-ethogram.js, pose/behavior-labels.js,
+//             ui/behavior-states.js, pose/behavior-predictions.js, import-export/save-load.js
+
+import { state, timeline } from './app-state.js?v=7b49c811976f';
+import {
+    sessionAnimals, focalAnimal, selectedBehaviorId, codeBehavior, armRange, clearBehaviorRange,
+    registerBehaviorRepaint, animalColor,
+} from './behavior-coding.js?v=7b49c811976f';
+import { detectionEnv, detectionFps } from './behavior-detect.js?v=7b49c811976f';
+import { stateTimelineRows } from './behavior-states.js?v=7b49c811976f';
+import { behaviors, behaviorById } from '../pose/behavior-ethogram.js?v=7b49c811976f';
+import { listBouts, runningStates, hasBehaviorData, orphanedAnimals } from '../pose/behavior-labels.js?v=7b49c811976f';
+import { predictedBouts, predictionStaleness } from '../pose/behavior-predictions.js?v=7b49c811976f';
+import { setStatus } from '../import-export/save-load.js?v=7b49c811976f';
+
+/** Color of explicit "not this behavior" labels. */
+export var ABSENT_COLOR = '#9aa0a6';
+var MAX_LANES = 5;                       // 10 px rows: lanes stay >= 2 px
+/** A lane with predictions: labels above, predictions below (fractions of the lane). */
+var LABEL_BAND = [0, 0.56];
+var PREDICTION_BAND = [0.62, 1];
+
+/** A predicted bout's alpha: its score, in steps of 0.05 (few fills), fainter while stale. */
+function predictionAlpha(score, stale) {
+    var s = Number.isFinite(score) ? Math.max(0, Math.min(1, score)) : 0.5;
+    var a = Math.round((0.2 + 0.7 * s) * 20) / 20;
+    return stale ? Math.round(a * 0.45 * 20) / 20 || 0.05 : a;
+}
+
+/**
+ * The rows for `session`: the "Behavior" group's, then the "States" group's
+ * (`group: 'States'`); null when there is nothing to show.
+ * @returns {Array<{animal:string, color:string, lanes:number, segments:Array, group?:string}>|null}
+ */
+export function behaviorTimelineRows(session) {
+    if (!session) return null;
+    var labels = labelTimelineRows(session) || [];
+    var states = stateTimelineRows(session);
+    return labels.length || states.length ? labels.concat(states) : null;
+}
+
+/** The "Behavior" group's rows, or null when there is no ethogram and no bout. */
+function labelTimelineRows(session) {
+    if (!behaviors().length && !hasBehaviorData(session)) return null;
+    var animals = sessionAnimals(session);
+    var names = animals.concat(orphanedAnimals(session, animals));
+    if (!names.length) return null;
+    var bouts = listBouts(session);
+    var running = runningStates(session);
+    var predicted = predictedBouts(session);
+    var sel = selectedBehaviorId();
+    var shown;
+    if (sel) {
+        shown = [sel];
+    } else {
+        var used = new Set();
+        bouts.forEach(function (b) { used.add(b.behaviorId); });
+        running.forEach(function (r) { used.add(r.behaviorId); });
+        predicted.forEach(function (p) { used.add(p.behaviorId); });
+        shown = behaviors().filter(function (b) { return used.has(b.id); }).map(function (b) { return b.id; });
+    }
+    var laneOf = new Map();
+    shown.forEach(function (id, i) { laneOf.set(id, i % MAX_LANES); });
+    var lanes = Math.max(1, Math.min(MAX_LANES, shown.length));
+    var byAnimal = new Map(names.map(function (n) { return [n, []]; }));
+    // A row shows the bouts its animal does — both animals' rows for a mutual pair.
+    var rowsOf = function (b, animal, target) { return b && b.mutual && target ? [animal, target] : [animal]; };
+    // Predictions first (drawn under), in their band of the lane.
+    var predLanes = new Set();
+    if (predicted.length) {
+        var stale = predictionStaleness(session, detectionEnv());
+        predicted.forEach(function (p) {
+            if (!laneOf.has(p.behaviorId)) return;
+            var b = behaviorById(p.behaviorId);
+            var alpha = predictionAlpha(p.score, stale.input || stale.settings.indexOf(p.behaviorId) >= 0 ||
+                stale.labels.indexOf(p.behaviorId) >= 0 || stale.model.indexOf(p.behaviorId) >= 0);
+            rowsOf(b, p.animal, p.target).forEach(function (a) {
+                if (!byAnimal.has(a)) return;
+                predLanes.add(a + '\u0001' + laneOf.get(p.behaviorId));
+                byAnimal.get(a).push({ start: p.start, end: p.end, lane: laneOf.get(p.behaviorId), color: b.color, alpha: alpha,
+                                       band: PREDICTION_BAND, predicted: true });
+            });
+        });
+    }
+    var bandFor = function (a, lane) { return predLanes.has(a + '\u0001' + lane) ? LABEL_BAND : null; };
+    bouts.forEach(function (bt) {
+        if (!laneOf.has(bt.behaviorId)) return;
+        var b = behaviorById(bt.behaviorId);
+        rowsOf(b, bt.animal, bt.target).forEach(function (a) {
+            if (!byAnimal.has(a)) return;
+            byAnimal.get(a).push({
+                start: bt.start, end: bt.end, lane: laneOf.get(bt.behaviorId),
+                color: bt.present ? b.color : ABSENT_COLOR, alpha: bt.present ? 0.85 : 0.22,
+                band: bandFor(a, laneOf.get(bt.behaviorId)),
+            });
+        });
+    });
+    var cursor = state.currentFrame;
+    running.forEach(function (r) {
+        var b = behaviorById(r.behaviorId);
+        if (!b || !laneOf.has(r.behaviorId)) return;
+        rowsOf(b, r.animal, r.target).forEach(function (a) {
+            if (byAnimal.has(a)) {
+                byAnimal.get(a).push({ start: r.start, end: Math.max(r.start, cursor), lane: laneOf.get(r.behaviorId), color: b.color, alpha: 1,
+                                       band: bandFor(a, laneOf.get(r.behaviorId)), live: true });
+            }
+        });
+    });
+    return names.map(function (n) {
+        return { animal: n, color: animalColor(session, n), lanes: lanes, segments: byAnimal.get(n) };
+    });
+}
+
+// Repaint the rows after any label or selection change. Not on a frame change
+// alone: a running state's bar is `live`, and the Timeline grows it itself.
+registerBehaviorRepaint(function (info) {
+    if (!timeline) return;
+    if (info.frame && !info.labels && !info.ui && !info.ethogram && !info.predictions && !info.states) return;
+    timeline.refreshBehaviorRows();
+});
+
+// ----------------------------------------------------------------------------
+// The Shift+drag menu
+// ----------------------------------------------------------------------------
+
+var _menu = null;
+var _menuOnClose = null;
+
+function closeRangeMenu() {
+    if (!_menu) return;
+    _menu.remove();
+    _menu = null;
+    document.removeEventListener('keydown', onMenuKey, true);
+    document.removeEventListener('mousedown', onOutside, true);
+    if (timeline) timeline.clearRangeSelection();
+    var onClose = _menuOnClose;
+    _menuOnClose = null;
+    if (onClose) onClose();
+}
+
+function onMenuKey(e) {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeRangeMenu();
+}
+
+function onOutside(e) {
+    if (_menu && !_menu.contains(e.target)) closeRangeMenu();
+}
+
+function frameRangeText(start, end) {
+    var n = end - start + 1;
+    return 'Frames ' + (start + 1).toLocaleString('en-US') + '–' + (end + 1).toLocaleString('en-US') +
+        ' · ' + n.toLocaleString('en-US') + ' frame' + (n === 1 ? '' : 's') + ' (' + (n / detectionFps()).toFixed(1) + ' s)';
+}
+
+/**
+ * The timeline's `onRangeSelect`: with an ethogram and animals, open the menu
+ * that labels the range; otherwise just report it, as before.
+ * @param {number} start
+ * @param {number} end
+ * @param {{animal?:string, anchor?:{x:number, top:number}, onClose?:function()}} [info]
+ *   the behavior row the drag started on; for another caller (the bouts strip,
+ *   ui/behavior-strip.js), where to open the menu and who to tell when it closes
+ */
+export function onTimelineRangeSelect(start, end, info) {
+    var session = state.session;
+    if (!session || !behaviors().length || !sessionAnimals(session).length) {
+        setStatus('Selected range: ' + start.toLocaleString('en-US') + '–' + end.toLocaleString('en-US'));
+        return;
+    }
+    showRangeMenu(start, end, (info && info.animal) || focalAnimal(session), info);
+}
+
+function showRangeMenu(start, end, animal, info) {
+    closeRangeMenu();
+    _menuOnClose = (info && info.onClose) || null;
+    var session = state.session;
+    var menu = document.createElement('div');
+    menu.className = 'behavior-range-menu';
+    menu.id = 'behaviorRangeMenu';
+    menu.setAttribute('role', 'dialog');
+    menu.setAttribute('aria-label', 'Label this range');
+
+    var head = document.createElement('div');
+    head.className = 'behavior-range-head';
+    head.textContent = frameRangeText(start, end);
+    menu.appendChild(head);
+
+    var animals = sessionAnimals(session);
+    var pick = document.createElement('select');
+    pick.className = 'behavior-range-animal';
+    animals.forEach(function (n) {
+        var o = document.createElement('option');
+        o.value = n; o.textContent = n;
+        if (n === animal) o.selected = true;
+        pick.appendChild(o);
+    });
+    var who = document.createElement('label');
+    who.className = 'behavior-range-who';
+    who.textContent = 'Animal ';
+    who.appendChild(pick);
+    menu.appendChild(who);
+
+    var grid = document.createElement('div');
+    grid.className = 'behavior-range-buttons';
+    behaviors().forEach(function (b) {
+        var btn = document.createElement('button');
+        btn.className = 'behavior-chip-btn';
+        btn.dataset.behavior = b.id;
+        btn.title = 'Label the range "' + b.name + '" — Shift-click: label it "not ' + b.name + '"';
+        var sw = document.createElement('span');
+        sw.className = 'behavior-swatch';
+        sw.style.background = b.color;
+        btn.appendChild(sw);
+        btn.appendChild(document.createTextNode(b.name + (b.key ? ' (' + b.key + ')' : '')));
+        btn.addEventListener('click', function (e) {
+            var a = pick.value;
+            closeRangeMenu();
+            codeBehavior(b.id, { animal: a, start: start, end: end, absent: e.shiftKey });
+        });
+        grid.appendChild(btn);
+    });
+    menu.appendChild(grid);
+
+    var actions = document.createElement('div');
+    actions.className = 'behavior-range-actions';
+    var arm = document.createElement('button');
+    arm.className = 'panel-btn';
+    arm.textContent = 'Use as [ ] range';
+    arm.title = 'Keep this range armed: the next behavior key labels it';
+    arm.addEventListener('click', function () { closeRangeMenu(); armRange(start, end); setStatus(frameRangeText(start, end) + ' armed — a behavior key labels it'); });
+    var clear = document.createElement('button');
+    clear.className = 'panel-btn';
+    clear.textContent = 'Clear labels';
+    clear.title = 'Remove every behavior label of this animal in the range';
+    clear.addEventListener('click', function () {
+        var a = pick.value;
+        closeRangeMenu();
+        var n = clearBehaviorRange(session, a, start, end);
+        setStatus(n ? 'Cleared behavior labels of ' + a + ' in the range' : 'No behavior labels of ' + a + ' in the range');
+    });
+    var close = document.createElement('button');
+    close.className = 'panel-btn';
+    close.textContent = 'Close';
+    close.addEventListener('click', closeRangeMenu);
+    actions.appendChild(arm);
+    actions.appendChild(clear);
+    actions.appendChild(close);
+    menu.appendChild(actions);
+
+    document.body.appendChild(menu);
+    _menu = menu;
+    // Above the timeline (or the caller's anchor), near the end of the selection, kept on screen.
+    var anchor = info && info.anchor;
+    var canvas = !anchor && timeline && timeline._canvas;
+    var rect = anchor || (canvas ? canvas.getBoundingClientRect() : { left: 0, top: window.innerHeight - 120 });
+    var x = anchor ? anchor.x : canvas ? rect.left + timeline._frameToX(end + 1) : window.innerWidth / 2;
+    var w = menu.offsetWidth || 320;
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, x - w / 2)) + 'px';
+    menu.style.bottom = Math.max(8, window.innerHeight - rect.top + 6) + 'px';
+    document.addEventListener('keydown', onMenuKey, true);
+    document.addEventListener('mousedown', onOutside, true);
+}
