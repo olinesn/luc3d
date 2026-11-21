@@ -109,7 +109,7 @@ import {
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from '../import-export/visibility-metadata.js';
 import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js';
-import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict, readCageOutlineMetadata } from '../import-export/plane-metadata.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2430,6 +2430,9 @@ export async function handleLoadSessionFolderSingleSlp() {
             console.warn('[single-slp] not reading the plane state in ' + slpFile.name +
                 ' — ' + planeConflict + '; the open project\'s planes are kept');
             session.planePlacements = new Map();
+            // An outline names no plane node, so it is this session's own
+            // whatever project the file came from.
+            readCageOutlineMetadata(session, sessLucid);
         } else {
             readPlaneMetadata(session, sessLucid);
         }

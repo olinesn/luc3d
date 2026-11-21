@@ -119,6 +119,7 @@
                     <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
                     <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
                     <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
+                    <div class="menu-dropdown-item" id="menuLoadReferenceMesh" title="Draw an STL or PLY file in the 3D view, in the calibration's world coordinates (for example a cage scan). Not saved with the project.">Load Reference Mesh (STL/PLY)...</div>
                     <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSaveSkeleton">Save Skeleton (JSON)</div>
@@ -764,6 +765,16 @@
                             <span class="slider"></span>
                         </label>
                     </div>
+                    <!-- Reference meshes (File ▸ Load Reference Mesh, ui/reference-meshes.js):
+                         an STL/PLY drawn in the 3D view in calibration world
+                         coordinates, e.g. a cage scan aligned to the rig. Display
+                         only: never written to the project file, and gone on reload. -->
+                    <h3>Reference Meshes</h3>
+                    <div id="referenceMeshList"></div>
+                    <div class="table-empty" id="referenceMeshEmpty">None loaded</div>
+                    <div class="panel-button-row" style="margin-top:6px">
+                        <button class="panel-btn" id="btnLoadReferenceMesh" title="Load an STL or PLY file and draw it in the 3D view, in the calibration's world coordinates. Not saved with the project.">Load Mesh (STL/PLY)…</button>
+                    </div>
                     <h3>Display Legend</h3>
                     <div class="vis-slider-row">
                         <span>Show</span>
@@ -1402,6 +1413,30 @@
                                         <button class="panel-btn" id="btnExportMeshGlb" title="Binary glTF — welded vertices and this object's colour, converted to the Y-up glTF requires so Blender imports it upright">Export .glb</button>
                                     </div>
                                 </div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- Cage outlines: the cage's silhouette traced in each camera
+                         view, per session (ui/cage-outline-tool.js). Per-view 2D
+                         with no 3D identity, saved as metadata.lucid.cageOutlines
+                         for the cage-scan tools (visual hull, plane fitting). -->
+                    <div class="info-section">
+                        <details class="plane-details" id="cageOutlinesDetails" open>
+                            <summary>Outlines<button type="button" class="plane-section-info" id="cageOutlinesInfo"></button></summary>
+                            <div class="plane-details-body">
+                                <table class="data-table" id="cageOutlinesTable">
+                                    <thead>
+                                        <tr>
+                                            <th>View</th>
+                                            <th style="width:48px">Points</th>
+                                            <th style="width:124px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="cageOutlinesEmpty">No views loaded</div>
+                                <div class="plane-hint" id="cageOutlinesHint" style="display:none;"></div>
                             </div>
                         </details>
                     </div>

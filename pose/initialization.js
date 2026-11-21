@@ -35,6 +35,7 @@ import {
     setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
 } from '../ui/plane-definition.js';
 import { setupSplitHandles } from '../ui/layout-controls.js';
+import { setupReferenceMeshes, syncReferenceMeshes3D } from '../ui/reference-meshes.js';
 import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import {
@@ -78,6 +79,7 @@ async function init() {
         setupVideosTab();
         setupRecordingInfo();
         setupPlaneDefinition();
+        setupReferenceMeshes();
         setupInteraction();
         try {
             paneManager.init(document.getElementById('videoDock'));
@@ -972,6 +974,9 @@ export function setup3DViewport() {
         // a triangulated plane vanishes the next time the viewport is rebuilt
         // (the same gap `setEnvironment` still has).
         syncPlanes3D();
+        // The reference meshes (File ▸ Load Reference Mesh) are page state, not
+        // project state, so they survive the rebuild the same way.
+        syncReferenceMeshes3D();
         // …and the panel that lists them. Every project-load path rebuilds the
         // viewport, so this is the one place a freshly RESTORED plane model
         // reaches the Nodes / Planes tables.

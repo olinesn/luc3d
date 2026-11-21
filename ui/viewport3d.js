@@ -481,6 +481,15 @@ export class Viewport3D {
         this._planeRoleGroup.name = 'planeRoles';
         this.scene.add(this._planeRoleGroup);
 
+        // Reference meshes (File ▸ Load Reference Mesh): display-only, in
+        // calibration world coordinates like every other data group, so they
+        // stay put when Set Origin moves the displayed frame.
+        this._referenceGroup = new THREE.Group();
+        this._referenceGroup.name = 'referenceMeshes';
+        this.scene.add(this._referenceGroup);
+        /** @type {Map<number, THREE.Object3D>} entry id -> drawn object */
+        this._referenceObjects = new Map();
+
         // --- Draw camera pyramids ---
         this.addCameraPyramids();
 
@@ -2671,6 +2680,86 @@ export class Viewport3D {
     /**
      * Remove every annotated plane from the 3D scene.
      */
+    /**
+     * Show the reference meshes (`ui/reference-meshes.js`). Takes the whole
+     * list each time: an entry already drawn keeps its GPU buffers and only
+     * restyles (visibility, colour, opacity), a new one is built, a missing
+     * one is removed. The typed arrays are the parser's, shared, never copied.
+     *
+     * @param {Array<{id:number, name:string, mesh:Object, visible:boolean,
+     *          color:string, opacity:number}>} entries
+     */
+    setReferenceMeshes(entries) {
+        if (this._disposed || !this._referenceGroup) return;
+        const keep = new Set();
+        const list = entries || [];
+        for (let i = 0; i < list.length; i++) {
+            const e = list[i];
+            if (!e || !e.mesh) continue;
+            keep.add(e.id);
+            let obj = this._referenceObjects.get(e.id);
+            if (!obj || obj.userData.mesh !== e.mesh) {
+                if (obj) { this._referenceGroup.remove(obj); this._disposeObject(obj); }
+                obj = this._buildReferenceObject(e);
+                this._referenceObjects.set(e.id, obj);
+                this._referenceGroup.add(obj);
+            }
+            obj.visible = e.visible !== false;
+            this._styleReferenceObject(obj, e);
+        }
+        for (const [id, obj] of Array.from(this._referenceObjects)) {
+            if (keep.has(id)) continue;
+            this._referenceGroup.remove(obj);
+            this._disposeObject(obj);
+            this._referenceObjects.delete(id);
+        }
+    }
+
+    /** @private */
+    _buildReferenceObject(e) {
+        const m = e.mesh;
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.BufferAttribute(m.positions, 3));
+        if (m.colors) geom.setAttribute('color', new THREE.BufferAttribute(m.colors, 3, true));
+        let obj;
+        if (m.kind === 'points') {
+            obj = new THREE.Points(geom, new THREE.PointsMaterial({
+                size: 2, sizeAttenuation: false, vertexColors: !!m.colors,
+            }));
+        } else {
+            if (m.indices) geom.setIndex(new THREE.BufferAttribute(m.indices, 1));
+            if (m.normals) {
+                geom.setAttribute('normal', new THREE.BufferAttribute(m.normals, 3));
+            } else {
+                geom.computeVertexNormals();
+                // Kept on the parsed mesh, so a rebuilt viewport reuses them.
+                m.normals = geom.getAttribute('normal').array;
+            }
+            obj = new THREE.Mesh(geom, new THREE.MeshPhongMaterial({
+                side: THREE.DoubleSide, vertexColors: !!m.colors, shininess: 8,
+            }));
+        }
+        obj.name = 'referenceMesh_' + e.id;
+        obj.userData.mesh = m;
+        // After the opaque scene, so a see-through scan shows what is inside it.
+        obj.renderOrder = 2;
+        return obj;
+    }
+
+    /** @private */
+    _styleReferenceObject(obj, e) {
+        const mat = obj.material;
+        if (!mat) return;
+        // Vertex colours (a distance heatmap) are shown as they are.
+        mat.color.set(e.mesh.colors ? '#ffffff' : (e.color || '#b0bec5'));
+        const op = Math.max(0.05, Math.min(1, Number.isFinite(e.opacity) ? e.opacity : 0.5));
+        const transparent = op < 1;
+        if (mat.transparent !== transparent) mat.needsUpdate = true;
+        mat.transparent = transparent;
+        mat.opacity = op;
+        mat.depthWrite = !transparent;
+    }
+
     clearPlanes() {
         this._clearGroup(this._planeGroup);
         // The ghost is a proposal about a plane that no longer exists here, so
@@ -2933,6 +3022,19 @@ export class Viewport3D {
                     }
                 }
             });
+        }
+
+        // Reference meshes that are shown: their bounding boxes' corners.
+        if (this._referenceObjects) {
+            for (const obj of this._referenceObjects.values()) {
+                const bb = obj.visible && obj.userData.mesh ? obj.userData.mesh.bbox : null;
+                if (!bb) continue;
+                for (let k = 0; k < 8; k++) {
+                    points.push([(k & 1) ? bb.max[0] : bb.min[0],
+                                 (k & 2) ? bb.max[1] : bb.min[1],
+                                 (k & 4) ? bb.max[2] : bb.min[2]]);
+                }
+            }
         }
 
         // Add the DISPLAYED origin — the user's once Set Origin has applied one,

@@ -1007,6 +1007,20 @@ export class InteractionManager {
         var vx = coords[0], vy = coords[1];
         var frameIdx = state.currentFrame;
 
+        // Cage outlines (Define Planes ▸ Outlines) see the click first: while
+        // one is traced every click on its view is a vertex, and a click on an
+        // outline's vertex or edge edits it. A callback, so this module keeps
+        // no import of the feature (`ui/cage-outline-tool.js`).
+        if (this.callbacks.outlinePointerDown &&
+            this.callbacks.outlinePointerDown(e, viewName, vx, vy,
+                this._displayToVideo(state, viewName), this)) {
+            e.preventDefault();
+            // The video cell's pan / box-zoom must not start under it.
+            e._consumedByInteraction = true;
+            this._requestRedraw();
+            return;
+        }
+
         // --- Right-click / Ctrl+click (macOS trackpad): toggle node null ---
         if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
             e.preventDefault();
@@ -1470,6 +1484,19 @@ export class InteractionManager {
         this.lastCursorPos = [vx, vy];
         this.lastInteractedView = viewName;
 
+        // A cage outline being traced on this view owns the cursor; over an
+        // outline vertex the cursor shows it can be grabbed.
+        var outlineHover = false;
+        if (this.callbacks.outlinePointerMove) {
+            var oh = this.callbacks.outlinePointerMove(e, viewName, vx, vy,
+                this._displayToVideo(state, viewName));
+            if (oh === true) {
+                if (this.hoveredPlaneNode) { this.hoveredPlaneNode = null; this._requestRedraw(); }
+                return;
+            }
+            outlineHover = oh === 'hover';
+        }
+
         // Plane hover takes priority for the same reason mousedown does —
         // inside the mode a plane node must always be the thing you can grab.
         var prevPlaneHover = this.hoveredPlaneNode;
@@ -1513,7 +1540,7 @@ export class InteractionManager {
             e.clientX, e.clientY);
 
         // Update cursor style on the overlay canvas
-        var anyHover = this.hoveredNode || hoverUnlinked || planeHover;
+        var anyHover = this.hoveredNode || hoverUnlinked || planeHover || outlineHover;
         var view = this._findView(state, viewName);
         if (view && view.overlayCanvas) {
             if (anyHover && e.altKey) {

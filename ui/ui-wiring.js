@@ -46,6 +46,7 @@ import { PLANE_VIS_IDS } from './plane-visibility.js';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveCompactCopy, saveProjectSlp, saveProject,
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
+import { loadReferenceMeshInteractive } from './reference-meshes.js';
 import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
          loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js';
@@ -1645,6 +1646,11 @@ export function setupMenus() {
     document.getElementById('menuLoadPoints3dH5').addEventListener('click', function () {
         closeMenus();
         handleLoadPoints3dH5();
+    });
+
+    document.getElementById('menuLoadReferenceMesh').addEventListener('click', function () {
+        closeMenus();
+        loadReferenceMeshInteractive();
     });
 
     document.getElementById('menuLoadSkeletonMenu').addEventListener('click', function () {
