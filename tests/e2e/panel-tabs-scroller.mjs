@@ -81,10 +81,10 @@ try {
             overflowX: getComputedStyle(bar).overflowX,
         };
     });
-    const expected = ['tabInstances', 'tabVisibility', 'tabIdSwitches', 'tabVideos',
+    const expected = ['tabInstances', 'tabVisibility', 'tabIdSwitches', 'tabOutlines', 'tabVideos',
         'tabCameras', 'tabSkeleton', 'tabSession', 'tabBehavior'];
     check(JSON.stringify(inventory.names) === JSON.stringify(expected),
-        `all 8 tabs are in the bar, in markup order (${inventory.names.join(', ')})`);
+        `all ${expected.length} tabs are in the bar, in markup order (${inventory.names.join(', ')})`);
     check(inventory.hidden.length === 0,
         `no tab is hidden from the bar (was: 5 of 7 demoted into "More")`);
     check(inventory.more === 0, 'no "More ▾" control survives anywhere in the DOM');
@@ -142,7 +142,14 @@ try {
     check(await activeTab() === before,
         'the drag did NOT switch tabs, though it began on the Visibility tab');
 
-    // A press that goes nowhere is still a click.
+    // A press that goes nowhere is still a click. (Bring the Cameras tab into the
+    // visible strip first: where the drag left the bar depends on how many tabs it has.)
+    await page.evaluate(() => {
+        const bar = document.querySelector('.panel-tabs');
+        const t = document.querySelector('.panel-tab[data-tab="tabCameras"]');
+        bar.scrollLeft = Math.max(0, t.offsetLeft - 8);
+    });
+    await page.waitForTimeout(60);
     const camTab = await page.locator('.panel-tab[data-tab="tabCameras"]').boundingBox();
     await page.mouse.move(camTab.x + camTab.width / 2, midY);
     await page.mouse.down();

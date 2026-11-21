@@ -20,6 +20,7 @@ import { isCameraTracked, getTrackingThreshold } from './settings.js';
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
 import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js';
+import { drawAnimalOutlines } from './animal-outlines.js';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
@@ -461,8 +462,10 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         // project — the shared `frameIdx`.
         var vFrameGroup = frameGroup, vGroups = instanceGroups, vSelected = selectedInstanceGroup;
         var vFrame = viewFrames ? viewFrames[view.name] : undefined;
+        var vIdx = frameIdx;
         if (vFrame != null && vFrame !== frameIdx &&
             !(state.session.lazyLoader && !state.session.frameGroups.has(vFrame))) {
+            vIdx = vFrame;
             vFrameGroup = state.session.getFrameGroup(vFrame);
             vGroups = getInstanceGroupsForFrame(vFrame);
             if (!filledFrames) filledFrames = new Set();
@@ -625,6 +628,10 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             trackingExcluded: !isCameraTracked(view.name),
             behaviorBoxes: behaviorBoxes,
         });
+
+        // Visibility ▸ Animal Outlines: drawn BEHIND the skeletons just drawn
+        // (`destination-over`), at the frame this view shows. A no-op when off.
+        drawAnimalOutlines(view, vIdx, vFrameGroup, vGroups, { overlaySizeScale: overlaySizeScale });
 
         // Annotated planes (View ▸ Define Planes). Frame-independent, so they
         // are drawn on every frame regardless of the current FrameGroup.
