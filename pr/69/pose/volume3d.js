@@ -10,12 +10,13 @@
  * The setting (Triangulate ▸ "Fuse with volume") is browser-local (localStorage `lucidVolumeFusion`), like
  * every display/workflow preference; a session without a loaded volume is solved as before.
  *
- * Skeleton chains (the skeleton check, pose/volume-fusion.js `checkSkeletonChains`) come from the file
- * (`data.chains`, by node name; its exporter names them, e.g. the tail and the head); each bone's usual
- * length is measured once, from the file's own means (`chainBoneMedians`). A chain with a node the file or
- * the skeleton lacks, or a bone measured on too few rows, is left out. No chains = no check.
+ * Skeleton chains: when Triangulate's skeleton check is on (pose/skeleton-check-run.js) and the group matches a
+ * volume animal, the check uses the file's chains (`data.chains`, by node name; its exporter names them, e.g. the
+ * tail and the head) instead of the skeleton's: each bone's usual length is measured once, from the file's own
+ * means (`chainBoneMedians`), with the +-50 % range the volfuse study validated. A chain with a node the file or
+ * the skeleton lacks, or a bone measured on too few rows, is left out. No chains = the skeleton's are checked.
  */
-import { mapVolumeNodes, chainBoneMedians, VOLUME_DEFAULTS } from './volume-fusion.js?v=3acb16502d26';
+import { mapVolumeNodes, chainBoneMedians, VOLUME_DEFAULTS } from './volume-fusion.js?v=3da147f3a9f0';
 
 const STORAGE_KEY = 'lucidVolumeFusion';
 const DEFAULT_SETTINGS = Object.freeze({
@@ -25,9 +26,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     matchMaxMm: VOLUME_DEFAULTS.matchMaxMm,
     fuse: true,
     covScale: null,          // null = the file's own (its exporter measured it)
-    skeletonCheck: true,     // check the file's chains (if it names any)
-    chainTol: VOLUME_DEFAULTS.chainTol,
-    chainAgreeMm: VOLUME_DEFAULTS.chainAgreeMm,   // a node the plain solve and the volume agree on is never changed
+    chainAgreeMm: VOLUME_DEFAULTS.chainAgreeMm,   // the skeleton check never changes a point the two agree on
 });
 let _settings = null;
 
@@ -133,7 +132,12 @@ export function volumeChains(session) {
             out.skipped.push({ name: ch.name, reason: 'a node is not in the skeleton' });
             return;
         }
-        out.push({ name: ch.name, bones: b, nodes: nd, medians: ch.medians });
+        // pose/skeleton-check.js's chain form: anchors = the bones' ends outside the chain; the +-50 % range
+        const inChain = new Set(nd), anchors = new Set();
+        for (const k of b) if (!inChain.has(k)) anchors.add(k);
+        const nb = ch.medians.length;
+        out.push({ name: ch.name, bones: b, nodes: nd, anchors: Int32Array.from(anchors), medians: ch.medians,
+                   lo: new Float64Array(nb).fill(0.5), hi: new Float64Array(nb).fill(1.5) });
     });
     v.chainsMapped = out;
     return out;
@@ -175,7 +179,7 @@ export function volumeForFrame(session, frameIdx) {
     const rows = v.rowsByFrame.get(frameIdx);
     if (!rows || !rows.length) return null;
     const names = skeletonNodeNames(session);
-    const chains = s.skeletonCheck === false ? [] : volumeChains(session);   // also (re)builds the node map
+    const chains = volumeChains(session);   // also (re)builds the node map
     const N = names.length, J = v.data.nodeNames.length, map = v.nodeMap;
     const means = new Float64Array(rows.length * N * 3).fill(NaN);
     const covs = new Float64Array(rows.length * N * 6).fill(NaN);
@@ -194,6 +198,6 @@ export function volumeForFrame(session, frameIdx) {
         n: rows.length, nNodes: N, means: means, covs: covs,
         covScale: s.covScale != null ? s.covScale : (v.data.covScale != null ? v.data.covScale : 1),
         gateFloorPx: s.gateFloorPx, gateK: s.gateK, fuse: s.fuse !== false, matchMaxMm: s.matchMaxMm,
-        chains: chains.slice(), chainTol: s.chainTol, chainAgreeMm: s.chainAgreeMm,
+        chains: chains.slice(), chainAgreeMm: s.chainAgreeMm,
     };
 }

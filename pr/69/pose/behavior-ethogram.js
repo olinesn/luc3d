@@ -42,7 +42,7 @@
 //
 // Depends on: pose/behavior-rules.js (`normalizeDetector`)
 
-import { normalizeDetector } from './behavior-rules.js?v=3acb16502d26';
+import { normalizeDetector } from './behavior-rules.js?v=3da147f3a9f0';
 
 /** The behavior kinds. */
 export var BEHAVIOR_KINDS = ['state', 'point'];

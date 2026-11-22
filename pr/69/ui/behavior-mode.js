@@ -29,18 +29,18 @@
 //             ui/plane-definition.js, pose/behavior-ethogram.js,
 //             pose/behavior-labels.js, import-export/save-load.js
 
-import { state } from './app-state.js?v=3acb16502d26';
+import { state } from './app-state.js?v=3da147f3a9f0';
 import {
     behaviorUi, codeBehavior, pickBehaviorTarget, cancelPendingTarget, setFocalAnimal, sessionAnimals, noteBehaviorMode,
     focalAnimal, setRangeIn, setRangeOut, clearArmedRange, armedRange, adjacentBout, goToBehaviorFrame,
     openBehaviorTab, requestBehaviorRepaint, registerBehaviorRepaint, pairGlyph,
-} from './behavior-coding.js?v=3acb16502d26';
-import { detectionFps } from './behavior-detect.js?v=3acb16502d26';
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=3acb16502d26';
-import { isPlaneModeActive, exitPlaneMode } from './plane-definition.js?v=3acb16502d26';
-import { behaviorByKey, behaviorById, behaviors } from '../pose/behavior-ethogram.js?v=3acb16502d26';
-import { closeRunning, runningStates, undoBehaviorEdit, redoBehaviorEdit } from '../pose/behavior-labels.js?v=3acb16502d26';
-import { setStatus } from '../import-export/save-load.js?v=3acb16502d26';
+} from './behavior-coding.js?v=3da147f3a9f0';
+import { detectionFps } from './behavior-detect.js?v=3da147f3a9f0';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=3da147f3a9f0';
+import { isPlaneModeActive, exitPlaneMode } from './plane-definition.js?v=3da147f3a9f0';
+import { behaviorByKey, behaviorById, behaviors } from '../pose/behavior-ethogram.js?v=3da147f3a9f0';
+import { closeRunning, runningStates, undoBehaviorEdit, redoBehaviorEdit } from '../pose/behavior-labels.js?v=3da147f3a9f0';
+import { setStatus } from '../import-export/save-load.js?v=3da147f3a9f0';
 
 var _active = false;
 

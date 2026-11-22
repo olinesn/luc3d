@@ -16,9 +16,10 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=3acb16502d26';
-import { jacobiEigen } from './plane-fit.js?v=3acb16502d26';
-import { matchVolumeAnimal, gateObservations, fuseWithVolume, checkSkeletonChains } from './volume-fusion.js?v=3acb16502d26';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=3da147f3a9f0';
+import { jacobiEigen } from './plane-fit.js?v=3da147f3a9f0';
+import { matchVolumeAnimal, gateObservations, fuseWithVolume, VOLUME_DEFAULTS } from './volume-fusion.js?v=3da147f3a9f0';
+import { checkChains, SKELETON_CHECK_DEFAULTS } from './skeleton-check.js?v=3da147f3a9f0';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
@@ -1515,19 +1516,24 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     }
     let points3d = triangulateFrom(allObservations);
 
+    // The skeleton check (opt-in: `options.skeleton` from pose/skeleton-check-run.js) checks the session skeleton's
+    // measured chains, or a matched volume's own chains. Its candidates are re-solves from groups of cameras that
+    // agree, plus, with a volume, the volume's point and the PLAIN solve's: it needs every detection and the plain
+    // solve, before the gate and the threshold rule below drop any.
+    const skeletonOpt = options && options.skeleton ? options.skeleton : null;
+    const volume = options && options.volume;
+    const wantCheck = !!skeletonOpt && ((skeletonOpt.chains && skeletonOpt.chains.length > 0) ||
+        !!(volume && volume.n > 0 && volume.chains && volume.chains.length));
+    const skObs = wantCheck ? allObservations.map(function (row) { return row.slice(); }) : null;
+    const plain3d = wantCheck ? Float64Array.from(points3d) : null;
+
     // Volume-gated triangulation (opt-in: `options.volume`, one frame of a volumetric model's output, see
     // pose/volume-fusion.js and pose/volume3d.js). The group is matched to one of the frame's volume animals
     // by the plain solve above; then each view's detection of a node enters only if it lies near the volume's
     // node projected into that view, and the group is solved again from what passed. Gating BEFORE the
     // solve: the reprojection-threshold rule below still runs on the survivors, unchanged.
-    const volume = options && options.volume;
     const volCams = volume ? cameraNames.map(function (n) { return cameraMap[n]; }) : null;
     let volAnimal = -1, volGated = 0;
-    // The skeleton check (after the fusion) may take a chain from the PLAIN solve: keep it and the
-    // observations it came from (the gate below nulls entries of `allObservations`).
-    const plainObs = (volume && volume.n > 0 && volume.chains && volume.chains.length)
-        ? allObservations.map(function (row) { return row.slice(); }) : null;
-    const plain3d = plainObs ? Float64Array.from(points3d) : null;
     if (volume && volume.n > 0) {
         volAnimal = matchVolumeAnimal(points3d, volume);
         if (volAnimal >= 0) {
@@ -1607,17 +1613,47 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         const fz = fuseWithVolume(points3d, volume, volAnimal, allObservations, allObservationsRaw, volCams, included,
             reprojectPointCamera, numKeypoints);
         volumeInfo = { animal: volAnimal, gated: volGated, fused: fz.fused, filled: fz.filled };
-        if (plainObs) {
-            // Skeleton check: a chain (e.g. the tail) whose fused bones are implausible is repaired with the fewest
-            // node changes, each to the plain solve's point (with the threshold rule, as an unfused Triangulate
-            // would give it), the volume's, or dropped; nodes the two sources agree on are kept.
-            const sk = checkSkeletonChains(points3d, function () {
-                return applyReprojThreshold(plainObs, plain3d);
-            }, volume, volAnimal);
-            volumeInfo.chainsRepaired = sk.chains;
-            volumeInfo.nodesFromSolve = sk.fromSolve;
-            volumeInfo.nodesFromVolume = sk.fromVolume;
-            volumeInfo.nodesDropped = sk.dropped;
+    }
+
+    // Skeleton check (pose/skeleton-check.js): a chain whose bones break their usual lengths gets the fewest point
+    // changes that make it plausible. Each point may take a re-solve from a group of cameras that agree; with a
+    // matched volume also the volume's point or the plain solve's (ungated, through the same threshold rule: what an
+    // unfused Triangulate gives); or be dropped. A point that never changes: without a volume, one every camera agrees
+    // on; with one, one the plain solve and the volume put within `chainAgreeMm` of each other. With a volume its own
+    // chains (by name, from its file) are checked instead of the skeleton's.
+    let skeletonInfo = null;
+    if (wantCheck) {
+        const useVol = !!(volume && volAnimal >= 0);
+        const chains = useVol && volume.chains && volume.chains.length ? volume.chains : (skeletonOpt.chains || []);
+        if (chains.length) {
+            const px = skeletonOpt.subsetPx != null ? skeletonOpt.subsetPx : SKELETON_CHECK_DEFAULTS.subsetPx;
+            const maxC = skeletonOpt.maxCandidates != null ? skeletonOpt.maxCandidates : SKELETON_CHECK_DEFAULTS.maxCandidates;
+            const agreeMm = useVol ? (volume.chainAgreeMm != null ? volume.chainAgreeMm : VOLUME_DEFAULTS.chainAgreeMm) : 0;
+            const camsArr = cameraNames.map(function (n) { return cameraMap[n]; });
+            const V = useVol ? volume.means : null, voff = useVol ? volAnimal * volume.nNodes * 3 : 0;
+            let plain = null;
+            const getPlain = function () {
+                if (!plain) plain = applyReprojThreshold(skObs.map(function (row) { return row.slice(); }), Float64Array.from(plain3d));
+                return plain;
+            };
+            const fin = function (P, q) { return Number.isFinite(P[q]) && Number.isFinite(P[q + 1]) && Number.isFinite(P[q + 2]); };
+            const sk = checkChains(points3d, chains, function (k) {
+                const c = subsetCandidates(k, points3d, skObs, allObservationsRaw, included, projMatrices, camsArr, px, maxC);
+                if (!useVol) return c;
+                const P = getPlain(), q = 3 * k, qv = voff + q;
+                const pOk = fin(P, q), vOk = fin(V, qv);
+                // with a volume, a point is locked only where the plain solve and the volume agree (the volfuse
+                // study's rule): cameras that all agree may share one 2D mistake, which the volume can overrule
+                if (pOk && vOk && Math.hypot(P[q] - V[qv], P[q + 1] - V[qv + 1], P[q + 2] - V[qv + 2]) <= agreeMm) {
+                    return { locked: true, cands: [] };
+                }
+                const cands = c.cands.slice();
+                if (pOk) { const X = [P[q], P[q + 1], P[q + 2]]; cands.push({ X: X, kind: 'plain', support: c.supportOf(X) }); }
+                if (vOk) { const X = [V[qv], V[qv + 1], V[qv + 2]]; cands.push({ X: X, kind: 'volume', support: c.supportOf(X) }); }
+                return { locked: false, cands: cands };
+            });
+            skeletonInfo = { chainsRepaired: sk.chains, nodesResolved: sk.changed.subset || 0,
+                nodesFromSolve: sk.changed.plain || 0, nodesFromVolume: sk.changed.volume || 0, nodesDropped: sk.dropped };
         }
     }
 
@@ -1625,6 +1661,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     if (options && options.triangulateOnly) {
         const fast = { points3d: points3d, reprojections: {}, errors: {}, meanError: null, method: method };
         if (volumeInfo) fast.volume = volumeInfo;
+        if (skeletonInfo) fast.skeleton = skeletonInfo;
         return fast;
     }
 
@@ -1643,7 +1680,57 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         method: method
     };
     if (volumeInfo) out.volume = volumeInfo;   // only when the volume was used: plain results stay as they were
+    if (skeletonInfo) out.skeleton = skeletonInfo;   // only when asked: plain results stay as they were
     return out;
+}
+
+/**
+ * The skeleton check's candidates for node k (pose/skeleton-check.js `checkChains`): re-solves from GROUPS OF
+ * CAMERAS THAT AGREE. Every pair of the cameras that see the node is triangulated (DLT); the cameras whose detection
+ * lies within `px` of that point's reprojection form its group; each group of 2+ cameras is re-solved from its own
+ * detections. The `maxC` largest groups are offered (`support` = their size; `supportOf(X)` counts the cameras that
+ * agree with any point). `locked`: the current point (`P`) is seen by 3+ cameras and every one agrees with it, so
+ * nothing in the 2D disputes it (the check honours it without a volume; with one, the volume can).
+ * `obs`: undistorted detections per node and camera (all of them, before the threshold rule); `obsRaw`: the same in
+ * native pixels; `cams`: camera objects index-parallel to `projMatrices`.
+ */
+function subsetCandidates(k, P, obs, obsRaw, included, projMatrices, cams, px, maxC) {
+    const views = [];
+    for (let c = 0; c < cams.length; c++) if (included[c] && obs[k][c] != null && obsRaw[k][c] != null) views.push(c);
+    const agree = function (X, c) {
+        const r = reprojectPointCamera(X, cams[c]);
+        if (!r) return false;
+        const e = Math.hypot(r[0] - obsRaw[k][c][0], r[1] - obsRaw[k][c][1]);
+        return e <= px;
+    };
+    // how many cameras agree with any point: how other sources' candidates (a volume's) are weighed the same way
+    const supportOf = function (X) { return views.filter(function (c) { return agree(X, c); }).length; };
+    if (views.length < 2) return { locked: false, cands: [], supportOf: supportOf };
+    const cur = readPoint3d(P, k, [0, 0, 0]);
+    const locked = !!cur && views.length >= 3 && views.every(function (c) { return agree(cur, c); });
+    const solveFrom = function (cs) {
+        const row = obs[k].map(function (o, c) { return cs.indexOf(c) >= 0 ? o : null; });
+        const X = triangulatePointDLT(row, projMatrices);
+        return X && Number.isFinite(X[0]) && Number.isFinite(X[1]) && Number.isFinite(X[2]) ? X : null;
+    };
+    const groups = new Map();
+    for (let i = 0; i < views.length; i++) {
+        for (let j = i + 1; j < views.length; j++) {
+            const X = solveFrom([views[i], views[j]]);
+            if (!X) continue;
+            const S = views.filter(function (c) { return agree(X, c); });
+            if (S.length < 2) continue;
+            const key = S.join(',');
+            if (!groups.has(key)) groups.set(key, S);
+        }
+    }
+    const cands = [];
+    for (const S of groups.values()) {
+        const X = solveFrom(S);
+        if (X) cands.push({ X: X, kind: 'subset', support: S.length });
+    }
+    cands.sort(function (a, b) { return b.support - a.support; });
+    return { locked: locked, cands: cands.slice(0, maxC), supportOf: supportOf };
 }
 
 /**

@@ -21,8 +21,8 @@
  *   { type: 'error', message: string, name?: string }
  */
 
-import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=3acb16502d26';   // local vendored 0.10.3 ESM
-import { checkSlpFormatAttrs, isNewerSlpFormatError } from './slp-format-check.js?v=3acb16502d26';
+import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=3da147f3a9f0';   // local vendored 0.10.3 ESM
+import { checkSlpFormatAttrs, isNewerSlpFormatError } from './slp-format-check.js?v=3da147f3a9f0';
 
 var h5wasmReady = false;
 var FS = null;

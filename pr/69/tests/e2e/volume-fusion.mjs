@@ -14,7 +14,8 @@
  *   4. the display fill (ui/rendering.js) keeps a fused group's stored 3D even when the reprojection threshold is
  *      on (a re-solve there would drop the volume);
  *   5. fusion off again: Triangulate All gives exactly the plain DLT (bit-identical), no group marked fused;
- *   6. the skeleton check: the file names one chain (bones n5-n6, n6-n7) and its row for frame 0, animal 0 puts n6
+ *   6. the skeleton check (Triangulate ▸ Skeleton check, with the volume as a source): the file names one chain
+ *      (bones n5-n6, n6-n7) and its row for frame 0, animal 0 puts n6
  *      and n7 four bones off. With the check, This frame and All frames (through the workers) take that chain
  *      from the plain solve (on the truth); with it off, the group keeps the volume's misplaced chain.
  * Run: node tests/e2e/volume-fusion.mjs
@@ -59,6 +60,7 @@ try {
     const TRI = await import('/pose/triangulation.js');
     const RND = await import('/ui/rendering.js');
     const V3D = await import('/pose/volume3d.js');
+    const RUN = await import('/pose/skeleton-check-run.js');
     const VFILE = await import('/import-export/volume3d-file.js');
     const FIO = await import('/import-export/file-io.js');
     const SET = await import('/ui/settings.js');
@@ -144,16 +146,17 @@ try {
     TRI.triangulateCurrentFrame('dlt');
     const plain0 = (TRI.getInstanceGroupsForFrame(0) || []).map(g => Float64Array.from(g.points3d));
     V3D.setVolumeSettings({ enabled: true });
+    RUN.setSkeletonCheckSettings({ enabled: true });   // the volume's chains are checked by Triangulate ▸ Skeleton check
     TRI.triangulateCurrentFrame('dlt');
     const g0 = TRI.getInstanceGroupsForFrame(0) || [];
     r.frameFused = g0.map(g => !!g.volumeFused);
     r.frameErrPlain = plain0.map(p => errTruth(p, 0));
     r.frameErrFused = g0.map(g => errTruth(g.points3d, 0));
     r.frameChain = [6, 7].map(k => chainErr(g0, 0, 0, k));
-    V3D.setVolumeSettings({ skeletonCheck: false });
+    RUN.setSkeletonCheckSettings({ enabled: false });
     TRI.triangulateCurrentFrame('dlt');
     r.frameChainOff = [6, 7].map(k => chainErr(TRI.getInstanceGroupsForFrame(0) || [], 0, 0, k));
-    V3D.setVolumeSettings({ skeletonCheck: true });
+    RUN.setSkeletonCheckSettings({ enabled: true });
 
     // ---- 3. All frames, lazy session, through 2 workers
     window.LUCID_TRIANGULATION_WORKERS = 2;
@@ -186,6 +189,7 @@ try {
 
     // ---- 5. off again: exactly plain DLT
     V3D.setVolumeSettings({ enabled: false });
+    RUN.setSkeletonCheckSettings({ enabled: false });
     await TRI.triangulateAllFrames('dlt');
     r.offFused = 0; r.offDelta = 0;
     for (let f = 0; f < F.NF; f++) {
@@ -208,7 +212,7 @@ try {
   check(out.boxOnAfter, '"Fuse with volume" is on once loaded');
   check(out.coverage.matched === 8 && out.coverage.total === 8, `nodes matched by name: ${out.coverage.matched}/${out.coverage.total}`);
   check(out.chains.join() === 'end', `the file's skeleton chain is read (${out.chains.join()})`);
-  check(/Skeleton check: end/.test(out.status), 'the load status names it: ' + out.status);
+  check(/Skeleton check: end/.test(out.status), 'the load status names it: ' + out.status);   // "Its chains for Triangulate ▸ Skeleton check: end."
   check(out.frameFused.length === 2 && out.frameFused.every(Boolean), 'This frame: every group fused');
   console.log(`    This frame, mean node error to the truth: plain ${mean(out.frameErrPlain).toFixed(4)}, fused ${mean(out.frameErrFused).toFixed(4)}`);
   check(mean(out.frameErrFused) < 0.5 * mean(out.frameErrPlain), 'This frame: fused nearer the truth than plain DLT');

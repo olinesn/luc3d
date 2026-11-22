@@ -13,11 +13,11 @@
  *                    node name; the chains the skeleton check guards, e.g. the tail and the head)
  * Rows carry no identity: each Triangulate solve matches its group to the frame's rows by 3D distance.
  */
-import { initH5wasm, pickFiles } from './file-io.js?v=3acb16502d26';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=3acb16502d26';
-import { showLoading, hideLoading, setStatus } from './save-load.js?v=3acb16502d26';
-import { state } from '../ui/app-state.js?v=3acb16502d26';
-import { setSessionVolume, volumeNodeCoverage, volumeChains, getVolumeSettings } from '../pose/volume3d.js?v=3acb16502d26';
+import { initH5wasm, pickFiles } from './file-io.js?v=3da147f3a9f0';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=3da147f3a9f0';
+import { showLoading, hideLoading, setStatus } from './save-load.js?v=3da147f3a9f0';
+import { state } from '../ui/app-state.js?v=3da147f3a9f0';
+import { setSessionVolume, volumeNodeCoverage, volumeChains, getVolumeSettings } from '../pose/volume3d.js?v=3da147f3a9f0';
 
 export const VOLUME3D_FORMAT = 'lucid-volume3d/1';
 
@@ -121,8 +121,8 @@ export async function handleLoadVolume3d(file) {
                 frames.toLocaleString('en-US') + ' frames, ' + cov.matched + ' of ' + cov.total + ' nodes' +
                 (cov.missing.length ? ' (no ' + cov.missing.join(', ') + ')' : '') + '. Triangulate ' +
                 (getVolumeSettings().enabled ? 'fuses it' : 'ignores it while "Fuse with volume" is off') + '.' +
-                (chains.length ? ' Skeleton check: ' + chains.map(function (c) { return c.name; }).join(', ') + '.' : '') +
-                (skipped.length ? ' Not checked: ' + skipped.join('; ') + '.' : ''), 'success');
+                (chains.length ? ' Its chains for Triangulate ▸ Skeleton check: ' + chains.map(function (c) { return c.name; }).join(', ') + '.' : '') +
+                (skipped.length ? ' Not used: ' + skipped.join('; ') + '.' : ''), 'success');
         }
         document.dispatchEvent(new CustomEvent('lucid:volume3d-changed'));
         return data;
