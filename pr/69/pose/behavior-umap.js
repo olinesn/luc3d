@@ -26,7 +26,7 @@
 //
 // Depends on: lib/umap-js/umap-js.esm.js
 
-import { UMAP } from '../lib/umap-js/umap-js.esm.js?v=86b7b538a06a';
+import { UMAP } from '../lib/umap-js/umap-js.esm.js?v=502fa68868b4';
 
 /**
  * The fuzzy graph as umap-js reads it, in typed arrays, rows and columns sorted:

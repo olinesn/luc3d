@@ -13,7 +13,10 @@
  *      group fused and nearer the truth than an independent plain DLT;
  *   4. the display fill (ui/rendering.js) keeps a fused group's stored 3D even when the reprojection threshold is
  *      on (a re-solve there would drop the volume);
- *   5. fusion off again: Triangulate All gives exactly the plain DLT (bit-identical), no group marked fused.
+ *   5. fusion off again: Triangulate All gives exactly the plain DLT (bit-identical), no group marked fused;
+ *   6. the skeleton check: the file names one chain (bones n5-n6, n6-n7) and its row for frame 0, animal 0 puts n6
+ *      and n7 four bones off. With the check, This frame and All frames (through the workers) take that chain
+ *      from the plain solve (on the truth); with it off, the group keeps the volume's misplaced chain.
  * Run: node tests/e2e/volume-fusion.mjs
  */
 import { chromium } from 'playwright';
@@ -92,11 +95,16 @@ try {
     const names = ['extra'].concat(Array.from({ length: F.NNODE }, (_, i) => 'n' + (F.NNODE - 1 - i)));
     const J = names.length, R = F.NF * F.NTRACK;
     const frames = new Int32Array(R), means = new Float32Array(R * J * 3), covs = new Float32Array(R * J * 6);
+    // frame 0, animal 0: the volume puts n6 and n7 four bone lengths off (a chain reaching for a neighbour)
+    const BONE = dist3(F.truth[0][0][5], F.truth[0][0][6]), SHIFT = 4 * BONE;
+    r.shift = SHIFT;
     for (let f = 0; f < F.NF; f++) for (let t = 0; t < F.NTRACK; t++) {
       const row = f * F.NTRACK + t;
       frames[row] = f;
       names.forEach((n, j) => {
-        const X = n === 'extra' ? [0, 0, 0] : F.truth[f][t][Number(n.slice(1))];
+        const k = Number(n.slice(1));
+        let X = n === 'extra' ? [0, 0, 0] : F.truth[f][t][k];
+        if (f === 0 && t === 0 && (k === 6 || k === 7)) X = [X[0] + SHIFT, X[1], X[2]];
         means.set(X, (row * J + j) * 3);
         covs.set([SD * SD, 0, 0, SD * SD, 0, SD * SD], (row * J + j) * 6);
       });
@@ -110,6 +118,7 @@ try {
     hf.create_dataset({ name: 'node_names', data: names });
     hf.create_attribute('format', 'lucid-volume3d/1');
     hf.create_attribute('cov_scale', new Float64Array([1.0]));
+    hf.create_attribute('skeleton_chains', JSON.stringify([{ name: 'end', bones: [['n5', 'n6'], ['n6', 'n7']], nodes: ['n6', 'n7'] }]));
     hf.close();
     const bytes = mod.FS.readFile(fname);
     mod.FS.unlink(fname);
@@ -118,6 +127,17 @@ try {
     r.rows = data ? data.frameIndices.length : 0;
     r.boxOnAfter = !!(box && !box.disabled && box.checked);
     r.coverage = V3D.volumeNodeCoverage(sE);
+    r.chains = V3D.volumeChains(sE).map(c => c.name);
+    r.status = (document.getElementById('statusText') || {}).textContent || '';
+    /** distance of node k, in the frame-f group nearest animal t (by node 0), to that animal's truth */
+    const chainErr = (groups, f, t, k) => {
+      let best = null, bestD = Infinity;
+      for (const g of groups) {
+        const d = dist3([g.points3d[0], g.points3d[1], g.points3d[2]], F.truth[f][t][0]);
+        if (d < bestD) { bestD = d; best = g; }
+      }
+      return best ? dist3([best.points3d[3 * k], best.points3d[3 * k + 1], best.points3d[3 * k + 2]], F.truth[f][t][k]) : Infinity;
+    };
 
     // ---- 2. This frame: plain, then fused
     V3D.setVolumeSettings({ enabled: false });
@@ -129,6 +149,11 @@ try {
     r.frameFused = g0.map(g => !!g.volumeFused);
     r.frameErrPlain = plain0.map(p => errTruth(p, 0));
     r.frameErrFused = g0.map(g => errTruth(g.points3d, 0));
+    r.frameChain = [6, 7].map(k => chainErr(g0, 0, 0, k));
+    V3D.setVolumeSettings({ skeletonCheck: false });
+    TRI.triangulateCurrentFrame('dlt');
+    r.frameChainOff = [6, 7].map(k => chainErr(TRI.getInstanceGroupsForFrame(0) || [], 0, 0, k));
+    V3D.setVolumeSettings({ skeletonCheck: true });
 
     // ---- 3. All frames, lazy session, through 2 workers
     window.LUCID_TRIANGULATION_WORKERS = 2;
@@ -137,6 +162,7 @@ try {
     V3D.setSessionVolume(sL, data);
     await TRI.triangulateAllFrames('dlt');
     r.released = sL.lazyLoader.released.length;
+    r.allChain = [6, 7].map(k => chainErr(sL.instanceGroups.get(0) || [], 0, 0, k));
     r.allFused = []; r.allErrFused = []; r.allErrRef = [];
     for (let f = 0; f < F.NF; f++) {
       const gs = sL.instanceGroups.get(f) || [];
@@ -181,9 +207,15 @@ try {
   check(out.loaded && out.rows === 12, `the .vol3d.h5 loads through the real handler (${out.rows} rows)`);
   check(out.boxOnAfter, '"Fuse with volume" is on once loaded');
   check(out.coverage.matched === 8 && out.coverage.total === 8, `nodes matched by name: ${out.coverage.matched}/${out.coverage.total}`);
+  check(out.chains.join() === 'end', `the file's skeleton chain is read (${out.chains.join()})`);
+  check(/Skeleton check: end/.test(out.status), 'the load status names it: ' + out.status);
   check(out.frameFused.length === 2 && out.frameFused.every(Boolean), 'This frame: every group fused');
   console.log(`    This frame, mean node error to the truth: plain ${mean(out.frameErrPlain).toFixed(4)}, fused ${mean(out.frameErrFused).toFixed(4)}`);
   check(mean(out.frameErrFused) < 0.5 * mean(out.frameErrPlain), 'This frame: fused nearer the truth than plain DLT');
+  console.log(`    skeleton check, n6/n7 off the truth (the volume put them ${out.shift.toFixed(3)} off): This frame ${out.frameChain.map(x => x.toFixed(3)).join(', ')}; check off ${out.frameChainOff.map(x => x.toFixed(3)).join(', ')}; All frames ${out.allChain.map(x => x.toFixed(3)).join(', ')}`);
+  check(out.frameChainOff.every(x => x > 0.5 * out.shift), 'skeleton check off: the group keeps the volume\'s misplaced chain');
+  check(out.frameChain.every(x => x < 0.1 * out.shift), 'This frame: the chain comes back from the plain solve');
+  check(out.allChain.every(x => x < 0.1 * out.shift), 'All frames (2 workers): the same');
   check(out.released > 0, `All frames took the windowed (lazy) path (${out.released} window releases)`);
   check(out.allFused.length === 12 && out.allFused.every(Boolean), `All frames: every group fused (${out.allFused.filter(Boolean).length}/${out.allFused.length})`);
   console.log(`    All frames (2 workers), mean error: independent plain DLT ${mean(out.allErrRef).toFixed(4)}, fused ${mean(out.allErrFused).toFixed(4)}`);

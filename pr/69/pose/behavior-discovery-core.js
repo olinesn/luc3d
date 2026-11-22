@@ -32,8 +32,8 @@
 //
 // Depends on: pose/behavior-features.js, pose/behavior-forest.js
 
-import { computeFeatureChunk } from './behavior-features.js?v=86b7b538a06a';
-import { trainTree, treeScratch, treeSeed, scoreRows, scoreBinnedRows, presentFrames } from './behavior-forest.js?v=86b7b538a06a';
+import { computeFeatureChunk } from './behavior-features.js?v=502fa68868b4';
+import { trainTree, treeScratch, treeSeed, scoreRows, scoreBinnedRows, presentFrames } from './behavior-forest.js?v=502fa68868b4';
 
 /** A bin, in seconds (B-SOiD's). */
 export var BIN_SECONDS = 0.1;

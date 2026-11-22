@@ -17,17 +17,17 @@
 //             import-export/behavior-io.js, import-export/save-load.js,
 //             loading/cold-read-guard.js
 
-import { state } from './app-state.js?v=86b7b538a06a';
-import { sessionAnimals, armedRange, requestBehaviorRepaint } from './behavior-coding.js?v=86b7b538a06a';
-import { confirmRemoveBehavior, confirmMakeMutual } from './behavior-confirm.js?v=86b7b538a06a';
+import { state } from './app-state.js?v=502fa68868b4';
+import { sessionAnimals, armedRange, requestBehaviorRepaint } from './behavior-coding.js?v=502fa68868b4';
+import { confirmRemoveBehavior, confirmMakeMutual } from './behavior-confirm.js?v=502fa68868b4';
 import {
     behaviors, addBehavior, updateBehavior, removeBehavior, moveBehavior, serializeEthogram, ingestEthogram,
     behaviorById, behaviorByName, BEHAVIOR_KINDS,
-} from '../pose/behavior-ethogram.js?v=86b7b538a06a';
-import { countBehaviorBouts, deleteBehaviorBouts, markReviewed, rekeyBehavior, bothWayPairs } from '../pose/behavior-labels.js?v=86b7b538a06a';
-import { parseBehaviorFile, ethogramPayload } from '../import-export/behavior-io.js?v=86b7b538a06a';
-import { markDirty, setStatus } from '../import-export/save-load.js?v=86b7b538a06a';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=86b7b538a06a';
+} from '../pose/behavior-ethogram.js?v=502fa68868b4';
+import { countBehaviorBouts, deleteBehaviorBouts, markReviewed, rekeyBehavior, bothWayPairs } from '../pose/behavior-labels.js?v=502fa68868b4';
+import { parseBehaviorFile, ethogramPayload } from '../import-export/behavior-io.js?v=502fa68868b4';
+import { markDirty, setStatus } from '../import-export/save-load.js?v=502fa68868b4';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=502fa68868b4';
 
 function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
