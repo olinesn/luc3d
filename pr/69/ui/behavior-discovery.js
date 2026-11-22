@@ -17,14 +17,14 @@
 //             ui/behavior-coding.js, pose/behavior-discovery.js, pose/behavior-states.js,
 //             pose/behavior-ethogram.js, import-export/save-load.js
 
-import { state } from './app-state.js?v=502fa68868b4';
-import { showLoading, showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=502fa68868b4';
-import { buildBehaviorContext, cachedBehaviorContext, sessionFps } from './behavior-detect.js?v=502fa68868b4';
-import { requestBehaviorRepaint, setReviewFocus, goToBehaviorFrame, openBehaviorTab, behaviorUi } from './behavior-coding.js?v=502fa68868b4';
-import { discoverBehaviors, storeDiscovery } from '../pose/behavior-discovery.js?v=502fa68868b4';
-import { stateColor, stateLabel, statesToBouts, OTHER_STATE_COLOR } from '../pose/behavior-states.js?v=502fa68868b4';
-import { behaviorById } from '../pose/behavior-ethogram.js?v=502fa68868b4';
-import { setStatus } from '../import-export/save-load.js?v=502fa68868b4';
+import { state } from './app-state.js?v=3acb16502d26';
+import { showLoading, showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=3acb16502d26';
+import { buildBehaviorContext, cachedBehaviorContext, sessionFps } from './behavior-detect.js?v=3acb16502d26';
+import { requestBehaviorRepaint, setReviewFocus, goToBehaviorFrame, openBehaviorTab, behaviorUi } from './behavior-coding.js?v=3acb16502d26';
+import { discoverBehaviors, storeDiscovery } from '../pose/behavior-discovery.js?v=3acb16502d26';
+import { stateColor, stateLabel, statesToBouts, OTHER_STATE_COLOR } from '../pose/behavior-states.js?v=3acb16502d26';
+import { behaviorById } from '../pose/behavior-ethogram.js?v=3acb16502d26';
+import { setStatus } from '../import-export/save-load.js?v=3acb16502d26';
 
 /** The layer a run makes unless told otherwise. */
 export var DEFAULT_DISCOVERY_LAYER = 'Discovery';

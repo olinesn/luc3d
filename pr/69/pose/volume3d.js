@@ -15,7 +15,7 @@
  * length is measured once, from the file's own means (`chainBoneMedians`). A chain with a node the file or
  * the skeleton lacks, or a bone measured on too few rows, is left out. No chains = no check.
  */
-import { mapVolumeNodes, chainBoneMedians, VOLUME_DEFAULTS } from './volume-fusion.js?v=502fa68868b4';
+import { mapVolumeNodes, chainBoneMedians, VOLUME_DEFAULTS } from './volume-fusion.js?v=3acb16502d26';
 
 const STORAGE_KEY = 'lucidVolumeFusion';
 const DEFAULT_SETTINGS = Object.freeze({
@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     covScale: null,          // null = the file's own (its exporter measured it)
     skeletonCheck: true,     // check the file's chains (if it names any)
     chainTol: VOLUME_DEFAULTS.chainTol,
+    chainAgreeMm: VOLUME_DEFAULTS.chainAgreeMm,   // a node the plain solve and the volume agree on is never changed
 });
 let _settings = null;
 
@@ -193,6 +194,6 @@ export function volumeForFrame(session, frameIdx) {
         n: rows.length, nNodes: N, means: means, covs: covs,
         covScale: s.covScale != null ? s.covScale : (v.data.covScale != null ? v.data.covScale : 1),
         gateFloorPx: s.gateFloorPx, gateK: s.gateK, fuse: s.fuse !== false, matchMaxMm: s.matchMaxMm,
-        chains: chains.slice(), chainTol: s.chainTol,
+        chains: chains.slice(), chainTol: s.chainTol, chainAgreeMm: s.chainAgreeMm,
     };
 }

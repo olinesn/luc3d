@@ -16,9 +16,9 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=502fa68868b4';
-import { jacobiEigen } from './plane-fit.js?v=502fa68868b4';
-import { matchVolumeAnimal, gateObservations, fuseWithVolume, checkSkeletonChains } from './volume-fusion.js?v=502fa68868b4';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=3acb16502d26';
+import { jacobiEigen } from './plane-fit.js?v=3acb16502d26';
+import { matchVolumeAnimal, gateObservations, fuseWithVolume, checkSkeletonChains } from './volume-fusion.js?v=3acb16502d26';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
@@ -1608,13 +1608,16 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
             reprojectPointCamera, numKeypoints);
         volumeInfo = { animal: volAnimal, gated: volGated, fused: fz.fused, filled: fz.filled };
         if (plainObs) {
-            // Skeleton check: a chain (e.g. the tail) whose fused bones are implausible is taken from the plain
-            // solve (with the threshold rule, as an unfused Triangulate would give it) or from the volume.
+            // Skeleton check: a chain (e.g. the tail) whose fused bones are implausible is repaired with the fewest
+            // node changes, each to the plain solve's point (with the threshold rule, as an unfused Triangulate
+            // would give it), the volume's, or dropped; nodes the two sources agree on are kept.
             const sk = checkSkeletonChains(points3d, function () {
                 return applyReprojThreshold(plainObs, plain3d);
             }, volume, volAnimal);
-            volumeInfo.chainsFromSolve = sk.fromSolve;
-            volumeInfo.chainsFromVolume = sk.fromVolume;
+            volumeInfo.chainsRepaired = sk.chains;
+            volumeInfo.nodesFromSolve = sk.fromSolve;
+            volumeInfo.nodesFromVolume = sk.fromVolume;
+            volumeInfo.nodesDropped = sk.dropped;
         }
     }
 

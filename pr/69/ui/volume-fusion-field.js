@@ -9,9 +9,9 @@
 //
 // Not in Defining Plane Mode's toolbar lock: it is a setting a run reads when it starts, not an action.
 
-import { state } from './app-state.js?v=502fa68868b4';
-import { getVolumeSettings, setVolumeSettings, sessionVolume } from '../pose/volume3d.js?v=502fa68868b4';
-import { setStatus } from '../import-export/save-load.js?v=502fa68868b4';
+import { state } from './app-state.js?v=3acb16502d26';
+import { getVolumeSettings, setVolumeSettings, sessionVolume } from '../pose/volume3d.js?v=3acb16502d26';
+import { setStatus } from '../import-export/save-load.js?v=3acb16502d26';
 
 function refresh(input, label) {
     var v = sessionVolume(state.session);
