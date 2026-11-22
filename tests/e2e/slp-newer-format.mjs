@@ -2,17 +2,17 @@
  * slp-newer-format.mjs — a `.slp` newer than LUC3D can read is refused on every
  * path, says so, and changes nothing.
  *
- * Python sleap-io 0.10 writes SLP format 3.0 by default, where every table is a
- * group of columns. LUC3D's two readers know the 2.x layout only: both used to
- * read such a file as 0 frames with no error, and File ▸ Open reported "SLP loaded
- * (… 0 labeled frames)". The rule is `loading/slp-format-check.js` (unit test:
- * `tests/test-slp-format-check.mjs`); the vendored reader has its own copy
- * (`LUCID local patch (luc3d newer-format)`).
+ * Read with code that doesn't know its layout, such a file comes out as 0 frames with
+ * no error, and File ▸ Open reported "SLP loaded (… 0 labeled frames)": that is how
+ * format 3.0 opened before LUC3D could read it. The rule is
+ * `loading/slp-format-check.js` (unit test: `tests/test-slp-format-check.mjs`); the
+ * vendored reader has its own copy (`LUCID local patch (luc3d newer-format)`).
  *
- * `tests/fixtures/slp-format-30/py_written_30_columnar.slp` is a real file from
- * Python's release branch. Files with other format ids are LUC3D's own or other
- * real 2.x files with only that attribute changed, so they prove the check goes by
- * `format_id` and not by what the tables happen to look like.
+ * The too-new file here is `tests/fixtures/slp-format-30/py_written_30_columnar.slp`, a
+ * real file from Python's release branch, with `format_id` changed to 4.0. Files with
+ * other format ids are LUC3D's own or other real 2.x files with only that attribute
+ * changed, so they prove the check goes by `format_id` and not by what the tables
+ * happen to look like. `tests/e2e/slp-format-30.mjs` covers 3.0 itself.
  *
  *  1. Both readers and every vendored entry refuse it, in exactly the same words.
  *  2. Each loader says so, with nothing open: no session, no prefix, no retry.
@@ -25,8 +25,8 @@
  *     data, the others load, and the status gives the reason and names the camera.
  *  6. A multi-session load ends on that status, not on "Loaded 2 sessions".
  *  7. The environment step refuses too, rather than using the readable cameras.
- *  8. A project file with sessions, marked 3.0, is refused on both routes.
- *  9. 2.x files are unaffected: a format just below the limit reads everywhere, a
+ *  8. A project file with sessions, marked 4.0, is refused on both routes.
+ *  9. Other files are unaffected: a format just below the limit reads everywhere, a
  *     file that is not HDF5 still gets its own error, and a big 2.x file still
  *     replaces the open project through the lazy route.
  *
@@ -49,7 +49,7 @@ let fails = 0;
 const check = (c, m, extra) => { console.log((c ? '  ✓ ' : '  ✗ ') + m + (c || extra === undefined ? '' : ' — ' + extra)); if (!c) fails++; };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-const refusalFor = (name, version = '3.0') => `${name} uses SLP format ${version}, which is newer than this version of LUC3D supports (max 2.x). Update LUC3D to read it, or re-save the file from Python sleap-io with \`legacy_format=True\`.`;
+const refusalFor = (name, version = '4.0') => `${name} uses SLP format ${version}, which is newer than this version of LUC3D supports (max 3.x). Update LUC3D to read it, or re-save the file from Python sleap-io with \`legacy_format=True\`.`;
 
 const server = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1'], { cwd: repoRoot, stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 1200));
@@ -68,7 +68,8 @@ try {
         await page.goto(`http://127.0.0.1:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });
         await page.waitForFunction(() => window.SleapIO && window.h5wasm && window.__lucid && window.__lucid.state, null, { timeout: 120000 });
         await page.evaluate(() => {
-            window.__fixture = async () => new Uint8Array(await (await fetch('/tests/fixtures/slp-format-30/py_written_30_columnar.slp')).arrayBuffer());
+            window.__real30 = async () => new Uint8Array(await (await fetch('/tests/fixtures/slp-format-30/py_written_30_columnar.slp')).arrayBuffer());
+            window.__fixture = async () => window.__withFormatId(await window.__real30(), 4);
             window.__real2x = async () => new Uint8Array(await (await fetch('/tests/fixtures/slp-compound/sleap-compound-small.slp')).arrayBuffer());
             // A copy of a file with only `format_id` changed.
             let n = 0;
@@ -210,7 +211,7 @@ try {
             check(o.name === 'UnsupportedSlpFormatError' && o.message === refusalFor('mice.slp'),
                 where, JSON.stringify(o).slice(0, 220));
         }
-        check(eq(Object.values(r).filter(o => o.formatId !== undefined).map(o => o.formatId), [3, 3, 3, 3, 3, 3]),
+        check(eq(Object.values(r).filter(o => o.formatId !== undefined).map(o => o.formatId), [4, 4, 4, 4, 4, 4]),
             'the vendored error carries formatId');
         await page.close();
     }
@@ -266,7 +267,7 @@ try {
 
         // Add SLP goes through a picker.
         const newPath = path.join(tmpRoot, 'mice.slp');
-        fs.copyFileSync(path.join(repoRoot, 'tests', 'fixtures', 'slp-format-30', 'py_written_30_columnar.slp'), newPath);
+        fs.writeFileSync(newPath, Buffer.from(await page.evaluate(() => Array.from(window.__new))));
         page.once('filechooser', fc => fc.setFiles(newPath));
         await page.evaluate(async () => { await (await import('/import-export/slp-import.js')).handleAddSlp(); });
         let st = await page.evaluate(() => window.__status());
@@ -332,7 +333,7 @@ try {
 
         // The trap itself: a project is open, its handle set, and a refused file comes along.
         t = await menu(page, 'menuLoadProject', '__new', 'mice.slp');
-        check(t === refusalFor('mice.slp'), 'File ▸ Open of the 3.0 file over it: refused', t);
+        check(t === refusalFor('mice.slp'), 'File ▸ Open of the 4.0 file over it: refused', t);
         check((await tag(page)) === 'open-project.slp', 'the next Save still goes to the open project\'s own file', await tag(page));
         await page.close();
 
@@ -432,7 +433,7 @@ try {
         }, size);
         check(all.cams && all.cams.views === 2 && !all.cams.lazy && all.cams.per.cam1 === 0 && all.cams.per.cam2 === 0,
             label + ', every camera refused: the views, and no data', JSON.stringify(all.cams));
-        check(all.status.text.includes('2 annotation file(s) could not be read') && /uses SLP format 3\.0/.test(all.status.text) && /error/.test(all.status.dot),
+        check(all.status.text.includes('2 annotation file(s) could not be read') && /uses SLP format 4\.0/.test(all.status.text) && /error/.test(all.status.dot),
             '  and the status says why', JSON.stringify(all.status));
         await page2.close();
     }
@@ -462,7 +463,7 @@ try {
         check(await page.evaluate(() => window.__multiDone) === true, 'the load finished');
         await page.waitForTimeout(300);
         const st = await page.evaluate(() => window.__status());
-        check(/uses SLP format 3\.0/.test(st.text) && st.text.includes('4 annotation file(s) could not be read') && /error/.test(st.dot),
+        check(/uses SLP format 4\.0/.test(st.text) && st.text.includes('4 annotation file(s) could not be read') && /error/.test(st.dot),
             'the last status gives the reason, in red, after the skeleton prompt', JSON.stringify(st));
         check((await page.evaluate(() => window.__snapshot())).sessions.length === 2, 'and both sessions are there, with their views');
         await page.close();
@@ -496,12 +497,12 @@ try {
     }
 
     // =================================================================
-    console.log('\n-- 8. a project file with sessions, marked 3.0, is refused on both routes --');
+    console.log('\n-- 8. a project file with sessions, marked 4.0, is refused on both routes --');
     {
         const page = await freshPage();
         await page.evaluate(async () => {
             window.__project = await window.__projectBytes('with-sessions', ['cam0', 'cam1']);
-            window.__marked = await window.__withFormatId(window.__project, 3);
+            window.__marked = await window.__withFormatId(window.__project, 4);
             window.__marked41 = await window.__withFormatId(window.__project, 4.1);
         });
         let r = await run(page, EAGER, '__marked', 'marked.slp');
@@ -515,12 +516,12 @@ try {
     }
 
     // =================================================================
-    console.log('\n-- 9. 2.x files are unaffected --');
+    console.log('\n-- 9. other files are unaffected --');
     {
         const page = await freshPage();
         await page.evaluate(async () => {
             window.__project = await window.__projectBytes('fine', ['cam0', 'cam1']);
-            window.__justBelow = await window.__withFormatId(window.__project, 2.99);
+            window.__justBelow = await window.__withFormatId(window.__project, 3.99);
             window.__noId = await (async () => {
                 const h5 = window.h5wasm;
                 await h5.ready;
@@ -539,7 +540,7 @@ try {
             const fio = await import('/import-export/file-io.js');
             const { SioLazyLoader } = await import('/loading/sio-lazy-loader.js');
             const out = {};
-            for (const [name, bytes] of [['real SLEAP file', window.__real], ['format 2.99', window.__justBelow], ['no format_id', window.__noId]]) {
+            for (const [name, bytes] of [['real SLEAP file', window.__real], ['format 3.99 in the 2.x layout', window.__justBelow], ['no format_id', window.__noId]]) {
                 const file = new File([bytes], 'x.slp');
                 const lazy = new SioLazyLoader();
                 const opened = await lazy.open('cam', file);
