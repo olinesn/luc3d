@@ -60,7 +60,7 @@ export function handleOutlineMessage(msg, store, makeCanvas) {
             areas.push(a);
             // blobs holding exactly one animal's pose: what one animal looks like here
             var an = Array.isArray(msg.poses) ? msg.poses[i] : null;
-            if (an && an.length) singlePoseBlobs(seg, w, h, an, msg.params).forEach(function (s) { singles.push({ frame: i, area: s.area, reach: s.reach }); });
+            if (an && an.length) singlePoseBlobs(seg, w, h, an, msg.params).forEach(function (s) { singles.push({ frame: i, area: s.area, reach: s.reach, reach3d: s.reach3d }); });
         }
         store.bgs.set(msg.cam, { bg: bg, w: w, h: h });
         var copy = bg.slice();

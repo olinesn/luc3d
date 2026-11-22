@@ -29,11 +29,18 @@
 //    keypoints come within `reach` px of it, else to nobody. Poses come from
 //    the camera's own 2D detection, else from the animal's 3D projected into it
 //    (the caller supplies whichever it has). Either way an animal gets only the
-//    pixels within `envelope` times the camera's `reach` of its body skeleton
-//    (or `tailWidth` of its tail line): something bright that touches an animal
-//    is not the animal (its reflection in a wall where it meets the floor, wall
-//    lit up beside it). Those pixels stay nobody's, shown like other blobs
-//    nobody is in.
+//    pixels near its body (or within `tailWidth` of its tail line): something
+//    bright that touches an animal is not the animal (its reflection in a wall
+//    where it meets the floor, wall lit up beside it). Those pixels stay
+//    nobody's, shown like other blobs nobody is in. With the animal's 3D pose
+//    (`tubes`: its body edges projected into this camera, with the image scale
+//    at each end), near means within `envelope3d` times the camera's `reach3d`
+//    (a body half-width in calibration units) of that projected body: the body
+//    as it is in 3D, so rearing, turning and distance from the camera need no
+//    slack, and a reflection, which lies beyond the body in 3D, falls outside.
+//    Without 3D (or with 3D that disagrees with the 2D pose by more than half
+//    that width), within `envelope` times the camera's `reach` (pixels) of its
+//    2D body skeleton.
 // 4. Tails, traced: pixels more than `tailThr` (14) grey levels over the empty
 //    arena (tails are thin and dimmer than bodies) within `tailWidth` px of an animal's tail
 //    polyline (its tail keypoints from the body point they hang from) become
@@ -64,6 +71,7 @@ export const OUTLINE_PARAMS = Object.freeze({
     minPiece: 60,       // px: an animal's pieces smaller than this go
     inFraction: 0.25,   // share of an animal's body keypoints that puts it in a blob
     envelope: 1.5,      // an animal's pixels lie within this many times its camera's reach of its pose (0 = no limit)
+    envelope3d: 1.25,   // with 3D: within this many times the camera's reach3d of the projected 3D body (0 = the 2D rule)
 });
 
 /** Merged parameters: `p` over the defaults, unknown keys ignored. */
@@ -472,10 +480,12 @@ export function areaModel(samples, nAnimals, params) {
  * The blobs of one frame (`segmentBlobs`' result) that hold exactly one
  * animal's pose: at least `inFraction` of its body keypoints are in the blob
  * and no other animal has a body keypoint there. -> [{blob, animal, area,
- * reach}], `reach` the 99th percentile of the blob's pixels' distance (px) to
- * the animal's pose (body skeleton, or its tail line): how far one animal's
- * own pixels lie from its pose in this camera, unless something bright
- * touches it.
+ * reach, reach3d?}], `reach` the 99th percentile of the blob's pixels'
+ * distance (px) to the animal's pose (body skeleton, or its tail line): how
+ * far one animal's own pixels lie from its pose in this camera, unless
+ * something bright touches it. With the animal's projected 3D body (`tubes`)
+ * agreeing with its 2D pose, `reach3d` is the same percentile in calibration
+ * units of `tubeReach`, tail pixels left out: the body's half-width.
  */
 export function singlePoseBlobs(seg, w, h, animals, params) {
     var P = outlineParams(params);
@@ -500,14 +510,25 @@ export function singlePoseBlobs(seg, w, h, animals, params) {
         var a = A[who], L = a.tail ? smoothTail(a.tail, 8) : null;
         var box = seg.box.subarray(4 * b, 4 * b + 4);
         var d = new Float32Array(seg.area[b]), n = 0;
+        var T = a.tubes, d3 = T.length ? new Float32Array(seg.area[b]) : null, n3 = 0, tw2 = P.tailWidth * P.tailWidth;
         for (var y = box[1]; y <= box[3]; y++) {
             for (var x = box[0], p = y * w + box[0]; x <= box[2]; x++, p++) {
                 if (blob[p] !== b) continue;
-                d[n++] = Math.sqrt(Math.min(bodyDist2(a, x, y), L ? lineDist2(L, x, y) : Infinity));
+                var tl2 = L ? lineDist2(L, x, y) : Infinity;
+                d[n++] = Math.sqrt(Math.min(bodyDist2(a, x, y), tl2));
+                // the body in 3D: tail pixels are the tail line's, not the body's
+                if (d3 && tl2 > tw2) d3[n3++] = tubeReach(T, x, y);
             }
         }
         d = d.subarray(0, n).sort();
-        out.push({ blob: b, animal: who, area: seg.area[b], reach: n ? d[Math.min(n - 1, Math.floor(0.99 * n))] : 0 });
+        var reach = n ? d[Math.min(n - 1, Math.floor(0.99 * n))] : 0;
+        var rec = { blob: b, animal: who, area: seg.area[b], reach: reach };
+        // 3D that agrees with the 2D pose (within a quarter of this blob's reach)
+        if (n3 >= 20 && a.tubeError <= reach / 4) {
+            d3 = d3.subarray(0, n3).sort();
+            rec.reach3d = d3[Math.min(n3 - 1, Math.floor(0.99 * n3))];
+        }
+        out.push(rec);
     }
     return out;
 }
@@ -518,7 +539,8 @@ export function singlePoseBlobs(seg, w, h, animals, params) {
  * from): the median area and a robust s.d. (1.4826 x the median absolute
  * deviation, so the few blobs with a reflection or lit wall attached don't
  * widen it), `hi` the crossing threshold, `reach` the median of the blobs'
- * reach. null with fewer than 3 blobs.
+ * reach, and `reach3d` (with `n3d`) the median of their `reach3d` when at
+ * least 3 had one. null with fewer than 3 blobs.
  */
 export function poseAreaModel(singles, params) {
     var P = outlineParams(params);
@@ -528,8 +550,12 @@ export function poseAreaModel(singles, params) {
     var median = med(areas);
     var sd = 1.4826 * med(areas.map(function (a) { return Math.abs(a - median); }));
     var frames = new Set(singles.map(function (s) { return s.frame; })).size;
-    return { median: median, sd: sd, lo: median - P.areaSigmas * sd, hi: median + P.areaSigmas * sd, n: singles.length, frames: frames,
+    var r3 = singles.filter(function (s) { return s.reach3d > 0; }).map(function (s) { return s.reach3d; });
+    var m = { median: median, sd: sd, lo: median - P.areaSigmas * sd, hi: median + P.areaSigmas * sd, n: singles.length, frames: frames,
         reach: med(singles.map(function (s) { return s.reach; })), source: 'poses' };
+    // the body's half-width in calibration units, from blobs whose animal had 3D
+    if (r3.length >= 3) { m.reach3d = med(r3); m.n3d = r3.length; }
+    return m;
 }
 
 // Squared distance from (px,py) to segment (ax,ay)-(bx,by).
@@ -591,7 +617,42 @@ export function normalizeAnimal(a) {
         if (isFinite(s[i]) && isFinite(s[i + 1]) && isFinite(s[i + 2]) && isFinite(s[i + 3])) segs.push(s[i], s[i + 1], s[i + 2], s[i + 3]);
     }
     var tail = finitePts(a && a.tail);
-    return { body: body, segments: segs, tail: tail.length >= 4 ? tail : null, tailPts: finitePts(a && a.tailPts) };
+    var tubes = [], T = a && a.tubes;
+    if (T) for (var j = 0; j + 5 < T.length; j += 6) {
+        var ok = true;
+        for (var q = 0; q < 6; q++) if (!isFinite(T[j + q])) ok = false;
+        if (ok && T[j + 2] > 0 && T[j + 5] > 0) tubes.push(T[j], T[j + 1], T[j + 2], T[j + 3], T[j + 4], T[j + 5]);
+    }
+    var te = a && typeof a.tubeError === 'number' && a.tubeError >= 0 ? a.tubeError : 0;
+    return { body: body, segments: segs, tail: tail.length >= 4 ? tail : null, tailPts: finitePts(a && a.tailPts), tubes: tubes, tubeError: te };
+}
+
+/**
+ * How far a pixel lies from an animal's projected 3D body, in calibration
+ * units: over its body edges (`T`: [u0, v0, s0, u1, v1, s1, ...], image
+ * points and pixels per unit at each end), the smallest pixel distance to an
+ * edge divided by the scale where the edge is closest. Infinity without edges.
+ */
+export function tubeReach(T, x, y) {
+    var best = Infinity;
+    for (var i = 0; i + 5 < T.length; i += 6) {
+        var ax = T[i], ay = T[i + 1], bx = T[i + 3], by = T[i + 4];
+        var vx = bx - ax, vy = by - ay, L = vx * vx + vy * vy;
+        var t = L > 0 ? ((x - ax) * vx + (y - ay) * vy) / L : 0;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        var dx = ax + t * vx - x, dy = ay + t * vy - y;
+        var r = Math.sqrt(dx * dx + dy * dy) / (T[i + 2] + t * (T[i + 5] - T[i + 2]));
+        if (r < best) best = r;
+    }
+    return best;
+}
+
+// The median pixels-per-unit of an animal's projected body edges.
+function tubeScale(T) {
+    var v = [];
+    for (var i = 0; i + 5 < T.length; i += 6) v.push(T[i + 2], T[i + 5]);
+    v.sort(function (a, b) { return a - b; });
+    return v.length ? v[v.length >> 1] : 0;
 }
 
 /**
@@ -673,10 +734,17 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
     // of its body skeleton, or `tailWidth` of its tail line
     var tails = A.map(function (z) { return z.tail ? smoothTail(z.tail, 8) : null; });
     var lim2 = model && model.reach > 0 && P.envelope > 0 ? Math.pow(model.reach * P.envelope, 2) : Infinity;
+    var lim3 = model && model.reach3d > 0 && P.envelope3d > 0 ? model.reach3d * P.envelope3d : 0;
+    // 3D is used for an animal whose projected body agrees with its 2D pose
+    // within half the 3D limit; otherwise the 2D rule
+    var use3d = A.map(function (z) { return lim3 > 0 && z.tubes.length > 0 && z.tubeError <= 0.5 * lim3 * tubeScale(z.tubes); });
     var tw2 = P.tailWidth * P.tailWidth;
     var near = function (k, x, y, bd2) {
-        if (lim2 === Infinity) return true;
-        if ((bd2 == null ? bodyDist2(A[k], x, y) : bd2) <= lim2) return true;
+        if (use3d[k]) { if (tubeReach(A[k].tubes, x, y) <= lim3) return true; }
+        else {
+            if (lim2 === Infinity) return true;
+            if ((bd2 == null ? bodyDist2(A[k], x, y) : bd2) <= lim2) return true;
+        }
         return !!tails[k] && lineDist2(tails[k], x, y) <= tw2;
     };
 
@@ -830,7 +898,7 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
     for (var ai = 0; ai < A.length; ai++) {
         var kinds = [];
         for (var bi = 0; bi < blobInfo.length; bi++) if (blobInfo[bi].animals.indexOf(ai) >= 0) kinds.push(blobInfo[bi].kind);
-        animalsOut.push({ area: areas[ai + 1], blobs: kinds, tail: traced[ai + 1], reattached: reattached[ai + 1], posed: (A[ai].body.length >> 1) });
+        animalsOut.push({ area: areas[ai + 1], blobs: kinds, tail: traced[ai + 1], reattached: reattached[ai + 1], posed: (A[ai].body.length >> 1), by3d: use3d[ai] });
     }
     contours.shift();
     // keypoints the outline misses where the image shows something there

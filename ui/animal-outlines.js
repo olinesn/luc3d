@@ -208,6 +208,63 @@ function cameraOf(session, name) {
     return null;
 }
 
+/**
+ * An animal's 3D body projected into `camera`, for the outline's 3D limit
+ * (`tubeReach`, pose/outline-core.js): per body edge with both ends in 3D, its
+ * two image points (distortion included) and the image scale at each
+ * (pixels per calibration unit: a step across the view at 1 % of the depth,
+ * projected); body nodes alone when the skeleton has no body edge. And how far
+ * the animal's 2D body keypoints lie from their projections (`inst2d`; median
+ * px, 0 without a 2D pose). -> {tubes, tubeError} or null without 3D.
+ */
+export function bodyTubes(group, camera, edges, chain, inst2d) {
+    var p3 = group && group.points3d;
+    if (!p3 || !p3.length || !camera || typeof camera.project !== 'function' || !camera.rotationMatrix || !camera.tvec) return null;
+    var n = (p3.length / 3) | 0;
+    var R = camera.rotationMatrix, t = camera.tvec;
+    var proj = function (X) { var uv = camera.project(X); return camera.distortPoint ? camera.distortPoint(uv) : uv; };
+    var memo = [];
+    var at = function (k) {
+        if (memo[k] !== undefined) return memo[k];
+        var r = null;
+        if (k >= 0 && k < n) {
+            var X = [p3[3 * k], p3[3 * k + 1], p3[3 * k + 2]];
+            if (isFinite(X[0]) && isFinite(X[1]) && isFinite(X[2])) {
+                var z = R[2][0] * X[0] + R[2][1] * X[1] + R[2][2] * X[2] + t[2];
+                if (z > 0) {
+                    var uv = proj(X), d = 0.01 * z;
+                    var uv2 = proj([X[0] + d * R[0][0], X[1] + d * R[0][1], X[2] + d * R[0][2]]);
+                    var sc = Math.hypot(uv2[0] - uv[0], uv2[1] - uv[1]) / d;
+                    if (isFinite(uv[0]) && isFinite(uv[1]) && sc > 0 && isFinite(sc)) r = [uv[0], uv[1], sc];
+                }
+            }
+        }
+        memo[k] = r;
+        return r;
+    };
+    var T = [];
+    (edges || []).forEach(function (e) {
+        var u = e[0], v = e[1];
+        if (chain.isTail[u] || chain.isTail[v]) return;
+        var a = at(u), b = at(v);
+        if (a && b) T.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+    });
+    if (!T.length) for (var k = 0; k < n; k++) { if (chain.isTail[k]) continue; var q = at(k); if (q) T.push(q[0], q[1], q[2], q[0], q[1], q[2]); }
+    if (!T.length) return null;
+    var err = 0;
+    if (inst2d) {
+        var ds = [];
+        for (var j = 0; j < n; j++) {
+            if (chain.isTail[j] || !at(j) || !inst2d.hasPoint(j)) continue;
+            var x = inst2d.getX(j), y = inst2d.getY(j);
+            if (isFinite(x) && isFinite(y)) ds.push(Math.hypot(x - at(j)[0], y - at(j)[1]));
+        }
+        ds.sort(function (a, b) { return a - b; });
+        err = ds.length ? ds[ds.length >> 1] : Infinity;
+    }
+    return { tubes: T, tubeError: err };
+}
+
 function resolveIdentity(session, group, inst, cam, frameIdx) {
     if (inst && Number.isInteger(inst.trackIdx) && inst.trackIdx >= 0 && session.getIdentityForTrack) {
         var ident = session.getIdentityForTrack(inst.trackIdx, cam, frameIdx);
@@ -251,6 +308,8 @@ export function animalsInView(session, frameIdx, cam, groups, frameGroup) {
         var a = animalFromInstance(inst, edges, chain);
         if (!a.body.length) return;
         if (source === '2d') placed.push(inst);
+        var tb = bodyTubes(g, camera, edges, chain, source === '2d' ? inst : null);
+        if (tb) { a.tubes = tb.tubes; a.tubeError = tb.tubeError; }
         a.name = groupDisplayName(session, g, frameIdx);
         a.color = getGroupColor(g, session, useId, frameIdx, cam) || '#cccccc';
         a.identity = resolveIdentity(session, g, source === '2d' ? inst : null, cam, frameIdx);
@@ -299,6 +358,7 @@ function poseSignature(animals) {
         mix(a.body.length); a.body.forEach(mix);
         mix(a.tail ? a.tail.length : 0); if (a.tail) a.tail.forEach(mix);
         mix(a.segments.length);
+        mix(a.tubes ? a.tubes.length : 0); if (a.tubes) a.tubes.forEach(mix);
     });
     return animals.length + ':' + h.toString(36);
 }
@@ -352,7 +412,7 @@ async function posesAt(session, frame, cam) {
         }
         var groups = session.instanceGroups ? session.instanceGroups.get(frame) || [] : [];
         var fg = session.getFrameGroup ? session.getFrameGroup(frame) : null;
-        return animalsInView(session, frame, cam, groups, fg).map(function (a) { return { body: a.body, tail: a.tail, segments: a.segments }; });
+        return animalsInView(session, frame, cam, groups, fg).map(function (a) { return { body: a.body, tail: a.tail, segments: a.segments, tubes: a.tubes, tubeError: a.tubeError }; });
     } catch (e) {
         return null;
     }
@@ -508,7 +568,7 @@ export async function computeViewOutlines(session, view, frameIdx, animals) {
     if (!bm) return null;
     var res = await call(camKey(st, view.name), {
         type: 'outline', cam: camKey(st, view.name), frame: bm, w: c.w, h: c.h,
-        animals: animals.map(function (a) { return { body: a.body, segments: a.segments, tail: a.tail, tailPts: a.tailPts }; }),
+        animals: animals.map(function (a) { return { body: a.body, segments: a.segments, tail: a.tail, tailPts: a.tailPts, tubes: a.tubes, tubeError: a.tubeError }; }),
         model: c.model || null, params: currentOutlineParams(),
     }, [bm]);
     var entry = { frame: frameIdx, cam: view.name, w: c.w, h: c.h, animals: animals, result: res, sig: poseSignature(animals) };
