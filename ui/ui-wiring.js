@@ -67,6 +67,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 // The toolbar's Animals field, beside Track Frame / Track All.
 import { wireAnimalCountField } from './animal-count-field.js';
 import { wireReprojThresholdField } from './reproj-threshold-field.js';
+import { wireSkeletonCheckField } from './skeleton-check-field.js';
 import { wireToolbarMenuKeys, returnFocusTo } from './toolbar-menu-keys.js';
 import { wireVolumeFusionField } from './volume-fusion-field.js';
 import { handleLoadVolume3d } from '../import-export/volume3d-file.js';
@@ -3229,6 +3230,7 @@ export function setupUI() {
 
     wireAnimalCountField();
     wireReprojThresholdField();
+    wireSkeletonCheckField();
     wireToolbarMenuKeys();
     wireVolumeFusionField();
 

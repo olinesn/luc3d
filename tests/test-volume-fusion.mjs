@@ -38,6 +38,7 @@ const pd = await imp('pose/pose-data.js');
 const core = await imp('pose/triangulation-core.js');
 const VF = await imp('pose/volume-fusion.js');
 const V3D = await imp('pose/volume3d.js');
+const SC = await imp('pose/skeleton-check.js');
 const { triangulateAndReproject } = core;
 
 const FIX = JSON.parse(fs.readFileSync(path.join(HERE, 'fixtures', 'dlt-behind-cameras.json'), 'utf8'));
@@ -92,8 +93,10 @@ function makeGroup(obs) {
     });
     return g;
 }
-function solve(obs, volume) {
-    return triangulateAndReproject(makeGroup(obs), cams, { method: 'dlt', includedCameras: names, volume });
+/** `check`: Triangulate ▸ Skeleton check on (no skeleton chains measured: the volume's own chains apply) */
+function solve(obs, volume, check) {
+    return triangulateAndReproject(makeGroup(obs), cams,
+        { method: 'dlt', includedCameras: names, volume, skeleton: check ? { chains: [] } : undefined });
 }
 const pt = (r, k) => [r.points3d[3 * k], r.points3d[3 * k + 1], r.points3d[3 * k + 2]];
 function makeVolume(animals, sd, covScale) {
@@ -262,9 +265,10 @@ group('the volfuse study (Python) on real data: HardFight, production 2D, 24 ani
 
 group('skeleton check: a chain the volume got wrong comes back from the plain solve');
 // chain "limb": bones 0-3 and 3-4, nodes 3 and 4 may change; usual lengths = the truth's
-const LIMB = { name: 'limb', bones: Int32Array.from([0, 3, 3, 4]), nodes: Int32Array.from([3, 4]),
-               medians: Float64Array.from([dist3(TRUTH[0], TRUTH[3]), dist3(TRUTH[3], TRUTH[4])]) };
-const withChains = (vol, chains) => Object.assign(vol, { chains: chains, chainTol: 0.5, chainAgreeMm: 10 });
+const LIMB = { name: 'limb', bones: Int32Array.from([0, 3, 3, 4]), nodes: Int32Array.from([3, 4]), anchors: Int32Array.from([0]),
+               medians: Float64Array.from([dist3(TRUTH[0], TRUTH[3]), dist3(TRUTH[3], TRUTH[4])]),
+               lo: Float64Array.from([0.5, 0.5]), hi: Float64Array.from([1.5, 1.5]) };
+const withChains = (vol, chains) => Object.assign(vol, { chains: chains, chainAgreeMm: 10 });
 const same = (r, s, k) => [0, 1, 2].every(i => Object.is(r.points3d[3 * k + i], s.points3d[3 * k + i]));
 {
     seed = 6;
@@ -272,11 +276,12 @@ const same = (r, s, k) => [0, 1, 2].every(i => Object.is(r.points3d[3 * k + i], 
     // the volume reaches for a neighbour: nodes 3 and 4 60 mm off, sharp, so the gate drops their detections and
     // the fusion takes the volume's points
     const wrong = TRUTH.map((X, k) => k >= 3 ? [X[0] + 60, X[1], X[2]] : X);
-    const noCheck = solve(obs, withChains(makeVolume([wrong], 1, 0.01), []));
-    const r = solve(obs, withChains(makeVolume([wrong], 1, 0.01), [LIMB]));
+    const noCheck = solve(obs, withChains(makeVolume([wrong], 1, 0.01), [LIMB]), false);
+    const r = solve(obs, withChains(makeVolume([wrong], 1, 0.01), [LIMB]), true);
     ok(dist3(pt(noCheck, 4), TRUTH[4]) > 30, 'without the check the limb follows the volume (' + dist3(pt(noCheck, 4), TRUTH[4]).toFixed(1) + ' mm off)');
-    ok(r.volume && r.volume.chainsRepaired === 1 && r.volume.nodesFromSolve === 2 && r.volume.nodesFromVolume === 0 &&
-       r.volume.nodesDropped === 0, 'both limb nodes come from the plain solve (' + JSON.stringify(r.volume) + ')');
+    ok(r.skeleton && r.skeleton.chainsRepaired === 1 && r.skeleton.nodesFromSolve + r.skeleton.nodesResolved === 2 &&
+       r.skeleton.nodesFromVolume === 0 && r.skeleton.nodesDropped === 0,
+       'both limb nodes come back from the cameras (the plain solve or a group of them) (' + JSON.stringify(r.skeleton) + ')');
     ok([3, 4].every(k => dist3(pt(r, k), TRUTH[k]) < 1), 'nodes 3 and 4 are back on the truth (' +
         [3, 4].map(k => dist3(pt(r, k), TRUTH[k]).toFixed(2)).join(', ') + ' mm)');
     ok([0, 1, 2].every(k => same(r, noCheck, k)), 'nodes outside the chain keep the fused point');
@@ -290,11 +295,11 @@ group('skeleton check: only the node the 2D got wrong changes');
     // solve and the volume agree on it.
     const off4 = [TRUTH[4][0] + 50, TRUTH[4][1], TRUTH[4][2]];
     const obs = observe(0.5, o => { o.forEach((pts, c) => { const q = native(off4, c); pts[4] = [q[0], q[1]]; }); });
-    const noCheck = solve(obs, withChains(makeVolume([TRUTH], 60, 1), []));
-    const r = solve(obs, withChains(makeVolume([TRUTH], 60, 1), [LIMB]));
+    const noCheck = solve(obs, withChains(makeVolume([TRUTH], 60, 1), [LIMB]), false);
+    const r = solve(obs, withChains(makeVolume([TRUTH], 60, 1), [LIMB]), true);
     ok(noCheck.volume && noCheck.volume.gated === 0 && dist3(pt(noCheck, 4), off4) < 3, 'without the check node 4 sits on the neighbour');
-    ok(r.volume && r.volume.chainsRepaired === 1 && r.volume.nodesFromVolume === 1 && r.volume.nodesFromSolve === 0,
-        'one node comes from the volume (' + JSON.stringify(r.volume) + ')');
+    ok(r.skeleton && r.skeleton.chainsRepaired === 1 && r.skeleton.nodesFromVolume === 1 && r.skeleton.nodesFromSolve === 0,
+        'one node comes from the volume, although every camera agrees on the wrong one (' + JSON.stringify(r.skeleton) + ')');
     ok(dist3(pt(r, 4), TRUTH[4]) < 1e-9, 'node 4 is the volume\'s');
     ok(same(r, noCheck, 3), 'node 3 keeps its fused point');
 }
@@ -307,10 +312,10 @@ group('skeleton check: a node the plain solve and the volume agree on is never c
     const off4 = [TRUTH[4][0] + 50, TRUTH[4][1], TRUTH[4][2]];
     const obs = observe(0.5, o => { o.forEach((pts, c) => { const q = native(off4, c); pts[4] = [q[0], q[1]]; }); });
     const vol = TRUTH.map((X, k) => k === 4 ? off4 : X);
-    const a = solve(obs, withChains(makeVolume([vol], 3, 0.05), []));
-    const b = solve(obs, withChains(makeVolume([vol], 3, 0.05), [LIMB]));
-    ok(VF.chainBadness(a.points3d, 0, LIMB, 0.5) > 0, 'the fused limb is implausible');
-    ok(b.volume && b.volume.chainsRepaired === 0, 'nothing repaired');
+    const a = solve(obs, withChains(makeVolume([vol], 3, 0.05), [LIMB]), false);
+    const b = solve(obs, withChains(makeVolume([vol], 3, 0.05), [LIMB]), true);
+    ok(SC.chainBadness(a.points3d, LIMB) > 0, 'the fused limb is implausible');
+    ok(b.skeleton && b.skeleton.chainsRepaired === 0, 'nothing repaired');
     ok(Array.from(b.points3d).every((v, i) => Object.is(v, a.points3d[i])), 'bit-identical to the solve without chains');
 }
 
@@ -321,9 +326,9 @@ group('skeleton check: a node no source places plausibly is dropped');
     const off4 = [TRUTH[4][0] + 50, TRUTH[4][1], TRUTH[4][2]];
     const obs = observe(0.5, o => { o.forEach((pts, c) => { const q = native(off4, c); pts[4] = [q[0], q[1]]; }); });
     const vol = TRUTH.map((X, k) => k === 4 ? [X[0], X[1], X[2] + 60] : X);
-    const a = solve(obs, withChains(makeVolume([vol], 60, 1), []));
-    const b = solve(obs, withChains(makeVolume([vol], 60, 1), [LIMB]));
-    ok(b.volume && b.volume.chainsRepaired === 1 && b.volume.nodesDropped === 1, 'one node dropped (' + JSON.stringify(b.volume) + ')');
+    const a = solve(obs, withChains(makeVolume([vol], 60, 1), [LIMB]), false);
+    const b = solve(obs, withChains(makeVolume([vol], 60, 1), [LIMB]), true);
+    ok(b.skeleton && b.skeleton.chainsRepaired === 1 && b.skeleton.nodesDropped === 1, 'one node dropped (' + JSON.stringify(b.skeleton) + ')');
     ok(pt(b, 4).every(Number.isNaN), 'node 4 has no 3D');
     ok([0, 1, 2, 3].every(k => same(b, a, k)), 'every other node keeps its fused point');
 }
@@ -332,21 +337,21 @@ group('skeleton check: plausible chains change nothing; how a repair is judged')
 {
     seed = 8;
     const obs = observe(0.5);
-    const a = solve(obs, withChains(makeVolume([TRUTH], 3, 0.05), []));
-    const b = solve(obs, withChains(makeVolume([TRUTH], 3, 0.05), [LIMB]));
-    ok(b.volume && b.volume.chainsRepaired === 0, 'nothing repaired');
+    const a = solve(obs, withChains(makeVolume([TRUTH], 3, 0.05), [LIMB]), false);
+    const b = solve(obs, withChains(makeVolume([TRUTH], 3, 0.05), [LIMB]), true);
+    ok(b.skeleton && b.skeleton.chainsRepaired === 0, 'nothing repaired');
     ok(Array.from(b.points3d).every((v, i) => Object.is(v, a.points3d[i])), 'bit-identical to the solve without chains');
     const P = Float64Array.from(TRUTH.flat());
-    ok(VF.chainBadness(P, 0, LIMB, 0.5) === 0, 'the truth is plausible (badness 0)');
+    ok(SC.chainBadness(P, LIMB) === 0, 'the truth is plausible (badness 0)');
     const Q = Float64Array.from(P); Q[3 * 4] += 30;   // bone 3-4: 53.4 mm of 36.7, 45 % long
-    ok(VF.chainBadness(Q, 0, LIMB, 0.5) === 0, 'a bone 45 % long is inside the tolerance');
+    ok(SC.chainBadness(Q, LIMB) === 0, 'a bone 45 % long is inside the tolerance');
     Q[3 * 4] += 40;   // 87.5 mm: 138 % long
-    ok(VF.chainBadness(Q, 0, LIMB, 0.5) > 0, 'one 138 % long is not');
+    ok(SC.chainBadness(Q, LIMB) > 0, 'one 138 % long is not');
     Q[3 * 4] = NaN;
-    ok(VF.chainBadness(Q, 0, LIMB, 0.5) >= 10, 'a missing node counts as badly off for the trigger');
-    ok(VF.chainRepairBadness(Q, 0, LIMB, 0.5) === 0, 'for a repair, a dropped end node leaves its bone unjudged');
+    ok(SC.chainBadness(Q, LIMB) === 0, 'a missing node is absent, not implausible');
+    ok(SC.chainRepairBadness(Q, LIMB) === 0, 'for a repair, a dropped end node leaves its bone unjudged');
     const R = Float64Array.from(P); R[9] = NaN; R[10] = NaN; R[11] = NaN;   // drop node 3: node 4 is cut loose
-    ok(VF.chainRepairBadness(R, 0, LIMB, 0.5) >= 1, 'a drop cannot cut a node loose from the body (orphan)');
+    ok(SC.chainRepairBadness(R, LIMB) >= 1, 'a drop cannot cut a node loose from the body (orphan)');
 }
 
 group('pose/volume3d.js: the file\'s chains, their usual lengths, and the chains left out');
@@ -380,12 +385,11 @@ group('pose/volume3d.js: the file\'s chains, their usual lengths, and the chains
     ok(/not in the file: d/.test(why.nofile || '') && /skeleton/.test(why.noskel || '') && /no bones/.test(why.empty || ''),
         'the others are left out, with why: ' + JSON.stringify(why));
     const v = V3D.volumeForFrame(session, 1);
-    ok(v && v.chains.length === 1 && v.chainTol === 0.5, 'each frame\'s volume carries the chains and the tolerance');
-    V3D.setVolumeSettings({ skeletonCheck: false });
-    ok(V3D.volumeForFrame(session, 1).chains.length === 0, 'skeleton check off: no chains');
-    V3D.setVolumeSettings({ skeletonCheck: true });
+    ok(v && v.chains.length === 1 && v.chainAgreeMm === 10, 'each frame\'s volume carries the chains and the agreement distance');
+    ok(ch.length && Array.from(ch[0].anchors).join() === '0' && ch[0].lo[0] === 0.5 && ch[0].hi[1] === 1.5,
+        'in the skeleton check\'s form: anchored where the chain meets the rest (a), +-50 %');
     V3D.setSessionVolume(session, Object.assign({}, data, { chains: undefined }));
-    ok(V3D.volumeForFrame(session, 1).chains.length === 0, 'a file without chains: no skeleton check');
+    ok(V3D.volumeForFrame(session, 1).chains.length === 0, 'a file without chains brings none (the skeleton\'s apply)');
 }
 
 group('real data: the July 13 tail case (frame 105,409), production 2D, three mice piled up');
@@ -399,21 +403,24 @@ group('real data: the July 13 tail case (frame 105,409), production 2D, three mi
     const rn = rc.map(c => c.name);
     const NN = FX.node_names.length;
     const idx = n => FX.node_names.indexOf(n);
-    const chains = FX.chains.map(c => ({
-        name: c.name, bones: Int32Array.from(c.bones.flat().map(idx)), nodes: Int32Array.from(c.nodes.map(idx)),
-        medians: Float64Array.from(FX.medians[c.name]),
-    }));
+    const chains = FX.chains.map(c => {
+        const nodes = c.nodes.map(idx), bones = c.bones.flat().map(idx);
+        return { name: c.name, bones: Int32Array.from(bones), nodes: Int32Array.from(nodes),
+                 anchors: Int32Array.from(new Set(bones.filter(k => !nodes.includes(k)))),
+                 medians: Float64Array.from(FX.medians[c.name]),
+                 lo: new Float64Array(c.bones.length).fill(0.5), hi: new Float64Array(c.bones.length).fill(1.5) };
+    });
     const tail = chains.find(c => c.name === 'tail');
-    function frameVol(f, withCheck) {
+    function frameVol(f) {
         const fr = FX.frames[String(f)];
         const A = fr.means.length;
         const means = new Float64Array(A * NN * 3).fill(NaN), covs = new Float64Array(A * NN * 6).fill(NaN);
         fr.means.forEach((m, a) => m.forEach((X, k) => { if (X) means.set(X, (a * NN + k) * 3); }));
         fr.cov6.forEach((m, a) => m.forEach((S, k) => { if (S) covs.set(S, (a * NN + k) * 6); }));
         return { n: A, nNodes: NN, means, covs, covScale: FX.cov_scale, gateFloorPx: FX.gate_floor_px, gateK: FX.gate_k,
-                 fuse: true, matchMaxMm: 30, chains: withCheck ? chains : [], chainTol: 0.5, chainAgreeMm: 10 };
+                 fuse: true, matchMaxMm: 30, chains: chains, chainAgreeMm: 10 };
     }
-    function rsolve(cs, volume) {
+    function rsolve(cs, volume, check) {
         const g = new pd.InstanceGroup(1, 0);
         cs.obs.forEach((pts, c) => {
             if (pts.every(p => p == null)) return;
@@ -422,7 +429,8 @@ group('real data: the July 13 tail case (frame 105,409), production 2D, three mi
             if (nulled.length) inst.nulledNodes = new Set(nulled);
             g.addInstance(rn[c], inst);
         });
-        return triangulateAndReproject(g, rc, { method: 'dlt', includedCameras: rn, reprojErrorThreshold: 12, volume });
+        return triangulateAndReproject(g, rc, { method: 'dlt', includedCameras: rn, reprojErrorThreshold: 12, volume,
+            skeleton: check ? { chains: [] } : undefined });
     }
     const tailLen = P => { let s = 0; for (let i = 0; i < tail.medians.length; i++) s += dist3(
         [P[3 * tail.bones[2 * i]], P[3 * tail.bones[2 * i] + 1], P[3 * tail.bones[2 * i] + 2]],
@@ -431,20 +439,20 @@ group('real data: the July 13 tail case (frame 105,409), production 2D, three mi
     let matched = 0, flagged = 0, repaired = 0, left = 0, broken = 0, touchedPlausible = 0;
     const atCase = [], results = new Map();
     for (const cs of FX.cases) {
-        const a = rsolve(cs, frameVol(cs.frame, false)), b = rsolve(cs, frameVol(cs.frame, true));
+        const a = rsolve(cs, frameVol(cs.frame), false), b = rsolve(cs, frameVol(cs.frame), true);
         if (!b.volume) continue;
         matched++;
         results.set(cs.frame + ':' + cs.mouse, { cs, a, b });
         for (const ch of chains) {
             const unchanged = Array.from(ch.nodes).every(k => sameNode(a.points3d, b.points3d, k));
-            if (!(VF.chainBadness(a.points3d, 0, ch, 0.5) > 0)) { if (!unchanged) touchedPlausible++; continue; }
+            if (!(SC.chainBadness(a.points3d, ch) > 0)) { if (!unchanged) touchedPlausible++; continue; }
             flagged++;
             if (unchanged) left++;
-            else if (VF.chainRepairBadness(b.points3d, 0, ch, 0.5) === 0) repaired++;
+            else if (SC.chainRepairBadness(b.points3d, ch) === 0) repaired++;
             else broken++;
         }
         if (cs.frame >= 105409 && cs.frame <= 105414 && cs.mouse === 2) {
-            atCase.push({ frame: cs.frame, before: tailLen(a.points3d), after: VF.chainRepairBadness(b.points3d, 0, tail, 0.5) });
+            atCase.push({ frame: cs.frame, before: tailLen(a.points3d), after: SC.chainRepairBadness(b.points3d, tail) });
         }
     }
     const usual = tail.medians.reduce((x, y) => x + y, 0);

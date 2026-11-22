@@ -121,8 +121,8 @@ export async function handleLoadVolume3d(file) {
                 frames.toLocaleString('en-US') + ' frames, ' + cov.matched + ' of ' + cov.total + ' nodes' +
                 (cov.missing.length ? ' (no ' + cov.missing.join(', ') + ')' : '') + '. Triangulate ' +
                 (getVolumeSettings().enabled ? 'fuses it' : 'ignores it while "Fuse with volume" is off') + '.' +
-                (chains.length ? ' Skeleton check: ' + chains.map(function (c) { return c.name; }).join(', ') + '.' : '') +
-                (skipped.length ? ' Not checked: ' + skipped.join('; ') + '.' : ''), 'success');
+                (chains.length ? ' Its chains for Triangulate ▸ Skeleton check: ' + chains.map(function (c) { return c.name; }).join(', ') + '.' : '') +
+                (skipped.length ? ' Not used: ' + skipped.join('; ') + '.' : ''), 'success');
         }
         document.dispatchEvent(new CustomEvent('lucid:volume3d-changed'));
         return data;
