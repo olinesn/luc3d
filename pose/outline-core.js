@@ -40,7 +40,13 @@
 //    slack, and a reflection, which lies beyond the body in 3D, falls outside.
 //    Without 3D (or with 3D that disagrees with the 2D pose by more than half
 //    that width), within `envelope` times the camera's `reach` (pixels) of its
-//    2D body skeleton.
+//    2D body skeleton. A reflection that touches the animal along its side
+//    passes that limit; with the arena's walls and floor (a campy cage), each
+//    animal's mirror images (`mirrors`: its body mirrored across a surface and
+//    projected, where the camera sees it in that surface) say where the
+//    reflections are, and a pixel nearer a reflection than the animal's own
+//    body stays nobody's. Only surfaces that reflect in this camera count
+//    (`model.mirrors`, from `mirrorEvidence` over the sampled frames).
 // 4. Tails, traced: pixels more than `tailThr` (14) grey levels over the empty
 //    arena (tails are thin and dimmer than bodies) within `tailWidth` px of an animal's tail
 //    polyline (its tail keypoints from the body point they hang from) become
@@ -624,7 +630,70 @@ export function normalizeAnimal(a) {
         if (ok && T[j + 2] > 0 && T[j + 5] > 0) tubes.push(T[j], T[j + 1], T[j + 2], T[j + 3], T[j + 4], T[j + 5]);
     }
     var te = a && typeof a.tubeError === 'number' && a.tubeError >= 0 ? a.tubeError : 0;
-    return { body: body, segments: segs, tail: tail.length >= 4 ? tail : null, tailPts: finitePts(a && a.tailPts), tubes: tubes, tubeError: te };
+    var mirrors = [];
+    ((a && a.mirrors) || []).forEach(function (m) {
+        var t = finiteTubes(m && m.tubes);
+        if (t.length && Number.isInteger(m.plane)) mirrors.push({ plane: m.plane, tubes: t });
+    });
+    return { body: body, segments: segs, tail: tail.length >= 4 ? tail : null, tailPts: finitePts(a && a.tailPts), tubes: tubes, tubeError: te, mirrors: mirrors };
+}
+
+function finiteTubes(T) {
+    var out = [];
+    if (T) for (var j = 0; j + 5 < T.length; j += 6) {
+        var ok = true;
+        for (var q = 0; q < 6; q++) if (!isFinite(T[j + q])) ok = false;
+        if (ok && T[j + 2] > 0 && T[j + 5] > 0) out.push(T[j], T[j + 1], T[j + 2], T[j + 3], T[j + 4], T[j + 5]);
+    }
+    return out;
+}
+
+/**
+ * Which of the arena's surfaces reflect in this camera, from one sampled
+ * frame: per surface (`plane` of the animals' `mirrors`), the mirror images'
+ * body points that lie in the image and outside every animal's own projected
+ * body (`tubeReach` > `envelope3d` x `reach3d`), and how many of them land on
+ * something brighter than the empty arena (more than `thrLow`). A mirror's
+ * images land on its reflections; a matt surface's on floor or wall.
+ * -> {plane: {n, hits}}
+ */
+export function mirrorEvidence(gray, bg, w, h, animals, reach3d, params) {
+    var P = outlineParams(params);
+    var A = (animals || []).map(normalizeAnimal);
+    var lim = reach3d * P.envelope3d;
+    var out = {};
+    A.forEach(function (a) {
+        a.mirrors.forEach(function (m) {
+            var e = out[m.plane] || (out[m.plane] = { n: 0, hits: 0 });
+            var seen = new Set();
+            for (var i = 0; i + 2 < m.tubes.length; i += 3) {
+                var x = m.tubes[i], y = m.tubes[i + 1];
+                var key = Math.round(x * 4) + ',' + Math.round(y * 4);
+                if (seen.has(key)) continue;
+                seen.add(key);
+                var xi = Math.round(x), yi = Math.round(y);
+                if (xi < 0 || yi < 0 || xi >= w || yi >= h) continue;
+                var inside = false;
+                for (var k = 0; k < A.length && !inside; k++) if (A[k].tubes.length && tubeReach(A[k].tubes, x, y) <= lim) inside = true;
+                if (inside) continue;
+                e.n++;
+                if (gray[yi * w + xi] - bg[yi * w + xi] > P.thrLow) e.hits++;
+            }
+        });
+    });
+    return out;
+}
+
+/**
+ * The surfaces that reflect in a camera, from `mirrorEvidence` summed over
+ * its sampled frames (`ev`: {plane: {n, hits}}): those with at least 20 mirror
+ * points to judge by, at least half of them on something bright.
+ * -> [{plane, n, hits}]
+ */
+export function reflectingSurfaces(ev) {
+    var out = [];
+    for (var k in ev) if (ev[k].n >= 20 && ev[k].hits >= 0.5 * ev[k].n) out.push({ plane: +k, n: ev[k].n, hits: ev[k].hits });
+    return out;
 }
 
 /**
@@ -739,13 +808,43 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
     // within half the 3D limit; otherwise the 2D rule
     var use3d = A.map(function (z) { return lim3 > 0 && z.tubes.length > 0 && z.tubeError <= 0.5 * lim3 * tubeScale(z.tubes); });
     var tw2 = P.tailWidth * P.tailWidth;
+    // every animal's visible mirror images in the surfaces that reflect here
+    var refl = [];
+    if (lim3 > 0 && model && model.mirrors && model.mirrors.length) {
+        var on = {};
+        model.mirrors.forEach(function (m) { on[m.plane] = true; });
+        A.forEach(function (z) {
+            z.mirrors.forEach(function (m) {
+                if (!on[m.plane]) return;
+                var T = m.tubes, x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+                for (var i = 0; i + 2 < T.length; i += 3) {
+                    var r = lim3 * T[i + 2];
+                    x0 = Math.min(x0, T[i] - r); x1 = Math.max(x1, T[i] + r);
+                    y0 = Math.min(y0, T[i + 1] - r); y1 = Math.max(y1, T[i + 1] + r);
+                }
+                refl.push({ tubes: T, box: [x0, y0, x1, y1] });
+            });
+        });
+    }
+    // 1 = the animal's; 0 = beyond its reach; 2 = a reflection (nearer a
+    // mirror image than the animal's own body)
     var near = function (k, x, y, bd2) {
-        if (use3d[k]) { if (tubeReach(A[k].tubes, x, y) <= lim3) return true; }
-        else {
-            if (lim2 === Infinity) return true;
-            if ((bd2 == null ? bodyDist2(A[k], x, y) : bd2) <= lim2) return true;
+        if (use3d[k]) {
+            var dr = tubeReach(A[k].tubes, x, y);
+            if (dr <= lim3) {
+                for (var q = 0; q < refl.length; q++) {
+                    var bx = refl[q].box;
+                    if (x < bx[0] || x > bx[2] || y < bx[1] || y > bx[3]) continue;
+                    var dm = tubeReach(refl[q].tubes, x, y);
+                    if (dm <= lim3 && dm < dr) return 2;
+                }
+                return 1;
+            }
+        } else {
+            if (lim2 === Infinity) return 1;
+            if ((bd2 == null ? bodyDist2(A[k], x, y) : bd2) <= lim2) return 1;
         }
-        return !!tails[k] && lineDist2(tails[k], x, y) <= tw2;
+        return tails[k] && lineDist2(tails[k], x, y) <= tw2 ? 1 : 0;
     };
 
     var blobInfo = [];
@@ -776,7 +875,7 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
             if (best >= 0) { cand.push(best); kind = 'near'; }
             else kind = 'unassigned';
         }
-        var info = { area: seg.area[b], kind: kind, animals: cand.slice(), byArea: byArea, beyond: 0 };
+        var info = { area: seg.area[b], kind: kind, animals: cand.slice(), byArea: byArea, beyond: 0, mirrored: 0 };
         blobInfo.push(info);
         if (!cand.length) continue;
         var x0 = box[0], y0 = box[1], x1 = box[2], y1 = box[3];
@@ -785,7 +884,8 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
             for (var yy = y0; yy <= y1; yy++) {
                 for (var xx = x0, p = yy * w + x0; xx <= x1; xx++, p++) {
                     if (blob[p] !== b) continue;
-                    if (near(cand[0], xx, yy)) labels[p] = v; else info.beyond++;
+                    var nr = near(cand[0], xx, yy);
+                    if (nr === 1) labels[p] = v; else if (nr === 2) info.mirrored++; else info.beyond++;
                 }
             }
         } else {
@@ -797,7 +897,8 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
                         var dd = bodyDist2(A[cand[ci]], x2, y2);
                         if (dd < bd) { bd = dd; bk = cand[ci]; }
                     }
-                    if (near(bk, x2, y2, bd)) labels[p2] = bk + 1; else info.beyond++;
+                    var nr2 = near(bk, x2, y2, bd);
+                    if (nr2 === 1) labels[p2] = bk + 1; else if (nr2 === 2) info.mirrored++; else info.beyond++;
                 }
             }
         }
@@ -887,7 +988,7 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
         var bi0 = blobInfo[ub - 1];
         if (bi0.kind === 'unassigned' && bi0.area >= minUn) unassigned.push(traceBoundary(blob, w, h, firstPixel(blob, w, seg.box, ub), ub));
     }
-    if (blobInfo.some(function (z) { return z.beyond >= minUn; })) {
+    if (blobInfo.some(function (z) { return z.beyond + z.mirrored >= minUn; })) {
         var left = new Uint8Array(N);
         for (var lp = 0; lp < N; lp++) if (blob[lp] && !labels[lp] && blobInfo[blob[lp] - 1].kind !== 'unassigned') left[lp] = 1;
         var lc = components(left, w, h, false);

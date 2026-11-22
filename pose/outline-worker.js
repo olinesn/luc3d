@@ -20,7 +20,7 @@
 //
 // Depends on: pose/outline-core.js
 
-import { rgbaToGray, medianImage, maskedMedian, poseMask, segmentBlobs, areaModel, singlePoseBlobs, poseAreaModel, computeOutlines } from './outline-core.js';
+import { rgbaToGray, medianImage, maskedMedian, poseMask, segmentBlobs, areaModel, singlePoseBlobs, poseAreaModel, mirrorEvidence, reflectingSurfaces, computeOutlines } from './outline-core.js';
 
 /**
  * Grey pixels of `src` (an ImageBitmap/VideoFrame/canvas, or already grey
@@ -65,6 +65,17 @@ export function handleOutlineMessage(msg, store, makeCanvas) {
         store.bgs.set(msg.cam, { bg: bg, w: w, h: h });
         var copy = bg.slice();
         var model = poseAreaModel(singles, msg.params) || areaModel(areas, msg.nAnimals, msg.params);
+        // which of the arena's surfaces reflect here: the animals' mirror images
+        // (a campy cage) landing on bright pixels in the sampled frames
+        if (model && model.reach3d > 0 && Array.isArray(msg.poses) && msg.poses.some(function (an) { return an && an.some(function (a) { return a && a.mirrors && a.mirrors.length; }); })) {
+            var ev = {};
+            for (var f = 0; f < grays.length; f++) {
+                var e = msg.poses[f] ? mirrorEvidence(grays[f], bg, w, h, msg.poses[f], model.reach3d, msg.params) : {};
+                for (var k in e) { ev[k] = ev[k] || { n: 0, hits: 0 }; ev[k].n += e[k].n; ev[k].hits += e[k].hits; }
+            }
+            model.mirrorStats = ev;
+            model.mirrors = reflectingSurfaces(ev);
+        }
         return { reply: { bg: copy, model: model, counts: counts, areas: areas, singles: singles }, transfer: [copy.buffer] };
     }
     if (msg.type === 'setBackground') {

@@ -14,6 +14,7 @@ import {
     OUTLINE_PARAMS, outlineParams, rgbaToGray, medianImage, ellipseElement, morph, components, fillHoles,
     segmentBlobs, areaModel, computeOutlines, traceBoundary, pointInPolygon, tailChain, animalFromInstance, normalizeAnimal,
     keypointCheck, outlineSuspects, smoothTail, maskedMedian, poseMask, convexHull, singlePoseBlobs, poseAreaModel, tubeReach,
+    mirrorEvidence, reflectingSurfaces,
 } from '../pose/outline-core.js';
 
 let passed = 0, failed = 0;
@@ -387,6 +388,32 @@ console.log('\n19. With the 3D pose: the body as it is in 3D, projected (a refle
     const ms = poseAreaModel([{ frame: 0, area: 1000, reach: 12, reach3d: 10 }, { frame: 1, area: 1000, reach: 12, reach3d: 11 }, { frame: 2, area: 1000, reach: 12 }, { frame: 3, area: 1000, reach: 12, reach3d: 30 }]);
     check(ms.reach3d === 11 && ms.n3d === 3, 'the model takes the median 3D half-width over the blobs that had 3D');
     check(poseAreaModel([{ frame: 0, area: 1000, reach: 12, reach3d: 10 }, { frame: 1, area: 1000, reach: 12 }, { frame: 2, area: 1000, reach: 12 }]).reach3d === undefined, 'fewer than 3 with 3D: none (the 2D rule)');
+}
+
+console.log('\n20. A reflection touching the animal, where the arena\'s wall is known (campy cage)');
+{
+    // the body x 80..122 on y = 60 (1 px per unit); it touches its mirror image below,
+    // whose mirrored body lies on y = 83 (the mirror line at y = 71.5, the body's edge)
+    const tubes = [80, 60, 1, 101, 60, 1, 101, 60, 1, 122, 60, 1];
+    const mirror = [80, 83, 1, 101, 83, 1, 101, 83, 1, 122, 83, 1];
+    const A = Object.assign(mouse(100, 60, 1, 40), { tubes, tubeError: 0, mirrors: [{ plane: 2, tubes: mirror }] });
+    const img = frame(ellipse(100, 60, 26, 12), hline(60, 74, 40), ellipse(100, 83, 26, 12));
+    const m = { median: 900, sd: 60, lo: 660, hi: 4000, reach: 12, reach3d: 16 };    // 3D limit 20 units: the band passes it
+    const r0 = computeOutlines(img, BG, W, H, [A], m);
+    check(at(r0, 100, 76) === 1 && at(r0, 100, 79) === 1, 'without the wall known to reflect, the band near the body is the mouse\'s');
+    const mm = Object.assign({}, m, { mirrors: [{ plane: 2, n: 40, hits: 38 }] });
+    const r = computeOutlines(img, BG, W, H, [A], mm);
+    check(at(r, 100, 76) === 0 && at(r, 100, 79) === 0, 'with it, the reflection\'s pixels nearer its mirror image than the body are nobody\'s');
+    check(at(r, 100, 68) === 1 && at(r, 100, 70) === 1 && at(r, 45, 60) === 1, 'the body up to its edge, and the tail, stay the mouse\'s');
+    check(r.blobs[0].mirrored > 300, `pixels left to the reflection are counted (${r.blobs[0].mirrored})`);
+    const other = Object.assign({}, mm, { mirrors: [{ plane: 4, n: 40, hits: 38 }] });
+    check(at(computeOutlines(img, BG, W, H, [A], other), 100, 76) === 1, 'a surface that reflects is needed: another surface\'s images do nothing here');
+    // which surfaces reflect: the images on bright pixels, or on floor
+    const ev = mirrorEvidence(img, BG, W, H, [Object.assign({}, A, { mirrors: [{ plane: 2, tubes: mirror }, { plane: 3, tubes: [150, 130, 1, 200, 130, 1] }] })], 16);
+    check(ev[2] && ev[2].n >= 2 && ev[2].hits === ev[2].n, `plane 2's images land on the reflection (${ev[2] && ev[2].hits} of ${ev[2] && ev[2].n})`);
+    check(ev[3] && ev[3].n === 2 && ev[3].hits === 0, 'plane 3\'s land on floor');
+    check(JSON.stringify(reflectingSurfaces({ 2: { n: 40, hits: 30 }, 3: { n: 40, hits: 2 }, 4: { n: 5, hits: 5 } }).map((x) => x.plane)) === '[2]',
+        'a surface reflects with at least 20 images to judge by and half of them on something bright');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
