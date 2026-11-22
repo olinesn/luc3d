@@ -11,12 +11,19 @@ with the volume by their uncertainties (pose/volume-fusion.js). This script writ
     /means          float32 (R, J, 3)  world mm, the same calibration LUCID uses
     /covs           float32 (R, J, 6)  [xx, xy, xz, yy, yz, zz] mm^2, as the model gives them
     /node_names     str     (J,)
-    attrs: format = "lucid-volume3d/1", cov_scale, source
+    attrs: format = "lucid-volume3d/1", cov_scale, source, skeleton_chains (optional JSON, below)
 
 cov_scale: the factor LUCID multiplies the volume's covariance by before fusing (the gate uses it unscaled). A
 softmax's spread is much wider than the model's actual error; measure it where triangulation is good: on points
 with >= 4 views and < 3 px, the median Mahalanobis^2 of (volume mean - DLT) under the volume's covariance, divided
 by chi^2_3's median (2.366). --dlt does that here; otherwise pass --cov-scale (DoublePoke's volume: 0.04-0.06).
+
+skeleton_chains: the node chains LUCID's skeleton check guards. Where a fused chain has a bone more than 50 % off
+its usual length (LUCID measures it on this file's means), the chain's nodes come from the plain triangulation or
+the volume, whichever is plausible (the volfuse study's tail case: the volume stretched a tail onto the next mouse's).
+JSON [{"name": "tail", "bones": [["TTI", "Tail_0"], ...], "nodes": ["Tail_0", ...]}, ...]: `bones` are checked,
+`nodes` are replaced. --chains auto (default): DoublePoke's tail and head chains, each written only if the file has
+all its nodes; --chains none; --chains FILE.json.
 
 Inputs (IN.npz), either:
   - frames (F,), means (F, A, J, 3), covs (F, A, J, 3, 3), node_names (J,) [, cov_scale]
@@ -25,15 +32,46 @@ Inputs (IN.npz), either:
 --dlt DLT.npz (X (F, A, J, 3), nview (F, A, J), err (F, A, J), same frames and animal order) measures cov_scale.
 
 usage: python scripts/export_volume3d.py IN.npz OUT.vol3d.h5 [--cov-scale S | --dlt DLT.npz] [--node-names a,b,...]
+                                         [--chains auto|none|FILE.json]
        python scripts/export_volume3d.py --self-test
 Needs numpy and h5py.
 """
-import argparse, os, sys
+import argparse, json, os, sys
 
 import numpy as np
 
 FORMAT = "lucid-volume3d/1"
 CHI2_3_MEDIAN = 2.366
+# DoublePoke's skeleton (the volfuse study's chains): the tail from TTI out, the head from the Neck out
+DOUBLEPOKE_CHAINS = [
+    {"name": "tail", "bones": [["TTI", "Tail_0"], ["Tail_0", "Tail_1"], ["Tail_1", "Tail_2"], ["Tail_2", "TailTip"]],
+     "nodes": ["Tail_0", "Tail_1", "Tail_2", "TailTip"]},
+    {"name": "head", "bones": [["Nose", "Head"], ["Ear_L", "Head"], ["Ear_R", "Head"], ["Head", "Neck"]],
+     "nodes": ["Nose", "Ear_L", "Ear_R", "Head"]},
+]
+
+
+def chain_nodes(ch):
+    return {n for b in ch["bones"] for n in b} | set(ch["nodes"])
+
+
+def resolve_chains(arg, names):
+    """--chains auto|none|FILE.json -> the list to write ([] = none)."""
+    have = set(names)
+    if arg == "none":
+        return []
+    if arg == "auto":
+        return [ch for ch in DOUBLEPOKE_CHAINS if chain_nodes(ch) <= have]
+    chains = json.load(open(arg))
+    if not isinstance(chains, list):
+        raise SystemExit(f"--chains {arg}: expected a JSON list of {{name, bones, nodes}}")
+    for ch in chains:
+        if not ch.get("bones") or not ch.get("nodes"):
+            raise SystemExit(f"--chains {arg}: chain {ch.get('name')!r} needs bones and nodes")
+        missing = chain_nodes(ch) - have
+        if missing:
+            raise SystemExit(f"--chains {arg}: chain {ch.get('name')!r} names nodes not in the file: {sorted(missing)}")
+    return chains
 
 
 def load_input(path, node_names=None):
@@ -78,7 +116,7 @@ def to_rows(frames, means, covs):
     return np.asarray(frames)[fi].astype(np.int64), m, c6.astype(np.float32)
 
 
-def write(out, frame_indices, means, covs6, names, cov_scale, source):
+def write(out, frame_indices, means, covs6, names, cov_scale, source, chains=()):
     import h5py
     with h5py.File(out, "w") as h:
         h.create_dataset("frame_indices", data=frame_indices)
@@ -88,6 +126,8 @@ def write(out, frame_indices, means, covs6, names, cov_scale, source):
         h.attrs["format"] = FORMAT
         h.attrs["cov_scale"] = float(cov_scale)
         h.attrs["source"] = source
+        if chains:
+            h.attrs["skeleton_chains"] = json.dumps(list(chains))
 
 
 def self_test():
@@ -117,11 +157,21 @@ def self_test():
             print("self-test passed (h5py missing: the write was not tested)")
             return
         out = os.path.join(d, "t.vol3d.h5")
-        write(out, fi, m, c6, ["a", "b", "c"], 0.05, "self-test")
+        ch = [{"name": "ab", "bones": [["a", "b"]], "nodes": ["b"]}]
+        write(out, fi, m, c6, ["a", "b", "c"], 0.05, "self-test", ch)
         import h5py
         with h5py.File(out, "r") as h:
             assert h["means"].shape == (F * A - 1, J, 3) and h.attrs["format"] == FORMAT
             assert [x.decode() if isinstance(x, bytes) else x for x in h["node_names"][:]] == ["a", "b", "c"]
+            assert json.loads(h.attrs["skeleton_chains"]) == ch
+        write(out, fi, m, c6, ["a", "b", "c"], 0.05, "self-test")
+        with h5py.File(out, "r") as h:
+            assert "skeleton_chains" not in h.attrs
+    # --chains auto keeps a DoublePoke chain only when the file has all its nodes
+    dp = ["Nose", "Ear_R", "Ear_L", "TTI", "TailTip", "Head", "Trunk", "Tail_0", "Tail_1", "Tail_2", "Neck"]
+    assert [c["name"] for c in resolve_chains("auto", dp)] == ["tail", "head"]
+    assert [c["name"] for c in resolve_chains("auto", [n for n in dp if n != "Neck"])] == ["tail"]
+    assert resolve_chains("none", dp) == [] and resolve_chains("auto", ["a", "b"]) == []
     print("self-test passed")
 
 
@@ -133,6 +183,7 @@ def main():
     ap.add_argument("--dlt", default="")
     ap.add_argument("--node-names", default="")
     ap.add_argument("--source", default="")
+    ap.add_argument("--chains", default="auto", help="auto (DoublePoke's tail/head when present), none, or FILE.json")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()
     if a.self_test:
@@ -148,10 +199,11 @@ def main():
         cs = a.cov_scale
     if cs is None:
         raise SystemExit("no cov_scale: pass --cov-scale or --dlt (see the header)")
+    chains = resolve_chains(a.chains, names)
     fi, m, c6 = to_rows(frames, means, covs)
-    write(a.output, fi, m, c6, names, cs, a.source or os.path.basename(a.input))
+    write(a.output, fi, m, c6, names, cs, a.source or os.path.basename(a.input), chains)
     print(f"wrote {a.output}: {len(fi)} animal-frames on {len(np.unique(fi))} frames, {len(names)} nodes, "
-          f"cov_scale {cs:.4f}")
+          f"cov_scale {cs:.4f}, skeleton chains: {', '.join(c['name'] for c in chains) or 'none'}")
 
 
 if __name__ == "__main__":

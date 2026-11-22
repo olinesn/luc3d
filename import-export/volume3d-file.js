@@ -8,14 +8,16 @@
  *   /covs           float32 (R, J, 6)   each node's covariance [xx, xy, xz, yy, yz, zz] (mm^2), as the model
  *                                       gives it (the gate uses it as is; fusion scales it by cov_scale)
  *   /node_names     string  (J,)        matched to the skeleton by name
- *   root attributes: format = "lucid-volume3d/1", cov_scale (float, default 1), source (string, optional)
+ *   root attributes: format = "lucid-volume3d/1", cov_scale (float, default 1), source (string, optional),
+ *                    skeleton_chains (optional JSON string: [{ name, bones: [[a, b], ...], nodes: [...] }] by
+ *                    node name; the chains the skeleton check guards, e.g. the tail and the head)
  * Rows carry no identity: each Triangulate solve matches its group to the frame's rows by 3D distance.
  */
 import { initH5wasm, pickFiles } from './file-io.js';
 import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 import { showLoading, hideLoading, setStatus } from './save-load.js';
 import { state } from '../ui/app-state.js';
-import { setSessionVolume, volumeNodeCoverage, getVolumeSettings } from '../pose/volume3d.js';
+import { setSessionVolume, volumeNodeCoverage, volumeChains, getVolumeSettings } from '../pose/volume3d.js';
 
 export const VOLUME3D_FORMAT = 'lucid-volume3d/1';
 
@@ -28,11 +30,25 @@ function attr(f, name) {
     } catch (e) { return undefined; }
 }
 
+/** The optional `skeleton_chains` attribute (JSON: [{ name, bones: [[a, b], ...], nodes: [...] }], by node
+ *  name) -> that array, or [] (absent or unreadable: no skeleton check, never a failed load). */
+function readChains(f) {
+    const raw = attr(f, 'skeleton_chains');
+    if (raw == null || raw === '') return [];
+    try {
+        const v = JSON.parse(String(raw));
+        return Array.isArray(v) ? v : [];
+    } catch (e) {
+        console.warn('volume file: skeleton_chains is not JSON; no skeleton check', e);
+        return [];
+    }
+}
+
 /**
  * Parse a .vol3d.h5 file.
  * @param {ArrayBuffer} arrayBuffer
  * @returns {Promise<{nodeNames: string[], frameIndices: Int32Array, means: Float32Array, covs: Float32Array,
- *          covScale: number, source: string, format: string}>}
+ *          covScale: number, chains: object[], source: string, format: string}>}
  */
 export async function parseVolume3dH5(arrayBuffer) {
     const mod = await initH5wasm();
@@ -65,6 +81,7 @@ export async function parseVolume3dH5(arrayBuffer) {
         return {
             nodeNames: nodeNames, frameIndices: frameIndices, means: means, covs: covs,
             covScale: Number.isFinite(cs) && cs > 0 ? cs : 1,
+            chains: readChains(f),
             source: String(attr(f, 'source') || ''), format: String(attr(f, 'format') || ''),
         };
     } finally {
@@ -98,10 +115,14 @@ export async function handleLoadVolume3d(file) {
             setStatus('Volume file ' + data.fileName + ': only ' + cov.matched + ' of the skeleton\'s nodes are in it — ' +
                 'node names must match', 'error');
         } else {
+            const chains = volumeChains(session);
+            const skipped = chains.skipped.map(function (c) { return c.name + ' (' + c.reason + ')'; });
             setStatus('Volume 3D loaded: ' + data.frameIndices.length.toLocaleString('en-US') + ' animal-frames on ' +
                 frames.toLocaleString('en-US') + ' frames, ' + cov.matched + ' of ' + cov.total + ' nodes' +
                 (cov.missing.length ? ' (no ' + cov.missing.join(', ') + ')' : '') + '. Triangulate ' +
-                (getVolumeSettings().enabled ? 'fuses it' : 'ignores it while "Fuse with volume" is off') + '.', 'success');
+                (getVolumeSettings().enabled ? 'fuses it' : 'ignores it while "Fuse with volume" is off') + '.' +
+                (chains.length ? ' Skeleton check: ' + chains.map(function (c) { return c.name; }).join(', ') + '.' : '') +
+                (skipped.length ? ' Not checked: ' + skipped.join('; ') + '.' : ''), 'success');
         }
         document.dispatchEvent(new CustomEvent('lucid:volume3d-changed'));
         return data;

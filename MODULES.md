@@ -3985,9 +3985,12 @@ played far past the cap, save, reopen — a member's edit must survive the save)
 
 **`options.volume`** (one frame of a volumetric model, `pose/volume3d.js`): `triangulateAndReproject` matches the
 group to a volume animal on its plain solve, gates each view's detections by the volume's projection, re-solves,
-runs the reprojection-threshold rule as usual, then fuses each node with the volume (`pose/volume-fusion.js`). The
-result then carries `volume: {animal, gated, fused, filled}` (also through `triangulationSummary`); without the
-option, or with no animal matched, the result is exactly the old one (no `volume` key).
+runs the reprojection-threshold rule as usual, then fuses each node with the volume (`pose/volume-fusion.js`), then
+(when the volume names chains) runs the skeleton check, whose plain-solve alternative is the ungated solve through
+the same threshold rule (`applyReprojThreshold(obs, pts)`, the rule as a function; computed only when a fused chain
+is off). The result then carries `volume: {animal, gated, fused, filled, chainsFromSolve?, chainsFromVolume?}` (also
+through `triangulationSummary`); without the option, or with no animal matched, the result is exactly the old one
+(no `volume` key).
 
 **Purpose.** The pure triangulation math, split out of `pose/triangulation.js`
 so a Web Worker can load it: matrix helpers (`matMul`, `matTranspose`,
@@ -4199,6 +4202,12 @@ moments of its softmax) with the triangulation of the 2D detections, inside the 
    `dltCovariance`: Gauss-Newton from its remaining views' rays, scaled by the reprojection residuals shrunk toward
    2 px with 4 pseudo-degrees of freedom) and the volume (covariance × `covScale`); a node the solve leaves empty
    takes the volume's mean. `fuse: false` only fills.
+4. **Skeleton check** (`checkSkeletonChains`, when `vol.chains` is non-empty): a chain (bones checked, nodes replaced,
+   each bone's usual length) whose fused bones are implausible (`chainBadness` > 0: a bone more than `chainTol` 0.5
+   off its usual length, or missing) takes its nodes from the plain solve if that is less off and no worse than the
+   volume, else from the volume if that is less off; a node the source lacks keeps the fused point. Usual lengths:
+   `chainBoneMedians`, medians over the file's rows (the study used DLT's reliable points; on July 13 the two agree
+   within 8 %). It is what fixes the July 13 tail case: the volume stretched a tail onto a neighbour's while DLT kept it.
 **The gate uses the volume's covariance as given; the fusion scales it** by `covScale`, which the exporter measures
 (a softmax spread is far wider than the model's error: 17-25× in variance for DoublePoke's volume).
 Import-free and DOM-free (the worker loads it through the core); the projection is passed in (the core's
@@ -4206,12 +4215,13 @@ Import-free and DOM-free (the worker loads it through the core); the projection 
 still invert.
 
 **Key exports.** `VOLUME_DEFAULTS`, `mapVolumeNodes`, `volumeNode`, `matchVolumeAnimal`, `gateObservations`,
-`dltCovariance`, `productOfGaussians`, `fuseWithVolume`.
+`dltCovariance`, `productOfGaussians`, `fuseWithVolume`, `chainBoneMedians`, `chainBadness`, `checkSkeletonChains`.
 
 **Imports.** None. **Imported by** `pose/triangulation-core.js`, `pose/volume3d.js`. Tests:
 `tests/test-volume-fusion.mjs` (synthetic rig on SLAP's 8 cameras; and real data, `fixtures/volume-fusion-fight.json`:
 24 animal-frames of a DoublePoke fight with the volfuse study's Python results — LUCID's fusion moves the nodes the
-study moved, the same way), `tests/e2e/volume-fusion.mjs`.
+study moved, the same way; `fixtures/volume-fusion-tail0713.json`: 40 animal-frames around July 13's tail case —
+LUCID's check switches the chains the study's did and brings the stretched tail back), `tests/e2e/volume-fusion.mjs`.
 
 ---
 
@@ -4225,15 +4235,20 @@ fused or filled).
   The 3D a fused solve produces is saved like any 3D. Such groups carry `group.volumeFused` (in memory) so
   `ui/rendering.js`'s reprojection fill reprojects their stored 3D instead of re-solving them without the volume.
 - **The setting is browser-local** (`localStorage.lucidVolumeFusion`: `enabled`, gate floor and factor,
-  `matchMaxMm`, `fuse`, an optional `covScale` override; default on, the file's `cov_scale`). Storage failures fall
-  back to the defaults.
+  `matchMaxMm`, `fuse`, an optional `covScale` override, `skeletonCheck`, `chainTol`; default on, the file's
+  `cov_scale`). Storage failures fall back to the defaults.
+- **Skeleton chains come from the file** (`data.chains`, by node name). `setSessionVolume` keeps the usable ones in
+  file node indices with each bone's usual length (`chainBoneMedians` over the file's means); `volumeChains(session)`
+  maps them to the skeleton (cached per skeleton) and lists the chains left out, with why (a node the file or the
+  skeleton lacks, no bones, too few rows). `volumeForFrame` passes them as `chains` (none while `skeletonCheck` is
+  off).
 - Every Triangulate path passes it: This frame (`triangulateCurrentFrame`), All frames (eager and windowed, through
   the pool's `submit(..., volume)`), Range (`_triangulateGroupStep`), and an edit's re-solve (`reTriangulateGroup`,
   with the shown frame's volume when the group is one of that frame's). The grouping and identity solves
   (`ui/export-modals.js`, `ui/sessions-panes.js`, `ui/ui-wiring.js`) and Track All's tracker stay plain DLT.
 
 **Key exports.** `getVolumeSettings`, `setVolumeSettings`, `setSessionVolume`, `clearSessionVolume`, `sessionVolume`,
-`volumeNodeCoverage`, `volumeForFrame`.
+`volumeNodeCoverage`, `volumeChains`, `volumeForFrame`.
 
 **Imports.** `./volume-fusion.js`. **Imported by** `pose/triangulation.js`, `ui/volume-fusion-field.js`,
 `import-export/volume3d-file.js`. Tests: `tests/test-volume-fusion.mjs`, `tests/e2e/volume-fusion.mjs`.
@@ -16486,10 +16501,13 @@ the status bar at the bottom.
 session and attach it (`pose/volume3d.js` `setSessionVolume`). The file, `<name>.vol3d.h5`, is written by
 `scripts/export_volume3d.py`: one row per animal per frame — `/frame_indices` (R), `/means` float32 (R, J, 3),
 `/covs` float32 (R, J, 6) as [xx, xy, xz, yy, yz, zz], `/node_names` (J); root attributes `format`
-(`lucid-volume3d/1`), `cov_scale`, `source`. Rows carry no identity: each solve matches its group by 3D distance.
+(`lucid-volume3d/1`), `cov_scale`, `source`, and optionally `skeleton_chains` (JSON `[{name, bones: [[a, b], ...],
+nodes: [...]}]` by node name: the skeleton check's chains; unreadable JSON means no check, never a failed load).
+Rows carry no identity: each solve matches its group by 3D distance.
 Read through `loading/cold-read-guard.js` (`readBlobArrayBuffer`) and the shared h5wasm (`initH5wasm`, now exported
 by `file-io.js`), into MEMFS and unlinked after. Wrong shapes throw with the shapes found. The status says how
-many animal-frames, frames and skeleton nodes matched (fewer than 3 nodes is an error), and fires
+many animal-frames, frames and skeleton nodes matched (fewer than 3 nodes is an error) and which chains the skeleton
+check guards (and which it leaves out, with why), and fires
 `lucid:volume3d-changed`.
 
 **Key exports.** `parseVolume3dH5(arrayBuffer)`, `handleLoadVolume3d(file?)`, `VOLUME3D_FORMAT`.

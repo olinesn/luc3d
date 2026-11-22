@@ -9,8 +9,13 @@
  *
  * The setting (Triangulate ▸ "Fuse with volume") is browser-local (localStorage `lucidVolumeFusion`), like
  * every display/workflow preference; a session without a loaded volume is solved as before.
+ *
+ * Skeleton chains (the skeleton check, pose/volume-fusion.js `checkSkeletonChains`) come from the file
+ * (`data.chains`, by node name; its exporter names them, e.g. the tail and the head); each bone's usual
+ * length is measured once, from the file's own means (`chainBoneMedians`). A chain with a node the file or
+ * the skeleton lacks, or a bone measured on too few rows, is left out. No chains = no check.
  */
-import { mapVolumeNodes, VOLUME_DEFAULTS } from './volume-fusion.js';
+import { mapVolumeNodes, chainBoneMedians, VOLUME_DEFAULTS } from './volume-fusion.js';
 
 const STORAGE_KEY = 'lucidVolumeFusion';
 const DEFAULT_SETTINGS = Object.freeze({
@@ -20,6 +25,8 @@ const DEFAULT_SETTINGS = Object.freeze({
     matchMaxMm: VOLUME_DEFAULTS.matchMaxMm,
     fuse: true,
     covScale: null,          // null = the file's own (its exporter measured it)
+    skeletonCheck: true,     // check the file's chains (if it names any)
+    chainTol: VOLUME_DEFAULTS.chainTol,
 });
 let _settings = null;
 
@@ -63,8 +70,72 @@ export function setSessionVolume(session, data) {
         if (!list) { list = []; rowsByFrame.set(f, list); }
         list.push(r);
     }
-    session.volume3d = { data: data, rowsByFrame: rowsByFrame, nodeMap: null, nodeMapKey: null };
+    session.volume3d = { data: data, rowsByFrame: rowsByFrame, nodeMap: null, nodeMapKey: null,
+        chains: fileChains(data), chainsMapped: null };
     return session.volume3d;
+}
+
+/**
+ * The file's chains in FILE node indices, with each bone's usual length: [{ name, bones: Int32Array,
+ * nodes: Int32Array, medians: Float64Array }] (usable) and `skipped` [{ name, reason }].
+ * `data.chains`: [{ name, bones: [[a, b], ...], nodes: [...] }] by node name (import-export/volume3d-file.js).
+ */
+function fileChains(data) {
+    const out = [];
+    out.skipped = [];
+    const raw = Array.isArray(data.chains) ? data.chains : [];
+    const J = data.nodeNames.length;
+    const at = new Map();
+    data.nodeNames.forEach(function (n, j) { at.set(String(n), j); });
+    raw.forEach(function (ch, c) {
+        const name = String((ch && ch.name) || ('chain ' + (c + 1)));
+        const bones = ch && Array.isArray(ch.bones) ? ch.bones : [];
+        const nodes = ch && Array.isArray(ch.nodes) ? ch.nodes : [];
+        const missing = [];
+        const look = function (n) {
+            const j = at.get(String(n));
+            if (j == null) missing.push(String(n));
+            return j == null ? -1 : j;
+        };
+        const b = new Int32Array(bones.length * 2);
+        bones.forEach(function (pair, i) {
+            b[2 * i] = look(pair && pair[0]); b[2 * i + 1] = look(pair && pair[1]);
+        });
+        const nd = Int32Array.from(nodes, look);
+        if (!bones.length || !nodes.length) { out.skipped.push({ name: name, reason: 'no bones or no nodes' }); return; }
+        if (missing.length) { out.skipped.push({ name: name, reason: 'not in the file: ' + missing.join(', ') }); return; }
+        const medians = chainBoneMedians(b, data.means, J);
+        if (!medians.every(Number.isFinite)) { out.skipped.push({ name: name, reason: 'too few rows to measure its bones' }); return; }
+        out.push({ name: name, bones: b, nodes: nd, medians: medians });
+    });
+    return out;
+}
+
+/** The loaded volume's chains in the SKELETON's node indices (cached per skeleton); `skipped` lists the
+ *  file's chains left out (with why). */
+export function volumeChains(session) {
+    const v = sessionVolume(session);
+    if (!v) { const none = []; none.skipped = []; return none; }
+    const names = skeletonNodeNames(session);
+    const key = names.join('\u0001');
+    if (v.nodeMapKey !== key) { v.nodeMap = mapVolumeNodes(v.data.nodeNames, names); v.nodeMapKey = key; v.chainsMapped = null; }
+    if (v.chainsMapped) return v.chainsMapped;
+    const inv = new Int32Array(v.data.nodeNames.length).fill(-1);
+    v.nodeMap.forEach(function (j, k) { if (j >= 0) inv[j] = k; });
+    const fc = v.chains || fileChains(v.data);
+    const out = [];
+    out.skipped = (fc.skipped || []).slice();
+    fc.forEach(function (ch) {
+        const b = Int32Array.from(ch.bones, function (j) { return inv[j]; });
+        const nd = Int32Array.from(ch.nodes, function (j) { return inv[j]; });
+        if (b.some(function (k) { return k < 0; }) || nd.some(function (k) { return k < 0; })) {
+            out.skipped.push({ name: ch.name, reason: 'a node is not in the skeleton' });
+            return;
+        }
+        out.push({ name: ch.name, bones: b, nodes: nd, medians: ch.medians });
+    });
+    v.chainsMapped = out;
+    return out;
 }
 
 export function clearSessionVolume(session) {
@@ -103,8 +174,7 @@ export function volumeForFrame(session, frameIdx) {
     const rows = v.rowsByFrame.get(frameIdx);
     if (!rows || !rows.length) return null;
     const names = skeletonNodeNames(session);
-    const key = names.join('\u0001');
-    if (v.nodeMapKey !== key) { v.nodeMap = mapVolumeNodes(v.data.nodeNames, names); v.nodeMapKey = key; }
+    const chains = s.skeletonCheck === false ? [] : volumeChains(session);   // also (re)builds the node map
     const N = names.length, J = v.data.nodeNames.length, map = v.nodeMap;
     const means = new Float64Array(rows.length * N * 3).fill(NaN);
     const covs = new Float64Array(rows.length * N * 6).fill(NaN);
@@ -123,5 +193,6 @@ export function volumeForFrame(session, frameIdx) {
         n: rows.length, nNodes: N, means: means, covs: covs,
         covScale: s.covScale != null ? s.covScale : (v.data.covScale != null ? v.data.covScale : 1),
         gateFloorPx: s.gateFloorPx, gateK: s.gateK, fuse: s.fuse !== false, matchMaxMm: s.matchMaxMm,
+        chains: chains.slice(), chainTol: s.chainTol,
     };
 }

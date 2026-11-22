@@ -15,7 +15,11 @@
  *   3. re-solves (DLT or Refined, and the reprojection-threshold rule, unchanged) from what passed;
  *   4. FUSION (`fuseWithVolume`): the product of Gaussians of each solved node (its covariance from its
  *      views' ray geometry and reprojection residuals, `dltCovariance`) and the volume's (covariance x
- *      `covScale`); a node the solve leaves empty takes the volume's mean.
+ *      `covScale`); a node the solve leaves empty takes the volume's mean;
+ *   5. SKELETON CHECK (`checkSkeletonChains`, only when the volume file names chains, e.g. the tail and the
+ *      head): where a fused chain has a bone more than `chainTol` (50 %) off its usual length, the chain's
+ *      nodes come from whichever of the plain solve (no gate, no fusion) and the volume is less off, if
+ *      that one is less off than the fused chain.
  * The gate uses the volume's covariance as given; the fusion scales it by `covScale`, which the volume's
  * exporter measures (the volfuse study, 2026-11-21: a softmax spread is 17-25x too wide in variance).
  *
@@ -24,12 +28,20 @@
  *
  * Volume layout (`vol`): { n: animals, nNodes, means: Float64Array(n * nNodes * 3),
  *   covs: Float64Array(n * nNodes * 6) as [xx, xy, xz, yy, yz, zz], covScale, gateFloorPx, gateK, fuse,
- *   matchMaxMm }, node order = the session skeleton's (NaN = the volume has no such node).
+ *   matchMaxMm, chains?: [{ name, bones: Int32Array(2 * nb) node index pairs, nodes: Int32Array,
+ *   medians: Float64Array(nb) usual bone lengths }], chainTol? }, node order = the session skeleton's
+ *   (NaN = the volume has no such node).
  */
 
 export const VOLUME_DEFAULTS = Object.freeze({
     gateFloorPx: 12, gateK: 2, covScale: 1, fuse: true, matchMaxMm: 30, sigma0Px: 2, pseudoDof: 4,
+    chainTol: 0.5,
 });
+
+/** A chain's badness for a missing bone (the volfuse study's value: worse than any measured one). */
+const MISSING_BONE = 10;
+/** Fewest finite lengths a bone's usual length is measured from. */
+const MIN_BONE_SAMPLES = 5;
 
 const JAC_EPS = 0.05;   // world units (mm) for the numerical projection Jacobian
 
@@ -225,4 +237,81 @@ export function fuseWithVolume(points3d, vol, a, obs, obsRaw, cams, included, pr
         fused++;
     }
     return { fused: fused, filled: filled };
+}
+
+/**
+ * Each bone's usual length: the median over the volume file's rows of the distance between its two nodes
+ * (`bones`: Int32Array of FILE node index pairs; `means`: the file's (R, J, 3) means, flat). The volfuse
+ * study measured them on the plain solve's reliable points instead; on July 13 the two agree within 8 %,
+ * well inside the 50 % tolerance. -> Float64Array (NaN = fewer than MIN_BONE_SAMPLES finite lengths).
+ */
+export function chainBoneMedians(bones, means, J) {
+    const nb = bones.length >> 1, R = Math.floor(means.length / (3 * J));
+    const out = new Float64Array(nb).fill(NaN);
+    const L = [];
+    for (let i = 0; i < nb; i++) {
+        L.length = 0;
+        for (let r = 0; r < R; r++) {
+            const p = (r * J + bones[2 * i]) * 3, q = (r * J + bones[2 * i + 1]) * 3;
+            const dx = means[p] - means[q], dy = means[p + 1] - means[q + 1], dz = means[p + 2] - means[q + 2];
+            const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (Number.isFinite(d)) L.push(d);
+        }
+        if (L.length < MIN_BONE_SAMPLES) continue;
+        L.sort(function (x, y) { return x - y; });
+        const n = L.length;
+        out[i] = n % 2 ? L[(n - 1) / 2] : 0.5 * (L[n / 2 - 1] + L[n / 2]);
+    }
+    return out;
+}
+
+/** How far a chain's bones in `P` (flat, node k at off + 3k) are past the tolerance: the sum over bones of
+ *  max(|L / usual - 1| - tol, 0), MISSING_BONE per bone with a missing end. 0 = plausible. */
+export function chainBadness(P, off, chain, tol) {
+    const b = chain.bones, med = chain.medians;
+    let s = 0;
+    for (let i = 0; i < med.length; i++) {
+        const p = off + 3 * b[2 * i], q = off + 3 * b[2 * i + 1];
+        const dx = P[p] - P[q], dy = P[p + 1] - P[q + 1], dz = P[p + 2] - P[q + 2];
+        const L = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        s += Number.isFinite(L) ? Math.max(Math.abs(L / med[i] - 1) - tol, 0) : MISSING_BONE;
+    }
+    return s;
+}
+
+/**
+ * Skeleton check of the fused points (flat 3N, IN PLACE) against volume animal `a`'s chains (`vol.chains`).
+ * A chain whose fused bones are implausible (`chainBadness` > 0) takes its nodes from the plain solve when
+ * that is less off than the fused chain and no worse than the volume, else from the volume when that is
+ * less off than the fused chain; a node the source has no point for keeps the fused one. At each moment
+ * usually only one of the two reaches for a neighbour's body part (the volfuse study, July 13 frame
+ * 105,409: the volume stretched a tail onto the next mouse's while DLT kept it).
+ * `getPlain()` -> the plain solve (flat 3N) or null; called at most once, and only when a chain is off.
+ * -> { fromSolve, fromVolume } chain counts.
+ */
+export function checkSkeletonChains(points3d, getPlain, vol, a) {
+    const out = { fromSolve: 0, fromVolume: 0 };
+    const chains = vol.chains;
+    if (!chains || !chains.length || a < 0) return out;
+    const tol = vol.chainTol != null ? vol.chainTol : VOLUME_DEFAULTS.chainTol;
+    const voff = a * vol.nNodes * 3;
+    let plain;
+    for (let c = 0; c < chains.length; c++) {
+        const ch = chains[c];
+        const bf = chainBadness(points3d, 0, ch, tol);
+        if (!(bf > 0)) continue;
+        if (plain === undefined) plain = getPlain() || null;
+        const bd = plain ? chainBadness(plain, 0, ch, tol) : Infinity;
+        const bv = chainBadness(vol.means, voff, ch, tol);
+        let src = null, off = 0;
+        if (bd < bf && bd <= bv) { src = plain; out.fromSolve++; }
+        else if (bv < bf) { src = vol.means; off = voff; out.fromVolume++; }
+        if (!src) continue;
+        for (let i = 0; i < ch.nodes.length; i++) {
+            const k = ch.nodes[i], q = off + 3 * k;
+            if (!(Number.isFinite(src[q]) && Number.isFinite(src[q + 1]) && Number.isFinite(src[q + 2]))) continue;
+            points3d[3 * k] = src[q]; points3d[3 * k + 1] = src[q + 1]; points3d[3 * k + 2] = src[q + 2];
+        }
+    }
+    return out;
 }

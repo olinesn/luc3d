@@ -18,7 +18,7 @@
 
 import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js';
 import { jacobiEigen } from './plane-fit.js';
-import { matchVolumeAnimal, gateObservations, fuseWithVolume } from './volume-fusion.js';
+import { matchVolumeAnimal, gateObservations, fuseWithVolume, checkSkeletonChains } from './volume-fusion.js';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
@@ -1523,6 +1523,11 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     const volume = options && options.volume;
     const volCams = volume ? cameraNames.map(function (n) { return cameraMap[n]; }) : null;
     let volAnimal = -1, volGated = 0;
+    // The skeleton check (after the fusion) may take a chain from the PLAIN solve: keep it and the
+    // observations it came from (the gate below nulls entries of `allObservations`).
+    const plainObs = (volume && volume.n > 0 && volume.chains && volume.chains.length)
+        ? allObservations.map(function (row) { return row.slice(); }) : null;
+    const plain3d = plainObs ? Float64Array.from(points3d) : null;
     if (volume && volume.n > 0) {
         volAnimal = matchVolumeAnimal(points3d, volume);
         if (volAnimal >= 0) {
@@ -1540,15 +1545,19 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     const reprojThresh = (options && options.reprojErrorThreshold != null)
         ? options.reprojErrorThreshold
         : (_settingsHooks.getTrackingThreshold ? _settingsHooks.getTrackingThreshold('reprojErrorThreshold') : 0);
-    if (reprojThresh > 0) {
+    // `applyReprojThreshold(obs, pts)` runs it on any (observations, solve) pair: below on the solve, and in the
+    // skeleton check on the plain one. It nulls entries of `obs`; it returns the final points (possibly a new
+    // array; nodes it drops are cleared in it).
+    function applyReprojThreshold(obs, pts) {
+        if (!(reprojThresh > 0)) return pts;
         // Don't include a node-in-a-view (a single 2D keypoint) whose reprojection
         // error exceeds the threshold — re-triangulate that node from the views that
         // remain. This works PER NODE within a view; it never drops a whole view
         // (that is the Tracking Wizard's job). A node left with <2 views is null.
         const _nodeErrBuf = [0, 0, 0];
         function nodeError(k, c) {
-            if (allObservations[k][c] == null) return -1;
-            if (!readPoint3d(points3d, k, _nodeErrBuf)) return -1;
+            if (obs[k][c] == null) return -1;
+            if (!readPoint3d(pts, k, _nodeErrBuf)) return -1;
             const inst = instanceGroup.getInstance(cameraNames[c]);
             const raw = inst ? inst.getPoint(k) : null;
             if (raw == null) return -1;
@@ -1565,29 +1574,31 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         for (let iter = 0; iter < maxPasses; iter++) {
             let excludedAny = false;
             for (let k = 0; k < numKeypoints; k++) {
-                if (!hasPoint3d(points3d, k)) continue;
+                if (!hasPoint3d(pts, k)) continue;
                 let worstC = -1, worstErr = reprojThresh, kept = 0;
                 for (let c = 0; c < cameraNames.length; c++) {
-                    if (!included[c] || allObservations[k][c] == null) continue;
+                    if (!included[c] || obs[k][c] == null) continue;
                     kept++;
                     const e = nodeError(k, c);
                     if (e > worstErr) { worstErr = e; worstC = c; }
                 }
-                if (worstC >= 0 && kept > 2) { allObservations[k][worstC] = null; excludedAny = true; }
+                if (worstC >= 0 && kept > 2) { obs[k][worstC] = null; excludedAny = true; }
             }
             if (!excludedAny) break;
-            points3d = triangulateFrom(allObservations);
+            pts = triangulateFrom(obs);
         }
         // If a node's remaining views still exceed the threshold, it has <2 views
         // under the threshold → drop it from 3D (null).
         for (let k = 0; k < numKeypoints; k++) {
-            if (!hasPoint3d(points3d, k)) continue;
+            if (!hasPoint3d(pts, k)) continue;
             for (let c = 0; c < cameraNames.length; c++) {
-                if (!included[c] || allObservations[k][c] == null) continue;
-                if (nodeError(k, c) > reprojThresh) { clearPoint3d(points3d, k); break; }
+                if (!included[c] || obs[k][c] == null) continue;
+                if (nodeError(k, c) > reprojThresh) { clearPoint3d(pts, k); break; }
             }
         }
+        return pts;
     }
+    points3d = applyReprojThreshold(allObservations, points3d);
 
     // Fusion with the volume (after the gate and the threshold rule): each solved node becomes the product of
     // Gaussians of its solve and the volume's; a node left without a solve takes the volume's mean.
@@ -1596,6 +1607,15 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         const fz = fuseWithVolume(points3d, volume, volAnimal, allObservations, allObservationsRaw, volCams, included,
             reprojectPointCamera, numKeypoints);
         volumeInfo = { animal: volAnimal, gated: volGated, fused: fz.fused, filled: fz.filled };
+        if (plainObs) {
+            // Skeleton check: a chain (e.g. the tail) whose fused bones are implausible is taken from the plain
+            // solve (with the threshold rule, as an unfused Triangulate would give it) or from the volume.
+            const sk = checkSkeletonChains(points3d, function () {
+                return applyReprojThreshold(plainObs, plain3d);
+            }, volume, volAnimal);
+            volumeInfo.chainsFromSolve = sk.fromSolve;
+            volumeInfo.chainsFromVolume = sk.fromVolume;
+        }
     }
 
     // Fast path: skip reprojections/errors when only 3D points are needed (bulk ops)
