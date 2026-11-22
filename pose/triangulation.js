@@ -32,6 +32,8 @@ import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseF
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
 import { noteTriangulateRun, carryTriangulateMark } from './run-state.js';
+import { skeletonCheckForRun, invalidateSkeletonCheck, groupNeedsSkeletonCheck, framesNeedingSkeletonCheck }
+    from './skeleton-check-run.js';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -1979,6 +1981,8 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
     var totalGroups = 0;
     var errSum = 0, errN = 0;
     var frames = [];
+    var skeletonCheck = skeletonCheckForRun(session);   // null when off or nothing is measured yet
+    var skeletonRepaired = 0;
 
     // MEMORY / CORRECTNESS (luc3d #195): sweep the range through
     // `sweepLazyFrameWindows` so each frame's 2D is HYDRATED before it is
@@ -1998,11 +2002,12 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
             // Camera-name fixup + >=2-usable-view gate + points3d/usedCameras
             // stores are shared with the other two paths (see
             // `_triangulateGroupStep`).
-            var step = _triangulateGroupStep(group, cameras, method);
+            var step = _triangulateGroupStep(group, cameras, method, skeletonCheck);
             if (!step) continue;
             group.markClean();
             totalGroups++;
             solvedAny = true;
+            if (group.skeletonRepaired) skeletonRepaired++;
             if (step.result.meanError != null) {
                 errSum += step.result.meanError;
                 errN++;
@@ -2025,7 +2030,9 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
     });
 
     noteTriangulateRun(state.session, frames);   // Triangulate turns blue (ui/run-buttons.js)
-    return { triangulated: frames.length, totalGroups: totalGroups, errSum: errSum, errN: errN, frames: frames };
+    if (skeletonCheck) invalidateSkeletonCheck(session);
+    return { triangulated: frames.length, totalGroups: totalGroups, errSum: errSum, errN: errN, frames: frames,
+             skeletonRepaired: skeletonRepaired };
 }
 
 // ============================================
@@ -2393,6 +2400,10 @@ export function triangulateCurrentFrame(method) {
     console.log('[triangulate] Frame', frameIdx, '| cameras:', cameras.map(c => c.name),
         '| views:', state.views.map(v => v.name));
 
+    // Skeleton check (Triangulate ▸ Skeleton check): bones measured from the session's 3D so far; null when off or
+    // nothing is measured yet (pose/skeleton-check-run.js).
+    const skeletonCheck = skeletonCheckForRun(session);
+    let skeletonRepaired = 0;
     const frameResults = [];
 
     for (const group of frameGroupsList) {
@@ -2444,9 +2455,12 @@ export function triangulateCurrentFrame(method) {
             const groupCamNames = group.cameraNames;
             const groupCameras = cameras.filter(c => groupCamNames.indexOf(c.name) >= 0);
 
-            const result = triangulateAndReproject(group, groupCameras, { method: method });
+            const result = triangulateAndReproject(group, groupCameras,
+                { method: method, skeleton: skeletonCheck || undefined });
             group.triangulationMethod = result.method;
             group.solveSettings = triangulationSettingsKey(cameras);
+            group.skeletonRepaired = !!(result.skeleton && result.skeleton.chainsRepaired > 0);
+            if (group.skeletonRepaired) skeletonRepaired++;
 
             // Watch for a NaN-poisoned solve. An all-NaN triple is now just the
             // "missing" sentinel, so it can no longer stand in for corruption —
@@ -2544,7 +2558,8 @@ export function triangulateCurrentFrame(method) {
             methodLabel + ' • Error: ' + frameResults[0].meanError.toFixed(2) + 'px');
         setStatus('Triangulated frame ' + (frameIdx + 1).toLocaleString('en-US') + ' via ' + methodLabel + ' (' +
             frameResults.length + ' group(s), error: ' +
-            frameResults[0].meanError.toFixed(2) + 'px)', 'success');
+            frameResults[0].meanError.toFixed(2) + 'px)' +
+            (skeletonRepaired ? '; skeleton check repaired ' + skeletonRepaired + ' group(s)' : ''), 'success');
     } else if (frameResults.length > 0) {
         updateTriangulationBadge('triangulated', 'Triangulated');
         setStatus('Triangulated frame ' + (frameIdx + 1).toLocaleString('en-US') + ' (' + frameResults.length + ' group(s))', 'success');
@@ -2617,10 +2632,11 @@ async function _encourageGC(totalMB) {
  *
  * @returns {{result: Object, groupCameras: Array}|null}
  */
-function _triangulateGroupStep(group, cameras, method) {
+function _triangulateGroupStep(group, cameras, method, skeletonCheck) {
     var prep = _prepareGroupStep(group, cameras);
     if (!prep) return null;
-    var result = triangulateAndReproject(group, prep.groupCameras, { method: method });
+    var result = triangulateAndReproject(group, prep.groupCameras,
+        { method: method, skeleton: skeletonCheck || undefined });
     _applyGroupStep(group, prep, result);
     return { result: result, groupCameras: prep.groupCameras };
 }
@@ -2678,6 +2694,9 @@ function _applyGroupStep(group, prep, result) {
     group.solveSettings = prep.settingsKey;
     group.points3d = pooledPoints3d(result.points3d);   // one slab, not one ArrayBuffer per group
     group.usedCameras = prep.usedCameras;
+    // In memory only: the display reprojects a repaired group's stored 3D instead of re-solving it without the
+    // check (ui/rendering.js's fill). A re-solve without the check clears it.
+    group.skeletonRepaired = !!(result && result.skeleton && result.skeleton.chainsRepaired > 0);
 }
 
 /**
@@ -2815,6 +2834,32 @@ async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
             windowCount++;
             if (windowCount % gcEvery === 0) await _encourageGC(gcMB);
         };
+        if (opts.frames) {
+            // Only these frames (sorted): hydrate just the windows that hold them (the skeleton check's pass).
+            var fl = opts.frames.filter(function (f) { return f >= from && f <= to; });
+            var doneF = 0;
+            for (var i0 = 0; i0 < fl.length; ) {
+                var ws = fl[i0], j0 = i0;
+                while (j0 < fl.length && fl[j0] < ws + W) j0++;
+                var we = fl[j0 - 1] + 1;
+                await batchLoadLazyFrames(ws, we - ws);
+                for (var k0 = i0; k0 < j0; k0++) {
+                    var fi0 = fl[k0], fg0 = session.frameGroups.get(fi0);
+                    if (fg0 || _hasFrameData(session, fi0)) { await onFrame(fi0, fg0); processed++; }
+                    doneF++;
+                    if (pacer.due()) {
+                        if (opts.onProgress) await opts.onProgress(doneF, fl.length);
+                        await pacer.yield();
+                    }
+                }
+                pendingWindows.push([ws, we]);
+                while (pendingWindows.length > lag) { var w0 = pendingWindows.shift(); await releaseWindow(w0[0], w0[1]); }
+                i0 = j0;
+            }
+            while (pendingWindows.length) { var wl0 = pendingWindows.shift(); await releaseWindow(wl0[0], wl0[1]); }
+            if (opts.onProgress) await opts.onProgress(fl.length, fl.length);
+            return processed;
+        }
         for (var start = from; start <= to; start += W) {
             var end = Math.min(start + W, to + 1);
             await batchLoadLazyFrames(start, end - start);
@@ -2857,7 +2902,7 @@ async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
     // and no `FrameGroup`, and must still be visited.
     var idxSet = new Set(session.frameGroups.keys());
     for (var [igIdx] of session.instanceGroups) idxSet.add(igIdx);
-    var idxs = Array.from(idxSet)
+    var idxs = (opts.frames ? opts.frames.filter(function (k) { return idxSet.has(k); }) : Array.from(idxSet))
         .filter(function (k) { return k >= lo && k <= hi; })
         .sort(function (a, b) { return a - b; });
     for (var j = 0; j < idxs.length; j++) {
@@ -2955,6 +3000,58 @@ export function dropAllDerivedTriangulationState(session) {
     }
 }
 
+/**
+ * Triangulate All's skeleton check (Triangulate ▸ Skeleton check, pose/skeleton-check-run.js): after the solve,
+ * measure every chain's bones on the run's own 3D, then re-solve WITH the check only the groups whose stored 3D has
+ * a chain outside its ranges (`groupNeedsSkeletonCheck`). Those are a few percent of the groups, so they run here on
+ * the main thread; a lazy project hydrates only the windows holding their frames (`sweepLazyFrameWindows`'
+ * `frames`). -> null (setting off, or nothing measurable) or { frames, groups, repaired }.
+ */
+async function skeletonCheckPass(session, cameras, method) {
+    invalidateSkeletonCheck(session);
+    var sk = skeletonCheckForRun(session);
+    if (!sk) return null;
+    var frames = framesNeedingSkeletonCheck(session, sk);
+    var stats = { frames: frames.length, groups: 0, repaired: 0 };
+    if (!frames.length) return stats;
+    showLoadingProgress('Skeleton check', 0, frames.length,
+        { detail: frames.length.toLocaleString('en-US') + ' frames to check' });
+    await yieldToPaint();
+    await sweepLazyFrameWindows(session, function (fi) {
+        var list = session.instanceGroups.get(fi);
+        if (!list) return;
+        var any = false;
+        for (var gi = 0; gi < list.length; gi++) {
+            var g = list[gi];
+            if (!groupNeedsSkeletonCheck(g, sk)) continue;
+            var step = _triangulateGroupStep(g, cameras, method, sk);
+            if (!step) continue;
+            g.markClean();
+            stats.groups++;
+            any = true;
+            if (g.skeletonRepaired) stats.repaired++;
+        }
+        // The frame's reprojections came from the 3D just replaced (as Range does).
+        if (any) dropDerivedReprojections(session, fi, state.triangulationResults);
+    }, {
+        frames: frames,
+        onProgress: function (done, tot) {
+            showLoadingProgress('Skeleton check', done, tot,
+                { detail: stats.repaired.toLocaleString('en-US') + ' groups repaired' });
+        },
+    });
+    invalidateSkeletonCheck(session);
+    return stats;
+}
+
+/** The status line's note on a check pass ('' when it did not run). */
+function skeletonCheckNote(st) {
+    if (!st) return '';
+    if (!st.groups) return '; skeleton check: every chain within its usual lengths';
+    return '; skeleton check repaired ' + st.repaired.toLocaleString('en-US') + ' of ' +
+        st.groups.toLocaleString('en-US') + ' groups it re-solved';
+}
+
 async function sweepTriangulateAllFrames(session, cameras, method) {
     // Windowing/hydration/release all live in `sweepLazyFrameWindows`.
 
@@ -3038,6 +3135,7 @@ export async function triangulateAllFrames(method) {
         showLoadingProgress('Triangulating', 0, triLoader.nFrames,
             { detail: triangulationMethodLabel(method), title: 'Triangulate All' });   // the card's title, kept to hideLoading
         var swept = await sweepTriangulateAllFrames(state.session, cameras, method);
+        var sweptCheck = await skeletonCheckPass(state.session, cameras, method);
         noteTriangulateRun(state.session, null);   // Triangulate turns blue (ui/run-buttons.js)
         setReprojErrorVisible(true, { checkBoxes: false });
         var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
@@ -3048,7 +3146,7 @@ export async function triangulateAllFrames(method) {
         var sweptAvg = swept.errN > 0 ? (swept.errSum / swept.errN).toFixed(2) : 'N/A';
         setStatus('Triangulated ' + swept.frames.toLocaleString() + ' frames via ' +
             triangulationMethodLabel(method) + ' (' + swept.groups.toLocaleString() +
-            ' groups, avg error: ' + sweptAvg + 'px)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
+            ' groups, avg error: ' + sweptAvg + 'px)' + skeletonCheckNote(sweptCheck) + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
         console.log('[triangulate-all] windowed sweep done:', swept.frames, 'frames,',
             swept.groups, 'groups,', swept.skipped, 'groups skipped (<2 usable views), avg error:', sweptAvg);
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
@@ -3165,6 +3263,7 @@ export async function triangulateAllFrames(method) {
     }
     showLoadingProgress('Triangulating', frameIndices.length, frameIndices.length,
         stageOpts(methodLabel + ' · ' + totalGroups.toLocaleString() + ' groups'));
+    var allCheck = await skeletonCheckPass(state.session, cameras, method);
 
     // Show reproj/error UI elements, then only the reprojections (#243).
     setReprojErrorVisible(true, { checkBoxes: false });
@@ -3180,7 +3279,8 @@ export async function triangulateAllFrames(method) {
     var avgError = errN > 0 ? (errSum / errN).toFixed(2) : 'N/A';
     var totalTriangulated = triangulatedFrames.length;
     setStatus('Triangulated ' + totalTriangulated.toLocaleString('en-US') + ' frames via ' + triangulationMethodLabel(method) +
-        ' (' + totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
+        ' (' + totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px)' + skeletonCheckNote(allCheck) +
+        (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
     console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
 
     // Update timeline: mark frames with grouped UserInstances, refresh track bars
