@@ -19,8 +19,9 @@ with >= 4 views and < 3 px, the median Mahalanobis^2 of (volume mean - DLT) unde
 by chi^2_3's median (2.366). --dlt does that here; otherwise pass --cov-scale (DoublePoke's volume: 0.04-0.06).
 
 skeleton_chains: the node chains LUCID's skeleton check guards. Where a fused chain has a bone more than 50 % off
-its usual length (LUCID measures it on this file's means), the chain's nodes come from the plain triangulation or
-the volume, whichever is plausible (the volfuse study's tail case: the volume stretched a tail onto the next mouse's).
+its usual length (LUCID measures it on this file's means), LUCID changes the fewest of its nodes (to the plain
+triangulation's point, the volume's, or none) that make it plausible, never one the two agree on (the volfuse
+study's tail case: the volume stretched a tail onto the next mouse's).
 JSON [{"name": "tail", "bones": [["TTI", "Tail_0"], ...], "nodes": ["Tail_0", ...]}, ...]: `bones` are checked,
 `nodes` are replaced. --chains auto (default): DoublePoke's tail and head chains, each written only if the file has
 all its nodes; --chains none; --chains FILE.json.

@@ -17,9 +17,9 @@
  *      views' ray geometry and reprojection residuals, `dltCovariance`) and the volume's (covariance x
  *      `covScale`); a node the solve leaves empty takes the volume's mean;
  *   5. SKELETON CHECK (`checkSkeletonChains`, only when the volume file names chains, e.g. the tail and the
- *      head): where a fused chain has a bone more than `chainTol` (50 %) off its usual length, the chain's
- *      nodes come from whichever of the plain solve (no gate, no fusion) and the volume is less off, if
- *      that one is less off than the fused chain.
+ *      head): where a fused chain has a bone more than `chainTol` (50 %) off its usual length, the FEWEST
+ *      nodes are changed (to the plain solve's point, the volume's, or dropped) that make the chain
+ *      plausible, never one the plain solve and the volume agree on; else the chain is left as it is.
  * The gate uses the volume's covariance as given; the fusion scales it by `covScale`, which the volume's
  * exporter measures (the volfuse study, 2026-11-21: a softmax spread is 17-25x too wide in variance).
  *
@@ -35,13 +35,17 @@
 
 export const VOLUME_DEFAULTS = Object.freeze({
     gateFloorPx: 12, gateK: 2, covScale: 1, fuse: true, matchMaxMm: 30, sigma0Px: 2, pseudoDof: 4,
-    chainTol: 0.5,
+    chainTol: 0.5, chainAgreeMm: 10,
 });
 
 /** A chain's badness for a missing bone (the volfuse study's value: worse than any measured one). */
 const MISSING_BONE = 10;
 /** Fewest finite lengths a bone's usual length is measured from. */
 const MIN_BONE_SAMPLES = 5;
+/** The repair's penalty for a kept chain node no path of present bones links to the body (the chain's anchor). */
+const ORPHAN = 1;
+/** Most option combinations the repair tries for one chain (4 options per node: 6 nodes); larger chains are left. */
+const MAX_REPAIR_COMBOS = 4096;
 
 const JAC_EPS = 0.05;   // world units (mm) for the numerical projection Jacobian
 
@@ -280,38 +284,118 @@ export function chainBadness(P, off, chain, tol) {
 }
 
 /**
+ * How far a candidate repair of a chain (`P` flat, node k at off + 3k; NaN = dropped or missing) is from plausible:
+ * the sum over bones with BOTH ends present of max(|L / usual - 1| - tol, 0), plus ORPHAN for each present chain
+ * node that no path of present bones links to the anchor (a bone node outside `chain.nodes`, e.g. TTI or the Neck).
+ * A dropped node's bones are not judged, but it cannot cut a wrong piece of the chain loose. 0 = plausible.
+ */
+export function chainRepairBadness(P, off, chain, tol) {
+    const b = chain.bones, med = chain.medians, nb = med.length;
+    const has = function (k) {
+        const q = off + 3 * k;
+        return Number.isFinite(P[q]) && Number.isFinite(P[q + 1]) && Number.isFinite(P[q + 2]);
+    };
+    const inChain = new Set(chain.nodes);
+    const reached = new Set();
+    for (let i = 0; i < 2 * nb; i++) if (!inChain.has(b[i]) && has(b[i])) reached.add(b[i]);
+    let grew = true;
+    while (grew) {
+        grew = false;
+        for (let i = 0; i < nb; i++) {
+            const p = b[2 * i], q = b[2 * i + 1];
+            if (!has(p) || !has(q) || reached.has(p) === reached.has(q)) continue;
+            reached.add(reached.has(p) ? q : p);
+            grew = true;
+        }
+    }
+    let s = 0;
+    for (let i = 0; i < nb; i++) {
+        const p = b[2 * i], q = b[2 * i + 1];
+        if (!has(p) || !has(q)) continue;
+        const L = Math.hypot(P[off + 3 * p] - P[off + 3 * q], P[off + 3 * p + 1] - P[off + 3 * q + 1],
+            P[off + 3 * p + 2] - P[off + 3 * q + 2]);
+        s += Math.max(Math.abs(L / med[i] - 1) - tol, 0);
+    }
+    for (let i = 0; i < chain.nodes.length; i++) if (has(chain.nodes[i]) && !reached.has(chain.nodes[i])) s += ORPHAN;
+    return s;
+}
+
+const KEEP = 0, FROM_SOLVE = 1, FROM_VOLUME = 2, DROP = 3;
+function finite3(P, q) { return Number.isFinite(P[q]) && Number.isFinite(P[q + 1]) && Number.isFinite(P[q + 2]); }
+function dist3(P, p, Q, q) { return Math.hypot(P[p] - Q[q], P[p + 1] - Q[q + 1], P[p + 2] - Q[q + 2]); }
+
+/**
  * Skeleton check of the fused points (flat 3N, IN PLACE) against volume animal `a`'s chains (`vol.chains`).
- * A chain whose fused bones are implausible (`chainBadness` > 0) takes its nodes from the plain solve when
- * that is less off than the fused chain and no worse than the volume, else from the volume when that is
- * less off than the fused chain; a node the source has no point for keeps the fused one. At each moment
- * usually only one of the two reaches for a neighbour's body part (the volfuse study, July 13 frame
- * 105,409: the volume stretched a tail onto the next mouse's while DLT kept it).
+ * A chain whose fused bones are implausible (`chainBadness` > 0) is REPAIRED with the fewest node changes that make
+ * it plausible (`chainRepairBadness` 0): each chain node may keep its fused point, take the plain solve's or the
+ * volume's, or be dropped (NaN, no 3D); ties go to fewer drops, then to the smallest move. A node the plain solve
+ * and the volume put within `vol.chainAgreeMm` (10 mm) of each other is never changed. If no such repair makes the
+ * chain plausible, it is left as it is.
+ * Why the fewest nodes, not the whole chain: in pile-ups one node is often wrong while the rest are right, and
+ * whichever source has a plausible whole chain may have it on another mouse (the volfuse study's July 13 frames
+ * 105,416 and 105,372, judged by eye). Why the agreement guard: two sources agreeing is the best evidence a node is
+ * right (fight frame 4,294: a short nose bone, but both sources put the nose in the same place).
  * `getPlain()` -> the plain solve (flat 3N) or null; called at most once, and only when a chain is off.
- * -> { fromSolve, fromVolume } chain counts.
+ * -> { chains, fromSolve, fromVolume, dropped }: chains repaired and nodes changed by kind.
  */
 export function checkSkeletonChains(points3d, getPlain, vol, a) {
-    const out = { fromSolve: 0, fromVolume: 0 };
+    const out = { chains: 0, fromSolve: 0, fromVolume: 0, dropped: 0 };
     const chains = vol.chains;
     if (!chains || !chains.length || a < 0) return out;
     const tol = vol.chainTol != null ? vol.chainTol : VOLUME_DEFAULTS.chainTol;
-    const voff = a * vol.nNodes * 3;
+    const agree = vol.chainAgreeMm != null ? vol.chainAgreeMm : VOLUME_DEFAULTS.chainAgreeMm;
+    const V = vol.means, voff = a * vol.nNodes * 3;
     let plain;
     for (let c = 0; c < chains.length; c++) {
         const ch = chains[c];
-        const bf = chainBadness(points3d, 0, ch, tol);
-        if (!(bf > 0)) continue;
+        if (!(chainBadness(points3d, 0, ch, tol) > 0)) continue;
         if (plain === undefined) plain = getPlain() || null;
-        const bd = plain ? chainBadness(plain, 0, ch, tol) : Infinity;
-        const bv = chainBadness(vol.means, voff, ch, tol);
-        let src = null, off = 0;
-        if (bd < bf && bd <= bv) { src = plain; out.fromSolve++; }
-        else if (bv < bf) { src = vol.means; off = voff; out.fromVolume++; }
-        if (!src) continue;
-        for (let i = 0; i < ch.nodes.length; i++) {
-            const k = ch.nodes[i], q = off + 3 * k;
-            if (!(Number.isFinite(src[q]) && Number.isFinite(src[q + 1]) && Number.isFinite(src[q + 2]))) continue;
-            points3d[3 * k] = src[q]; points3d[3 * k + 1] = src[q + 1]; points3d[3 * k + 2] = src[q + 2];
+        const K = ch.nodes.length, opts = [];
+        let total = 1;
+        for (let i = 0; i < K; i++) {
+            const q = 3 * ch.nodes[i], qv = voff + q;
+            const f = finite3(points3d, q), p = !!plain && finite3(plain, q), v = finite3(V, qv);
+            if (p && v && dist3(plain, q, V, qv) <= agree) { opts.push([KEEP]); continue; }
+            const o = [KEEP];
+            if (p && !(f && dist3(plain, q, points3d, q) <= 1e-6)) o.push(FROM_SOLVE);
+            if (v && !(f && dist3(V, qv, points3d, q) <= 1e-6)) o.push(FROM_VOLUME);
+            if (f) o.push(DROP);
+            opts.push(o);
+            total *= o.length;
         }
+        if (total <= 1 || total > MAX_REPAIR_COMBOS) continue;
+        const work = Float64Array.from(points3d);
+        const idx = new Int32Array(K);
+        let best = null;
+        for (let n = 0; n < total; n++) {
+            let changed = 0, drops = 0, moved = 0;
+            for (let i = 0; i < K; i++) {
+                const q = 3 * ch.nodes[i], o = opts[i][idx[i]];
+                const src = o === FROM_SOLVE ? plain : (o === FROM_VOLUME ? V : points3d);
+                const sq = o === FROM_VOLUME ? voff + q : q;
+                if (o === DROP) { work[q] = NaN; work[q + 1] = NaN; work[q + 2] = NaN; }
+                else { work[q] = src[sq]; work[q + 1] = src[sq + 1]; work[q + 2] = src[sq + 2]; }
+                if (o !== KEEP) changed++;
+                if (o === DROP) drops++;
+                else if (o !== KEEP && finite3(points3d, q)) moved += dist3(src, sq, points3d, q);
+            }
+            const bad = chainRepairBadness(work, 0, ch, tol);
+            const better = !best || bad < best.bad - 1e-9 || (Math.abs(bad - best.bad) <= 1e-9 &&
+                (changed < best.changed || (changed === best.changed &&
+                    (drops < best.drops || (drops === best.drops && moved < best.moved)))));
+            if (better) best = { bad: bad, changed: changed, drops: drops, moved: moved, pick: Int32Array.from(idx) };
+            for (let i = 0; i < K; i++) { if (++idx[i] < opts[i].length) break; idx[i] = 0; }
+        }
+        if (!best || best.bad > 1e-9 || !best.changed) continue;   // cannot be made plausible: leave it
+        for (let i = 0; i < K; i++) {
+            const q = 3 * ch.nodes[i], o = opts[i][best.pick[i]];
+            if (o === KEEP) continue;
+            if (o === DROP) { points3d[q] = NaN; points3d[q + 1] = NaN; points3d[q + 2] = NaN; out.dropped++; continue; }
+            const src = o === FROM_SOLVE ? plain : V, sq = o === FROM_VOLUME ? voff + q : q;
+            points3d[q] = src[sq]; points3d[q + 1] = src[sq + 1]; points3d[q + 2] = src[sq + 2];
+            if (o === FROM_SOLVE) out.fromSolve++; else out.fromVolume++;
+        }
+        out.chains++;
     }
     return out;
 }

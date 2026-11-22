@@ -3988,7 +3988,8 @@ group to a volume animal on its plain solve, gates each view's detections by the
 runs the reprojection-threshold rule as usual, then fuses each node with the volume (`pose/volume-fusion.js`), then
 (when the volume names chains) runs the skeleton check, whose plain-solve alternative is the ungated solve through
 the same threshold rule (`applyReprojThreshold(obs, pts)`, the rule as a function; computed only when a fused chain
-is off). The result then carries `volume: {animal, gated, fused, filled, chainsFromSolve?, chainsFromVolume?}` (also
+is off). The result then carries `volume: {animal, gated, fused, filled, chainsRepaired?, nodesFromSolve?,
+nodesFromVolume?, nodesDropped?}` (also
 through `triangulationSummary`); without the option, or with no animal matched, the result is exactly the old one
 (no `volume` key).
 
@@ -4202,12 +4203,17 @@ moments of its softmax) with the triangulation of the 2D detections, inside the 
    `dltCovariance`: Gauss-Newton from its remaining views' rays, scaled by the reprojection residuals shrunk toward
    2 px with 4 pseudo-degrees of freedom) and the volume (covariance × `covScale`); a node the solve leaves empty
    takes the volume's mean. `fuse: false` only fills.
-4. **Skeleton check** (`checkSkeletonChains`, when `vol.chains` is non-empty): a chain (bones checked, nodes replaced,
-   each bone's usual length) whose fused bones are implausible (`chainBadness` > 0: a bone more than `chainTol` 0.5
-   off its usual length, or missing) takes its nodes from the plain solve if that is less off and no worse than the
-   volume, else from the volume if that is less off; a node the source lacks keeps the fused point. Usual lengths:
-   `chainBoneMedians`, medians over the file's rows (the study used DLT's reliable points; on July 13 the two agree
-   within 8 %). It is what fixes the July 13 tail case: the volume stretched a tail onto a neighbour's while DLT kept it.
+4. **Skeleton check** (`checkSkeletonChains`, when `vol.chains` is non-empty): a chain (bones checked, nodes that
+   may change, each bone's usual length) whose fused bones are implausible (`chainBadness` > 0: a bone more than
+   `chainTol` 0.5 off its usual length, or missing) is REPAIRED with the fewest node changes: each node keeps its
+   fused point, takes the plain solve's, takes the volume's, or is dropped (NaN); the repair must be plausible
+   (`chainRepairBadness` 0: bones with both ends present within tolerance, and every kept node linked to the anchor
+   — TTI, the Neck — through present bones, so a drop cannot cut a wrong piece loose); ties go to fewer drops, then
+   the smallest move. A node the plain solve and the volume put within `chainAgreeMm` (10 mm) of each other is never
+   changed; a chain no repair makes plausible is left as it is; at most 4,096 option combinations per chain.
+   **Never swap a whole chain**: in pile-ups one node is often wrong while the rest are right, and a source's
+   plausible whole chain may be on another mouse (July 13 frames 105,416 and 105,372, judged by eye). Usual lengths:
+   `chainBoneMedians`, medians over the file's rows (within 8 % of DLT's reliable points on July 13).
 **The gate uses the volume's covariance as given; the fusion scales it** by `covScale`, which the exporter measures
 (a softmax spread is far wider than the model's error: 17-25× in variance for DoublePoke's volume).
 Import-free and DOM-free (the worker loads it through the core); the projection is passed in (the core's
@@ -4215,13 +4221,15 @@ Import-free and DOM-free (the worker loads it through the core); the projection 
 still invert.
 
 **Key exports.** `VOLUME_DEFAULTS`, `mapVolumeNodes`, `volumeNode`, `matchVolumeAnimal`, `gateObservations`,
-`dltCovariance`, `productOfGaussians`, `fuseWithVolume`, `chainBoneMedians`, `chainBadness`, `checkSkeletonChains`.
+`dltCovariance`, `productOfGaussians`, `fuseWithVolume`, `chainBoneMedians`, `chainBadness`, `chainRepairBadness`,
+`checkSkeletonChains`.
 
 **Imports.** None. **Imported by** `pose/triangulation-core.js`, `pose/volume3d.js`. Tests:
 `tests/test-volume-fusion.mjs` (synthetic rig on SLAP's 8 cameras; and real data, `fixtures/volume-fusion-fight.json`:
 24 animal-frames of a DoublePoke fight with the volfuse study's Python results — LUCID's fusion moves the nodes the
-study moved, the same way; `fixtures/volume-fusion-tail0713.json`: 40 animal-frames around July 13's tail case —
-LUCID's check switches the chains the study's did and brings the stretched tail back), `tests/e2e/volume-fusion.mjs`.
+study moved, the same way; `fixtures/volume-fusion-tail0713.json`: 41 animal-frames around July 13's tail case,
+three of them judged by eye (`judged`: which nodes must stay, change, or match plain triangulation) — every flagged
+chain is repaired to plausible or left, no plausible chain is touched), `tests/e2e/volume-fusion.mjs`.
 
 ---
 
@@ -4235,7 +4243,7 @@ fused or filled).
   The 3D a fused solve produces is saved like any 3D. Such groups carry `group.volumeFused` (in memory) so
   `ui/rendering.js`'s reprojection fill reprojects their stored 3D instead of re-solving them without the volume.
 - **The setting is browser-local** (`localStorage.lucidVolumeFusion`: `enabled`, gate floor and factor,
-  `matchMaxMm`, `fuse`, an optional `covScale` override, `skeletonCheck`, `chainTol`; default on, the file's
+  `matchMaxMm`, `fuse`, an optional `covScale` override, `skeletonCheck`, `chainTol`, `chainAgreeMm`; default on, the file's
   `cov_scale`). Storage failures fall back to the defaults.
 - **Skeleton chains come from the file** (`data.chains`, by node name). `setSessionVolume` keeps the usable ones in
   file node indices with each bone's usual length (`chainBoneMedians` over the file's means); `volumeChains(session)`
