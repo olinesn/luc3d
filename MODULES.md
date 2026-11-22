@@ -3333,7 +3333,8 @@ and used by EVERY operation that must touch every frame. Hydrate a 2,000-frame
 window (`batchLoadLazyFrames`) → run the callback → drop the window's non-user
 `frameGroups` (pinning the on-screen frame and any user-edited frame) →
 `releaseWindow` → force a real collection every 5 windows. `opts.start`/`opts.end`
-restrict it to a range. Contract points:
+restrict it to a range; `opts.frames` (sorted) to just those frames, hydrating only the windows that hold them
+(the skeleton check's pass). Contract points:
 - **Playback eviction is HELD for the whole sweep** (`holdLazyResidency`,
   released in a `finally` by the exported wrapper around
   `_sweepLazyFrameWindowsHeld`): eviction protects windows around the on-screen
@@ -3983,6 +3984,18 @@ played far past the cap, save, reopen — a member's edit must survive the save)
 
 ### pose/triangulation-core.js
 
+**`options.volume`** (one frame of a volumetric model, `pose/volume3d.js`): `triangulateAndReproject` matches the
+group to a volume animal on its plain solve, gates each view's detections by the volume's projection, re-solves,
+runs the reprojection-threshold rule as usual, then fuses each node with the volume (`pose/volume-fusion.js`). The
+result then carries `volume: {animal, gated, fused, filled}` (also through `triangulationSummary`); without the
+option, or with no animal matched, the result is exactly the old one (no `volume` key). With `options.skeleton` too,
+the skeleton check (below) runs on the fused points with the volume as a source: the volume's own chains when it
+names any, the volume's point and the PLAIN solve's (the ungated solve through the same threshold rule,
+`applyReprojThreshold(obs, pts)`, the rule as a function, computed only when a chain is off) beside the
+camera-subset candidates, each weighed by the cameras that agree with it, and the lock is the volume's (plain and
+volume within `chainAgreeMm`) instead of the all-cameras-agree one: cameras that all agree can share one 2D mistake.
+`skeleton` then also counts `nodesFromSolve` and `nodesFromVolume`.
+
 **Purpose.** The pure triangulation math, split out of `pose/triangulation.js`
 so a Web Worker can load it: matrix helpers (`matMul`, `matTranspose`,
 `solveSmallestEigenvector4x4`, `svd3x4`), DLT
@@ -4019,6 +4032,14 @@ numbers are identical (Object.is) — except, with a reprojection-error
 threshold, the UNDISTORTED errors: the solve leaves out the observations it
 dropped, which the stored 3D does not record. ~20x cheaper than re-solving
 Refined. Used by `ui/rendering.js`'s reprojection fill.
+**`options.skeleton`** (measured chains from `pose/skeleton-check-run.js`) runs Triangulate's skeleton check after
+the reprojection-threshold rule (`pose/skeleton-check.js` `checkChains`): a chain whose bones leave their usual
+ranges gets the fewest point changes that make it plausible, each to a candidate from `subsetCandidates` — every
+pair of the cameras that see the point is triangulated, the cameras within `subsetPx` (12) of that point's
+reprojection form a group, each group of 2+ is re-solved (DLT) from its own detections, the `maxCandidates` (3)
+largest offered — or dropped (NaN). A point seen by 3+ cameras that all agree with it is locked. Candidates use
+every detection, from a copy taken before the threshold rule. The result then carries `skeleton: {chainsRepaired,
+nodesResolved, nodesDropped}`; without the option it is exactly the old one (no `skeleton` key).
 **`triangulationSummary(result)`** — `{points3d, meanError,
 meanErrorUndistorted, method}`, what a pool reply carries under `summaryOnly`.
 Covered by `tests/test-reproject-stored-3d.mjs` (incl. the threshold negative
@@ -4099,11 +4120,72 @@ only on `./pose-data.js`, so a worker can still load this module.
 
 ---
 
+### pose/skeleton-check.js
+
+**Purpose.** Triangulate's skeleton check, import-free and DOM-free (the core runs it in the page or a worker):
+find body parts whose 3D breaks the skeleton's usual bone lengths and repair only the points that need it.
+- **Chains from the skeleton** (`skeletonChains(nodeCount, edges)`): hubs are the nodes with 3+ edges (on
+  DoublePoke's star skeleton TTI and the Head; a connected part without one is held at its centre); every group of
+  the other nodes that hangs together once the hubs are removed is a chain, anchored at the hubs it touches; its
+  bones are every edge with an end in it. On the star skeleton each tail point is its own chain (judged by its
+  distance to TTI), the ears are one chain, the shoulders one, the haunches one.
+- **Usual lengths** (`measureBones(chains, forEachPose)`): each bone's median and range
+  `[min(0.5, p2 × 0.85), max(1.5, p98 × 1.15)]` of the median, from up to 20,000 lengths per bone (reservoir,
+  fixed hash); fewer than `MIN_BONE_SAMPLES` (20) → the chain is skipped, with why. A steady bone gets exactly ±50 %;
+  TTI–TailTip (short whenever the tail curls; 19 % of July 13's poses are under half its median) gets a wider lower
+  bound and the same upper one.
+- **The repair** (`checkChains(points3d, chains, candidatesFor)`): the trigger `chainBadness` (bones with both ends
+  present, outside their ranges; a missing point is absent, not implausible); every combination of keep / a
+  candidate / drop per chain point (≤ 4,096); the result must be plausible (`chainRepairBadness` 0: judged bones
+  inside their ranges and every kept point linked to an anchor through present bones, so a drop cannot cut a wrong
+  piece loose); fewest changes, then fewest drops, then most support, then smallest move; none plausible = the chain
+  is left. A `locked` point is keep-only. **Never swap a whole chain**: one wrong point among right ones is the
+  common case (the volfuse study's July 13 frames 105,416 and 105,372, judged by eye).
+
+**Key exports.** `skeletonChains`, `measureBones`, `chainBadness`, `chainRepairBadness`, `checkChains`,
+`SKELETON_CHECK_DEFAULTS`, `MIN_BONE_SAMPLES`.
+
+**Imports.** None. **Imported by** `pose/triangulation-core.js`, `pose/skeleton-check-run.js`. Tests:
+`tests/test-skeleton-check.mjs` (chains of a star, a chain-shaped and a hub-less skeleton; ranges; the repair; the
+solve on SLAP's 8 cameras; real data `fixtures/skeleton-check-real.json`: 84 animal-frames of two DoublePoke clips,
+production 2D, no volume — every flagged chain repaired to plausible or left, no plausible chain touched),
+`tests/e2e/skeleton-check.mjs`.
+
+---
+
+### pose/skeleton-check-run.js
+
+**Purpose.** The project side of the skeleton check: the browser-local setting (`localStorage.lucidSkeletonCheck`,
+`enabled`, off by default; never in the `.slp`), the session skeleton's chains named by their nodes
+(`sessionSkeletonChains`, cached per skeleton), their bones measured on every group's stored 3D in the session
+(`session.instanceGroups`, never evicted, so a lazy project is measured whole; cached until
+`invalidateSkeletonCheck`), and which groups a pass re-solves.
+- `skeletonCheckForRun(session)` → `options.skeleton` or null (off, no skeleton, no chain, nothing measurable).
+- Where it runs (`pose/triangulation.js`): This frame (`triangulateCurrentFrame`) and Range
+  (`triangulateMultiFrameInstances`, `_triangulateGroupStep`) inline with the bones measured from the 3D already
+  there; **Triangulate All in a pass after its solve** (`skeletonCheckPass`): measure on the run's own 3D, find the
+  frames with a flagged group (`framesNeedingSkeletonCheck`), re-solve only those groups with the check on the main
+  thread (`sweepLazyFrameWindows`' `frames`), drop those frames' derived reprojections. An edit's re-solve
+  (`reTriangulateGroup`) does not check: the user's points are authoritative.
+- A repaired group carries `group.skeletonRepaired` (in memory), so `ui/rendering.js`'s fill reprojects its stored
+  3D instead of re-solving it without the check; a re-solve without the check clears it. A dropped point is saved
+  as missing 3D.
+
+**Key exports.** `getSkeletonCheckSettings`, `setSkeletonCheckSettings`, `sessionSkeletonChains`,
+`invalidateSkeletonCheck`, `skeletonCheckForRun`, `groupNeedsSkeletonCheck`, `framesNeedingSkeletonCheck`.
+
+**Imports.** `./skeleton-check.js`. **Imported by** `pose/triangulation.js`, `ui/skeleton-check-field.js`. Tests:
+`tests/test-skeleton-check.mjs`, `tests/e2e/skeleton-check.mjs`.
+
+---
+
 ### pose/triangulation-pool.js
 
 **Purpose.** Run `triangulateAndReproject` for many instance groups on a pool
 of Web Workers — the Triangulate All paths' parallel solve. Every group is
-independent (cameras fixed).
+independent (cameras fixed). `submit(group, groupCameras, cb, volume)`: the optional `volume` (the group's frame of
+a volumetric model, `pose/volume3d.js` `volumeForFrame`) is captured in the job like its 2D, and passed to the solve
+inline, in the worker (`job.volume`) and in an inline re-solve of a failed batch.
 
 **Key exports.** `createGroupSolver(cameras, { method, triangulateOnly,
 summaryOnly, expectedGroups })` -> `{ submit(group, groupCameras, cb), mark(cb), throttle(),
@@ -4171,6 +4253,80 @@ whose options say `summaryOnly`) or `{type:'error', id, message}`.
 
 **Imported by.** Spawned by `pose/triangulation-pool.js` via
 `new Worker(new URL('pose/triangulation-worker.js', document.baseURI), {type:'module'})`.
+
+---
+
+### pose/volume-fusion.js
+
+**Purpose.** Combine a volumetric 3D model's estimate (per animal and node: a 3D mean and a covariance, the second
+moments of its softmax) with the triangulation of the 2D detections, inside the solve. `triangulateAndReproject`
+(`pose/triangulation-core.js`) calls it when `options.volume` is set (one frame of the session's volume, from
+`pose/volume3d.js` `volumeForFrame`):
+1. `matchVolumeAnimal`: the group is the frame's volume animal with the smallest median node distance to the plain
+   solve, under `matchMaxMm` (30 mm); none, and the solve is the plain one, bit for bit.
+2. **Volume-gated triangulation** (`gateObservations`): each view's detection of node k enters the triangulation only
+   if it lies within max(`gateFloorPx` 12, `gateK` 2 × sigma) of the volume's node projected into that view; sigma is
+   the largest axis of the volume's covariance projected there (numerical Jacobian). Gating BEFORE the solve, not a
+   test of the solve's own reprojection: the core re-solves (DLT or Refined) from what passed and its
+   reprojection-threshold rule then runs unchanged.
+3. **Fusion** (`fuseWithVolume`): each solved node becomes the product of Gaussians of the solve (covariance
+   `dltCovariance`: Gauss-Newton from its remaining views' rays, scaled by the reprojection residuals shrunk toward
+   2 px with 4 pseudo-degrees of freedom) and the volume (covariance × `covScale`); a node the solve leaves empty
+   takes the volume's mean. `fuse: false` only fills.
+4. **Triangulate's skeleton check** (`pose/skeleton-check.js`, when it is on) then repairs the fused points with
+   the volume as one more source (`pose/triangulation-core.js`, above): the file's chains (±50 % of
+   `chainBoneMedians`, medians over the file's rows, within 8 % of DLT's reliable points on July 13), the volume's
+   and the plain solve's points as candidates, and a point the two put within `chainAgreeMm` (10 mm) locked.
+   **Never swap a whole chain**: in pile-ups one node is often wrong while the rest are right (July 13 frames
+   105,416 and 105,372, judged by eye).
+**The gate uses the volume's covariance as given; the fusion scales it** by `covScale`, which the exporter measures
+(a softmax spread is far wider than the model's error: 17-25× in variance for DoublePoke's volume).
+Import-free and DOM-free (the worker loads it through the core); the projection is passed in (the core's
+`reprojectPointCamera`, native pixels). Its 3×3 inverse uses a relative singularity test, so sub-mm covariances
+still invert.
+
+**Key exports.** `VOLUME_DEFAULTS`, `mapVolumeNodes`, `volumeNode`, `matchVolumeAnimal`, `gateObservations`,
+`dltCovariance`, `productOfGaussians`, `fuseWithVolume`, `chainBoneMedians`.
+
+**Imports.** None. **Imported by** `pose/triangulation-core.js`, `pose/volume3d.js`. Tests:
+`tests/test-volume-fusion.mjs` (synthetic rig on SLAP's 8 cameras; and real data, `fixtures/volume-fusion-fight.json`:
+24 animal-frames of a DoublePoke fight with the volfuse study's Python results — LUCID's fusion moves the nodes the
+study moved, the same way; `fixtures/volume-fusion-tail0713.json`: 41 animal-frames around July 13's tail case,
+three of them judged by eye (`judged`: which nodes must stay, change, or match plain triangulation) — every flagged
+chain is repaired to plausible or left, no plausible chain is touched), `tests/e2e/volume-fusion.mjs`.
+
+---
+
+### pose/volume3d.js
+
+**Purpose.** A session's loaded volumetric-model output (File ▸ Load Volume 3D, `import-export/volume3d-file.js`)
+and the volume-fusion setting; `volumeForFrame(session, frameIdx)` hands one frame of it to the solve as
+`options.volume`, in the skeleton's node order (matched by name; a node the file lacks is NaN, so not gated,
+fused or filled).
+- **In memory only**: `session.volume3d` is never written to the `.slp`; a reopened project needs the file again.
+  The 3D a fused solve produces is saved like any 3D. Such groups carry `group.volumeFused` (in memory) so
+  `ui/rendering.js`'s reprojection fill reprojects their stored 3D instead of re-solving them without the volume.
+- **The setting is browser-local** (`localStorage.lucidVolumeFusion`: `enabled`, gate floor and factor,
+  `matchMaxMm`, `fuse`, an optional `covScale` override, `chainAgreeMm`; default on, the file's
+  `cov_scale`). Storage failures fall back to the defaults.
+- **Skeleton chains come from the file** (`data.chains`, by node name). `setSessionVolume` keeps the usable ones in
+  file node indices with each bone's usual length (`chainBoneMedians` over the file's means); `volumeChains(session)`
+  maps them to the skeleton (cached per skeleton) in pose/skeleton-check.js's chain form (anchors = the bones' ends
+  outside the chain, range ±50 %) and lists the chains left out, with why (a node the file or the skeleton lacks,
+  no bones, too few rows). `volumeForFrame` passes them as `chains`; they are checked only while Triangulate ▸
+  Skeleton check is on (`pose/skeleton-check-run.js`), and on a group that matches a volume animal they replace the
+  skeleton's. Triangulate All's check pass re-solves a group whose stored 3D breaks either set (`groupNeedsCheck`,
+  `pose/triangulation.js`), with the frame's volume.
+- Every Triangulate path passes it: This frame (`triangulateCurrentFrame`), All frames (eager and windowed, through
+  the pool's `submit(..., volume)`), Range (`_triangulateGroupStep`), and an edit's re-solve (`reTriangulateGroup`,
+  with the shown frame's volume when the group is one of that frame's). The grouping and identity solves
+  (`ui/export-modals.js`, `ui/sessions-panes.js`, `ui/ui-wiring.js`) and Track All's tracker stay plain DLT.
+
+**Key exports.** `getVolumeSettings`, `setVolumeSettings`, `setSessionVolume`, `clearSessionVolume`, `sessionVolume`,
+`volumeNodeCoverage`, `volumeChains`, `volumeForFrame`.
+
+**Imports.** `./volume-fusion.js`. **Imported by** `pose/triangulation.js`, `ui/volume-fusion-field.js`,
+`import-export/volume3d-file.js`. Tests: `tests/test-volume-fusion.mjs`, `tests/e2e/volume-fusion.mjs`.
 
 ---
 
@@ -7239,6 +7395,31 @@ an action.
 `updateTrackingThresholds`, `onTrackingThresholdsChange`),
 `../import-export/save-load.js` (`setStatus`). **Imported by** `ui/ui-wiring.js`.
 Test: `tests/e2e/toolbar-reproj-threshold.mjs`.
+
+### ui/volume-fusion-field.js
+
+**Purpose.** The Triangulate menu's **Fuse with volume** checkbox (`#tbVolumeFusion`), below Reprojection error:
+edits `pose/volume3d.js`'s browser-local `enabled`, which every Triangulate run reads per frame. Greyed out
+(`.tri-dropdown-setting.disabled`) while the active session has no volume loaded (File ▸ Load Volume 3D); the
+setting itself is kept. Refreshed on `lucid:volume3d-changed` and whenever the menu is opened (the active session
+may have changed). Not in Defining Plane Mode's toolbar lock: a setting, not an action.
+
+**Key exports.** `wireVolumeFusionField()`.
+
+**Imports.** `./app-state.js`, `../pose/volume3d.js`, `../import-export/save-load.js` (`setStatus`).
+**Imported by** `ui/ui-wiring.js`. Test: `tests/e2e/volume-fusion.mjs`.
+
+### ui/skeleton-check-field.js
+
+**Purpose.** The Triangulate menu's **Skeleton check** checkbox (`#tbSkeletonCheck`), below Reprojection error:
+edits `pose/skeleton-check-run.js`'s browser-local `enabled` (off by default), which every Triangulate run reads
+when it starts. Its tooltip explains the check and names the session skeleton's parts, refreshed when the menu
+opens. Not in Defining Plane Mode's toolbar lock: a setting, not an action.
+
+**Key exports.** `wireSkeletonCheckField()`.
+
+**Imports.** `./app-state.js`, `../pose/skeleton-check-run.js`, `../import-export/save-load.js` (`setStatus`).
+**Imported by** `ui/ui-wiring.js`. Test: `tests/e2e/skeleton-check.mjs`.
 
 ### ui/animal-count-field.js
 
@@ -16400,6 +16581,29 @@ the status bar at the bottom.
 ---
 
 **Behavior labels.** The project JSON writes `writeBehaviorMetadata` per session (v3) / at top level (v2) and `_restoreProjectV2` reads it; New Project and the project-JSON load call `resetBehaviorState()` next to `resetPlaneState()`.
+
+### import-export/volume3d-file.js
+
+**Purpose.** File ▸ **Load Volume 3D (H5)...** (`#menuLoadVolume3d`): read a volumetric model's output for the active
+session and attach it (`pose/volume3d.js` `setSessionVolume`). The file, `<name>.vol3d.h5`, is written by
+`scripts/export_volume3d.py`: one row per animal per frame — `/frame_indices` (R), `/means` float32 (R, J, 3),
+`/covs` float32 (R, J, 6) as [xx, xy, xz, yy, yz, zz], `/node_names` (J); root attributes `format`
+(`lucid-volume3d/1`), `cov_scale`, `source`, and optionally `skeleton_chains` (JSON `[{name, bones: [[a, b], ...],
+nodes: [...]}]` by node name: the skeleton check's chains; unreadable JSON means no check, never a failed load).
+Rows carry no identity: each solve matches its group by 3D distance.
+Read through `loading/cold-read-guard.js` (`readBlobArrayBuffer`) and the shared h5wasm (`initH5wasm`, now exported
+by `file-io.js`), into MEMFS and unlinked after. Wrong shapes throw with the shapes found. The status says how
+many animal-frames, frames and skeleton nodes matched (fewer than 3 nodes is an error) and which chains the skeleton
+check guards (and which it leaves out, with why), and fires
+`lucid:volume3d-changed`.
+
+**Key exports.** `parseVolume3dH5(arrayBuffer)`, `handleLoadVolume3d(file?)`, `VOLUME3D_FORMAT`.
+
+**Imports.** `./file-io.js` (`initH5wasm`, `pickFiles`), `../loading/cold-read-guard.js`, `./save-load.js`
+(`showLoading`, `hideLoading`, `setStatus`), `../ui/app-state.js`, `../pose/volume3d.js`. **Imported by**
+`ui/ui-wiring.js`. Test: `tests/e2e/volume-fusion.mjs` (writes a file with h5wasm in the page and loads it through
+the handler).
+
 
 ### import-export/slp-import.js
 

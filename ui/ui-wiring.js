@@ -67,7 +67,10 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 // The toolbar's Animals field, beside Track Frame / Track All.
 import { wireAnimalCountField } from './animal-count-field.js';
 import { wireReprojThresholdField } from './reproj-threshold-field.js';
+import { wireSkeletonCheckField } from './skeleton-check-field.js';
 import { wireToolbarMenuKeys, returnFocusTo } from './toolbar-menu-keys.js';
+import { wireVolumeFusionField } from './volume-fusion-field.js';
+import { handleLoadVolume3d } from '../import-export/volume3d-file.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -1675,6 +1678,11 @@ export function setupMenus() {
         handleLoadPoints3dH5();
     });
 
+    document.getElementById('menuLoadVolume3d').addEventListener('click', function () {
+        closeMenus();
+        handleLoadVolume3d();
+    });
+
     document.getElementById('menuLoadSkeletonMenu').addEventListener('click', function () {
         closeMenus();
         document.getElementById('btnLoadSkeleton').click();
@@ -3222,7 +3230,9 @@ export function setupUI() {
 
     wireAnimalCountField();
     wireReprojThresholdField();
+    wireSkeletonCheckField();
     wireToolbarMenuKeys();
+    wireVolumeFusionField();
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
