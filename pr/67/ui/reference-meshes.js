@@ -14,14 +14,14 @@
 // Parsing is `import-export/mesh-import.js` (typed arrays only). A big file is
 // parsed in chunks with the progress card up, yielding to paint between them.
 
-import { viewport3d } from './app-state.js?v=34a7a6449e01';
-import { pickFiles } from '../import-export/file-io.js?v=34a7a6449e01';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=34a7a6449e01';
-import { parseMeshAsync } from '../import-export/mesh-import.js?v=34a7a6449e01';
+import { viewport3d } from './app-state.js?v=20102c35280e';
+import { pickFiles } from '../import-export/file-io.js?v=20102c35280e';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=20102c35280e';
+import { parseMeshAsync } from '../import-export/mesh-import.js?v=20102c35280e';
 import {
     showLoading, showLoadingProgress, hideLoading, yieldToPaint,
-} from './loading-overlay.js?v=34a7a6449e01';
-import { setStatus } from '../import-export/save-load.js?v=34a7a6449e01';
+} from './loading-overlay.js?v=20102c35280e';
+import { setStatus } from '../import-export/save-load.js?v=20102c35280e';
 
 /** Colours handed to meshes without vertex colours, in turn. */
 export const REFERENCE_MESH_COLORS = ['#b0bec5', '#ce93d8', '#80cbc4', '#ffcc80', '#90caf9'];

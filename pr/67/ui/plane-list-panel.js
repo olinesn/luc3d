@@ -17,17 +17,17 @@
 // a function body only, never at this module's top level. Same rule as
 // `ui/plane-nodes-panel.js`; see the note there.
 
-import { state, interactionManager } from './app-state.js?v=34a7a6449e01';
-import { getPoint3d, hasPoint3d } from '../pose/pose-data.js?v=34a7a6449e01';
+import { state, interactionManager } from './app-state.js?v=20102c35280e';
+import { getPoint3d, hasPoint3d } from '../pose/pose-data.js?v=20102c35280e';
 import {
     planeNodeIndices, points3dForPlane, nodeErrorsForPlane,
-} from '../pose/plane-data.js?v=34a7a6449e01';
-import { fittedPlanes } from './origin-definition.js?v=34a7a6449e01';
+} from '../pose/plane-data.js?v=20102c35280e';
+import { fittedPlanes } from './origin-definition.js?v=20102c35280e';
 import {
     ICON_PIN, PLANE_DRAG_MIME, makeDeleteButton, setEmptyState, redraw,
     planeModel, planeState, getSelectedPlane, deletePlane, placedViewsOf,
     planeImmutableMask, unplacePlaneFromView, refreshPlanePanel,
-} from './plane-definition.js?v=34a7a6449e01';
+} from './plane-definition.js?v=20102c35280e';
 
 // --- Planes table (drag source) --------------------------------------------
 
