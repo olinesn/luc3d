@@ -19,27 +19,27 @@
  *     Both alone.
  *  5. Running Track All with coloring already on Identity changes nothing and does not
  *     claim a switch.
+ *  5. The switches' own overlay redraws (Color by ID, trails, the layer boxes)
+ *     are held, and Track All redraws once (`holdOverlayDraws`): each redraw
+ *     forced a layout of the page the previous one changed.
  *
  * Run: node tests/e2e/track-all-switches-to-id.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { answerTrackSetup } from './fixtures/track-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8265);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -125,7 +125,9 @@ try {
     let m = await tlMode();
     check(m.button === 'tracks' && m.mode === 'tracks', `precondition: the timeline is on Tracks (${JSON.stringify(m)})`);
     const threeDBefore = t.threeD;
+    const heldBefore = await page.evaluate(async () => (await import('/ui/rendering.js')).overlayDrawHold.held);
     await runTrackAll();
+    const hold = await page.evaluate(async () => (await import('/ui/rendering.js')).overlayDrawHold);
     t = await toggle();
     check(t.identities === 2, `Track All assigned identities (${t.identities})`);
     check(t.id && !t.tracks && t.state, 'after Track All the toggle is on Identity (button and state)');
@@ -133,6 +135,8 @@ try {
     m = await tlMode();
     check(m.button === 'identities' && m.mode === 'identities', `after Track All the timeline is on IDs (${JSON.stringify(m)})`);
     check(m.idRows > 0 && m.trackRows === 0, `...and its rows are the identities (${m.idRows} ID rows, ${m.trackRows} track rows)`);
+    check(hold.held - heldBefore >= 2 && hold.depth === 0,
+        `5. the switches' redraws were held (${hold.held - heldBefore}) and the hold released (depth ${hold.depth})`);
     const hasViewer = await page.evaluate(async () => !!(await import('/ui/app-state.js')).viewport3d);
     if (hasViewer) check(t.threeD > threeDBefore, `the 3D viewer was refreshed for the recolor (${threeDBefore} -> ${t.threeD})`);
     else console.log('  - no 3D viewer in this build; skipped the 3D recolor check');

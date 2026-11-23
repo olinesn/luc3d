@@ -41,7 +41,7 @@
  *
  * Run: node tests/e2e/slp-failed-read.mjs   (starts its own server, on a free port)
  */
-import { chromium } from 'playwright';
+import { launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -151,7 +151,7 @@ FileReaderSync.prototype.readAsArrayBuffer = function (blob) {
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const context = await browser.newContext({ acceptDownloads: false });
     const page = await context.newPage();
     const pageErrors = [];

@@ -32,12 +32,12 @@
  * ../sleap-app beside the main LUC3D checkout), and `uv` for Python. Skips without them.
  *
  * Run: node tests/e2e/behavior-cross-app.mjs
- *      (spawns http.server on PORT and sleap-app's dev server on APP_PORT)
+ *      (serves the app itself on PORT and starts sleap-app's dev server on APP_PORT)
  * WRITE_FIXTURES=<dir> also writes the two files the repos keep as fixtures, so each tests
  * the other's file without the other's code (`luc3d_behavior.slp` in sleap-app's
  * tests/fixtures, `sleap_app_behavior.slp` in tests/fixtures/behavior-events here).
  */
-import { chromium } from 'playwright';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -46,7 +46,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8194);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const APP_PORT = Number(process.env.APP_PORT || 5183);
 const SLEAP_APP_DIR = process.env.SLEAP_APP_DIR || path.join(os.homedir(), 'Desktop', 'sleap-app');
 const PY_SPEC = process.env.SLEAP_IO_SPEC || 'sleap-io==0.9.5';
@@ -157,7 +158,6 @@ sio.Labels(labeled_frames=frames, videos=videos, skeletons=[skeleton], tracks=[t
     if (r.status !== 0) throw new Error('python failed: ' + r.stderr);
 }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 const appServer = spawn('bun', ['run', 'dev', '--port', String(APP_PORT), '--strictPort'], { cwd: SLEAP_APP_DIR, stdio: 'ignore', detached: true });
 const stopServers = () => {
     server.kill();
@@ -354,7 +354,7 @@ let browser;
 try {
     await waitForHttp(`http://localhost:${PORT}/index.html`);
     await waitForHttp(`http://localhost:${APP_PORT}/`);
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const luc3d = await openLuc3d(browser);
     const app = await openSleapApp(browser);
 
