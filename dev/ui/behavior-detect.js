@@ -35,27 +35,27 @@
 //             ui/origin-definition.js, pose/behavior-*.js,
 //             import-export/save-load.js
 
-import { state } from './app-state.js?v=55136f8a4d88';
-import { showLoading, showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=55136f8a4d88';
-import { planeModel, getPlanes } from './plane-definition.js?v=55136f8a4d88';
-import { originState } from './origin-definition.js?v=55136f8a4d88';
-import { behaviors, behaviorById, featureSettings } from '../pose/behavior-ethogram.js?v=55136f8a4d88';
+import { state } from './app-state.js?v=589d9cc0747b';
+import { showLoading, showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=589d9cc0747b';
+import { planeModel, getPlanes } from './plane-definition.js?v=589d9cc0747b';
+import { originState } from './origin-definition.js?v=589d9cc0747b';
+import { behaviors, behaviorById, featureSettings } from '../pose/behavior-ethogram.js?v=589d9cc0747b';
 import {
     collectBehaviorInput, resolveBody, fitFloor, floorFromPlane, floorFromOrigin, featureSpec, brokenPoseFrames,
-} from '../pose/behavior-tensor.js?v=55136f8a4d88';
-import { featurePadFrames, planChunks, sliceChunkData, catalogFor, TARGET_PREFIX } from '../pose/behavior-features.js?v=55136f8a4d88';
-import { planDetectors, detectorBouts, orderedPairs, combineMutual } from '../pose/behavior-rules.js?v=55136f8a4d88';
-import { runBehaviorChunks, runJob } from '../pose/behavior-pool.js?v=55136f8a4d88';
+} from '../pose/behavior-tensor.js?v=589d9cc0747b';
+import { featurePadFrames, planChunks, sliceChunkData, catalogFor, TARGET_PREFIX } from '../pose/behavior-features.js?v=589d9cc0747b';
+import { planDetectors, detectorBouts, orderedPairs, combineMutual } from '../pose/behavior-rules.js?v=589d9cc0747b';
+import { runBehaviorChunks, runJob } from '../pose/behavior-pool.js?v=589d9cc0747b';
 import {
     setBehaviorRun, noteDetectionPass, runConfigPrint, predictionInputPrintAsync, notePossibleInputChange,
     predictionCheckPending, checkPredictionInputAsync, recordedFps,
-} from '../pose/behavior-predictions.js?v=55136f8a4d88';
+} from '../pose/behavior-predictions.js?v=589d9cc0747b';
 import {
     behaviorModelOf, modelHashOf, labelPrintOf, modelProblems, predictModels, predictModelsAtFrame, deriveBouts,
     modelBoutSettings,
-} from '../pose/behavior-classifier.js?v=55136f8a4d88';
-import { behaviorPost } from '../pose/behavior-ethogram.js?v=55136f8a4d88';
-import { setStatus, markDirty, onMarkDirty } from '../import-export/save-load.js?v=55136f8a4d88';
+} from '../pose/behavior-classifier.js?v=589d9cc0747b';
+import { behaviorPost } from '../pose/behavior-ethogram.js?v=589d9cc0747b';
+import { setStatus, markDirty, onMarkDirty } from '../import-export/save-load.js?v=589d9cc0747b';
 
 /** Frames per chunk of a run (each padded by the longest window). */
 var CHUNK_FRAMES = 8192;

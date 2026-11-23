@@ -277,7 +277,12 @@ try {
     check(notBar && notBar.alpha < 0.4 && near(notBar.x + notBar.w, g.left(2981, 3000), 1.01), '"not" labels are faint, on their own frames');
     const col = await column('behaviorStripCanvas', rear.x + rear.w / 2);
     check(col[0] === 0 && col[1] === 1 && col[12] === 1 && col[13] === 0, 'bars are slim, inside their lane');
-    const attack = startingAt(b, g.left(3010, 3000), 2);
+    // The partner's name is written on the bar, and with some fonts (Linux's)
+    // its letters reach the row runs() reads, cutting the bar into pieces of
+    // its color: put them back together.
+    const attackStart = startingAt(b, g.left(3010, 3000), 2);
+    const attackParts = attackStart ? b.filter(m => m.lane === 2 && m.x >= attackStart.x - 0.01 && hex(m) === hex(attackStart)) : [];
+    const attack = attackStart && Object.assign({}, attackStart, { w: attackParts[attackParts.length - 1].x + attackParts[attackParts.length - 1].w - attackStart.x });
     check(!!attack && hex(attack) === (await colorOf('b2')).toLowerCase(), 'each bar in its own lane, its own color');
     const textPixels = (y) => page.evaluate(({ x0, x1, y, c0 }) => {
         const c = document.getElementById('behaviorStripCanvas');
@@ -288,7 +293,7 @@ try {
         return other;
     }, { x0: attack.x, x1: attack.x + attack.w, y, c0: { r: attack.r, g: attack.g, b: attack.b } });
     const onText = await textPixels(2 * 14 + 7);
-    check(onText > 3 && onText < attack.w / 4, `with more than two animals a directed bar names its target (${onText} pixels of text along it)`);
+    check(onText > 3 && onText < attack.w / 4, `with more than two animals a directed bar names its target (${onText} pixels of text along a ${attack.w.toFixed(1)} px bar)`);
     const jump = b.find(m => m.lane === 3);
     check(jump.w <= 4 && near(jump.x + jump.w / 2, g.mid(3000, 3000), 1.51), 'a point is a tick on its frame, under the playhead here');
     const labels = await page.$$eval('.behavior-strip-label', els => els.map(e => e.getBoundingClientRect().top));
@@ -306,8 +311,14 @@ try {
     check(beforeStart.length > 0 && beforeStart.every(m => m.alpha < 0.1) && near(beforeStart[0].x + beforeStart[0].w, v0.x + v0.w / 2 - g.ppf / 2, 1.51), 'before the recording starts, the stretch is marked');
     await goTo(3000);
     const rulerH = (await box('#behaviorStripRulerCanvas')).h;
-    const tickAt = await column('behaviorStripRulerCanvas', g.mid(3000, 3000));
-    check(tickAt[rulerH - 1] > 0 && tickAt[rulerH - 5] > 0, 'the ruler has a major tick under the playhead at 01:40.000, on frame 3,000 at 30 fps');
+    // The tick is one pixel wide, and where it lands of the pixels beside the
+    // playhead's x depends on the strip's sub-pixel left edge (which the labels'
+    // font sets): take the column, within a pixel, that holds it.
+    const tickCols = [];
+    for (const dx of [0, -1, 1]) tickCols.push(await column('behaviorStripRulerCanvas', g.mid(3000, 3000) + dx));
+    const isTick = (c) => c[rulerH - 1] > 0 && c[rulerH - 5] > 0;
+    const tickAt = tickCols.find(isTick) || tickCols[0];
+    check(isTick(tickAt), `the ruler has a major tick under the playhead at 01:40.000, on frame 3,000 at 30 fps (bottom row at the playhead, a pixel left, a pixel right: ${tickCols.map(c => c[rulerH - 1].toFixed(2)).join(' ')})`);
     check(tickAt.slice(0, 9).some(a => a > 0), 'with its label above it');
     const offTick = await column('behaviorStripRulerCanvas', g.mid(3005, 3000));
     check(offTick[rulerH - 4] === 0 && offTick[rulerH - 5] === 0, 'and none a sixth of a second on');
