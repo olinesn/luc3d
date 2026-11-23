@@ -1574,11 +1574,21 @@ async function lazyCameraExportBytes(SIO, session, cameraName) {
  * belong to the loader, so the labels ride along for this write only.
  */
 async function saveLazyCameraBytes(SIO, session, cameraName, lazyLabels, saveOpts) {
-    var videoAt = session.cameras.findIndex(function (c) { return c.name === cameraName; });
+    var save = function () {
+        return saveOpts ? SIO.saveSlpToBytes(lazyLabels, saveOpts) : SIO.saveSlpToBytes(lazyLabels);
+    };
+    var videos = lazyLabels.videos || [];
+    var videoAt = (session.cameras || []).findIndex(function (c) { return c.name === cameraName; });
     var cameraEvents = buildBehaviorEvents(SIO, [{
-        session: session, video: lazyLabels.videos[lazyLabels.videos.length === 1 ? 0 : videoAt] || null,
+        session: session, video: videos[videos.length === 1 ? 0 : videoAt] || null,
         identities: [], tracks: lazyLabels.tracks,
     }]);
+    // No ethogram and no bouts, here or in the store: the store is written as it
+    // is, byte for byte. (A store's own events are replaced, never kept: what the
+    // file had came into the session's labels when it opened.)
+    var none = function (a) { return !a || a.length === 0; };
+    if (none(cameraEvents.eventTypes) && none(cameraEvents.events) &&
+        none(lazyLabels.eventTypes) && none(lazyLabels.events)) return await save();
     var ownTypes = lazyLabels.eventTypes, ownEvents = lazyLabels.events, ownIdentities = lazyLabels.identities;
     lazyLabels.eventTypes = cameraEvents.eventTypes;
     lazyLabels.events = cameraEvents.events;
