@@ -16,35 +16,38 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=589d9cc0747b';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=589d9cc0747b';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=589d9cc0747b';
+} from './triangulation.js?v=b3d3d6714de1';
+import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=b3d3d6714de1';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=b3d3d6714de1';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=589d9cc0747b';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=b3d3d6714de1';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=589d9cc0747b';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=589d9cc0747b';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=589d9cc0747b';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=589d9cc0747b';
-import { startTrackerWorker } from './tracker-pool.js?v=589d9cc0747b';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=589d9cc0747b';
-import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=589d9cc0747b';
-import { hasRealCalibration } from './placeholder-cameras.js?v=589d9cc0747b';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=589d9cc0747b';
-import { updateInfoPanel } from '../ui/info-panel.js?v=589d9cc0747b';
-import { setColorByIdentity } from '../ui/color-by.js?v=589d9cc0747b';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=589d9cc0747b';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=589d9cc0747b';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=589d9cc0747b';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=589d9cc0747b';
-import { collapseTimeline, getTimelineDisplayMode, setTimelineDisplayMode } from '../ui/timeline-controller.js?v=589d9cc0747b';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=589d9cc0747b';
-import { noteTrackRun } from './run-state.js?v=589d9cc0747b';
-import { confirmRetrackWithBehaviorLabels } from '../ui/behavior-confirm.js?v=589d9cc0747b';
+} from '../ui/settings.js?v=b3d3d6714de1';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=b3d3d6714de1';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=b3d3d6714de1';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=b3d3d6714de1';
+import { startTrackerWorker } from './tracker-pool.js?v=b3d3d6714de1';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=b3d3d6714de1';
+import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=b3d3d6714de1';
+import { hasRealCalibration } from './placeholder-cameras.js?v=b3d3d6714de1';
+import { drawAllOverlays, holdOverlayDraws, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=b3d3d6714de1';
+import { updateInfoPanel } from '../ui/info-panel.js?v=b3d3d6714de1';
+import { setColorByIdentity } from '../ui/color-by.js?v=b3d3d6714de1';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=b3d3d6714de1';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=b3d3d6714de1';
+import { summarizeTrackedIdentities, describeSwitchCheck, describeTailMarks } from '../ui/track-summary.js?v=b3d3d6714de1';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=b3d3d6714de1';
+import { collapseTimeline, getTimelineDisplayMode, setTimelineDisplayMode } from '../ui/timeline-controller.js?v=b3d3d6714de1';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=b3d3d6714de1';
+import { noteTrackRun } from './run-state.js?v=b3d3d6714de1';
+import { confirmRetrackWithBehaviorLabels } from '../ui/behavior-confirm.js?v=b3d3d6714de1';
+import { resolveTailMarks, createTailBandCue, TAIL_BAND_READ } from './tail-mark.js?v=b3d3d6714de1';
+import { resolveIdentityCues } from './identity-cues.js?v=b3d3d6714de1';
+import { createTailMarkReader } from '../ui/tail-mark-reader.js?v=b3d3d6714de1';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -815,6 +818,9 @@ function numAnimalsAnswered(session) {
 // for a session nobody has answered yet, which in a multi-session project of
 // the same animals makes each one a single Enter.
 var _lastNumAnimals = null;
+// Same for the tail-mark choice: the sessions of one study usually share it.
+var _lastTailMarkedIdentity = null;
+var _tailMarkListeners = [];
 // Told when the count changes, so the toolbar field follows the first-use
 // dialog and the Track Frame Range dialog. A listener that throws must not
 // stop the others.
@@ -870,6 +876,7 @@ function computeMaxInstancesPerView(session) {
 // after the pass, with its options — the Tracking Wizard's own settings, read
 // when the pass ends, so an answer here applies to this run.
 async function askTrackSetup(session, title, withImageCheck) {
+    var answerTailMarks = withImageCheck;   // the whole-recording run: Track All's copy
     var names = (session.skeleton && Array.isArray(session.skeleton.nodes)) ? session.skeleton.nodes : [];
     var answer = await showTrackSetupModal({
         title: title,
@@ -878,12 +885,128 @@ async function askTrackSetup(session, title, withImageCheck) {
         imageCheck: withImageCheck
             ? getTrackingThresholdDefs().filter(function (d) { return IMAGE_CHECK_IDS.indexOf(d.id) >= 0; })
             : null,
+        tailMarks: answerTailMarks ? { value: session.tailMarkedIdentity || _lastTailMarkedIdentity,
+            bands: session.identityMarks && session.identityMarks.tailBands } : null,
     });
     if (!answer) return false;  // cancelled
     updateNodeWeights(answer.nodeWeights);
     if (answer.thresholds) updateTrackingThresholds(answer.thresholds);
     setTrackerNumAnimals(answer.animals);
+    if (answerTailMarks) {
+        if (answer.identityMarks) setIdentityMarks(answer.identityMarks);
+        else { setIdentityMarks(null); setTailMarkedIdentity(answer.tailMarkedIdentity); }
+    }
     return true;
+}
+
+/**
+ * Which identity Track All gives the tail marks in the active session ("id_0"),
+ * or null when the tail-mark pass is off (pose/tail-mark.js). Project state, saved
+ * in the `.slp` like the animal count, because it describes these animals.
+ * @returns {?string}
+ */
+export function getTailMarkedIdentity() {
+    var session = getActiveSession();
+    return (session && session.tailMarkedIdentity) || null;
+}
+
+/**
+ * Set it. A change marks the project dirty and notifies the listeners. A no-op
+ * with no session: there is nothing to save it with.
+ * @param {?string} name
+ */
+export function setTailMarkedIdentity(name) {
+    var session = getActiveSession();
+    if (!session) return;
+    var next = name || null;
+    _lastTailMarkedIdentity = next;
+    if ((session.tailMarkedIdentity || null) === next && !(next && session.identityMarks)) return;
+    session.tailMarkedIdentity = next;
+    if (next) session.identityMarks = null;   // one or the other
+    markDirty();
+    for (var i = 0; i < _tailMarkListeners.length; i++) {
+        try { _tailMarkListeners[i](next); } catch (e) { /* ignore */ }
+    }
+}
+
+/** @param {(name: ?string) => void} fn  called whenever the choice changes (either kind) */
+export function onTailMarkedIdentityChange(fn) {
+    if (typeof fn === 'function') _tailMarkListeners.push(fn);
+}
+
+/**
+ * What each identity of the active session should show, per identity cue
+ * (`{tailBands: {id_0: 0, ...}}`), or null. Project state, like the tail-mark choice.
+ * @returns {?Object}
+ */
+export function getIdentityMarks() {
+    var session = getActiveSession();
+    return (session && session.identityMarks) || null;
+}
+
+/**
+ * Set it (null clears it). Setting it clears the two-animal tail-mark choice: one
+ * session uses one or the other. Marks the project dirty and notifies the listeners.
+ * @param {?Object} marks
+ */
+export function setIdentityMarks(marks) {
+    var session = getActiveSession();
+    if (!session) return;
+    var next = marks && Object.keys(marks).length ? marks : null;
+    if (JSON.stringify(session.identityMarks || null) === JSON.stringify(next) && !(next && session.tailMarkedIdentity)) return;
+    session.identityMarks = next;
+    if (next) session.tailMarkedIdentity = null;
+    markDirty();
+    for (var i = 0; i < _tailMarkListeners.length; i++) {
+        try { _tailMarkListeners[i](session.tailMarkedIdentity || null); } catch (e) { /* ignore */ }
+    }
+}
+
+// Read each animal's tail in every camera and swap labels so the chosen identity has
+// the marks throughout. Never fails the tracking pass: the labels then stay as tracked.
+async function runTailMarkPass(session) {
+    var t0 = performance.now();
+    var fps = state.fps > 0 ? state.fps : session.fps;
+    var res;
+    try {
+        // counting bands needs a sharper read than telling marked from plain
+        var reader = createTailMarkReader(session, fps, session.identityMarks
+            ? Object.assign({}, TAIL_BAND_READ, globalThis.__lucidTailBandRead || {}) : undefined);
+        if (reader.failed) res = { ok: false, reason: reader.failed };
+        else {
+            showLoadingProgress('Reading tail marks', 0, 1, { title: 'Track All' });
+            await yieldToPaint();
+            var pacer = createProgressPacer();
+            var onProgress = async function (done, total) {
+                if (!pacer.due()) return;
+                showLoadingProgress('Reading tail marks', done, total, { title: 'Track All' });
+                await pacer.yield();
+            };
+            if (session.identityMarks) {
+                // Any number of animals, each with its own marks (pose/identity-cues.js).
+                var expected = {};
+                Object.keys(session.identityMarks).forEach(function (cueId) {
+                    var m = session.identityMarks[cueId];
+                    Object.keys(m).forEach(function (name) { (expected[name] = expected[name] || {})[cueId] = m[name]; });
+                });
+                res = await resolveIdentityCues(session, {
+                    fps: fps, expected: expected, onProgress: onProgress,
+                    cues: session.identityMarks.tailBands ? [{ cue: createTailBandCue(), reader: reader }] : [],
+                });
+            } else {
+                res = await resolveTailMarks(session, {
+                    markedName: session.tailMarkedIdentity, fps: fps, reader: reader, onProgress: onProgress,
+                });
+            }
+        }
+    } catch (e) {
+        console.error('[TrackAll] tail marks failed:', e);
+        res = { ok: false, reason: 'failed — ' + e.message };
+    } finally { hideLoading(); }
+    res.elapsedMs = performance.now() - t0;
+    session._tailMarkResult = res;   // in memory only: for the study harness (tests/e2e/_real-tail-marks.mjs)
+    console.log('[TrackAll] tail marks:', res.ok ? res.swapped + ' stretches swapped, ' + res.samples + ' samples' : res.reason);
+    return res;
 }
 
 /**
@@ -982,8 +1105,10 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx, session) {
 }
 
 // Persist a tracked frame: for each live target with a cross-view bundle THIS
-// frame, create an InstanceGroup, map the target's stable trackId to a session
-// Identity, write the per-frame identity entries, and promote unlinked members.
+// frame, create an InstanceGroup of those members — with 3D solved from them
+// alone, not from the stale views the target also holds (`membersPoints3d`) —
+// map the target's stable trackId to a session Identity, write the per-frame
+// identity entries, and promote unlinked members.
 //
 // Raw-trackIdx collision guard (2D-viewer color bug, most visible on the
 // first frame or two of a video): `session.setFrameIdentity` keys
@@ -1041,10 +1166,17 @@ export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity, iden
         }
 
         var group = new InstanceGroup(nextGroupId(), identityId);
+        // The 3D of THESE members only. `target.points3d` also fuses any stale
+        // view the target still holds for association (a camera that missed it
+        // this frame), which is not a member — see `membersPoints3d`.
+        // `triangulationMethod` is deliberately left unset: this is the
+        // tracker's normalized-coordinate DLT, not the app's pixel-space 'dlt',
+        // and tagging it 'dlt' would let Triangulate All ▸ DLT ADOPT it
+        // (`adoptPrior3d`) instead of re-solving.
         // A COPY in the slab pool (pose-data.js `pooledPoints3d`): one
         // ArrayBuffer per group was 539,545 of them for a full Track All, and it
         // also stops the group sharing the tracker target's live array.
-        group.points3d = pooledPoints3d(target.points3d);
+        group.points3d = pooledPoints3d(membersPoints3d(target, frameIdx));
         for (var m = 0; m < members.length; m++) {
             var camName = members[m].camName;
             var det = members[m].det;
@@ -1158,7 +1290,9 @@ function submitTrackerFrame(session, run, fi) {
 // Commit one frame the worker tracked: `targets` as tracker-worker.js returns
 // them, rebuilt into the shape commitTrackedFrame reads off a CrossViewTracker
 // (targets in order; each one's this-frame members in its detsByCam order), so
-// the commit itself is the inline one, unchanged.
+// the commit itself is the inline one, unchanged. The shim holds no stale view,
+// so its `points3d` must already be the members' — the worker sends
+// `membersPoints3d`, not the target's own 3D.
 function commitWorkerFrame(session, run, fi, targets) {
     var metas = run.pending.get(fi);
     run.pending.delete(fi);
@@ -1664,45 +1798,55 @@ async function runTrackingPass(range) {
         var trackMs = performance.now() - trackStart;
         noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         hideLoading();
+        // Track All only: a range is a targeted re-run, whose labels stay what the range's tracker gave.
+        var tailMarks = !isRange && (session.tailMarkedIdentity || session.identityMarks) ? await runTailMarkPass(session) : null;
         // The run's product is identities, so show them (#242): switch Color
         // from Tracks to ID. Only when it assigned any — otherwise there is
-        // nothing new to look at. Recolors 2D + 3D through ui-wiring's handler;
-        // the overlay redraw below is then a cheap repeat.
-        var switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
-        // ...and, after Track All, the timeline's rows from Tracks to IDs (its
-        // Tracks / IDs / Both toggle) for the same reason. IDs or Both already
-        // show them, so those stay; so does a range, inspected on the timeline
-        // as the user left it. The rows are rebuilt once, by refreshTracks below.
-        if (!isRange && lres.numIdentities > 0 && getTimelineDisplayMode() === 'tracks') {
-            setTimelineDisplayMode('identities', { refresh: false });
-        }
-        // ...and only the predictions (User, Reproj, Errors off), the layer tracking produced.
-        var predOnly = lres.numIdentities > 0 && showPredictedOnly();
-        // ...and, after Track All, node trails at ¼ s if they are off: each
-        // animal's recent path is where an identity switch shows. A length the
-        // user already picked is left alone, and so is a range (a targeted
-        // re-run, inspected on the timeline). Through ui-wiring's handler, so
-        // the Trails menus and button follow.
-        var trailsOn = !isRange && lres.numIdentities > 0 && !(state.trailSeconds > 0) &&
-            setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
+        // nothing new to look at. Recolors 3D, the timeline and the
+        // Visibility swatches through ui-wiring's handler; the 2D redraw is
+        // the one below.
+        // The three switches' own redraws are held: the one below draws
+        // their combined result (`holdOverlayDraws`, ui/rendering.js).
+        var switchedToIds = false, predOnly = false, trailsOn = false;
+        holdOverlayDraws(function () {
+            switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
+            // ...and, after Track All, the timeline's rows from Tracks to IDs (its
+            // Tracks / IDs / Both toggle) for the same reason. IDs or Both already
+            // show them, so those stay; so does a range, inspected on the timeline
+            // as the user left it. The rows are rebuilt once, by refreshTracks below.
+            if (!isRange && lres.numIdentities > 0 && getTimelineDisplayMode() === 'tracks') {
+                setTimelineDisplayMode('identities', { refresh: false });
+            }
+            // ...and only the predictions (User, Reproj, Errors off), the layer tracking produced.
+            predOnly = lres.numIdentities > 0 && showPredictedOnly();
+            // ...and, after Track All, node trails at ¼ s if they are off: each
+            // animal's recent path is where an identity switch shows. A length the
+            // user already picked is left alone, and so is a range (a targeted
+            // re-run, inspected on the timeline). Through ui-wiring's handler, so
+            // the Trails menus and button follow.
+            trailsOn = !isRange && lres.numIdentities > 0 && !(state.trailSeconds > 0) &&
+                setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
+        });
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session, { cap: true });
         // Track All closes the Timeline and the 3D viewer if they are open, handing
         // the space back to the views where the new IDs are shown. There is no 3D
         // pose to look at yet: tracking assigns IDs, and Triangulate All comes next.
         // A range does not: it is a targeted re-run whose result the user is usually
-        // inspecting on the timeline.
+        // inspecting on the timeline. Closed FIRST, so the timeline's rebuild below waits
+        // for it to be reopened (Timeline.refreshTracks) instead of building hidden rows.
         if (!isRange) {
             collapseTimeline();
             collapseViewport3D(viewport3d);
         }
+        if (timeline) timeline.refreshTracks(state.session, { cap: true });
         console.timeEnd('[' + label + '] total');
         var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
             totalFrameCount.toLocaleString('en-US') + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             (switchedToIds ? ', now coloring by Identity' : '') +
             (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') +
+            (tailMarks ? ', ' + describeTailMarks(tailMarks) : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply' + (predOnly ? PREDICTED_ONLY_NOTE : '');
         setStatus(doneMsg, 'success');
         // Then check the result for identity switches (ui/id-switch-modal.js): by body
@@ -1731,6 +1875,7 @@ async function runTrackingPass(range) {
                     // The recording's rate, as the ID-switch checks read it (measured
                     // from the video when one is loaded), for the real-time multiplier.
                     fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
+                    tailMarks: tailMarks ? describeTailMarks(tailMarks) : null,
                 };
                 var summaryChecks = {
                     size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),

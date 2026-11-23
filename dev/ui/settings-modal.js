@@ -42,19 +42,20 @@ import {
     getCameraWeight,
     setCameraWeights,
     getTrackingThresholdDefs,
+    ID_SWITCH_SETTING_IDS,
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=589d9cc0747b';
-import { getActiveSession, state, timeline } from './app-state.js?v=589d9cc0747b';
-import { drawAllOverlays } from './rendering.js?v=589d9cc0747b';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=589d9cc0747b';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=589d9cc0747b';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=589d9cc0747b';
-import { installModalGeometry } from './modal-geometry.js?v=589d9cc0747b';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=589d9cc0747b';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=589d9cc0747b';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=589d9cc0747b';
+} from './settings.js?v=b3d3d6714de1';
+import { getActiveSession, state, timeline } from './app-state.js?v=b3d3d6714de1';
+import { drawAllOverlays } from './rendering.js?v=b3d3d6714de1';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=b3d3d6714de1';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=b3d3d6714de1';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=b3d3d6714de1';
+import { installModalGeometry } from './modal-geometry.js?v=b3d3d6714de1';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=b3d3d6714de1';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=b3d3d6714de1';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=b3d3d6714de1';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -178,6 +179,57 @@ function buildParamRow(def, bag, onEdit) {
 }
 
 /**
+ * A one-of-N toggle for a `kind: 'choice'` setting (Temporal Smoothing's
+ * Method): a row of buttons, the chosen one lit, under the setting's name, with
+ * its description below. A click sets `bag[def.id]` to the option's value and
+ * calls `onEdit`. `sync()` re-lights it from `bag`.
+ *
+ * @returns {{el: HTMLElement, sync: function(): void}}
+ */
+function buildChoiceToggle(def, bag, onEdit) {
+    const wrap = document.createElement('div');
+    wrap.className = 'settings-choice';
+    wrap.dataset.setting = def.id;
+    const title = document.createElement('div');
+    title.className = 'settings-threshold-title';
+    title.textContent = def.label;
+    const opts = document.createElement('div');
+    opts.className = 'settings-choice-opts';
+    opts.setAttribute('role', 'radiogroup');
+    opts.setAttribute('aria-label', def.label);
+    const buttons = (def.options || []).map(function (opt) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'settings-choice-opt';
+        b.setAttribute('role', 'radio');
+        b.dataset.value = String(opt.value);
+        b.textContent = opt.label;
+        b.addEventListener('click', function () {
+            bag[def.id] = opt.value;
+            sync();
+            if (onEdit) onEdit();
+        });
+        opts.appendChild(b);
+        return b;
+    });
+    const desc = document.createElement('div');
+    desc.className = 'settings-threshold-desc';
+    desc.textContent = def.desc;
+    wrap.appendChild(title);
+    wrap.appendChild(opts);
+    wrap.appendChild(desc);
+    function sync() {
+        buttons.forEach(function (b) {
+            const on = Number(b.dataset.value) === Number(bag[def.id]);
+            b.classList.toggle('is-on', on);
+            b.setAttribute('aria-checked', on ? 'true' : 'false');
+        });
+    }
+    sync();
+    return { el: wrap, sync: sync };
+}
+
+/**
  * A wizard section as a native `<details>`: heading that folds, body inside.
  *
  * `<details>`/`<summary>` rather than a hand-rolled div + click handler so the
@@ -241,9 +293,15 @@ export function showSettingsModal(initialPanel) {
         ? initialPanel
         : (readLastPanel() || SETTINGS_PANELS[0]);
 
-    // Enforce a single instance.
+    // Enforce a single instance. Retire the open one through its own teardown:
+    // removing its overlay alone left its key handler on the document and its
+    // geometry watcher live, which then saved the detached card's zero size as
+    // the size the user had chosen (Settings reopened at its minimum).
     const existing = document.querySelector('.settings-overlay');
-    if (existing) existing.remove();
+    if (existing) {
+        if (typeof existing._lucidTeardown === 'function') existing._lucidTeardown();
+        else existing.remove();
+    }
 
     // Set once the footer exists: every write to `working` repaints its buttons.
     let onWorkingEdit = function () {};
@@ -713,7 +771,11 @@ export function showSettingsModal(initialPanel) {
     // or an on/off switch for a `kind: 'toggle'` setting, with an inline
     // description. Edits mutate working.thresholds; numbers are clamped to the
     // catalog range on blur and on Apply.
-    const thSection = buildSection('Tracking Thresholds', thresholdDefs.length || null);
+    // The ID-switch checks' settings get their own section after this one (ID_SWITCH_SETTING_IDS).
+    const idSwitchDefs = ID_SWITCH_SETTING_IDS.map(function (id) { return thresholdDefs.find(function (d) { return d.id === id; }); })
+        .filter(Boolean);
+    const trackerDefs = thresholdDefs.filter(function (d) { return ID_SWITCH_SETTING_IDS.indexOf(d.id) < 0; });
+    const thSection = buildSection('Tracking Thresholds', trackerDefs.length || null);
     wizPanel.appendChild(thSection.root);
 
     const thHint = document.createElement('div');
@@ -724,17 +786,35 @@ export function showSettingsModal(initialPanel) {
         'Defaults are tuned values — change them only if tracking under/over-matches. Changes apply when you click Apply.';
     thSection.body.appendChild(thHint);
 
-    thresholdDefs.forEach(function (def) {
+    // One setting's row (buildParamRow: a labelled number field, or a switch for a `kind: 'toggle'`) into `body`.
+    function renderThresholdRow(def, body) {
         const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore' ||
             def.id === 'filterMinMeanNodeScore';
         const onEdit = isFilter ? function () { filterPreview.update(); }
             : def.id === 'reprojErrorThreshold'
                 ? function () { triFigure.update({ threshold: working.thresholds.reprojErrorThreshold }); }
                 : null;
-        thSection.body.appendChild(buildParamRow(def, working.thresholds, onEdit));
+        const row = buildParamRow(def, working.thresholds, onEdit);
+        row.dataset.setting = def.id;
+        body.appendChild(row);
         // The readout goes right under the last of the three filter fields.
-        if (def.id === 'filterMinMeanNodeScore') thSection.body.appendChild(filterPreview.root);
-    });
+        if (def.id === 'filterMinMeanNodeScore') body.appendChild(filterPreview.root);
+    }
+    trackerDefs.forEach(function (def) { renderThresholdRow(def, thSection.body); });
+
+    // ID Switches: the checks that run after Track All / Track Frame Range, and the image check's options.
+    if (idSwitchDefs.length) {
+        const idSection = buildSection('ID Switches', idSwitchDefs.length);
+        idSection.root.classList.add('settings-section-id-switches');
+        wizPanel.appendChild(idSection.root);
+        const idHint = document.createElement('div');
+        idHint.className = 'settings-kbd-hint';
+        idHint.style.marginTop = '0';
+        idHint.style.marginBottom = '8px';
+        idHint.textContent = 'Checks for identity switches after Track All or Track Frame Range. Changes apply when you click Apply.';
+        idSection.body.appendChild(idHint);
+        idSwitchDefs.forEach(function (def) { renderThresholdRow(def, idSection.body); });
+    }
 
     // Docs link at the bottom of the thresholds.
     const docsNote = document.createElement('div');
@@ -769,11 +849,18 @@ export function showSettingsModal(initialPanel) {
     smHint.className = 'settings-kbd-hint';
     smHint.style.marginTop = '0';
     smHint.style.marginBottom = '8px';
-    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation: a median first, then a Gaussian. ' +
-        '2D labels and predictions never change; the reprojections follow the smoothed 3D. Both stages are off (0) ' +
-        'by default. Run it from the toolbar\'s Smooth ▾ (a click runs all frames; its menu also has This frame and ' +
+    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation, by one of two methods, never both: ' +
+        'Adaptive (the default) or Median + Gaussian (fixed windows: a median first, then a Gaussian; both off (0) by default). ' +
+        '2D labels and predictions never change; the reprojections follow the smoothed 3D. ' +
+        'Run it from the toolbar\'s Smooth ▾ (a click runs all frames; its menu also has This frame, the method and ' +
         'Remove smoothing). Changes here apply when you click Apply.';
     smPanel.appendChild(smHint);
+
+    // The method, one or the other: a toggle above the figure. The figure and
+    // the parameters below show only the chosen method's.
+    const methodDef = smoothingDefs.find(function (d) { return d.id === 'smoothingMethod'; });
+    const smMethod = buildChoiceToggle(methodDef, working.smoothing, function () { showSmoothingMethod(); });
+    smPanel.appendChild(smMethod.el);
 
     // What the two windows do, redrawn as they are typed
     // (`ui/smoothing-windows-figure.js`). Its sliders only redraw the sketch;
@@ -791,13 +878,27 @@ export function showSettingsModal(initialPanel) {
     smFigure.update(working.smoothing);
     smPanel.appendChild(smFigure.el);
 
-    const smSection = buildSection('Filter Parameters', smoothingDefs.length || null);
+    // One section with only the chosen method's parameters (`def.method`),
+    // shown again as the method changes, as the figure's cards are.
+    const smSection = buildSection('Filter Parameters', null);
     smPanel.appendChild(smSection.root);
+    const smRows = [];
+    function showSmoothingMethod() {
+        const method = working.smoothing.smoothingMethod === 1 ? 'adaptive' : 'windows';
+        smRows.forEach(function (r) { r.row.hidden = !!r.method && r.method !== method; });
+        smMethod.sync();
+        smFigure.update(working.smoothing);
+    }
     smoothingDefs.forEach(function (def) {
-        smSection.body.appendChild(buildParamRow(def, working.smoothing, function () {
+        if (def.id === 'smoothingMethod') return;     // the toggle above the figure
+        const row = buildParamRow(def, working.smoothing, function () {
             smFigure.update(working.smoothing);
-        }));
+        });
+        row.dataset.smoothingMethod = def.method || '';
+        smRows.push({ row: row, method: def.method });
+        smSection.body.appendChild(row);
     });
+    showSmoothingMethod();
 
     // The two dials of luc3d #134 pull against each other and the interaction is
     // the opposite of what tuning two sliders suggests, so say so here.
@@ -815,6 +916,54 @@ export function showSettingsModal(initialPanel) {
     // Footer.
     const footer = document.createElement('div');
     footer.className = 'settings-modal-footer';
+    // Window size: display taste, kept with the card's geometry, so Apply has nothing to do with it.
+    const sizeBtns = document.createElement('div');
+    sizeBtns.className = 'settings-size-btns';
+    sizeBtns.setAttribute('role', 'group');
+    sizeBtns.setAttribute('aria-label', 'Window size');
+    const sizeLabel = document.createElement('span');
+    sizeLabel.textContent = 'Window';
+    sizeBtns.appendChild(sizeLabel);
+    const SIZE_PRESETS = [
+        {
+            name: 'narrow', label: 'Narrow', tip: 'Fill the browser\'s height, up to 1320 px wide, centred',
+            // A slimmer window, with more room either side.
+            icon: '<rect x="1" y="2.5" width="14" height="11" rx="1.5" fill="none" stroke="currentColor" opacity="0.55"/>'
+                + '<rect x="5.75" y="4" width="4.5" height="8" rx="0.75" fill="currentColor"/>',
+        },
+        {
+            name: 'default', label: 'Default', tip: 'Fill the browser\'s height, up to 1700 px wide, centred',
+            // A window centred in the browser, with room either side.
+            icon: '<rect x="1" y="2.5" width="14" height="11" rx="1.5" fill="none" stroke="currentColor" opacity="0.55"/>'
+                + '<rect x="4.5" y="4" width="7" height="8" rx="0.75" fill="currentColor"/>',
+        },
+        {
+            name: 'full', label: 'Full', tip: 'Fill the whole browser window',
+            // Four corners pushed out to the edges: the usual full-screen mark.
+            icon: '<path d="M1.5 5.5V2.5a1 1 0 0 1 1-1h3M10.5 1.5h3a1 1 0 0 1 1 1v3M14.5 10.5v3a1 1 0 0 1-1 1h-3M5.5 14.5h-3a1 1 0 0 1-1-1v-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'
+                + '<rect x="4.5" y="4.5" width="7" height="7" rx="0.75" fill="currentColor"/>',
+        },
+    ];
+    const sizeButtons = SIZE_PRESETS.map(function (preset) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'settings-size-btn';
+        btn.dataset.size = preset.name;
+        btn.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">' + preset.icon + '</svg>';
+        btn.appendChild(document.createTextNode(preset.label));
+        btn.title = preset.tip;
+        btn.addEventListener('click', function () {
+            if (disposeGeometry && disposeGeometry.setSizePreset) disposeGeometry.setSizePreset(preset.name);
+        });
+        sizeBtns.appendChild(btn);
+        return btn;
+    });
+    function paintSizeButtons(current) {
+        sizeButtons.forEach(function (btn) {
+            btn.setAttribute('aria-pressed', btn.dataset.size === current ? 'true' : 'false');
+        });
+    }
+    footer.appendChild(sizeBtns);
     // Only on the Triangulation Wizard panel (`selectPanel`): what Triangulate All
     // will use, whatever the panel is scrolled to. A value not yet applied is lit,
     // with what it was.
@@ -907,6 +1056,7 @@ export function showSettingsModal(initialPanel) {
     let disposeGeometry = null;
 
     function teardown() {
+        overlay._lucidTeardown = null;
         document.removeEventListener('keydown', onDocKeyDown, true);
         filterPreview.dispose();
         thrExamples.dispose();
@@ -918,6 +1068,7 @@ export function showSettingsModal(initialPanel) {
         // Discard pending edits — just remove the overlay.
         teardown();
     }
+    overlay._lucidTeardown = teardown;
 
     function commit() {
         setDefaultTriangulationMethod(working.method);
@@ -997,9 +1148,13 @@ export function showSettingsModal(initialPanel) {
         minH: 320,
         margin: 24,
         fillHeight: true,
+        fillWidth: 1700,
+        narrowWidth: 1320,
+        onSizePreset: paintSizeButtons,
         // The opening size before it widened (to 1040x620, now 1320x800);
         // records holding it were saved without a resize, so they open at the
         // current default. Later records carry `sized`, so they follow it too.
         legacyDefaultSize: { w: 880, h: 620 },
     });
+    if (disposeGeometry.sizePreset) paintSizeButtons(disposeGeometry.sizePreset());
 }

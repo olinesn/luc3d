@@ -43,49 +43,49 @@
 //             ui/rendering.js, pose/behavior-ethogram.js, pose/behavior-labels.js,
 //             pose/behavior-predictions.js, import-export/save-load.js
 
-import { state } from './app-state.js?v=589d9cc0747b';
+import { state } from './app-state.js?v=b3d3d6714de1';
 import {
     behaviorUi, codeBehavior, focalAnimal, setFocalAnimal, sessionAnimals, animalColor, selectedBehaviorId,
     selectBehavior, pickBehaviorTarget, cancelPendingTarget, clearArmedRange, armedRange, registerBehaviorRepaint,
     requestBehaviorRepaint, setBehaviorNavigator, goToBehaviorFrame, BOUT_LEAD_IN_SECONDS,
     behaviorBoxesVisible, setBehaviorBoxesVisible, pairGlyph, openBehaviorTab, setReviewFocus,
-} from './behavior-coding.js?v=589d9cc0747b';
-import { toggleBehaviorMode, exitBehaviorMode, isBehaviorModeActive } from './behavior-mode.js?v=589d9cc0747b';
-import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-modal.js?v=589d9cc0747b';
-import { showBehaviorImportModal, showBehaviorExportModal } from './behavior-io-modal.js?v=589d9cc0747b';
-import { ABSENT_COLOR } from './behavior-timeline.js?v=589d9cc0747b';
-import { behaviorStripOn, setBehaviorStripOn, setupBehaviorStrip, updateBehaviorStripFrame } from './behavior-strip.js?v=589d9cc0747b';
+} from './behavior-coding.js?v=b3d3d6714de1';
+import { toggleBehaviorMode, exitBehaviorMode, isBehaviorModeActive } from './behavior-mode.js?v=b3d3d6714de1';
+import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-modal.js?v=b3d3d6714de1';
+import { showBehaviorImportModal, showBehaviorExportModal } from './behavior-io-modal.js?v=b3d3d6714de1';
+import { ABSENT_COLOR } from './behavior-timeline.js?v=b3d3d6714de1';
+import { behaviorStripOn, setBehaviorStripOn, setupBehaviorStrip, updateBehaviorStripFrame } from './behavior-strip.js?v=b3d3d6714de1';
 import {
     detectAllFrames, detectAllSessions, detectThisFrame, frameReadout, onFrameReadout, detectionEnv, detectionFps, setupBehaviorDetection,
-} from './behavior-detect.js?v=589d9cc0747b';
+} from './behavior-detect.js?v=b3d3d6714de1';
 import {
     classifierStatus, activeLearning, setActiveLearningBehavior, nextActiveItem, labelActiveItem, skipActiveItem,
     exportClassifiers, showImportClassifiers, fmt, setClassifierSessionSwitcher,
-} from './behavior-train.js?v=589d9cc0747b';
-import { showBehaviorTrainModal } from './behavior-train-modal.js?v=589d9cc0747b';
-import { onModelsChange, behaviorModels } from '../pose/behavior-classifier.js?v=589d9cc0747b';
-import { showBehaviorRulesModal } from './behavior-rules-modal.js?v=589d9cc0747b';
-import { behaviorConfirm } from './behavior-confirm.js?v=589d9cc0747b';
-import { renderStatesSection, setupBehaviorStates } from './behavior-states.js?v=589d9cc0747b';
-import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.js?v=589d9cc0747b';
-import { showBehaviorDiscoveryModal } from './behavior-discovery-modal.js?v=589d9cc0747b';
-import { setInfoTip } from './info-tip.js?v=589d9cc0747b';
-import { ICON_INFO } from './plane-definition.js?v=589d9cc0747b';
-import { isInfoPanelVisible } from './panel-visibility.js?v=589d9cc0747b';
-import { persistSectionStates } from './section-state.js?v=589d9cc0747b';
-import { setHandler } from './settings.js?v=589d9cc0747b';
-import { drawAllOverlays } from './rendering.js?v=589d9cc0747b';
-import { behaviors, behaviorById } from '../pose/behavior-ethogram.js?v=589d9cc0747b';
+} from './behavior-train.js?v=b3d3d6714de1';
+import { showBehaviorTrainModal } from './behavior-train-modal.js?v=b3d3d6714de1';
+import { onModelsChange, behaviorModels } from '../pose/behavior-classifier.js?v=b3d3d6714de1';
+import { showBehaviorRulesModal } from './behavior-rules-modal.js?v=b3d3d6714de1';
+import { behaviorConfirm } from './behavior-confirm.js?v=b3d3d6714de1';
+import { renderStatesSection, setupBehaviorStates } from './behavior-states.js?v=b3d3d6714de1';
+import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.js?v=b3d3d6714de1';
+import { showBehaviorDiscoveryModal } from './behavior-discovery-modal.js?v=b3d3d6714de1';
+import { setInfoTip } from './info-tip.js?v=b3d3d6714de1';
+import { ICON_INFO } from './plane-definition.js?v=b3d3d6714de1';
+import { isPanelOnScreen, onPanelRailChange } from './panel-rail.js?v=b3d3d6714de1';
+import { persistSectionStates } from './section-state.js?v=b3d3d6714de1';
+import { setHandler } from './settings.js?v=b3d3d6714de1';
+import { drawAllOverlays } from './rendering.js?v=b3d3d6714de1';
+import { behaviors, behaviorById } from '../pose/behavior-ethogram.js?v=b3d3d6714de1';
 import {
     onBehaviorChange, listBouts, runningStates, activeAt, timeBudget, orphanedAnimals, reassignAnimal,
     deleteBout, editBout, setBehaviorCursor, canUndoBehaviorEdit, undoBehaviorEdit, isRunning, closeRunningAtCursor,
     cancelRunning, hasBehaviorData, toggleState,
-} from '../pose/behavior-labels.js?v=589d9cc0747b';
+} from '../pose/behavior-labels.js?v=b3d3d6714de1';
 import {
     reviewQueue, acceptPredictions, rejectPredictions, predictionStaleness, hasPredictions, clearBehaviorRuns,
     onPredictionsChange, behaviorRuns, behaviorRunOf, runStateLayer,
-} from '../pose/behavior-predictions.js?v=589d9cc0747b';
-import { markDirty, setStatus } from '../import-export/save-load.js?v=589d9cc0747b';
+} from '../pose/behavior-predictions.js?v=b3d3d6714de1';
+import { markDirty, setStatus } from '../import-export/save-load.js?v=b3d3d6714de1';
 
 var SECTIONS_KEY = 'lucid.behaviorSections';
 var MAX_LISTED_BOUTS = 500;
@@ -118,10 +118,9 @@ function openBehaviorTabSection() {
     if (sec && !sec.open) sec.open = true;
 }
 
-/** Is the Behavior tab on screen? */
+/** Is the Behavior panel on screen (open, expanded, the info panel shown; ui/panel-rail.js)? */
 function tabVisible() {
-    var tab = document.getElementById('tabBehavior');
-    return !!(tab && tab.classList.contains('active') && isInfoPanelVisible());
+    return isPanelOnScreen('tabBehavior');
 }
 
 // ----------------------------------------------------------------------------
@@ -879,8 +878,14 @@ export function setupBehaviorUi(deps) {
     if (cinfo) { cinfo.innerHTML = ICON_INFO; setInfoTip(cinfo, CLASSIFIERS_INFO); }
     setupBehaviorDetection({ openSettings: showBehaviorRulesModal });
     setupBehaviorStates();
-    var tabBtn = document.querySelector('.panel-tab[data-tab="tabBehavior"]');
-    if (tabBtn) tabBtn.addEventListener('click', function () { setTimeout(refreshBehaviorPanel, 0); });
+    // Coming on screen (the rail opened or expanded it, or the info panel was shown): repaint
+    // what changed while it was off screen.
+    var wasOnScreen = tabVisible();
+    onPanelRailChange(function () {
+        var on = tabVisible();
+        if (on && !wasOnScreen) setTimeout(refreshBehaviorPanel, 0);
+        wasOnScreen = on;
+    });
 
     // Every label edit: the project is dirty, and everything that shows labels repaints.
     onBehaviorChange(function () {
