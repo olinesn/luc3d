@@ -2085,6 +2085,9 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         console.error('[load-slp] FATAL:', err);
         hideLoading();
         setStatus('SLP load error: ' + err.message, 'error');
+        // A load that fails part way has already replaced the open project with part of
+        // this one: Save must not write that over the file.
+        if (fileHandle && state.slpFileHandle === fileHandle) state.slpFileHandle = null;
         return false;   // not opened: the menus must not make it the save target
     }
 }

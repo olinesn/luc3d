@@ -15712,7 +15712,7 @@ Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
 `{folderFiles}` so `attachVideosForLazyReopen` takes the videos from that pick
 instead of prompting). `opts.fileHandle` (the picked `.slp`'s handle, from Load
 Project) becomes `state.slpFileHandle` when the old project is freed; without it
-the handle is cleared. **It frees the open project before it reads the new one**,
+the handle is cleared. A load that fails after that drops it again. **It frees the open project before it reads the new one**,
 for the memory, so it runs `checkSlpFileFormat` first: refusing a file too new to
 read must not cost the user that project (nor take its save target). It resolves
 `false` for that (and for a cancelled load), like `handleLoadSlpFile`.
@@ -18962,7 +18962,9 @@ first track.
 - `handleLoadSlpFile(slpFile, fileHandle)` — replace-current-state load. Sets
   `state.slpFileHandle` (File ▸ Save's target) to `fileHandle` or null at the
   point it clears the old project, never before, so a load cancelled at its
-  first prompt leaves the open project's file alone. Resolves `false` when
+  first prompt leaves the open project's file alone; a load that fails after
+  that point drops it again (the project is part of this file by then, and Save
+  must not write it over the file). Resolves `false` when
   the file did not open and the project is as it was (cancelled, refused as too new,
   unreadable). Pre-allocates all
   N session groups in the LoadingProgressModal before the per-session loop so
