@@ -43,16 +43,16 @@
  * The fixtures are in `tests/fixtures/slp-embedded/` (`make_fixture.py` says which is
  * what). Unit test of the rules: `tests/test-slp-package-reader.mjs`.
  *
- * Run: node tests/e2e/slp-embedded-images.mjs   (spawns its own http.server; PORT=…)
+ * Run: node tests/e2e/slp-embedded-images.mjs   (serves the app itself; PORT=…)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8433);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FIXTURES = path.join(repoRoot, 'tests', 'fixtures', 'slp-embedded');
 const fixture = (name) => path.join(FIXTURES, name);
 
@@ -60,13 +60,12 @@ let fails = 0;
 const check = (c, m, extra) => { console.log((c ? '  ✓ ' : '  ✗ ') + m + (c || extra === undefined ? '' : ' — ' + JSON.stringify(extra))); if (!c) fails++; };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 for (let i = 0; i < 60; i++) {
     try { if ((await fetch(`http://localhost:${PORT}/index.html`)).ok) break; } catch (e) { /* not up yet */ }
     await new Promise(r => setTimeout(r, 200));
 }
 
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 
 async function freshPage() {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
