@@ -24,7 +24,8 @@
  *     moved to another session, a session deleted.
  *  G. A lazy session on the eager writer's path (a project mixing lazy and eager).
  *  H. A file with no suggestions gets none, and no extra video.
- *  I. Files with their images inside: the suggestions stay on those videos' entries.
+ *  I. Files with their images inside: the suggestions stay on those videos' entries, and a
+ *     save keeps the images (each such video is listed as in the saved file, from its source).
  *  J. A suggestion and a behavior bout on one video: one entry of the list.
  *
  * Needs `uv` for Python (skipped without it).
@@ -62,13 +63,21 @@ const diff = (got, want) => {
 // `listed` holds what a filename cannot show: each raw row's video index is one the list
 // holds (a -1 reads in Python as the last video).
 const PY_READ = `
-import json, sys
+import json, os, sys
 import h5py
 import numpy as np
 import sleap_io as sio
 
 def num(v):
     return "nan" if v != v else f"{float(v):.3f}"
+
+def listed_name(v, path):
+    # A video whose images are in this file is named by the file itself: say so, with the
+    # video it came from.
+    if os.path.abspath(v.filename) == os.path.abspath(path):
+        source = v.source_video.filename if getattr(v, "source_video", None) is not None else "?"
+        return "in this file, from " + source
+    return v.filename
 
 def read(path):
     try:
@@ -100,7 +109,7 @@ def read(path):
         return "|".join(["P" if isinstance(inst, sio.PredictedInstance) else "U", inst.track.name if inst.track else "", ";".join(cells)])
     return {
         "error": None,
-        "videos": [v.filename for v in labels.videos],
+        "videos": [listed_name(v, path) for v in labels.videos],
         "suggestions": [where(s.video) + "|" + str(s.frame_idx) + "|" + json.dumps(s.metadata.get("group")) for s in labels.suggestions],
         "byFile": [s.video.filename + "|" + str(s.frame_idx) + "|" + json.dumps(s.metadata.get("group")) for s in labels.suggestions],
         "onSession": [session_of.get(id(s.video), -1) for s in labels.suggestions],
@@ -839,8 +848,10 @@ try {
     if (runs('I')) {
         console.log('\nI. Files with their images inside');
         const inFile = {
-            out_of_order_embedded: { suggestions: ['cam:clip_c|7|2', 'cam:clip_b|6|1', 'cam:clip_a|5|0'], videos: ['clip_a.mp4', 'clip_b.mp4', 'clip_c.mp4'] },
-            mixed_external: { suggestions: ['cam:outside|6|1', 'cam:inside|5|0'], videos: ['inside.mp4', 'outside.mp4'] },
+            // A save keeps the images (#49): each such video is in the saved file, from its source.
+            out_of_order_embedded: { suggestions: ['cam:clip_c|7|2', 'cam:clip_b|6|1', 'cam:clip_a|5|0'],
+                videos: ['in this file, from clip_a.mp4', 'in this file, from clip_b.mp4', 'in this file, from clip_c.mp4'] },
+            mixed_external: { suggestions: ['cam:outside|6|1', 'cam:inside|5|0'], videos: ['in this file, from inside.mp4', 'outside.mp4'] },
             two_sessions: { suggestions: sources.images_two_sessions.suggestions },
         };
         for (const [name, want] of Object.entries(inFile)) {
