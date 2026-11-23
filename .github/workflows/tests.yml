@@ -43,7 +43,8 @@ jobs:
       # crashed mid-test (slp-failed-read here; on talmolab's CI,
       # export-bycam-store-copy), and Chrome is the browser people use. The
       # tests call chromium.launch themselves, so a module loaded before each
-      # one adds the channel to every launch that names no browser.
+      # one (NODE_OPTIONS on the step that runs them; GitHub refuses it in
+      # $GITHUB_ENV) adds the channel to every launch that names no browser.
       - name: Use Google Chrome for the browser tests
         run: |
           cat > "$RUNNER_TEMP/use-chrome.mjs" <<'EOF'
@@ -54,9 +55,10 @@ jobs:
           chromium.launch = (o) => launch(withChrome(o));
           chromium.launchPersistentContext = (dir, o) => persistent(dir, withChrome(o));
           EOF
-          echo "NODE_OPTIONS=--import=file://$RUNNER_TEMP/use-chrome.mjs" >> "$GITHUB_ENV"
           google-chrome --version
       - name: Browser unit tests (tests/*.js via tests/test-runner.html)
+        env:
+          NODE_OPTIONS: --import=file://${{ runner.temp }}/use-chrome.mjs
         run: node tests/e2e/run-unit-tests.mjs
 
   e2e:
@@ -99,7 +101,8 @@ jobs:
       # crashed mid-test (slp-failed-read here; on talmolab's CI,
       # export-bycam-store-copy), and Chrome is the browser people use. The
       # tests call chromium.launch themselves, so a module loaded before each
-      # one adds the channel to every launch that names no browser.
+      # one (NODE_OPTIONS on the step that runs them; GitHub refuses it in
+      # $GITHUB_ENV) adds the channel to every launch that names no browser.
       - name: Use Google Chrome for the browser tests
         run: |
           cat > "$RUNNER_TEMP/use-chrome.mjs" <<'EOF'
@@ -110,12 +113,13 @@ jobs:
           chromium.launch = (o) => launch(withChrome(o));
           chromium.launchPersistentContext = (dir, o) => persistent(dir, withChrome(o));
           EOF
-          echo "NODE_OPTIONS=--import=file://$RUNNER_TEMP/use-chrome.mjs" >> "$GITHUB_ENV"
           google-chrome --version
       # So offline-server.mjs runs instead of skipping.
       - name: Install the offline packages
         run: python3 scripts/offline_deps.py install
       - name: e2e tests, shard ${{ matrix.shard }} of 6
+        env:
+          NODE_OPTIONS: --import=file://${{ runner.temp }}/use-chrome.mjs
         run: |
           python3 -m http.server 8431 --bind 127.0.0.1 > /dev/null 2>&1 &
           LOGS="$RUNNER_TEMP/e2e-logs"; mkdir -p "$LOGS"

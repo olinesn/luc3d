@@ -288,6 +288,15 @@ try {
         return other;
     }, { x0: attack.x, x1: attack.x + attack.w, y, c0: { r: attack.r, g: attack.g, b: attack.b } });
     const onText = await textPixels(2 * 14 + 7);
+    // TEMPORARY (CI layout probe): what takes the seekbar's row on this machine.
+    console.log('LAYOUT ' + JSON.stringify(await page.evaluate(() => {
+        const bar = document.getElementById('seekbar'), row = bar.parentElement;
+        const w = (e) => Math.round(e.getBoundingClientRect().width);
+        return { window: innerWidth, seekbar: w(bar), row: row.id || row.className, rowW: w(row), up: row.parentElement && (row.parentElement.id || row.parentElement.className), upW: row.parentElement && w(row.parentElement),
+            kids: [...row.children].map((e) => (e.id || e.className || e.tagName).toString().slice(0, 30) + ':' + w(e)),
+            upKids: row.parentElement ? [...row.parentElement.children].map((e) => (e.id || e.className || e.tagName).toString().slice(0, 30) + ':' + w(e)) : [],
+            fonts: getComputedStyle(document.body).fontFamily };
+    })));
     check(onText > 3 && onText < attack.w / 4, `with more than two animals a directed bar names its target (${onText} pixels of text along a ${attack.w.toFixed(1)} px bar)`);
     const jump = b.find(m => m.lane === 3);
     check(jump.w <= 4 && near(jump.x + jump.w / 2, g.mid(3000, 3000), 1.51), 'a point is a tick on its frame, under the playhead here');
