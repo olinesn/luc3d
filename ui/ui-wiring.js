@@ -67,7 +67,10 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 // The toolbar's Animals field, beside Track Frame / Track All.
 import { wireAnimalCountField } from './animal-count-field.js';
 import { wireReprojThresholdField } from './reproj-threshold-field.js';
+import { wireSkeletonCheckField } from './skeleton-check-field.js';
 import { wireToolbarMenuKeys, returnFocusTo } from './toolbar-menu-keys.js';
+import { wireVolumeFusionField } from './volume-fusion-field.js';
+import { handleLoadVolume3d } from '../import-export/volume3d-file.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -82,12 +85,13 @@ import { installSeekbarTooltip } from './seekbar-tooltip.js';
 import { installSeekbarPreview } from './seekbar-preview.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
+import { stepToSuggestedFrame } from './suggested-frame-nav.js';
 import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
 import { getDefaultTriangulationMethod, setDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler,
-         dispatchEvent, getActions, formatBinding, getSmoothingParams } from './settings.js';
+         dispatchEvent, matchesBinding, getActions, formatBinding, getSmoothingParams } from './settings.js';
 // luc3d #134: post-triangulation temporal smoothing of the 3D tracks.
 import { smoothSessionAsync, smoothFrame, unsmoothSession, resolveSmoothingParams, hasSmoothed3d,
     removeSmoothing, restoreSmoothing } from '../pose/temporal-smoothing.js';
@@ -1675,6 +1679,11 @@ export function setupMenus() {
         handleLoadPoints3dH5();
     });
 
+    document.getElementById('menuLoadVolume3d').addEventListener('click', function () {
+        closeMenus();
+        handleLoadVolume3d();
+    });
+
     document.getElementById('menuLoadSkeletonMenu').addEventListener('click', function () {
         closeMenus();
         document.getElementById('btnLoadSkeleton').click();
@@ -2040,7 +2049,8 @@ export function setupUI() {
             var m = seekbarMarkerAt(frac, rect.width);
             return m ? m.frame : frameAtFraction(frac);
         };
-        installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames);
+        installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames,
+            document.getElementById('seekbarSuggestionMarks'));
         // The time ruler under the bar (ui/seekbar-ticks.js).
         installSeekbarTicks(document.getElementById('seekbarRuler'), {
             getTotalFrames: function () { return state.totalFrames; },
@@ -2274,7 +2284,9 @@ export function setupUI() {
         if (!hasRealVideo()) {
             // Video-less project (skeleton + imported 3D points): support frame
             // stepping + play/pause over the points3d duration even though
-            // there's no decoder.
+            // there's no decoder. The suggested-frame keys (Opt+Shift+← / →) are
+            // the catalog dispatcher's: not a frame step too.
+            if (matchesBinding('prevSuggestedFrame', e) || matchesBinding('nextSuggestedFrame', e)) return;
             switch (e.key) {
                 case 'ArrowRight': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.currentFrame + 1); break;
                 case 'ArrowLeft': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.currentFrame - 1); break;
@@ -2443,6 +2455,9 @@ export function setupUI() {
     // has unwinding to do (Set Origin Mode, the angle dialog, the toolbar lock)
     // and a second entry point would be a second place to forget it.
     setHandler('definePlanes', function () { togglePlaneMode(); });
+    // A .slp's suggestions, in the file's order (ui/suggested-frame-nav.js).
+    setHandler('prevSuggestedFrame', function () { stepToSuggestedFrame(-1, jumpToFrame); });
+    setHandler('nextSuggestedFrame', function () { stepToSuggestedFrame(1, jumpToFrame); });
 
     // Single dispatcher for catalog-driven shortcuts. Runs before the structural
     // handlers below; if a catalog action matches it consumes the event.
@@ -3222,7 +3237,9 @@ export function setupUI() {
 
     wireAnimalCountField();
     wireReprojThresholdField();
+    wireSkeletonCheckField();
     wireToolbarMenuKeys();
+    wireVolumeFusionField();
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
@@ -3747,6 +3764,16 @@ export function seekToLabeledFrame(direction) {
         videoController.scrubToFrame(target);
         setStatus('Frame ' + (target + 1).toLocaleString('en-US'), 'info');
     }
+}
+
+// A frame far from this one, from a key (suggested frames): like the labeled-frame
+// jump, the timeline and seekbar move on the same keystroke; a video-less
+// project draws the frame statically.
+function jumpToFrame(target) {
+    if (!hasRealVideo() || !videoController) { navigateToFrame(target); return; }
+    if (timeline) timeline.setCurrentFrame(target);
+    updateSeekbarVisual(target);
+    videoController.scrubToFrame(target);
 }
 
 // ============================================
