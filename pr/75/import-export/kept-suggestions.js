@@ -32,8 +32,8 @@
  * byte-identically (`tests/e2e/save-golden-digest.mjs`).
  */
 
-import { keptVideoOf, headerVideoOfKept } from './outside-frames.js?v=b21c72208e2d';
-import { keptVideoRecords } from './behavior-events.js?v=b21c72208e2d';
+import { keptVideoOf, headerVideoOfKept } from './outside-frames.js?v=c63e9c4a67a7';
+import { keptVideoRecords } from './behavior-events.js?v=c63e9c4a67a7';
 
 // Rows of one file sit on the sessions that read their videos. This puts them back in
 // the file's order at save, and rows of a file added later after them.

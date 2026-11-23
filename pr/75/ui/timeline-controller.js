@@ -27,7 +27,7 @@
  * `app.js` — so this module can be safely bridged into the test runner.
  */
 
-import { timeline } from './app-state.js?v=b21c72208e2d';
+import { state, timeline } from './app-state.js?v=c63e9c4a67a7';
 
 // ----------------------------------------------------------------------------
 // Module-level state
@@ -41,11 +41,12 @@ var _installed = false;
 // ----------------------------------------------------------------------------
 
 function _getTimeline() {
-    // The live `timeline` binding — `setTimeline()` from `app-state.js`
-    // writes it. Read on every call so the controller works regardless of
-    // module-load order. (Reading `state.timeline` here, which nothing
-    // sets, left `fitTimelineToData()` a silent no-op in the app.)
-    return timeline || null;
+    // `setTimeline()` (app-state.js) sets the exported `timeline` binding — it
+    // never set `state.timeline`, which this used to read, so the expand's
+    // resize and first-expand fit never ran. Read lazily on every call (a live
+    // binding), so module-load order does not matter; `state.timeline` is kept
+    // as a fallback for callers that set it.
+    return timeline || (state && state.timeline) || null;
 }
 
 function _getContainer() {
@@ -88,6 +89,9 @@ export function toggleTimeline() {
         if (container.style) container.style.height = '';
     } else {
         container.classList.remove('collapsed');
+        // Rows a refresh skipped while collapsed (Timeline.refreshTracks), before
+        // anything below measures them.
+        if (timeline && typeof timeline.catchUp === 'function') timeline.catchUp();
         // Unconditionally restore the cached height when we have one;
         // only fall back to fitTimelineToData() when no cache exists
         // (e.g., first-ever expand on a fresh project).

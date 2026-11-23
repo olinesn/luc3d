@@ -30,8 +30,8 @@
 //
 // Depends on: pose/behavior-features.js, pose/behavior-postprocess.js
 
-import { resolveFeatureName, computeFeatureChunk, catalogFor, TARGET_PREFIX } from './behavior-features.js?v=b21c72208e2d';
-import { scoresToBouts, secondsToFrames } from './behavior-postprocess.js?v=b21c72208e2d';
+import { resolveFeatureName, computeFeatureChunk, catalogFor, TARGET_PREFIX } from './behavior-features.js?v=c63e9c4a67a7';
+import { scoresToBouts, secondsToFrames } from './behavior-postprocess.js?v=c63e9c4a67a7';
 
 /** The comparison operators: at least / at most the value. */
 export var RULE_OPS = ['>', '<'];

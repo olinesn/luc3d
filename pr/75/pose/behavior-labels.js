@@ -46,8 +46,8 @@
 //
 // Depends on: pose/behavior-ethogram.js, pose/pose-data.js (the identity-swap hook)
 
-import { behaviorById, exclusivePeers } from './behavior-ethogram.js?v=b21c72208e2d';
-import { onIdentitySwap } from './pose-data.js?v=b21c72208e2d';
+import { behaviorById, exclusivePeers } from './behavior-ethogram.js?v=c63e9c4a67a7';
+import { onIdentitySwap } from './pose-data.js?v=c63e9c4a67a7';
 
 var SEP = '\u0001';
 var UNDO_CAP = 100;

@@ -62,13 +62,13 @@
 // Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js, pose/behavior-predictions.js,
 //             pose/behavior-states.js, pose/behavior-classifier.js, import-export/behavior-events.js
 
-import { serializeEthogram, ingestEthogram, resetEthogram } from '../pose/behavior-ethogram.js?v=b21c72208e2d';
-import { exportBoutRows, importBoutRows, behaviorFps, noteBehaviorFps } from '../pose/behavior-labels.js?v=b21c72208e2d';
-import { exportPredictionRuns, exportPredictionHeaders, importPredictionRuns } from '../pose/behavior-predictions.js?v=b21c72208e2d';
-import { resetBehaviorModels, noteLabelsChanged } from '../pose/behavior-classifier.js?v=b21c72208e2d';
-import { exportStateLayers, importStateLayers, resetBehaviorStates } from '../pose/behavior-states.js?v=b21c72208e2d';
-import { resetDiscoveryResults } from '../pose/behavior-discovery.js?v=b21c72208e2d';
-import { eventsToBehaviorData, setKeptEventRows } from './behavior-events.js?v=b21c72208e2d';
+import { serializeEthogram, ingestEthogram, resetEthogram } from '../pose/behavior-ethogram.js?v=c63e9c4a67a7';
+import { exportBoutRows, importBoutRows, behaviorFps, noteBehaviorFps } from '../pose/behavior-labels.js?v=c63e9c4a67a7';
+import { exportPredictionRuns, exportPredictionHeaders, importPredictionRuns } from '../pose/behavior-predictions.js?v=c63e9c4a67a7';
+import { resetBehaviorModels, noteLabelsChanged } from '../pose/behavior-classifier.js?v=c63e9c4a67a7';
+import { exportStateLayers, importStateLayers, resetBehaviorStates } from '../pose/behavior-states.js?v=c63e9c4a67a7';
+import { resetDiscoveryResults } from '../pose/behavior-discovery.js?v=c63e9c4a67a7';
+import { eventsToBehaviorData, setKeptEventRows } from './behavior-events.js?v=c63e9c4a67a7';
 
 /** Every `metadata.lucid` key this module may write. */
 export var BEHAVIOR_METADATA_KEYS = ['ethogram', 'behaviorLabels', 'behaviorPredictions', 'behaviorStates'];

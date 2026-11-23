@@ -53,9 +53,9 @@
 //
 // Depends on: pose/pose-data.js, pose/plane-fit.js, pose/behavior-features.js
 
-import { POINT3D_STRIDE, points3dNodeCount } from './pose-data.js?v=b21c72208e2d';
-import { jacobiEigen } from './plane-fit.js?v=b21c72208e2d';
-import { halfFrames, SPEED_HALF_SECONDS } from './behavior-features.js?v=b21c72208e2d';
+import { POINT3D_STRIDE, points3dNodeCount } from './pose-data.js?v=c63e9c4a67a7';
+import { jacobiEigen } from './plane-fit.js?v=c63e9c4a67a7';
+import { halfFrames, SPEED_HALF_SECONDS } from './behavior-features.js?v=c63e9c4a67a7';
 
 // ----------------------------------------------------------------------------
 // Node roles

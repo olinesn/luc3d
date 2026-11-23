@@ -8,9 +8,15 @@
  * (Playwright's file chooser), in campy's layout: session.json,
  * campy-live-session.json and calibration.toml at the top, each camera's video
  * at <Camera>/0.mp4 — every camera's video has the same name, as campy's
- * default does. Camera0's folder also holds a decoy `aaa.mp4` (7 frames, listed
- * first) that is not campy's video. The calibration lists Camera1 before
- * Camera0, so the view order says whose order won.
+ * default does. Camera0's folder also holds a decoy `aaa.mp4` (7 frames) that
+ * is not campy's video. The calibration lists Camera1 before Camera0, so the
+ * view order says whose order won.
+ *
+ * The order the browser lists a picked folder's files in is not promised (it
+ * changed on CI's runners once, and a loader that went by it broke there
+ * only), so the test sets it: the folder input's `files` lists the decoy
+ * FIRST in every section, so a loader that takes the first video it is given
+ * picks the decoy, and section 10 repeats the campy loads with it listed LAST.
  *
  *  1. Load Session Folder (per camera): the frame rate is session.json's (20,
  *     not the video's), the views are in campy's order, each camera loads the
@@ -35,12 +41,13 @@
  *  8. File → Load Calibration on a campy session checks the new calibration.
  *  9. Reopening a project lazily (Load Project), then Select Session Folder;
  *     a recording campy never finished ("recording") is a warning.
+ * 10. The loads of 1, 6, 7 and 9 again with the decoy listed last: each camera
+ *     still loads campy's video.
  *
- * Run: node tests/e2e/campy-session-folder.mjs   (spawns its own http.server;
+ * Run: node tests/e2e/campy-session-folder.mjs   (serves the app itself;
  * PORT= to move it)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -50,7 +57,8 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const FIX = path.join(repoRoot, 'tests', 'fixtures', 'campy-recording');
-const PORT = Number(process.env.PORT || 8377);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
@@ -95,15 +103,37 @@ function writeRecording(name, videos, opts = {}) {
     return dir;
 }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('console', m => { if (m.type() === 'error') console.log('  [console.error]', m.text().slice(0, 300)); });
+
+    // A folder input lists the decoy first (`__decoyFirst`, the default) or
+    // last (false); `__orderedPicks` counts the lists it reordered, so a loader
+    // that stops reading the input fails here instead of passing untested.
+    await page.addInitScript(() => {
+        const own = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files');
+        window.__decoyFirst = true;
+        window.__orderedPicks = 0;
+        Object.defineProperty(HTMLInputElement.prototype, 'files', {
+            configurable: true,
+            enumerable: own.enumerable,
+            get() {
+                const list = own.get.call(this);
+                if (!list || !this.webkitdirectory) return list;
+                const all = Array.from(list);
+                const decoy = f => /\/aaa\.mp4$/.test(f.webkitRelativePath || '');
+                if (!all.some(decoy)) return list;
+                window.__orderedPicks++;
+                const first = window.__decoyFirst;
+                return all.filter(f => decoy(f) === first).concat(all.filter(f => decoy(f) !== first));
+            },
+            set(v) { own.set.call(this, v); },
+        });
+    });
+    const orderedPicks = () => page.evaluate(() => window.__orderedPicks);
 
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
@@ -184,6 +214,7 @@ try {
         await loadPerCamera();
         const r = await inspect();
         console.log('  measured:', JSON.stringify(r).slice(0, 1200));
+        check(await orderedPicks() > 0, 'the folder\'s files were listed with the decoy first');
         check(r.fps === 20 && r.fpsText === '20.0 fps', `the frame rate is session.json's (${r.fpsText})`);
         check(r.fpsTitle === 'Frame rate from the recording\'s session.json', 'and its hover says so');
         check(r.views.join(',') === 'Camera0,Camera1', `views in campy's order (${r.views})`);
@@ -258,7 +289,7 @@ try {
         check(r.fpsTitle === '', 'no "from session.json" hover');
         check(r.views.join(',') === 'Camera1,Camera0', `views in the calibration's order (${r.views})`);
         const firstVid = r.videoPaths.find(p => p.indexOf('Camera0/') >= 0);
-        check(/\/Camera0\/(aaa|0)\.mp4$/.test(firstVid), `Camera0 loads the first video its folder lists (${firstVid})`);
+        check(/\/Camera0\/aaa\.mp4$/.test(firstVid), `Camera0 loads the first video its folder lists: the decoy (${firstVid})`);
         check(/^Loaded 2 camera\(s\)$/.test(r.status), `status bar unchanged: ${r.status}`);
     }
 
@@ -374,6 +405,51 @@ try {
         check(r.rows.indexOf('Status=Did not finish') >= 0 && r.warns.some(w => /lost power/.test(w)),
             'a recording campy never finished says so');
         check(/warning/.test(r.statusKind) && /recording status: did not finish/.test(r.status), `status bar: ${r.status}`);
+    }
+
+    // =================================================================
+    console.log('\n10. The decoy listed last');
+    {
+        await page.evaluate(() => { window.__decoyFirst = false; });
+        const before = await orderedPicks();
+        /** File → Load SLP (or Load Project) with the .slp, then Select Session Folder in its prompt. */
+        const slpThenFolder = async (mod, fn, dir) => {
+            await page.evaluate(({ bytes, mod, fn }) => {
+                window.__slpLoad = (async () => {
+                    const m = await import(mod);
+                    await m[fn](new File([new Uint8Array(bytes)], 'campy-live.slp'));
+                })();
+            }, { bytes: Array.from(slpBytes), mod, fn });
+            await page.waitForSelector('#videoSelectOverlay', { timeout: 20000 });
+            page.once('filechooser', async (fc) => { await fc.setFiles(dir); });
+            await page.click('#videoSelectOverlay >> text=Select Session Folder');
+            await page.evaluate(() => window.__slpLoad);
+        };
+        const loads = [
+            ['Load Session Folder', 'rec10a', {}, async (dir) => {
+                page.once('filechooser', async (fc) => { await fc.setFiles(dir); });
+                await loadPerCamera();
+            }],
+            ['single-SLP mode', 'rec10b', { extra: { 'campy-live.slp': slpBytes } }, async (dir) => {
+                page.once('filechooser', async (fc) => { await fc.setFiles(dir); });
+                await page.evaluate(async () => {
+                    const loader = await import('/loading/session-loader.js');
+                    await loader.handleLoadSessionFolderSingleSlp();
+                });
+            }],
+            ['Load SLP', 'rec10c', {}, dir => slpThenFolder('/import-export/slp-import.js', 'handleLoadSlpFile', dir)],
+            ['lazy reopen', 'rec10d', {}, dir => slpThenFolder('/loading/session-loader.js', 'handleLoadProjectSlpLazy', dir)],
+        ];
+        for (const [label, name, opts, load] of loads) {
+            const dir = writeRecording(name, videos, opts);
+            await resetApp();
+            await load(dir);
+            const r = await inspect();
+            check(r.views.join(',') === 'Camera0,Camera1' && r.viewFrames.join(',') === '20,20'
+                && r.videoPaths.every(p => /\/0\.mp4$/.test(p)),
+                `${label}: campy's videos (${r.views} / ${r.viewFrames})`);
+        }
+        check(await orderedPicks() > before, 'the folder\'s files were listed with the decoy last');
     }
 } finally {
     if (browser) await browser.close();

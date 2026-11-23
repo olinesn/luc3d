@@ -19,8 +19,8 @@
  *   { id, type: 'done', result }             (typed arrays transferred)
  *   { id, type: 'error', message }
  */
-import { standardizeAndReduce, clusterLayouts } from './behavior-embedding.js?v=b21c72208e2d';
-import { prepareUmap } from './behavior-umap.js?v=b21c72208e2d';
+import { standardizeAndReduce, clusterLayouts } from './behavior-embedding.js?v=c63e9c4a67a7';
+import { prepareUmap } from './behavior-umap.js?v=c63e9c4a67a7';
 
 function transferables(value, out) {
     if (!value || typeof value !== 'object') return out;

@@ -51,7 +51,7 @@
 //
 // Depends on: import-export/behavior-io.js (`parseDelimited`)
 
-import { parseDelimited } from './behavior-io.js?v=b21c72208e2d';
+import { parseDelimited } from './behavior-io.js?v=c63e9c4a67a7';
 
 /** The settings file written beside the pose tables. */
 export var KPMS_MANIFEST = 'luc3d-kpms.yml';

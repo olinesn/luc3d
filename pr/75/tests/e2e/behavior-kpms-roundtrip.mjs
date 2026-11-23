@@ -32,10 +32,9 @@
  *     checkpoint.h5 or the pose tables), syll_info.csv names syllables, and
  *     the CSV results give the same syllables as results.h5.
  *
- * Run: node tests/e2e/behavior-kpms-roundtrip.mjs   (spawns its own http.server; PORT= to move it)
+ * Run: node tests/e2e/behavior-kpms-roundtrip.mjs   (serves the app itself; PORT= to move it)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -43,20 +42,19 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8231);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FIX = path.join(repoRoot, 'tests/fixtures/kpms');
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-kpms-'));
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const context = await browser.newContext({ acceptDownloads: true });
     const page = await context.newPage();
     const errs = [];
@@ -95,7 +93,7 @@ try {
         AS.state.totalFrames = T; AS.state.currentFrame = 0; AS.state.views = []; AS.state.fps = 30;
         AS.timeline.setTotalFrames(T); AS.timeline.setData(session);
         (await import('/ui/info-panel.js')).updateInfoPanel();
-        document.querySelector('.panel-tab[data-tab="tabBehavior"]').click();
+        (await import('/ui/panel-rail.js')).showPanelTab('tabBehavior');
     });
 
     console.log('\n-- 1. Export for keypoint-MoSeq (downloads) --');

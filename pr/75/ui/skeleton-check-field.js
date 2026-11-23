@@ -8,9 +8,9 @@
 //
 // Not in Defining Plane Mode's toolbar lock: it is a setting a run reads when it starts, not an action.
 
-import { state } from './app-state.js?v=b21c72208e2d';
-import { getSkeletonCheckSettings, setSkeletonCheckSettings, sessionSkeletonChains } from '../pose/skeleton-check-run.js?v=b21c72208e2d';
-import { setStatus } from '../import-export/save-load.js?v=b21c72208e2d';
+import { state } from './app-state.js?v=c63e9c4a67a7';
+import { getSkeletonCheckSettings, setSkeletonCheckSettings, sessionSkeletonChains } from '../pose/skeleton-check-run.js?v=c63e9c4a67a7';
+import { setStatus } from '../import-export/save-load.js?v=c63e9c4a67a7';
 
 const INFO = 'Skeleton check: after Triangulate, a body part whose bones are far outside their usual lengths ' +
     '(measured on this project\'s own 3D) is repaired with the fewest point changes: each point re-solved from a ' +

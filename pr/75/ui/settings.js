@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=b21c72208e2d';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=c63e9c4a67a7';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -406,14 +406,14 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'autoImageSwitchCheck', label: 'Check ID switches after tracking (image detection)', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~44 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
+        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~43 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
     },
     {
         // A new id, not 'imageCheckThreshold': the score's scale changed (2026-10-09, -4..+4 instead of summed
         // log-probabilities), and an old saved -25 would otherwise be clamped to -4 and flag almost nothing.
-        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -0.8,
+        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -1.2,
         min: -4, max: 0, step: 0.1,
-        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 8 proofread or tail-marked recordings (1 h 45 min), -0.8 caught 10 of 12 real relabels with 2 false marks; -0.5 caught the same with 6; -1.2 caught 8 with none.',
+        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 24 proofread or tail-marked recordings (4 h 30 min), -1.2 caught 22 label changes with no false mark; -1 caught the same 22 with 2; -0.8 with 3. On 193 held-out single-camera recordings, -1.2 caught 31 with none.',
     },
     {
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,
@@ -429,6 +429,24 @@ const TRACKING_THRESHOLDS = [
         id: 'imageCheckMaxViews', label: 'Image check: views per animal', default: 3,
         min: 0, max: 16, step: 1,
         desc: 'Embed only each animal\'s N views where it appears largest (0 = every view it is visible in). The model is the slow part, so time scales with this: 3 views ran 2.5x faster than all 8 with the same accuracy; 2 starts to cost accuracy.',
+    },
+    {
+        // A whole percentage (1-100). New ids, as each time the scale changed (the unreleased
+        // imageCheckMaxGpu/Cpu were 10-100, then imageCheckGpuTime/CpuCores 0.10-1.00), so a value saved on
+        // an earlier scale is never read on this one — a stored 0.5 would otherwise become 1%.
+        // 100 (uncapped) by default: on real data (M5 MacBook Pro, 2026-10-30) the uncapped check, GPU or CPU,
+        // dropped no frame of a 1080p60 YouTube video playing beside it — see MODULES.md ui/image-embedder.js.
+        id: 'imageCheckGpuTimePct', label: 'Image check: GPU time (%)', default: 100,
+        min: 1, max: 100, step: 1,
+        desc: 'The share of time the image check may use the GPU (or WebNN device); the rest is left for other apps.',
+        tip: 'Fraction of GPU time to run image check, idling the remaining time.',
+    },
+    {
+        // a new id again: the unreleased imageCheckCpuCoresPct capped the thread count, not the time
+        id: 'imageCheckCpuTimePct', label: 'Image check: CPU time (%)', default: 100,
+        min: 1, max: 100, step: 1,
+        desc: 'The share of time each of the image check\'s CPU threads may run; the rest is left for other apps.',
+        tip: 'Fraction of CPU time to run image check, idling the remaining time.',
     },
     {
         id: 'imageCheckWebNN', label: 'Image check: try WebNN (experimental)', default: 0,
@@ -454,9 +472,21 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore', 'filterMinMeanNodeScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate', 'maxPenalty', 'matchReproj',
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews',
+    'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
+
+/**
+ * The Tracking Wizard settings shown in its own "ID Switches" section rather than
+ * under Tracking Thresholds, in this order: the two after-tracking checks, then the
+ * image check's options. They configure the checks run AFTER tracking, not the
+ * tracker's matching.
+ */
+export const ID_SWITCH_SETTING_IDS = [
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz',
+    'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
+];
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.
 function clampThreshold(def, v) {
@@ -477,6 +507,7 @@ export function getTrackingThresholdDefs() {
             id: t.id, label: t.label, default: t.default,
             value: getTrackingThreshold(t.id),
             min: t.min, max: t.max, step: t.step, desc: t.desc, kind: t.kind || 'number',
+            tip: t.tip || '',
         };
     });
 }
@@ -513,24 +544,52 @@ export function getTrackingThresholds() {
 //
 // Both kernels default to 0 = off, matching `reprojErrorThreshold`: shipping
 // this must not change the 3D of any existing project until someone asks for it.
+//
+// `method` says which method a parameter belongs to ('windows' | 'adaptive');
+// the panel shows only the chosen method's. `smoothingMethod` is a choice stored
+// as a number (0 = median + Gaussian, 1 = adaptive; `resolveSmoothingParams`),
+// one or the other. The default is Adaptive, which smooths on the first click
+// with nothing to set, also for someone whose median or Gaussian window is
+// stored (those stay, for when Median + Gaussian is picked). A new id, not the
+// PR previews' `smoothMethod`: a choice saved there (an Apply while those
+// previews kept stored windows on the windows method) is never read.
+export const SMOOTH_METHOD_CHOICES = [
+    { value: 1, label: 'Adaptive' },
+    { value: 0, label: 'Median + Gaussian' },
+];
 export const SMOOTHING_PARAMS = [
     {
-        id: 'smoothMedianWindow', label: 'Median window (frames)', default: 0,
+        id: 'smoothingMethod', label: 'Method', default: 1,
+        min: 0, max: 1, step: 1, kind: 'choice', options: SMOOTH_METHOD_CHOICES,
+        desc: 'One or the other runs, never both. Adaptive (3D adaptive temporal averaging, the default): each node\'s window, per frame, grows while its next 3D point lies within the gate of this one (judged by both points\' uncertainty, from their camera views) and is cut symmetric, then the points are averaged, the more certain ones counting more. Long windows on a still node, a frame or two in fast motion, and no window across a jump (an ID swap) or a gap. On 60 fps mice it never made the 3D worse and halved frame-to-frame jitter. Median + Gaussian: fixed windows you set, the same for every node and frame, a median first, then a Gaussian.',
+    },
+    {
+        id: 'smoothAtaK', label: 'Gate (standard deviations)', default: 3, method: 'adaptive',
+        min: 0.5, max: 10, step: 0.5,
+        desc: 'A frame joins the window while its 3D point is within this many standard deviations of the current frame\'s, under both points\' covariance (from each point\'s views and reprojection errors). Wider lets more frames in, smoothing still nodes more, but also averages across smaller jumps: at 1 mm of noise, 3 stops at swaps over about 4 mm. Pure noise fails the gate by chance 2.9% of the time at 3, 26% at 2.',
+    },
+    {
+        id: 'smoothAtaHmax', label: 'Longest half-window (frames)', default: 15, method: 'adaptive',
+        min: 0, max: 100, step: 1,
+        desc: 'A window reaches at most this many frames each way, so at most 2 x this + 1 frames are averaged (15: 31 frames, half a second at 60 fps). Only a still node gets that long. 0 = off.',
+    },
+    {
+        id: 'smoothMedianWindow', label: 'Median window (frames)', default: 0, method: 'windows',
         min: 0, max: 101, step: 2,
         desc: 'Stage 1, over time. Replaces each node\'s x, y and z with that node\'s median over this many frames, which removes one-frame spikes without averaging. Coerced to the next odd value so the window stays centered on the frame being written. 0 = off. Note that a median filter erases any feature narrower than about half the window, so keep it short for fast motion.',
     },
     {
-        id: 'smoothGaussianWindow', label: 'Gaussian window (frames)', default: 0,
+        id: 'smoothGaussianWindow', label: 'Gaussian window (frames)', default: 0, method: 'windows',
         min: 0, max: 101, step: 2,
         desc: 'Stage 2, over time, applied to the median\'s output. A weighted average of each node\'s x, y and z over this many frames, with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. 3 barely changes anything (each frame keeps about 98% of its own value); 5 is the smallest window that smooths. Coerced to the next odd value. 0 = off.',
     },
     {
-        id: 'smoothMaxGap', label: 'Max gap to smooth across (frames)', default: 5,
+        id: 'smoothMaxGap', label: 'Max gap to smooth across (frames)', default: 5, method: 'windows',
         min: 0, max: 1000, step: 1,
         desc: 'An absence longer than this splits the trajectory into separate segments, and no window ever spans the break. This is what stops a filter from drawing a straight line through an occlusion or through the frames where the animal left. Shorter absences stay inside a segment as holes, which the filter skips over. Missing points are never filled in either case.',
     },
     {
-        id: 'smoothMinSegment', label: 'Minimum segment length (frames)', default: 5,
+        id: 'smoothMinSegment', label: 'Minimum segment length (frames)', default: 5, method: 'windows',
         min: 1, max: 1000, step: 1,
         desc: 'A segment shorter than this is left untouched rather than smoothed from too few samples. The analogue of aniposelib\'s refusal to optimize below 20 finite 3D points.',
     },
@@ -546,6 +605,7 @@ export function getSmoothingParamDefs() {
             id: p.id, label: p.label, default: p.default,
             value: getSmoothingParam(p.id),
             min: p.min, max: p.max, step: p.step, desc: p.desc,
+            kind: p.kind || 'number', options: p.options || null, method: p.method || null,
         };
     });
 }
@@ -579,6 +639,16 @@ export function setSmoothingParams(map) {
     }
     _settings.smoothingParams = next;
     persist();
+    for (var i = 0; i < _smoothingListeners.length; i++) {
+        try { _smoothingListeners[i](); } catch (e) { /* ignore */ }
+    }
+}
+
+// Called after every `setSmoothingParams` (the Smooth menu's Method follows
+// Settings ▸ Temporal Smoothing's Apply).
+const _smoothingListeners = [];
+export function onSmoothingParamsChange(fn) {
+    if (typeof fn === 'function') _smoothingListeners.push(fn);
 }
 
 // Commit an { id: value } override map (from the Tracking Wizard's Apply button).

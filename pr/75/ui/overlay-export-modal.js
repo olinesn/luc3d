@@ -24,23 +24,23 @@
 
 // Pinned to 6.6.1 — keep in sync with the dockview.css pin in index.html and the
 // import in ui/sessions-panes.js (see CLAUDE.md › Dependencies).
-import { noteProgress } from './progress-delta.js?v=b21c72208e2d';
+import { noteProgress } from './progress-delta.js?v=c63e9c4a67a7';
 import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 
-import { state, videoController, getActiveSession } from './app-state.js?v=b21c72208e2d';
-import { Viewport3D } from './viewport3d.js?v=b21c72208e2d';
+import { state, videoController, getActiveSession } from './app-state.js?v=c63e9c4a67a7';
+import { Viewport3D } from './viewport3d.js?v=c63e9c4a67a7';
 import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
     TRAIL_SHADES, DEFAULT_TRAIL_SHADE, trailShadeFor,
-} from './overlays.js?v=b21c72208e2d';
-import { getVisibilitySettings, fillLazyReprojections } from './rendering.js?v=b21c72208e2d';
+} from './overlays.js?v=c63e9c4a67a7';
+import { getVisibilitySettings, fillLazyReprojections } from './rendering.js?v=c63e9c4a67a7';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
     ensureLazyTrailWindow,
     sessionHasCalibration,
-} from '../pose/triangulation.js?v=b21c72208e2d';
-import { setStatus } from '../import-export/save-load.js?v=b21c72208e2d';
+} from '../pose/triangulation.js?v=c63e9c4a67a7';
+import { setStatus } from '../import-export/save-load.js?v=c63e9c4a67a7';
 
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
@@ -50,17 +50,17 @@ import {
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
     distributeAxisSizes, SASH_SHARE_FAR,
-} from './overlay-export-layout.js?v=b21c72208e2d';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=b21c72208e2d';
-import { fileSystemAccessHint } from './browser-hints.js?v=b21c72208e2d';
-import { behaviorBoxesAt } from './behavior-coding.js?v=b21c72208e2d';
+} from './overlay-export-layout.js?v=c63e9c4a67a7';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=c63e9c4a67a7';
+import { fileSystemAccessHint } from './browser-hints.js?v=c63e9c4a67a7';
+import { behaviorBoxesAt } from './behavior-coding.js?v=c63e9c4a67a7';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
 // project modules, so this adds no cycle — and going through the SAME
 // `buildVideoFilter` the live canvases use is what stops the export drifting from
 // what the user sees (`applyVideoFilters` in ui/sessions-panes.js).
 import {
     buildVideoFilter, getSessionBrightness, getSessionContrast, getSessionRotation,
-} from './video-filters.js?v=b21c72208e2d';
+} from './video-filters.js?v=c63e9c4a67a7';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
@@ -119,6 +119,8 @@ export function settingsFromVisibilityPanel() {
     s.layers.reproj = !!vis.showReprojected;
     s.layers.errors = !!vis.showErrors;
     s.layers.legend = !!vis.showLegend;
+    s.layers.symmetryEdges = !!vis.showSymmetryEdges;
+    s.symmetryEdgeWeight = vis.symmetryEdgeWeight;
     s.trailLength = state.trailLength || 0;
     s.trailShade = state.trailShade || DEFAULT_TRAIL_SHADE;
     s.colorBy = state.colorByIdentity ? 'identity' : 'track';
@@ -1332,7 +1334,7 @@ export function showOverlayExportModal() {
 
     var MARKERS = [['circle', 'circle'], ['square', 'square'], ['diamond', 'diamond'],
         ['triangle', 'triangle'], ['cross', 'cross'], ['x', 'x']];
-    var LINES = [['solid', 'solid'], ['dashed', 'dashed'], ['dotted', 'dotted']];
+    var LINES = [['solid', 'solid'], ['dashed', 'dashed'], ['dotted', 'dotted'], ['wedge', 'wedge']];
 
     function buildSettings() {
         settingsEl.textContent = '';
@@ -1365,6 +1367,8 @@ export function showOverlayExportModal() {
         addCheck(gLayers.body, 'Reprojections', settings.layers, 'reproj');
         addCheck(gLayers.body, 'Reprojection errors', settings.layers, 'errors');
         addCheck(gLayers.body, 'Legend', settings.layers, 'legend');
+        addCheck(gLayers.body, 'Symmetry edges', settings.layers, 'symmetryEdges');
+        addNumber(gLayers.body, 'Symmetry edge width', settings, 'symmetryEdgeWeight', 0.5, 15, 0.5);
         addSelect(gLayers.body, 'Color by', settings, 'colorBy',
             [['track', 'Track'], ['identity', 'Identity']], 'ovColorBy');
         addNumber(gLayers.body, 'Node trails (frames)', settings, 'trailLength', 0, 500, 10);
@@ -1406,7 +1410,7 @@ export function showOverlayExportModal() {
         addNumber(gRep.body, 'Opacity', settings.reproj, 'alpha', 0.1, 1, 0.05);
         addSelect(gRep.body, 'Line style', settings.reproj, 'lineStyle', LINES);
         addSelect(gRep.body, 'Marker color', settings.reproj, 'nodeColor',
-            [['white', 'white'], ['black', 'black'], ['track', 'track']]);
+            [['white', 'white'], ['black', 'black'], ['track', 'track'], ['dark', 'dark']]);
         addNumber(gRep.body, 'Brightness', settings.reproj, 'brightness', 0.1, 1, 0.05);
         addCheck(gRep.body, 'Show nodes', settings.reproj, 'showNodes');
         addCheck(gRep.body, 'Show edges', settings.reproj, 'showEdges');

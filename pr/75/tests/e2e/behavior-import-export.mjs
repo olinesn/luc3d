@@ -18,28 +18,26 @@
  *     behaviors (exclusions as a group, social from modifiers) and its labels.
  *  6. Edit Ethogram ▸ Import takes a BORIS project's behaviors.
  *
- * Run: node tests/e2e/behavior-import-export.mjs   (spawns its own http.server; PORT= to move it)
+ * Run: node tests/e2e/behavior-import-export.mjs   (serves the app itself; PORT= to move it)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8195);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
     const errs = [];
@@ -171,7 +169,7 @@ try {
     check(eq(await present(), original), 'every present bout is back, frame for frame');
     check(/Imported BehaviorIO_boris-tabular\.csv: 7 bouts labelled/.test(await status()), 'the status says so');
     check(await page.evaluate(async () => (await import('/ui/app-state.js')).state.isDirty), 'the project is dirty');
-    await page.click('.panel-tab[data-tab="tabBehavior"]');
+    await page.evaluate(async () => (await import('/ui/panel-rail.js')).showPanelTab('tabBehavior'));
     await page.click('#behaviorCodingBody button[data-act="undo"]');
     check((await present()).length === 0, 'one Undo takes the whole import back');
 

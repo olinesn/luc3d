@@ -10,9 +10,9 @@
  * Depends on: ui/app-state.js, ui/behavior-detect.js, pose/run-state.js
  */
 
-import { state } from './app-state.js?v=b21c72208e2d';
-import { detectionEnv, ensurePredictionInputChecked } from './behavior-detect.js?v=b21c72208e2d';
-import { hasTrackResult, hasTriangulateResult, hasBehaviorResult } from '../pose/run-state.js?v=b21c72208e2d';
+import { state } from './app-state.js?v=c63e9c4a67a7';
+import { detectionEnv, ensurePredictionInputChecked } from './behavior-detect.js?v=c63e9c4a67a7';
+import { hasTrackResult, hasTriangulateResult, hasBehaviorResult } from '../pose/run-state.js?v=c63e9c4a67a7';
 
 /** Re-derive the buttons' blue state from the active session. */
 export function syncRunButtons() {
