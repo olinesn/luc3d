@@ -101,6 +101,7 @@
                     <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
                     <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
                     <div class="menu-dropdown-item" id="menuLoadReferenceMesh" title="Draw an STL or PLY file in the 3D view, in the calibration's world coordinates (for example a cage scan). Not saved with the project.">Load Reference Mesh (STL/PLY)...</div>
+                    <div class="menu-dropdown-item" id="menuLoadVolume3d" title="A volumetric model's 3D (a .vol3d.h5 from scripts/export_volume3d.py) for this session: Triangulate fuses it with the 2D (Triangulate ▸ Fuse with volume)">Load Volume 3D (H5)...</div>
                     <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSaveSkeleton">Save Skeleton (JSON)</div>
@@ -335,6 +336,18 @@
                             <span class="tri-dropdown-setting-label">Reprojection error (px)</span>
                             <input type="number" id="tbReprojThreshold" min="0" max="640" step="1" inputmode="decimal"
                                 placeholder="off" autocomplete="off" aria-label="Reprojection error threshold (px)">
+                        </label>
+                        <!-- Fuse the session's volumetric-model 3D (File ▸ Load Volume 3D) into every
+                             Triangulate. Greyed out without one. Wired in ui/volume-fusion-field.js. -->
+                        <label class="tri-dropdown-setting" title="Fuse with volume: load a volumetric model's output first (File ▸ Load Volume 3D).">
+                            <span class="tri-dropdown-setting-label">Fuse with volume</span>
+                            <input type="checkbox" id="tbVolumeFusion" aria-label="Fuse with volume">
+                        </label>
+                        <!-- Triangulate's skeleton check (browser-local, off by default).
+                             Wired in ui/ui-wiring.js (wireSkeletonCheckField, ui/skeleton-check-field.js). -->
+                        <label class="tri-dropdown-setting">
+                            <span class="tri-dropdown-setting-label">Skeleton check</span>
+                            <input type="checkbox" id="tbSkeletonCheck" aria-label="Skeleton check">
                         </label>
                         <button class="tri-dropdown-item" id="tbTriangulateSettings" data-scope="settings" role="menuitem"
                             title="Settings ▸ Triangulation Wizard">Settings…</button>
@@ -1627,6 +1640,8 @@
                 </div>
                 <!-- Time ruler under the track (ui/seekbar-ticks.js) -->
                 <div class="seekbar-ruler" id="seekbarRuler" aria-hidden="true"></div>
+                <!-- Suggested frames' faint ticks, under the ID-switch ones (ui/seekbar-markers.js) -->
+                <div class="seekbar-suggestion-marks" id="seekbarSuggestionMarks" aria-hidden="true"></div>
                 <!-- Possible-ID-switch ticks (ui/seekbar-markers.js) -->
                 <div class="seekbar-marks" id="seekbarMarks"></div>
                 <!-- Hover line at the frame a click would land on (ui/seekbar-tooltip.js):
