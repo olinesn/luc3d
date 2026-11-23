@@ -30,12 +30,12 @@
  *     still loads, and Save passes no `startIn` (today's behaviour).
  *  7. Save As on a project opened from a file, with no recording folder: it
  *     opens beside that file.
+ *  8. File ▸ Save Compact Copy opens in the recording's folder too.
  *
- * Run: node tests/e2e/save-opens-in-recording-folder.mjs   (spawns its own
- * http.server; PORT= to move it)
+ * Run: node tests/e2e/save-opens-in-recording-folder.mjs   (serves the app
+ * itself; PORT= to choose the port)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -43,14 +43,13 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8391);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const CALIB = fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'campy-recording', 'calibration.toml'), 'utf8');
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-save-folder-'));
 
 /**
@@ -138,7 +137,7 @@ const saveAs = (page) => page.evaluate(async () => {
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const newPage = async (opts) => {
         const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
         page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
@@ -285,6 +284,24 @@ try {
             return t.lastSave();
         });
         check(s.startIn === 'opened.slp:file', 'startIn is the file Save As replaces (' + s.startIn + ')');
+    }
+
+    // =================================================================
+    console.log('\n8. Save Compact Copy opens in the recording\'s folder');
+    await page.close();
+    page = await newPage();
+    {
+        await openPerCamera(page, 'recC');
+        const run = page.evaluate(async () => {
+            const t = window.__t;
+            let opts = null;
+            await t.save.saveCompactCopy({ pickFile: async (o) => { opts = o; return null; } });
+            return opts && { startIn: opts.startIn ? opts.startIn.name + ':' + opts.startIn.kind : null, suggestedName: opts.suggestedName };
+        });
+        await page.click('#compactSaveContinue');
+        const s = await run;
+        check(s && s.startIn === 'recC:directory' && s.suggestedName === 'recC_compact.slp',
+            'the compact copy\'s picker opens in the folder (' + JSON.stringify(s) + ')');
     }
 } finally {
     if (browser) await browser.close();

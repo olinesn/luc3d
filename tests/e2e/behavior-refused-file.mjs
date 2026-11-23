@@ -13,10 +13,9 @@
  * session object and leave the saved form of the behavior state exactly as it was. A
  * readable file then does replace them, so these checks can fail.
  *
- * Run: node tests/e2e/behavior-refused-file.mjs   (spawns its own http.server; PORT=…)
+ * Run: node tests/e2e/behavior-refused-file.mjs   (serves the app itself; PORT=…)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,7 +23,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8392);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FIXTURE = path.join(repoRoot, 'tests', 'fixtures', 'slp-format-30', 'py_written_30_columnar.slp');
 const VIDEO = path.join(repoRoot, 'tests', 'fixtures', 'barcode-60', 'barcode-60.mp4');
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-refused-behavior-'));
@@ -38,12 +38,10 @@ const LAZY = "return (await import('/loading/session-loader.js')).handleLoadProj
 const ROUTED = "return (await import('/import-export/save-load.js')).handleLoadProject(f);";
 const OVER_200_MB = 250 * 1024 * 1024;
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1'], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 let browser;
 try {
-    browser = await chromium.launch({ headless: true });
+    browser = await launchBrowser({ headless: true });
 
     async function freshPage() {
         const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });

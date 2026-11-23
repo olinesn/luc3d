@@ -18,24 +18,21 @@
  *
  * Run: node tests/e2e/settings-apply-stays-open.mjs   (PORT=… to move the server)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8321);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 const FIELD = '.settings-panel[data-panel="wizard"] input[aria-label="Reprojection error threshold (px)"]';
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
@@ -145,13 +142,14 @@ try {
     await page.click('.settings-nav-item[data-panel="triangulation"]');
     r = await readout();
     check(r.text === 'Method: Refined (was DLT) Reprojection error threshold: off (was 30 px)' && r.changed === 2, `a threshold changed on the Tracking Wizard too (${r.text})`);
+    await page.click('.settings-size-btn[data-size="narrow"]');
     await page.evaluate(() => { document.querySelector('.settings-panel-container').scrollTop = 1e6; });
     const box = await page.evaluate(() => {
         const rect = (q) => document.querySelector(q).getBoundingClientRect();
-        const ro = rect('.settings-tri-readout'), cancel = rect('.settings-btn-cancel'), go = rect('.settings-btn-triangulate');
-        return { clear: ro.right <= cancel.left, oneRow: Math.abs(cancel.top - go.top) < 2, onScreen: ro.bottom <= innerHeight && ro.top >= 0, sw: ro.width };
+        const ro = rect('.settings-tri-readout'), size = rect('.settings-size-btns'), cancel = rect('.settings-btn-cancel'), go = rect('.settings-btn-triangulate');
+        return { clear: size.right <= ro.left && ro.right <= cancel.left, oneRow: Math.abs(cancel.top - go.top) < 2, onScreen: ro.bottom <= innerHeight && ro.top >= 0, sw: ro.width };
     });
-    check(box.clear && box.oneRow && box.onScreen, `in a 1000 px window it sits left of the Close button, scrolled to the end (${JSON.stringify(box)})`);
+    check(box.clear && box.oneRow && box.onScreen, `in a 1000 px window it sits between the Window and Close buttons, scrolled to the end (${JSON.stringify(box)})`);
     await page.click('.settings-btn-apply:not(.settings-btn-triangulate)');
     r = await readout();
     check(r.text === 'Method: Refined Reprojection error threshold: off' && r.changed === 0, `Apply: nothing is lit (${r.text})`);
