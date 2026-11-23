@@ -288,7 +288,7 @@ try {
         return other;
     }, { x0: attack.x, x1: attack.x + attack.w, y, c0: { r: attack.r, g: attack.g, b: attack.b } });
     const onText = await textPixels(2 * 14 + 7);
-    check(onText > 3 && onText < attack.w / 4, `with more than two animals a directed bar names its target (${onText} pixels of text along it)`);
+    check(onText > 3 && onText < attack.w / 4, `with more than two animals a directed bar names its target (${onText} pixels of text along a ${attack.w.toFixed(1)} px bar)`);
     const jump = b.find(m => m.lane === 3);
     check(jump.w <= 4 && near(jump.x + jump.w / 2, g.mid(3000, 3000), 1.51), 'a point is a tick on its frame, under the playhead here');
     const labels = await page.$$eval('.behavior-strip-label', els => els.map(e => e.getBoundingClientRect().top));
@@ -307,7 +307,7 @@ try {
     await goTo(3000);
     const rulerH = (await box('#behaviorStripRulerCanvas')).h;
     const tickAt = await column('behaviorStripRulerCanvas', g.mid(3000, 3000));
-    check(tickAt[rulerH - 1] > 0 && tickAt[rulerH - 5] > 0, 'the ruler has a major tick under the playhead at 01:40.000, on frame 3,000 at 30 fps');
+    check(tickAt[rulerH - 1] > 0 && tickAt[rulerH - 5] > 0, `the ruler has a major tick under the playhead at 01:40.000, on frame 3,000 at 30 fps (ruler ${rulerH} px high, column from the bottom ${tickAt.slice(-6).reverse().map(a => a.toFixed(2)).join(' ')})`);
     check(tickAt.slice(0, 9).some(a => a > 0), 'with its label above it');
     const offTick = await column('behaviorStripRulerCanvas', g.mid(3005, 3000));
     check(offTick[rulerH - 4] === 0 && offTick[rulerH - 5] === 0, 'and none a sixth of a second on');

@@ -38,6 +38,24 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npx playwright install --with-deps chromium
+      # Every browser test launches Google Chrome (GitHub's Ubuntu runners have
+      # it), not Playwright's own Chromium: on Linux that build's renderer
+      # crashed mid-test (slp-failed-read here; on talmolab's CI,
+      # export-bycam-store-copy), and Chrome is the browser people use. The
+      # tests call chromium.launch themselves, so a module loaded before each
+      # one adds the channel to every launch that names no browser.
+      - name: Use Google Chrome for the browser tests
+        run: |
+          cat > "$RUNNER_TEMP/use-chrome.mjs" <<'EOF'
+          import { createRequire } from 'node:module';
+          const { chromium } = createRequire(process.env.GITHUB_WORKSPACE + '/tests/e2e/package.json')('playwright');
+          const withChrome = (o) => (o && (o.channel || o.executablePath)) ? o : Object.assign({}, o, { channel: 'chrome' });
+          const launch = chromium.launch.bind(chromium), persistent = chromium.launchPersistentContext.bind(chromium);
+          chromium.launch = (o) => launch(withChrome(o));
+          chromium.launchPersistentContext = (dir, o) => persistent(dir, withChrome(o));
+          EOF
+          echo "NODE_OPTIONS=--import=file://$RUNNER_TEMP/use-chrome.mjs" >> "$GITHUB_ENV"
+          google-chrome --version
       - name: Browser unit tests (tests/*.js via tests/test-runner.html)
         run: node tests/e2e/run-unit-tests.mjs
 
@@ -76,6 +94,24 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           sudo apt-get install -y --no-install-recommends ffmpeg
+      # Every browser test launches Google Chrome (GitHub's Ubuntu runners have
+      # it), not Playwright's own Chromium: on Linux that build's renderer
+      # crashed mid-test (slp-failed-read here; on talmolab's CI,
+      # export-bycam-store-copy), and Chrome is the browser people use. The
+      # tests call chromium.launch themselves, so a module loaded before each
+      # one adds the channel to every launch that names no browser.
+      - name: Use Google Chrome for the browser tests
+        run: |
+          cat > "$RUNNER_TEMP/use-chrome.mjs" <<'EOF'
+          import { createRequire } from 'node:module';
+          const { chromium } = createRequire(process.env.GITHUB_WORKSPACE + '/tests/e2e/package.json')('playwright');
+          const withChrome = (o) => (o && (o.channel || o.executablePath)) ? o : Object.assign({}, o, { channel: 'chrome' });
+          const launch = chromium.launch.bind(chromium), persistent = chromium.launchPersistentContext.bind(chromium);
+          chromium.launch = (o) => launch(withChrome(o));
+          chromium.launchPersistentContext = (dir, o) => persistent(dir, withChrome(o));
+          EOF
+          echo "NODE_OPTIONS=--import=file://$RUNNER_TEMP/use-chrome.mjs" >> "$GITHUB_ENV"
+          google-chrome --version
       # So offline-server.mjs runs instead of skipping.
       - name: Install the offline packages
         run: python3 scripts/offline_deps.py install
