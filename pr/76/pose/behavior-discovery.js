@@ -51,12 +51,12 @@
 //             pose/behavior-labels.js, pose/behavior-states.js, and when it runs
 //             inline pose/behavior-embedding.js, pose/behavior-umap.js
 
-import { binFrames, binCenters, discoveryFeatureNames, speedFeatures, heldOutAgreement, randomView } from './behavior-discovery-core.js?v=fee6ef1c0bd8';
-import { runBehaviorChunks } from './behavior-pool.js?v=fee6ef1c0bd8';
-import { planChunks, featurePadFrames, sliceChunkData } from './behavior-features.js?v=fee6ef1c0bd8';
-import { DEFAULT_FOREST_PARAMS, binEdges, binColumn, finalizeForest, encodeColumn, mix32, missingFeatures } from './behavior-forest.js?v=fee6ef1c0bd8';
-import { listBouts } from './behavior-labels.js?v=fee6ef1c0bd8';
-import { setStateLayer, runsFromSequence, cleanLayerName, stateLayer } from './behavior-states.js?v=fee6ef1c0bd8';
+import { binFrames, binCenters, discoveryFeatureNames, speedFeatures, heldOutAgreement, randomView } from './behavior-discovery-core.js?v=036c0d6552f3';
+import { runBehaviorChunks } from './behavior-pool.js?v=036c0d6552f3';
+import { planChunks, featurePadFrames, sliceChunkData } from './behavior-features.js?v=036c0d6552f3';
+import { DEFAULT_FOREST_PARAMS, binEdges, binColumn, finalizeForest, encodeColumn, mix32, missingFeatures } from './behavior-forest.js?v=036c0d6552f3';
+import { listBouts } from './behavior-labels.js?v=036c0d6552f3';
+import { setStateLayer, runsFromSequence, cleanLayerName, stateLayer } from './behavior-states.js?v=036c0d6552f3';
 
 /** At most this many bins are clustered (B-SOiD's 100 ms bins, across sessions and animals). */
 export var MAX_BINS = 30000;
@@ -121,7 +121,7 @@ function openStepRunner(isCancelled, pause) {
     var worker = null, nextId = 1, pending = null, poll = null;
     if (!inline) {
         try {
-            worker = new Worker(new URL('pose/behavior-discovery-worker.js?v=fee6ef1c0bd8', document.baseURI), { type: 'module' });
+            worker = new Worker(new URL('pose/behavior-discovery-worker.js?v=036c0d6552f3', document.baseURI), { type: 'module' });
         } catch (e) {
             console.warn('[behavior-discovery] no worker, running inline:', e);
             worker = null;
@@ -156,9 +156,9 @@ function openStepRunner(isCancelled, pause) {
     }
     async function callInline(m, onProgress) {
         if (isCancelled()) return null;
-        if (m.type === 'reduce') return (await import('./behavior-embedding.js?v=fee6ef1c0bd8')).standardizeAndReduce(m.rows, m.M, m.F, m.opts);
-        if (m.type === 'cluster') return (await import('./behavior-embedding.js?v=fee6ef1c0bd8')).clusterLayouts(m.E, m.E2, m.n, m.d, m.opts);
-        var run = (await import('./behavior-umap.js?v=fee6ef1c0bd8')).prepareUmap(m.knn, m.opts);
+        if (m.type === 'reduce') return (await import('./behavior-embedding.js?v=036c0d6552f3')).standardizeAndReduce(m.rows, m.M, m.F, m.opts);
+        if (m.type === 'cluster') return (await import('./behavior-embedding.js?v=036c0d6552f3')).clusterLayouts(m.E, m.E2, m.n, m.d, m.opts);
+        var run = (await import('./behavior-umap.js?v=036c0d6552f3')).prepareUmap(m.knn, m.opts);
         for (var ep = 0; ep < run.epochs; ep++) {
             run.step();
             if (ep % 5 === 4) {

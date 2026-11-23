@@ -34,7 +34,7 @@
  * A-B testing), or the worker does not answer its `init` — so a worker that
  * cannot start never costs a run. A failure after that rejects the next wait.
  */
-import { createBusyClock } from '../ui/load-graph.js?v=fee6ef1c0bd8';
+import { createBusyClock } from '../ui/load-graph.js?v=036c0d6552f3';
 
 /** Frames per message: ~30 ms of tracking at 5 mice x 8 cameras — enough to amortize messaging. */
 export const TRACKER_BATCH = 100;
@@ -78,7 +78,7 @@ export async function startTrackerWorker(cameras, hp, onFrame, opts) {
     var busyDuring = opts.busyDuring || function (fn) { fn(); };
     var worker;
     try {
-        worker = new Worker(new URL('pose/tracker-worker.js?v=fee6ef1c0bd8', document.baseURI), { type: 'module' });
+        worker = new Worker(new URL('pose/tracker-worker.js?v=036c0d6552f3', document.baseURI), { type: 'module' });
     } catch (e) {
         console.warn('[tracker-pool] no tracker worker, tracking on the main thread:', e);
         return null;

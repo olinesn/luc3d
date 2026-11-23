@@ -44,8 +44,8 @@
 //
 // Depends on: pose/behavior-labels.js, pose/pose-data.js (the identity-swap hook)
 
-import { listBouts } from './behavior-labels.js?v=fee6ef1c0bd8';
-import { onIdentitySwap } from './pose-data.js?v=fee6ef1c0bd8';
+import { listBouts } from './behavior-labels.js?v=036c0d6552f3';
+import { onIdentitySwap } from './pose-data.js?v=036c0d6552f3';
 
 /** Where a layer's states came from. */
 export var STATE_SOURCES = ['keypoint-MoSeq', 'discovery'];
