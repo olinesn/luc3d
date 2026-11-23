@@ -9,80 +9,80 @@ import {
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
     markPoints3dFromFile,
-} from '../pose/pose-data.js?v=81354533b96b';
+} from '../pose/pose-data.js?v=ced3e36359b7';
 import {
     getInstanceGroupsForFrame, ensureLazyFrameData,
-} from '../pose/triangulation.js?v=81354533b96b';
-import { hasRealCalibration, cameraNamesFromVideos } from '../pose/placeholder-cameras.js?v=81354533b96b';
+} from '../pose/triangulation.js?v=ced3e36359b7';
+import { hasRealCalibration, cameraNamesFromVideos } from '../pose/placeholder-cameras.js?v=ced3e36359b7';
 import {
     parseSlpH5, parseSlpViaSleapIO, parseSlpWithRawFallback, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=81354533b96b';
-import { slpReadErrorStatus } from '../loading/slp-format-check.js?v=81354533b96b';
+} from './file-io.js?v=ced3e36359b7';
+import { slpReadErrorStatus } from '../loading/slp-format-check.js?v=ced3e36359b7';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames, videosClaimedBy, cameraOfClaimedVideos,
-} from './slp-merge.js?v=81354533b96b';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder, closeEmbeddedFrames } from '../loading/video.js?v=81354533b96b';
-import { embeddedVideoForEntry } from '../loading/slp-package-reader.js?v=81354533b96b';
+} from './slp-merge.js?v=ced3e36359b7';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder, closeEmbeddedFrames } from '../loading/video.js?v=ced3e36359b7';
+import { embeddedVideoForEntry } from '../loading/slp-package-reader.js?v=ced3e36359b7';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=81354533b96b';
+} from '../ui/app-state.js?v=ced3e36359b7';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
     adoptCampyRecording,
-} from '../loading/session-loader.js?v=81354533b96b';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=81354533b96b';
+} from '../loading/session-loader.js?v=ced3e36359b7';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=ced3e36359b7';
 import {
     campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
-} from '../loading/campy-session.js?v=81354533b96b';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=81354533b96b';
-import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js?v=81354533b96b';
-import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=81354533b96b';
-import { adoptIdentityMetadata, adoptTypedLabels } from './detection-labels.js?v=81354533b96b';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=81354533b96b';
+} from '../loading/campy-session.js?v=ced3e36359b7';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=ced3e36359b7';
+import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js?v=ced3e36359b7';
+import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=ced3e36359b7';
+import { adoptIdentityMetadata, adoptTypedLabels } from './detection-labels.js?v=ced3e36359b7';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=ced3e36359b7';
 import {
     fileSkeletons, groupsAcrossSkeletonsRefusal, headerVideoOfRecord, keepOtherSkeletonFrames, keepOutsideFrames,
     keptOutsideCounts, noteVideoReaders, outsideFramesNote, sessionSkeletonEntry,
-} from './outside-frames.js?v=81354533b96b';
-import { keepSuggestions } from './kept-suggestions.js?v=81354533b96b';
-import { storeFromParsedFrames } from '../loading/lazy-store-rows.js?v=81354533b96b';
-import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=81354533b96b';
-import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js?v=81354533b96b';
+} from './outside-frames.js?v=ced3e36359b7';
+import { keepSuggestions } from './kept-suggestions.js?v=ced3e36359b7';
+import { storeFromParsedFrames } from '../loading/lazy-store-rows.js?v=ced3e36359b7';
+import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=ced3e36359b7';
+import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js?v=ced3e36359b7';
 import {
     applyMovedGroupIdentities, reconcileSessionIdentities, reconcileSessionTracks,
     remapFrameIdentityTrackSlots, typedSessionGroups,
-} from './file-edits.js?v=81354533b96b';
+} from './file-edits.js?v=ced3e36359b7';
 import {
     showLoading, hideLoading, setStatus, clearDirty, markDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=81354533b96b';
+} from './save-load.js?v=ced3e36359b7';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=81354533b96b';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=81354533b96b';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=81354533b96b';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=ced3e36359b7';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=ced3e36359b7';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=ced3e36359b7';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=81354533b96b';
+import { setup3DViewport } from '../pose/initialization.js?v=ced3e36359b7';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=81354533b96b';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=81354533b96b';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=ced3e36359b7';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=ced3e36359b7';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=81354533b96b';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=ced3e36359b7';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=81354533b96b';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=81354533b96b';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=81354533b96b';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=81354533b96b';
-import { readBehaviorMetadata, resetBehaviorState } from './behavior-metadata.js?v=81354533b96b';
-import { sessionEventScope } from './behavior-events.js?v=81354533b96b';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=ced3e36359b7';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=ced3e36359b7';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=ced3e36359b7';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=ced3e36359b7';
+import { readBehaviorMetadata, resetBehaviorState } from './behavior-metadata.js?v=ced3e36359b7';
+import { sessionEventScope } from './behavior-events.js?v=ced3e36359b7';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -111,7 +111,7 @@ async function parseSlpForImport(file, onProgress) {
  *   videos (`SLPPackageReader.getVideos`), empty when it has none
  */
 function openEmbeddedFrames(slpFile) {
-    var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=81354533b96b', import.meta.url), { type: 'module' });
+    var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=ced3e36359b7', import.meta.url), { type: 'module' });
     return new Promise(function (resolve, reject) {
         var fail = function (message) {
             frameWorker.terminate();
@@ -130,25 +130,6 @@ function openEmbeddedFrames(slpFile) {
         frameWorker.onerror = function (err) {
             fail('Frame worker failed: ' + (err.message || 'unknown'));
         };
-    });
-}
-
-/**
- * Give a file's videos a camera each, for a file with no sessions: each camera, one
- * per video in list order, has its list position added when an earlier one has its
- * name. Every video with no source file is named after the `.slp`, and campy names
- * every video `0.mp4`. Two videos on one camera would put both's poses on it, and
- * leave one with no view.
- *
- * @param {Camera[]} cameras
- * @param {Object} videoIdxToCameraName - list position to camera name
- */
-function makeCameraNamesUnique(cameras, videoIdxToCameraName) {
-    cameras.forEach(function (camera, listIdx) {
-        var taken = cameras.slice(0, listIdx).some(function (c) { return c.name === camera.name; });
-        if (!taken) return;
-        camera.name = camera.name + '_' + listIdx;
-        videoIdxToCameraName[listIdx] = camera.name;
     });
 }
 
@@ -1228,7 +1209,6 @@ export async function handleLoadSlpFile(slpFile) {
                     [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
                 videoIdxToCameraName[dvi] = dNames[dvi];
             }
-            makeCameraNamesUnique(cameras, videoIdxToCameraName);
         }
 
         // Use per-session skeleton/tracks from lucid metadata if available,
@@ -2043,7 +2023,6 @@ export async function handleAddSlp() {
                     [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
                 videoIdxToCameraName[dvi] = dNames[dvi];
             }
-            makeCameraNamesUnique(cameras, videoIdxToCameraName);
         }
 
         // A store row with no track has none: a lazy add does not invent a first one.

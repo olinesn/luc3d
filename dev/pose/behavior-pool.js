@@ -44,10 +44,10 @@
  * and are terminated after 30 s idle. One run owns the pool at a time (a
  * concurrent second run goes inline).
  */
-import { computeFeatureChunk } from './behavior-features.js?v=81354533b96b';
-import { scoreDetectorsChunk } from './behavior-rules.js?v=81354533b96b';
-import { extractTrainingRows, scoreForestsChunk, trainTrees } from './behavior-forest.js?v=81354533b96b';
-import { binRowsChunk, clusterLabelsChunk, knnRows, trainClusterTrees } from './behavior-discovery-core.js?v=81354533b96b';
+import { computeFeatureChunk } from './behavior-features.js?v=ced3e36359b7';
+import { scoreDetectorsChunk } from './behavior-rules.js?v=ced3e36359b7';
+import { extractTrainingRows, scoreForestsChunk, trainTrees } from './behavior-forest.js?v=ced3e36359b7';
+import { binRowsChunk, clusterLabelsChunk, knnRows, trainClusterTrees } from './behavior-discovery-core.js?v=ced3e36359b7';
 
 /** Below this many animal-frames a run stays inline. */
 export const MIN_WORKLOAD = 40000;
@@ -78,7 +78,7 @@ function getPool() {
     }
     if (pool) terminatePool();
     try {
-        const url = new URL('pose/behavior-worker.js?v=81354533b96b', document.baseURI);
+        const url = new URL('pose/behavior-worker.js?v=ced3e36359b7', document.baseURI);
         const workers = [];
         for (let i = 0; i < n; i++) workers.push({ w: new Worker(url, { type: 'module' }), busy: false });
         pool = { workers, idleTimer: null };

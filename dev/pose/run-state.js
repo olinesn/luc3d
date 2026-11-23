@@ -24,8 +24,8 @@
  * Depends on: pose/pose-data.js
  */
 
-import { someValidPoint3d } from './pose-data.js?v=81354533b96b';
-import { predictionsStand } from './behavior-predictions.js?v=81354533b96b';
+import { someValidPoint3d } from './pose-data.js?v=ced3e36359b7';
+import { predictionsStand } from './behavior-predictions.js?v=ced3e36359b7';
 
 /** Session -> {frame, group} witness, or null = find one. Absent = not run. */
 var _trackRuns = new WeakMap();

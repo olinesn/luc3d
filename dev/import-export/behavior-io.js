@@ -28,8 +28,8 @@
 //
 // Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js
 
-import { behaviors, behaviorById, behaviorByName } from '../pose/behavior-ethogram.js?v=81354533b96b';
-import { exportBoutRows, timeBudget } from '../pose/behavior-labels.js?v=81354533b96b';
+import { behaviors, behaviorById, behaviorByName } from '../pose/behavior-ethogram.js?v=ced3e36359b7';
+import { exportBoutRows, timeBudget } from '../pose/behavior-labels.js?v=ced3e36359b7';
 
 var SEP = '\u0001';
 var SOURCE_NAMES = { m: 'manual', a: 'accepted', i: 'imported' };

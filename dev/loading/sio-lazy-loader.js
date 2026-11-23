@@ -31,13 +31,13 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { rekeyStoreRows } from '../import-export/detection-labels.js?v=81354533b96b';
-import { unionTrackNames } from './track-union.js?v=81354533b96b';
-import { cameraNamesFromVideos } from '../pose/placeholder-cameras.js?v=81354533b96b';
+import { rekeyStoreRows } from '../import-export/detection-labels.js?v=ced3e36359b7';
+import { unionTrackNames } from './track-union.js?v=ced3e36359b7';
+import { cameraNamesFromVideos } from '../pose/placeholder-cameras.js?v=ced3e36359b7';
 import {
     sourceRowsByVideo, allocateStoreRows, commitStoreRows, firstFreeVideoId,
     ADDED_STORE_FORMAT, OLDEST_STORE_FORMAT,
-} from './lazy-store-rows.js?v=81354533b96b';
+} from './lazy-store-rows.js?v=ced3e36359b7';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -194,7 +194,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=81354533b96b', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=ced3e36359b7', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -450,7 +450,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=81354533b96b', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=ced3e36359b7', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
