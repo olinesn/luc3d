@@ -23,6 +23,7 @@ python3 scripts/offline_deps.py install && python3 server.py --offline
 Channels:
 - `/` — newest **full release** only. `/stable/` — a one-file meta-refresh alias to root (deep links under it 404).
 - `/latest/` — newest release incl. pre-releases. `/dev/` — every push to `main`. `/pr/<n>/` — previews, removed on PR close.
+- **On a fork** (e.g. olinesn/luc3d) `pr-preview.yml` deploys to the fork's OWN `gh-pages` (only `pr/`, no channels), served from the fork's GitHub Pages address, and its comment links there (the Pages API's `html_url`; a note when Pages is off). Only talmolab/luc3d's comment links to luc3d.sleap.ai, where a fork's PR number is another PR or nothing.
 - Only a full release newer than the current one moves root, and the same run rewrites `/stable/`; channels only move forward. `workflow_dispatch` target `root` is the manual promote (writes root + alias).
 - Releases are cut **by hand** (`gh release create vX.Y.Z --generate-notes`) — an Actions-created release would not fire `release: published`. Tags must match `vX.Y.Z` or `vX.Y.Z-N`.
 

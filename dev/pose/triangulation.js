@@ -10,32 +10,32 @@
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
-         isPoints3dSmoothed } from './pose-data.js?v=ced3e36359b7';
+         isPoints3dSmoothed } from './pose-data.js?v=55136f8a4d88';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=ced3e36359b7';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=55136f8a4d88';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=ced3e36359b7';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=55136f8a4d88';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=ced3e36359b7';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=ced3e36359b7';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=ced3e36359b7';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=ced3e36359b7';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=ced3e36359b7';
-import { createGroupSolver } from './triangulation-pool.js?v=ced3e36359b7';
-import { volumeForFrame, volumeChains, sessionVolume } from './volume3d.js?v=ced3e36359b7';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=ced3e36359b7';
-import { nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=ced3e36359b7';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=55136f8a4d88';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=55136f8a4d88';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=55136f8a4d88';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=55136f8a4d88';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=55136f8a4d88';
+import { createGroupSolver } from './triangulation-pool.js?v=55136f8a4d88';
+import { volumeForFrame, volumeChains, sessionVolume } from './volume3d.js?v=55136f8a4d88';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=55136f8a4d88';
+import { nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=55136f8a4d88';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=ced3e36359b7';
+         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=55136f8a4d88';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=ced3e36359b7';
-import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=ced3e36359b7';
+import { update3DViewport } from './initialization.js?v=55136f8a4d88';
+import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=55136f8a4d88';
 import { skeletonCheckForRun, invalidateSkeletonCheck, groupNeedsSkeletonCheck, getSkeletonCheckSettings }
-    from './skeleton-check-run.js?v=ced3e36359b7';
-import { chainBadness } from './skeleton-check.js?v=ced3e36359b7';
+    from './skeleton-check-run.js?v=55136f8a4d88';
+import { chainBadness } from './skeleton-check.js?v=55136f8a4d88';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -55,7 +55,7 @@ import {
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=ced3e36359b7';
+} from './triangulation-core.js?v=55136f8a4d88';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,

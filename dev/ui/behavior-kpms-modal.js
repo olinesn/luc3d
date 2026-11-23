@@ -25,20 +25,20 @@
 //             pose/behavior-tensor.js, pose/behavior-ethogram.js, import-export/kpms-io.js,
 //             import-export/save-load.js, loading/cold-read-guard.js
 
-import { state } from './app-state.js?v=ced3e36359b7';
-import { sessionAnimals, armedRange, openBehaviorTab } from './behavior-coding.js?v=ced3e36359b7';
-import { buildBehaviorContext, cachedBehaviorContext } from './behavior-detect.js?v=ced3e36359b7';
-import { behaviorSessionInfo } from './behavior-io-modal.js?v=ced3e36359b7';
-import { showLoading, showLoadingProgress, hideLoading, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=ced3e36359b7';
-import { setStateLayer, stateLayer, cleanLayerName, runsFromSequence } from '../pose/behavior-states.js?v=ced3e36359b7';
-import { resolveBody, hasIdentified3d, pick2dCamera } from '../pose/behavior-tensor.js?v=ced3e36359b7';
-import { featureSettings } from '../pose/behavior-ethogram.js?v=ced3e36359b7';
+import { state } from './app-state.js?v=55136f8a4d88';
+import { sessionAnimals, armedRange, openBehaviorTab } from './behavior-coding.js?v=55136f8a4d88';
+import { buildBehaviorContext, cachedBehaviorContext } from './behavior-detect.js?v=55136f8a4d88';
+import { behaviorSessionInfo } from './behavior-io-modal.js?v=55136f8a4d88';
+import { showLoading, showLoadingProgress, hideLoading, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=55136f8a4d88';
+import { setStateLayer, stateLayer, cleanLayerName, runsFromSequence } from '../pose/behavior-states.js?v=55136f8a4d88';
+import { resolveBody, hasIdentified3d, pick2dCamera } from '../pose/behavior-tensor.js?v=55136f8a4d88';
+import { featureSettings } from '../pose/behavior-ethogram.js?v=55136f8a4d88';
 import {
     KPMS_MANIFEST, kpmsBodypartNames, recordingNames, coordinateDecimals, poseCsvChunks, kpmsManifest,
     parseKpmsManifest, readResultsH5, parseResultsCsv, recordingOfCsv, parseSyllableNames, matchRecordings,
-} from '../import-export/kpms-io.js?v=ced3e36359b7';
-import { setStatus } from '../import-export/save-load.js?v=ced3e36359b7';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=ced3e36359b7';
+} from '../import-export/kpms-io.js?v=55136f8a4d88';
+import { setStatus } from '../import-export/save-load.js?v=55136f8a4d88';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=55136f8a4d88';
 
 var PREFS_KEY = 'lucid.kpmsExport';
 var ROWS_PER_CHUNK = 4096;

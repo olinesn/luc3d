@@ -40,25 +40,25 @@
 //             pose/behavior-discovery.js, pose/behavior-predictions.js, pose/behavior-ethogram.js,
 //             pose/behavior-tensor.js, import-export/save-load.js
 
-import { state } from './app-state.js?v=ced3e36359b7';
-import { sessionAnimals, animalColor, requestBehaviorRepaint, goToBehaviorFrame } from './behavior-coding.js?v=ced3e36359b7';
-import { behaviorConfirm } from './behavior-confirm.js?v=ced3e36359b7';
-import { detectionFps, sessionFps } from './behavior-detect.js?v=ced3e36359b7';
-import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.js?v=ced3e36359b7';
-import { showBehaviorDiscoveryModal } from './behavior-discovery-modal.js?v=ced3e36359b7';
-import { nextStateExample, clearStateExample, drawDiscoveryMap, discoveryBinAt, showDiscoveryBin } from './behavior-discovery.js?v=ced3e36359b7';
-import { openSessionByName } from './behavior-train.js?v=ced3e36359b7';
-import { setInfoTip } from './info-tip.js?v=ced3e36359b7';
-import { ICON_INFO } from './plane-definition.js?v=ced3e36359b7';
+import { state } from './app-state.js?v=55136f8a4d88';
+import { sessionAnimals, animalColor, requestBehaviorRepaint, goToBehaviorFrame } from './behavior-coding.js?v=55136f8a4d88';
+import { behaviorConfirm } from './behavior-confirm.js?v=55136f8a4d88';
+import { detectionFps, sessionFps } from './behavior-detect.js?v=55136f8a4d88';
+import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.js?v=55136f8a4d88';
+import { showBehaviorDiscoveryModal } from './behavior-discovery-modal.js?v=55136f8a4d88';
+import { nextStateExample, clearStateExample, drawDiscoveryMap, discoveryBinAt, showDiscoveryBin } from './behavior-discovery.js?v=55136f8a4d88';
+import { openSessionByName } from './behavior-train.js?v=55136f8a4d88';
+import { setInfoTip } from './info-tip.js?v=55136f8a4d88';
+import { ICON_INFO } from './plane-definition.js?v=55136f8a4d88';
 import {
     stateLayers, stateLayer, removeStateLayer, setStateName, stateName, stateLabel, stateSummary, stateEnrichment,
     statesToBouts, stateColor, layerAnimals, onStatesChange,
-} from '../pose/behavior-states.js?v=ced3e36359b7';
-import { discoveryResult } from '../pose/behavior-discovery.js?v=ced3e36359b7';
-import { setBehaviorRun, behaviorRunOf, runConfigPrint, runStateLayer } from '../pose/behavior-predictions.js?v=ced3e36359b7';
-import { behaviors, behaviorById, behaviorByName, addBehavior } from '../pose/behavior-ethogram.js?v=ced3e36359b7';
-import { hasIdentified3d, pick2dCamera } from '../pose/behavior-tensor.js?v=ced3e36359b7';
-import { markDirty, setStatus } from '../import-export/save-load.js?v=ced3e36359b7';
+} from '../pose/behavior-states.js?v=55136f8a4d88';
+import { discoveryResult } from '../pose/behavior-discovery.js?v=55136f8a4d88';
+import { setBehaviorRun, behaviorRunOf, runConfigPrint, runStateLayer } from '../pose/behavior-predictions.js?v=55136f8a4d88';
+import { behaviors, behaviorById, behaviorByName, addBehavior } from '../pose/behavior-ethogram.js?v=55136f8a4d88';
+import { hasIdentified3d, pick2dCamera } from '../pose/behavior-tensor.js?v=55136f8a4d88';
+import { markDirty, setStatus } from '../import-export/save-load.js?v=55136f8a4d88';
 
 /** The gutter name of the timeline's states group. */
 export var STATES_GROUP_NAME = 'States';
