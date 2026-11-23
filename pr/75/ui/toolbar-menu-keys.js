@@ -6,7 +6,7 @@
 // cannot know are decided here: which input the user is on when two menus are
 // open at once, and Esc.
 
-import { isTextEntryTarget } from './keyboard-target.js?v=1d6bc8148ef9';
+import { isTextEntryTarget } from './keyboard-target.js?v=b21c72208e2d';
 
 // True when a full-window dialog is up over `el`. A dialog need not take focus
 // from the toolbar (Settings… leaves it on the item that opened it), so the key

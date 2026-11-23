@@ -16,10 +16,10 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=1d6bc8148ef9';
-import { jacobiEigen } from './plane-fit.js?v=1d6bc8148ef9';
-import { matchVolumeAnimal, gateObservations, fuseWithVolume, VOLUME_DEFAULTS } from './volume-fusion.js?v=1d6bc8148ef9';
-import { checkChains, SKELETON_CHECK_DEFAULTS } from './skeleton-check.js?v=1d6bc8148ef9';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=b21c72208e2d';
+import { jacobiEigen } from './plane-fit.js?v=b21c72208e2d';
+import { matchVolumeAnimal, gateObservations, fuseWithVolume, VOLUME_DEFAULTS } from './volume-fusion.js?v=b21c72208e2d';
+import { checkChains, SKELETON_CHECK_DEFAULTS } from './skeleton-check.js?v=b21c72208e2d';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
@@ -1653,7 +1653,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
                 if (vOk) { const X = [V[qv], V[qv + 1], V[qv + 2]]; cands.push({ X: X, kind: 'volume', support: c.supportOf(X) }); }
                 return { locked: false, cands: cands };
             }, { allowDrop: useVol });   // without a volume a point is re-solved or kept, never dropped
-            skeletonInfo = { chainsRepaired: sk.chains, nodesResolved: sk.changed.subset || 0,
+            skeletonInfo = { chainsRepaired: sk.chains, chainsPartial: sk.partial, nodesResolved: sk.changed.subset || 0,
                 nodesFromSolve: sk.changed.plain || 0, nodesFromVolume: sk.changed.volume || 0, nodesDropped: sk.dropped };
         }
     }
