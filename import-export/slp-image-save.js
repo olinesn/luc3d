@@ -104,8 +104,9 @@ export function adoptEmbeddedVideos(SIO, plan, allVideos) {
  * @param {Uint8Array} labelsBytes - the file so far (given up: it goes to the worker)
  * @param {Array} plan - from `noteEmbeddedVideos`, after `adoptEmbeddedVideos`
  * @param {Object} [opts]
- * @param {Object} [opts.sink] - `{write(chunk), close()}`, as for the streaming save, except
- *   that a chunk can also be a Blob
+ * @param {Object} [opts.sink] - `{write(chunk), close(), setTotalBytes?(n)}`, as for the
+ *   streaming save, except that a chunk can also be a Blob. `setTotalBytes` is told the
+ *   file's size before the first write (File ▸ Save's disk bar).
  * @param {Function} [opts.onProgress] - the Save progress card: `('images', done, total, 'images')`, `('finish')`
  * @returns {Promise<Blob|null>} the file as a Blob (kept out of the heap), or null when sent to `sink`
  */
@@ -164,6 +165,7 @@ export function addImagesToSlp(labelsBytes, plan, opts) {
                 await sendCopies(size, (bytes) => { parts.push(new Blob([bytes])); });
                 result = new Blob(parts);
             } else {
+                if (typeof options.sink.setTotalBytes === 'function') options.sink.setTotalBytes(size);
                 if (kind === 'disk') await sendSlices(size, options.sink);
                 else await sendCopies(size, (bytes) => options.sink.write(bytes));
                 if (options.sink.close) await options.sink.close();
