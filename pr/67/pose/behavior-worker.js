@@ -21,10 +21,10 @@
  *   { type: 'done', id, result }   (every typed array transferred)
  *   { type: 'error', id, message }
  */
-import { computeFeatureChunk } from './behavior-features.js?v=d48f2fd194e2';
-import { scoreDetectorsChunk } from './behavior-rules.js?v=d48f2fd194e2';
-import { extractTrainingRows, scoreForestsChunk, trainTrees } from './behavior-forest.js?v=d48f2fd194e2';
-import { binRowsChunk, clusterLabelsChunk, knnRows, trainClusterTrees } from './behavior-discovery-core.js?v=d48f2fd194e2';
+import { computeFeatureChunk } from './behavior-features.js?v=34a7a6449e01';
+import { scoreDetectorsChunk } from './behavior-rules.js?v=34a7a6449e01';
+import { extractTrainingRows, scoreForestsChunk, trainTrees } from './behavior-forest.js?v=34a7a6449e01';
+import { binRowsChunk, clusterLabelsChunk, knnRows, trainClusterTrees } from './behavior-discovery-core.js?v=34a7a6449e01';
 
 var shared = { key: null, value: null };
 

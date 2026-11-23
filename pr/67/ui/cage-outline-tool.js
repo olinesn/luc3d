@@ -25,15 +25,15 @@
 // Circular imports (`plane-definition.js` imports this module back) are safe:
 // every use is inside a function body.
 
-import { state, interactionManager } from './app-state.js?v=d48f2fd194e2';
-import { makeVideoToCanvasTransform } from './overlays.js?v=d48f2fd194e2';
+import { state, interactionManager } from './app-state.js?v=34a7a6449e01';
+import { makeVideoToCanvasTransform } from './overlays.js?v=34a7a6449e01';
 import {
     CageOutlineSet, OutlineTrace, nearestOutlineVertex, nearestOutlineEdge,
-} from '../pose/cage-outlines.js?v=d48f2fd194e2';
-import { planeState, redraw } from './plane-definition.js?v=d48f2fd194e2';
-import { planeVisibility } from './plane-visibility.js?v=d48f2fd194e2';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=d48f2fd194e2';
-import { isTextEntryTarget } from './keyboard-target.js?v=d48f2fd194e2';
+} from '../pose/cage-outlines.js?v=34a7a6449e01';
+import { planeState, redraw } from './plane-definition.js?v=34a7a6449e01';
+import { planeVisibility } from './plane-visibility.js?v=34a7a6449e01';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=34a7a6449e01';
+import { isTextEntryTarget } from './keyboard-target.js?v=34a7a6449e01';
 
 /** Outline colour: orange, apart from the plane palette's blues and greens. */
 export const OUTLINE_COLOR = '#ffa726';

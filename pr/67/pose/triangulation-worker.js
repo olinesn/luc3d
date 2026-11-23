@@ -20,8 +20,8 @@
  *     `triangulationSummary(result)` when the job's options say `summaryOnly`)
  *   { type: 'error', id, message }
  */
-import { Camera, Instance } from './pose-data.js?v=d48f2fd194e2';
-import { triangulateAndReproject, triangulationSummary } from './triangulation-core.js?v=d48f2fd194e2';
+import { Camera, Instance } from './pose-data.js?v=34a7a6449e01';
+import { triangulateAndReproject, triangulationSummary } from './triangulation-core.js?v=34a7a6449e01';
 
 let cameras = new Map();
 
@@ -52,6 +52,7 @@ function solveJob(job) {
     const r = triangulateAndReproject(group, cams, {
         method: method, includedCameras: o.includedCameras,
         reprojErrorThreshold: o.reprojErrorThreshold, triangulateOnly: o.triangulateOnly,
+        volume: job.volume,
     });
     return o.summaryOnly ? triangulationSummary(r) : r;
 }

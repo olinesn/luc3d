@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=d48f2fd194e2';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=34a7a6449e01';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -50,6 +50,9 @@ const ACTION_CATALOG = [
     // --- Navigation ---
     { id: 'prevNextFrame', label: 'Previous / Next frame', category: 'Navigation', binding: '← / →', editable: false, dispatched: false },
     { id: 'labeledFrame', label: 'Prev / Next user-labeled frame', category: 'Navigation', binding: 'Opt+← / Opt+→', editable: false, dispatched: false },
+    // A .slp's suggestions, in the file's order (ui/suggested-frame-nav.js).
+    { id: 'prevSuggestedFrame', label: 'Previous suggested frame', category: 'Navigation', binding: 'Alt+Shift+ArrowLeft', editable: true, dispatched: true },
+    { id: 'nextSuggestedFrame', label: 'Next suggested frame', category: 'Navigation', binding: 'Alt+Shift+ArrowRight', editable: true, dispatched: true },
     { id: 'firstLastFrame', label: 'First / Last frame', category: 'Navigation', binding: 'Home / End', editable: false, dispatched: false },
     { id: 'playPause', label: 'Play / Pause', category: 'Navigation', binding: 'Space', editable: false, dispatched: false },
     { id: 'gotoFrame', label: 'Go to frame number', category: 'Navigation', binding: 'Mod+Shift+J', editable: false, dispatched: false },

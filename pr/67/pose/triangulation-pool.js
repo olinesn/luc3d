@@ -13,7 +13,7 @@
  *
  *     const solver = createGroupSolver(cameras, { method, triangulateOnly, summaryOnly, expectedGroups });
  *     for (...) {
- *         solver.submit(group, groupCameras, (result) => { ...apply... });
+ *         solver.submit(group, groupCameras, (result) => { ...apply... }, volume);   // volume: optional
  *         solver.mark(() => { ...per-frame bookkeeping... });
  *         await solver.throttle();            // bounded in-flight work
  *     }
@@ -42,10 +42,10 @@
  * count as busy: at most one frame per ~250 ms chunk. Inline, the main thread
  * does it all and is busy throughout — one core.
  */
-import { triangulateAndReproject, triangulationSummary } from './triangulation-core.js?v=d48f2fd194e2';
-import { Instance } from './pose-data.js?v=d48f2fd194e2';
-import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=d48f2fd194e2';
-import { createBusyClock } from '../ui/load-graph.js?v=d48f2fd194e2';
+import { triangulateAndReproject, triangulationSummary } from './triangulation-core.js?v=34a7a6449e01';
+import { Instance } from './pose-data.js?v=34a7a6449e01';
+import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=34a7a6449e01';
+import { createBusyClock } from '../ui/load-graph.js?v=34a7a6449e01';
 
 /** Groups per worker message: big enough to amortize messaging, small enough
  *  to load-balance (~0.25 s of Refined solves, ~20 ms of DLT). */
@@ -76,7 +76,7 @@ function getPool() {
     }
     if (pool) terminatePool();
     try {
-        const url = new URL('pose/triangulation-worker.js?v=d48f2fd194e2', document.baseURI);
+        const url = new URL('pose/triangulation-worker.js?v=34a7a6449e01', document.baseURI);
         const workers = [];
         for (let i = 0; i < n; i++) workers.push({ w: new Worker(url, { type: 'module' }), busy: false });
         pool = { workers, idleTimer: null };
@@ -164,10 +164,12 @@ export function createGroupSolver(cameras, opts) {
     // Every call below spells the options out, `method: method` included, so the
     // source-level guard in tests/test-triangulation-method-propagation.mjs can
     // see that the method is threaded in rather than defaulted.
-    function solve(group, groupCameras, o) {
+    // `volume`: the group's frame of a volumetric model (pose/volume3d.js `volumeForFrame`), or none.
+    function solve(group, groupCameras, o, volume) {
         const r = triangulateAndReproject(group, groupCameras, {
             method: method, includedCameras: o.includedCameras,
             reprojErrorThreshold: o.reprojErrorThreshold, triangulateOnly: o.triangulateOnly,
+            volume: volume || undefined,
         });
         return o.summaryOnly ? triangulationSummary(r) : r;
     }
@@ -197,7 +199,7 @@ export function createGroupSolver(cameras, opts) {
                 if (src.nulled) inst.nulledNodes = new Set(src.nulled);
                 byCam.set(n, inst);
             });
-            it.entry.result = solve({ getInstance: (n) => byCam.get(n) }, it.groupCameras, it.options);
+            it.entry.result = solve({ getInstance: (n) => byCam.get(n) }, it.groupCameras, it.options, it.job.volume);
             it.entry.done = true;
         }
     }
@@ -280,12 +282,12 @@ export function createGroupSolver(cameras, opts) {
         cpuBusyMs() { return clock.ms(); },
 
         /** Queue `group` (with its usable `groupCameras`); `cb(result)` runs in order. */
-        submit(group, groupCameras, cb) {
+        submit(group, groupCameras, cb, volume) {
             const entry = { kind: 'job', cb, result: null, done: false };
             entries.push(entry);
             const options = optionsFor(groupCameras);
             if (!P) {
-                entry.result = solve(group, groupCameras, options);
+                entry.result = solve(group, groupCameras, options, volume);
                 entry.done = true;
                 drain();
                 return;
@@ -300,7 +302,7 @@ export function createGroupSolver(cameras, opts) {
                     nulled: (nn && nn.size) ? Array.from(nn) : null,
                 };
             });
-            batch.push({ entry, groupCameras, options, job: { camNames, insts, options } });
+            batch.push({ entry, groupCameras, options, job: { camNames, insts, options, volume: volume || undefined } });
             if (batch.length >= BATCH) flushBatch();
         },
 

@@ -68,12 +68,12 @@
 // Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js, pose/behavior-tensor.js,
 //             pose/behavior-states.js, pose/pose-data.js
 
-import { behaviorById, featureSettings, behaviorPost, exclusivePeers } from './behavior-ethogram.js?v=d48f2fd194e2';
-import { boutIntervals, labelBouts, behaviorFps } from './behavior-labels.js?v=d48f2fd194e2';
-import { resolveBody, POSE_CHECK_VERSION } from './behavior-tensor.js?v=d48f2fd194e2';
-import { stateLayer, layerPrint, cleanLayerName } from './behavior-states.js?v=d48f2fd194e2';
-import { FEATURE_SPEC_VERSION } from './behavior-features.js?v=d48f2fd194e2';
-import { POINT3D_STRIDE, points3dNodeCount } from './pose-data.js?v=d48f2fd194e2';
+import { behaviorById, featureSettings, behaviorPost, exclusivePeers } from './behavior-ethogram.js?v=34a7a6449e01';
+import { boutIntervals, labelBouts, behaviorFps } from './behavior-labels.js?v=34a7a6449e01';
+import { resolveBody, POSE_CHECK_VERSION } from './behavior-tensor.js?v=34a7a6449e01';
+import { stateLayer, layerPrint, cleanLayerName } from './behavior-states.js?v=34a7a6449e01';
+import { FEATURE_SPEC_VERSION } from './behavior-features.js?v=34a7a6449e01';
+import { POINT3D_STRIDE, points3dNodeCount } from './pose-data.js?v=34a7a6449e01';
 
 var SEP = '\u0001';
 

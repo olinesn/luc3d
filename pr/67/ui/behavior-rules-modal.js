@@ -25,25 +25,25 @@
 //             pose/behavior-features.js, pose/behavior-rules.js,
 //             import-export/save-load.js
 
-import { state } from './app-state.js?v=d48f2fd194e2';
-import { requestBehaviorRepaint } from './behavior-coding.js?v=d48f2fd194e2';
+import { state } from './app-state.js?v=34a7a6449e01';
+import { requestBehaviorRepaint } from './behavior-coding.js?v=34a7a6449e01';
 import {
     cachedBehaviorContext, refreshBehaviorContext, computeFeatureColumns, floorPlanes, detectAllFrames, combineMutual,
-} from './behavior-detect.js?v=d48f2fd194e2';
-import { setInfoTip } from './info-tip.js?v=d48f2fd194e2';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=d48f2fd194e2';
-import { ICON_INFO } from './plane-definition.js?v=d48f2fd194e2';
-import { originState } from './origin-definition.js?v=d48f2fd194e2';
-import { getTrackingThreshold } from './settings.js?v=d48f2fd194e2';
+} from './behavior-detect.js?v=34a7a6449e01';
+import { setInfoTip } from './info-tip.js?v=34a7a6449e01';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=34a7a6449e01';
+import { ICON_INFO } from './plane-definition.js?v=34a7a6449e01';
+import { originState } from './origin-definition.js?v=34a7a6449e01';
+import { getTrackingThreshold } from './settings.js?v=34a7a6449e01';
 import {
     behaviors, behaviorById, behaviorByName, addBehavior, setBehaviorDetector, featureSettings, setFeatureSettings,
-} from '../pose/behavior-ethogram.js?v=d48f2fd194e2';
-import { featureNamesFor, resolveFeatureName } from '../pose/behavior-features.js?v=d48f2fd194e2';
+} from '../pose/behavior-ethogram.js?v=34a7a6449e01';
+import { featureNamesFor, resolveFeatureName } from '../pose/behavior-features.js?v=34a7a6449e01';
 import {
     DETECTOR_TEMPLATES, instantiateTemplate, normalizeDetector, detectorProblems, featureHistogram, scoreConditions,
     detectorBouts, orderedPairs,
-} from '../pose/behavior-rules.js?v=d48f2fd194e2';
-import { markDirty, setStatus } from '../import-export/save-load.js?v=d48f2fd194e2';
+} from '../pose/behavior-rules.js?v=34a7a6449e01';
+import { markDirty, setStatus } from '../import-export/save-load.js?v=34a7a6449e01';
 
 var HIST_BINS = 60;
 var LIVE_DELAY_MS = 120;

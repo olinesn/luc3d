@@ -6,37 +6,37 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=d48f2fd194e2';
-import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=d48f2fd194e2';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=34a7a6449e01';
+import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=34a7a6449e01';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=d48f2fd194e2';
-import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=d48f2fd194e2';
-import { drawFrameOverlays } from './overlays.js?v=d48f2fd194e2';
-import { syncViewLegends } from './view-legend.js?v=d48f2fd194e2';
-import { isCameraTracked, getTrackingThreshold } from './settings.js?v=d48f2fd194e2';
+} from '../pose/triangulation.js?v=34a7a6449e01';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=34a7a6449e01';
+import { drawFrameOverlays } from './overlays.js?v=34a7a6449e01';
+import { syncViewLegends } from './view-legend.js?v=34a7a6449e01';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=34a7a6449e01';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=d48f2fd194e2';
-import { drawCageOutlines } from './cage-outline-tool.js?v=d48f2fd194e2';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=34a7a6449e01';
+import { drawCageOutlines } from './cage-outline-tool.js?v=34a7a6449e01';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=d48f2fd194e2';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=d48f2fd194e2';
-import { syncSmoothingButton } from './smoothing-button.js?v=d48f2fd194e2';
-import { syncRunButtons } from './run-buttons.js?v=d48f2fd194e2';
+import { syncAnimalCountField } from './animal-count-field.js?v=34a7a6449e01';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=34a7a6449e01';
+import { syncSmoothingButton } from './smoothing-button.js?v=34a7a6449e01';
+import { syncRunButtons } from './run-buttons.js?v=34a7a6449e01';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=d48f2fd194e2';
-import { updateFrameInfo } from './info-panel.js?v=d48f2fd194e2';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=34a7a6449e01';
+import { updateFrameInfo } from './info-panel.js?v=34a7a6449e01';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=d48f2fd194e2';
-import { behaviorBoxesAt } from './behavior-coding.js?v=d48f2fd194e2';
+} from './frame-counters.js?v=34a7a6449e01';
+import { behaviorBoxesAt } from './behavior-coding.js?v=34a7a6449e01';
 
 // ============================================
 // Reproj/Error visibility
@@ -210,7 +210,8 @@ const MAX_OVERLAY_AREA = 268435456; // 2^28 px
 //    or not, and with or without a method: a re-solve would show LUCID's
 //    answer rather than the 3D the project holds. SMOOTHED 3D
 //    (`isPoints3dSmoothed`) is reprojected the same way, or the display would
-//    re-solve the unsmoothed answer from the 2D. Any other group (Track
+//    re-solve the unsmoothed answer from the 2D; so is 3D the skeleton check
+//    REPAIRED (`group.skeletonRepaired`, pose/skeleton-check-run.js). Any other group (Track
 //    All's provisional 3D, an edited group) is re-solved, as before.
 //  - **It keeps what it made for at most DERIVED_FRAMES_KEEP frames per
 //    session** (`noteDerivedFrame`), dropping the least recently filled
@@ -234,6 +235,8 @@ export function fillLazyReprojections(fi, instanceGroups) {
                 if (_threshold == null) _threshold = getTrackingThreshold('reprojErrorThreshold') || 0;
                 var _triRes;
                 if (!_grp.dirty && (isPoints3dFromFile(_grp.points3d) || isPoints3dSmoothed(_grp.points3d) ||
+                    _grp.volumeFused ||    // fused with a volume: a re-solve here would drop it (pose/volume3d.js)
+                    _grp.skeletonRepaired ||   // a re-solve would undo Triangulate's skeleton check
                     (_grp.triangulationMethod != null && !(_threshold > 0)))) {
                     _triRes = reprojectStoredPoints3d(_grp, state.session.cameras);
                 } else {
