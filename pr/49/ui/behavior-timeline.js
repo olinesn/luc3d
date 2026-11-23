@@ -20,17 +20,17 @@
 //             pose/behavior-ethogram.js, pose/behavior-labels.js,
 //             ui/behavior-states.js, pose/behavior-predictions.js, import-export/save-load.js
 
-import { state, timeline } from './app-state.js?v=83b2f9170acd';
+import { state, timeline } from './app-state.js?v=dad68619871c';
 import {
     sessionAnimals, focalAnimal, selectedBehaviorId, codeBehavior, armRange, clearBehaviorRange,
     registerBehaviorRepaint, animalColor,
-} from './behavior-coding.js?v=83b2f9170acd';
-import { detectionEnv, detectionFps } from './behavior-detect.js?v=83b2f9170acd';
-import { stateTimelineRows } from './behavior-states.js?v=83b2f9170acd';
-import { behaviors, behaviorById } from '../pose/behavior-ethogram.js?v=83b2f9170acd';
-import { listBouts, runningStates, hasBehaviorData, orphanedAnimals } from '../pose/behavior-labels.js?v=83b2f9170acd';
-import { predictedBouts, predictionStaleness } from '../pose/behavior-predictions.js?v=83b2f9170acd';
-import { setStatus } from '../import-export/save-load.js?v=83b2f9170acd';
+} from './behavior-coding.js?v=dad68619871c';
+import { detectionEnv, detectionFps } from './behavior-detect.js?v=dad68619871c';
+import { stateTimelineRows } from './behavior-states.js?v=dad68619871c';
+import { behaviors, behaviorById } from '../pose/behavior-ethogram.js?v=dad68619871c';
+import { listBouts, runningStates, hasBehaviorData, orphanedAnimals } from '../pose/behavior-labels.js?v=dad68619871c';
+import { predictedBouts, predictionStaleness } from '../pose/behavior-predictions.js?v=dad68619871c';
+import { setStatus } from '../import-export/save-load.js?v=dad68619871c';
 
 /** Color of explicit "not this behavior" labels. */
 export var ABSENT_COLOR = '#9aa0a6';

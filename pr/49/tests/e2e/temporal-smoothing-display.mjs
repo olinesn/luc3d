@@ -37,23 +37,20 @@
  *
  * Run: node tests/e2e/temporal-smoothing-display.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8291);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -87,7 +84,7 @@ try {
         await page.evaluate(async ({ MID, win }) => {
             const AS = await import('/ui/app-state.js');
             const S = await import('/ui/settings.js');
-            S.setSmoothingParams({ smoothGaussianWindow: win, smoothMedianWindow: 0 });
+            S.setSmoothingParams({ smoothingMethod: 0, smoothGaussianWindow: win, smoothMedianWindow: 0 });
             AS.state.currentFrame = MID;
             document.getElementById('statusText').textContent = '';
             document.getElementById('tbSmooth').click();
@@ -268,7 +265,7 @@ try {
     // G. Re-runs with new median + Gaussian windows, and the 3D view after each.
     const smoothMG = async (med, gau) => {
         await page.evaluate(async ({ MID, med, gau }) => {
-            (await import('/ui/settings.js')).setSmoothingParams({ smoothMedianWindow: med, smoothGaussianWindow: gau });
+            (await import('/ui/settings.js')).setSmoothingParams({ smoothingMethod: 0, smoothMedianWindow: med, smoothGaussianWindow: gau });
             (await import('/ui/app-state.js')).state.currentFrame = MID;
             document.getElementById('statusText').textContent = '';
             document.getElementById('tbSmooth').click();
@@ -347,7 +344,7 @@ try {
     // New settings since Remove: Restore smooths again with them.
     await clickToggle();
     await page.evaluate(async () => (await import('/ui/settings.js'))
-        .setSmoothingParams({ smoothMedianWindow: 3, smoothGaussianWindow: 5 }));
+        .setSmoothingParams({ smoothingMethod: 0, smoothMedianWindow: 3, smoothGaussianWindow: 5 }));
     let rs = await clickToggle();
     check(/^Smoothed [\d,]+ poses .*\(median 3 \+ Gaussian 5\) — recomputed/.test(rs.msg) && rs.card > 0,
         `H. after a settings change, Restore recomputes with the new settings ("${rs.msg}", progress card shown ${rs.card} times)`);
@@ -376,7 +373,7 @@ try {
     // "This frame" through its menu item: only that frame is written and lit.
     await smooth(0);
     await page.evaluate(async (MID) => {
-        (await import('/ui/settings.js')).setSmoothingParams({ smoothGaussianWindow: 3 });
+        (await import('/ui/settings.js')).setSmoothingParams({ smoothingMethod: 0, smoothGaussianWindow: 3 });
         (await import('/ui/app-state.js')).state.currentFrame = MID;
         document.getElementById('statusText').textContent = '';
         document.querySelector('#smoothingDropdown [data-scope="frame"]').click();

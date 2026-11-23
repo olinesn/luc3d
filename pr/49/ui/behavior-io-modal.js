@@ -17,17 +17,17 @@
 //             pose/behavior-labels.js, import-export/behavior-io.js,
 //             import-export/save-load.js, loading/cold-read-guard.js
 
-import { state } from './app-state.js?v=83b2f9170acd';
-import { sessionAnimals, focalAnimal, requestBehaviorRepaint } from './behavior-coding.js?v=83b2f9170acd';
-import { sessionFps } from './behavior-detect.js?v=83b2f9170acd';
-import { behaviors, behaviorByName, ingestEthogram } from '../pose/behavior-ethogram.js?v=83b2f9170acd';
-import { labelBouts, hasBehaviorData, noteBehaviorFps } from '../pose/behavior-labels.js?v=83b2f9170acd';
+import { state } from './app-state.js?v=dad68619871c';
+import { sessionAnimals, focalAnimal, requestBehaviorRepaint } from './behavior-coding.js?v=dad68619871c';
+import { sessionFps } from './behavior-detect.js?v=dad68619871c';
+import { behaviors, behaviorByName, ingestEthogram } from '../pose/behavior-ethogram.js?v=dad68619871c';
+import { labelBouts, hasBehaviorData, noteBehaviorFps } from '../pose/behavior-labels.js?v=dad68619871c';
 import {
     toDelimited, boutsTable, perFrameTables, timeBudgetTable, borisAggregatedTable, borisTabularTable,
     parseBehaviorFile, ethogramPayload, defaultObservation, defaultSubjectMap, newBehaviorsFor, planBehaviorImport,
-} from '../import-export/behavior-io.js?v=83b2f9170acd';
-import { markDirty, setStatus } from '../import-export/save-load.js?v=83b2f9170acd';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=83b2f9170acd';
+} from '../import-export/behavior-io.js?v=dad68619871c';
+import { markDirty, setStatus } from '../import-export/save-load.js?v=dad68619871c';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=dad68619871c';
 
 var PREFS_KEY = 'lucid.behaviorExport';
 

@@ -57,10 +57,10 @@
 // Depends on: pose/behavior-ethogram.js, pose/behavior-labels.js, pose/behavior-predictions.js,
 // pose/placeholder-cameras.js
 
-import { behaviors, behaviorById, normalizeBehaviorKey } from '../pose/behavior-ethogram.js?v=83b2f9170acd';
-import { exportBoutRows } from '../pose/behavior-labels.js?v=83b2f9170acd';
-import { exportPredictionEvents } from '../pose/behavior-predictions.js?v=83b2f9170acd';
-import { hasRealCalibration } from '../pose/placeholder-cameras.js?v=83b2f9170acd';
+import { behaviors, behaviorById, normalizeBehaviorKey } from '../pose/behavior-ethogram.js?v=dad68619871c';
+import { exportBoutRows } from '../pose/behavior-labels.js?v=dad68619871c';
+import { exportPredictionEvents } from '../pose/behavior-predictions.js?v=dad68619871c';
+import { hasRealCalibration } from '../pose/placeholder-cameras.js?v=dad68619871c';
 
 /** Sources of a labelled bout, as saved. */
 var SOURCE_NAMES = { m: 'manual', a: 'accepted_prediction', i: 'imported' };

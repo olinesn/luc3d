@@ -15,10 +15,10 @@
  *   <- {type:'error', error}              at any point
  */
 
-import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=83b2f9170acd';   // local vendored 0.10.3 ESM
-import { SLPPackageReader } from './slp-package-reader.js?v=83b2f9170acd';
-import { copyEmbeddedVideo } from './slp-image-copy.js?v=83b2f9170acd';
-import { openScratchFile } from './slp-scratch-file.js?v=83b2f9170acd';
+import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=dad68619871c';   // local vendored 0.10.3 ESM
+import { SLPPackageReader } from './slp-package-reader.js?v=dad68619871c';
+import { copyEmbeddedVideo } from './slp-image-copy.js?v=dad68619871c';
+import { openScratchFile } from './slp-scratch-file.js?v=dad68619871c';
 
 const PROGRESS_INTERVAL_MS = 100;
 

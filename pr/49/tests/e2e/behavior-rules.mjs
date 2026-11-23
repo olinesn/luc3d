@@ -37,17 +37,17 @@
  *     Label Behaviors mode, States), and so do real files: an export's seconds
  *     and an import's frames.
  *
- * Run: node tests/e2e/behavior-rules.mjs   (spawns its own http.server; PORT= to move it)
+ * Run: node tests/e2e/behavior-rules.mjs   (serves the app itself; PORT= to move it)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8197);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const VIDEO_60 = path.join(repoRoot, 'tests', 'fixtures', 'barcode-60', 'barcode-60.mp4');
 const VIDEO_10 = path.join(repoRoot, 'tests', 'fixtures', 'bframes-test', 'bframes-test.mp4');
 
@@ -55,12 +55,10 @@ let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -177,8 +175,8 @@ try {
     check(strayRows.some(r => /rear/.test(r) && /id_1/.test(r) && /tracking broken here/.test(r)),
         'This frame on the stray nose (2005): mouse 1 is skipped, said so');
     await goTo(560);
-    check(await page.evaluate(() => document.querySelector('.panel-tab[data-tab="tabBehavior"]').classList.contains('active')),
-        'the Behavior tab opens to show it');
+    check(await page.evaluate(async () => (await import('/ui/panel-rail.js')).isPanelOnScreen('tabBehavior')),
+        'the Behavior panel opens to show it');
     const lock = await page.evaluate(async () => {
         const pd = await import('/ui/plane-definition.js');
         pd.togglePlaneMode();
@@ -500,8 +498,7 @@ try {
         const s = AS.state.session;
         const painted = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
         const text = (sel) => (document.querySelector(sel) || {}).textContent || '';
-        const tab = document.querySelector('.panel-tab[data-tab="tabBehavior"]');
-        if (tab && !tab.classList.contains('active')) tab.click();
+        (await import('/ui/panel-rail.js')).showPanelTab('tabBehavior');
         (await import('/ui/behavior-panel.js')).refreshBehaviorPanel();
         await painted();
         const out = { note: text('#behaviorSummaryBody .behavior-fps-note'), predicted: text('.behavior-pred[data-pkey^="b1|"] .behavior-bout-dur') };
@@ -564,8 +561,7 @@ try {
         const det = await import('/ui/behavior-detect.js');
         const s = AS.state.session;
         for (const t0 = performance.now(); P.predictionCheckPending(s) && performance.now() - t0 < 20000;) await new Promise(r => setTimeout(r, 50));
-        const tab = document.querySelector('.panel-tab[data-tab="tabBehavior"]');
-        if (tab && !tab.classList.contains('active')) tab.click();
+        (await import('/ui/panel-rail.js')).showPanelTab('tabBehavior');
         (await import('/ui/rendering.js')).drawAllOverlays(AS.state.currentFrame);
         (await import('/ui/behavior-panel.js')).refreshBehaviorPanel();
         const env = det.detectionEnv();

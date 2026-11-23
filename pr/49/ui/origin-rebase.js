@@ -73,18 +73,18 @@
 //
 // The handle is remembered for the page session, so the picker appears once.
 
-import { noteProgress } from './progress-delta.js?v=83b2f9170acd';
-import { state, viewport3d } from './app-state.js?v=83b2f9170acd';
-import { setStatus, markDirty, quickSave } from '../import-export/save-load.js?v=83b2f9170acd';
-import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js?v=83b2f9170acd';
-import { REBASED_CALIBRATION_NAME } from '../loading/calibration-pick.js?v=83b2f9170acd';
-import { countRebaseTargets, subsetRebaseTally, planOriginRebase, applyOriginRebase } from '../pose/origin-rebase.js?v=83b2f9170acd';
+import { noteProgress } from './progress-delta.js?v=dad68619871c';
+import { state, viewport3d } from './app-state.js?v=dad68619871c';
+import { setStatus, markDirty, quickSave } from '../import-export/save-load.js?v=dad68619871c';
+import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js?v=dad68619871c';
+import { REBASED_CALIBRATION_NAME } from '../loading/calibration-pick.js?v=dad68619871c';
+import { countRebaseTargets, subsetRebaseTally, planOriginRebase, applyOriginRebase } from '../pose/origin-rebase.js?v=dad68619871c';
 // Both circular by design and used only inside function bodies, the same rule
 // the rest of this directory's cycles follow.
-import { originState, renderOriginResult } from './origin-definition.js?v=83b2f9170acd';
-import { planeModel, syncPlanes3D, refreshPlanePanel } from './plane-definition.js?v=83b2f9170acd';
-import { drawAllOverlays } from './rendering.js?v=83b2f9170acd';
-import { update3DViewport } from '../pose/initialization.js?v=83b2f9170acd';
+import { originState, renderOriginResult } from './origin-definition.js?v=dad68619871c';
+import { planeModel, syncPlanes3D, refreshPlanePanel } from './plane-definition.js?v=dad68619871c';
+import { drawAllOverlays } from './rendering.js?v=dad68619871c';
+import { update3DViewport } from '../pose/initialization.js?v=dad68619871c';
 
 /**
  * @type {FileSystemFileHandle|null} Where `calibration.toml` lives, once the

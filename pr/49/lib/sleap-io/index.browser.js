@@ -179,7 +179,7 @@ import {
   videoPathCandidates,
   writeGeoJSON,
   writeSkeletonJson
-} from "./chunk-X76PRJK6.js?v=83b2f9170acd";
+} from "./chunk-X76PRJK6.js?v=dad68619871c";
 import {
   Camera,
   CameraGroup,
@@ -208,7 +208,7 @@ import {
   predictedPointsFromArray,
   predictedPointsFromDict,
   rodriguesTransformation
-} from "./chunk-H7G4PJNA.js?v=83b2f9170acd";
+} from "./chunk-H7G4PJNA.js?v=dad68619871c";
 import {
   CLOUD_SCHEMES,
   DEFAULT_MAX_BYTES,
@@ -235,7 +235,7 @@ import {
   stripCrossOriginHeaders,
   urlFromConfirmation,
   withRetries
-} from "./chunk-YS7Q6CO6.js?v=83b2f9170acd";
+} from "./chunk-YS7Q6CO6.js?v=dad68619871c";
 export {
   AUTO_VIDEO_MATCHER,
   AnnotationType,

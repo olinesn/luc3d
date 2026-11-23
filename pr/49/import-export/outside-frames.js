@@ -44,10 +44,10 @@
  * byte-identically (`tests/e2e/save-golden-digest.mjs`).
  */
 
-import { Instance } from '../pose/pose-data.js?v=83b2f9170acd';
-import { keptVideoRecords } from './behavior-events.js?v=83b2f9170acd';
-import { makePooledSioInstances } from './file-io.js?v=83b2f9170acd';
-import { identityCatalogFinder, writeFileLabels } from './detection-labels.js?v=83b2f9170acd';
+import { Instance } from '../pose/pose-data.js?v=dad68619871c';
+import { keptVideoRecords } from './behavior-events.js?v=dad68619871c';
+import { makePooledSioInstances } from './file-io.js?v=dad68619871c';
+import { identityCatalogFinder, writeFileLabels } from './detection-labels.js?v=dad68619871c';
 
 function newHeaderVideo(SIO, filename, shape) {
     var videoShape = shape || [0, 0, 0, 1];
