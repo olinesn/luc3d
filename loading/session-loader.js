@@ -3337,6 +3337,9 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         console.error('[load-project-lazy] Error:', err);
         hideLoading();
         setStatus(slpReadErrorStatus('Lazy reopen error', err), 'error');
+        // A load that fails part way has already replaced the open project with part of
+        // this one: Save must not write that over the file.
+        if (opts && opts.fileHandle && state.slpFileHandle === opts.fileHandle) state.slpFileHandle = null;
         if (isNewerSlpFormatError(err)) return false;
     }
 }

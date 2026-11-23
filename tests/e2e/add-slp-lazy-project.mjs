@@ -85,7 +85,12 @@ def read(path):
         sio.load_slp(path)  # the default call opens the videos too
     except Exception as e:
         return {"error": type(e).__name__ + ": " + str(e)[:160]}
-    poses = sorted(pose_row(lf.video.filename, lf.frame_idx, i) for lf in labels.labeled_frames for i in lf.instances)
+    # A video whose images are in this file is named by the file. The app reads a save as a
+    # File called saved.slp and names such a video after it, so name it that way here too.
+    own = os.path.abspath(path)
+    def vname(v):
+        return "saved.slp" if os.path.abspath(v.filename) == own else v.filename
+    poses = sorted(pose_row(vname(lf.video), lf.frame_idx, i) for lf in labels.labeled_frames for i in lf.instances)
     sessions, groups, tvecs, tracking = [], [], {}, {}
     camera_of = {}
     for si, s in enumerate(labels.sessions):
@@ -94,7 +99,7 @@ def read(path):
             tvecs[c.name] = float(np.asarray(c.tvec)[0])
             v = s.get_video(c)
             if v is not None:
-                cams[c.name] = v.filename
+                cams[c.name] = vname(v)
                 camera_of[id(v)] = c.name
         sessions.append(cams)
         for f, fg in s.frame_groups.items():
@@ -108,7 +113,7 @@ def read(path):
         cam = camera_of.get(id(lf.video))
         for i in lf.instances:
             if i.identity is not None or i.category is not None:
-                model_labels[(cam or lf.video.filename) + "|" + str(lf.frame_idx) + "|" + num(i.points["xy"][0][0])] = "|".join([
+                model_labels[(cam or vname(lf.video)) + "|" + str(lf.frame_idx) + "|" + num(i.points["xy"][0][0])] = "|".join([
                     (i.identity.name + "=" + num(i.identity_score)) if i.identity is not None else "",
                     (i.category.name + "=" + num(i.category_score)) if i.category is not None else "",
                 ])
@@ -119,7 +124,7 @@ def read(path):
                 ts = i.tracking_score
                 tracking[cam + "|" + str(lf.frame_idx)] = None if ts is None or ts != ts else round(float(ts), 3)
     return {
-        "error": None, "videos": [v.filename for v in labels.videos], "tracks": [t.name for t in labels.tracks],
+        "error": None, "videos": [vname(v) for v in labels.videos], "tracks": [t.name for t in labels.tracks],
         "skeletons": [[n.name for n in sk.nodes] for sk in labels.skeletons], "tvecs": tvecs, "tracking": tracking, "modelLabels": model_labels,
         "sessions": sessions, "poses": poses, "cameraPoses": sorted(camera_poses), "groups": sorted(groups),
     }
@@ -814,7 +819,7 @@ try {
     }
     if (wants('C')) {
         // A file with images inside: its images show, its poses go on the camera its
-        // video becomes, and a save writes no images, so that video becomes its source.
+        // video becomes, and a save keeps the images (#49), so that video is the saved file.
         const page = await open('lazy', readFile('project_for_pkg'));
         const beforeRows = await storeRows(page);
         await addSlp(page, minimalPkg);

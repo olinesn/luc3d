@@ -1183,6 +1183,9 @@ function sinkReportingTotal(writer, sink) {
  *                               resolves to null; otherwise resolves to the
  *                               Uint8Array.
  *
+ * `opts.beforeWriting(ctx, [{session, refGraph}])`, when given, runs once the videos are
+ * known and before anything is written (`buildSlpBytes`: embedded images).
+ *
  * `opts.onProgress(stage, done, total)` drives the Save progress card
  * (`import-export/save-load.js`), in order: `'refs'` (counted, over grouped
  * frames — `buildSessionRefGraph`), `'header'` (the 3D groups and points,
@@ -1212,6 +1215,7 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
     var ctx = createProjectWriterContext();
     var refGraph = await buildSessionRefGraph(session, views, videoFiles, ctx, onProgress);
     _lap('1/4 buildSessionRefGraph');
+    if (opts && opts.beforeWriting) opts.beforeWriting(ctx, [{ session: session, refGraph: refGraph }]);
     if (onProgress) await onProgress('header');
     var writer = await openProjectWriter(ctx, [refGraph.sioSession], (opts || {}).provenance);
     _lap('2/4 openProjectWriter (writes /session_data + sessions_json)');

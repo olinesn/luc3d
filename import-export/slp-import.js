@@ -138,6 +138,42 @@ function openEmbeddedFrames(slpFile) {
 }
 
 /**
+ * After a save: read the project's images from the file they were just written to. If that
+ * file replaced the one they were read from, the old workers' File no longer reads at all.
+ * Either way the project no longer depends on the file it came from. Leaves everything as
+ * it was if the saved file does not hold every image.
+ *
+ * @param {File} slpFile - the saved file
+ * @param {Array} plan - what went in it (`import-export/slp-image-save.js`)
+ */
+export async function readImagesFromSavedFile(slpFile, plan) {
+    var opened = await openEmbeddedFrames(slpFile);
+    var infos = plan.map(function (entry) {
+        return opened.videos.find(function (v) { return v.idx === entry.index; });
+    });
+    var missing = infos.findIndex(function (info, i) {
+        return !info || info.frameCount !== plan[i].decoder.videoInfo.frameCount;
+    });
+    if (missing >= 0) {
+        opened.worker.terminate();
+        throw new Error('video' + plan[missing].index + ' does not hold its images');
+    }
+    plan.forEach(function (entry, i) { entry.decoder.readFrom(opened.worker, infos[i], slpFile); });
+
+    // Anything else: a deleted session's images are gone for good, and any other view
+    // still needs the file it reads.
+    var saved = new Set(plan.map(function (entry) { return entry.decoder; }));
+    var stillUsed = new Set();
+    (state.videoFiles || []).forEach(function (vf) {
+        if (!(vf.decoder instanceof EmbeddedVideoDecoder) || saved.has(vf.decoder)) return;
+        if (vf.sessionIdx === -1) vf.decoder.close();
+        else stillUsed.add(vf.decoder._worker);
+    });
+    state.frameWorkers.forEach(function (worker) { if (!stillUsed.has(worker)) worker.terminate(); });
+    state.frameWorkers = [opened.worker].concat(Array.from(stillUsed));
+}
+
+/**
  * Whether a `.slp` file holds embedded images. Costs one worker start and a
  * metadata read. A file that cannot be read says no: the real read reports it.
  *
@@ -1205,6 +1241,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         }
 
         var embeddedFrames = null;   // this file's frame worker, once a session needs it
+        var embeddedVideosTaken = new Set();   // its videos some session's camera holds
         // Whether the session loaded last — the one left active — has 3D.
         var lastSessionHas3d = false;
         // Video indices some session reads; frames on any other are kept aside below.
@@ -1504,6 +1541,10 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
                 if (!evInfo) continue;
                 var evCamName = videoIdxToCameraName[evi]
                     || (cameras.length > 0 ? cameras[evi % cameras.length].name : 'cam_' + evi);
+                // A second video on one camera has no place in a saved file.
+                if (!state.videoFiles.some(function (vf) { return vf.sessionIdx === slpSessIdx && vf.assignedCamera === evCamName; })) {
+                    embeddedVideosTaken.add(evInfo.key);
+                }
                 var evWidth = evInfo.width || 0;
                 var evHeight = evInfo.height || 0;
 
@@ -1538,6 +1579,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
                 var decoder = new EmbeddedVideoDecoder({
                     worker: frameWorker,
                     videoInfo: evInfo,
+                    sourceFile: slpFile,
                     cacheSize: 60,
                     minFrames: evLabeled.length > 0 ? evLabeled[evLabeled.length - 1] + 1 : 0,
                 });
@@ -1998,6 +2040,11 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         }
 
         clearDirty();
+        // Images no session holds would not be in a save, so this file can't be the save target.
+        state.embeddedImagesLeftOut = embeddedFrames ? embeddedFrames.videos.filter(function (v) {
+            return v.frameCount > 0 && !embeddedVideosTaken.has(v.key);
+        }).length : 0;
+
         hideLoading();
         var statusParts = [state.sessions.length + ' session(s)', (state.session ? state.session.skeleton : skeleton).nodes.length + ' nodes'];
         if (state.session) statusParts.push(state.session.numFrames.toLocaleString('en-US') + ' labeled frames');
@@ -2038,6 +2085,10 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         console.error('[load-slp] FATAL:', err);
         hideLoading();
         setStatus('SLP load error: ' + err.message, 'error');
+        // A load that fails part way has already replaced the open project with part of
+        // this one: Save must not write that over the file.
+        if (fileHandle && state.slpFileHandle === fileHandle) state.slpFileHandle = null;
+        return false;   // not opened: the menus must not make it the save target
     }
 }
 
@@ -2337,6 +2388,7 @@ export async function handleAddSlp() {
                 var mDecoder = new EmbeddedVideoDecoder({
                     worker: frameWorker,
                     videoInfo: mevInfo,
+                    sourceFile: slpFile,
                     cacheSize: 60,
                     minFrames: mLabeled.length > 0 ? mLabeled[mLabeled.length - 1] + 1 : 0,
                 });
