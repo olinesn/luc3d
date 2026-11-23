@@ -21,6 +21,7 @@ import { isCameraTracked, getTrackingThreshold } from './settings.js';
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
 import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js';
+import { drawCageOutlines } from './cage-outline-tool.js';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
@@ -766,6 +767,8 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         // Annotated planes (View ▸ Define Planes). Frame-independent, so they
         // are drawn on every frame regardless of the current FrameGroup.
         drawPlaneOverlays(view);
+        // The cage outlines traced per view (Define Planes ▸ Outlines).
+        drawCageOutlines(view);
         octx.restore();
     }
 

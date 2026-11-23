@@ -60,6 +60,7 @@ import {
 // Circular by design, and safe for the same reason the rest of this feature's
 // cycles are: every use below is inside a function body, so the bindings are
 // resolved at call time rather than at module evaluation.
+import { serializeCageOutlines, restoreCageOutlines } from '../pose/cage-outlines.js';
 import { planeState } from '../ui/plane-definition.js';
 import { originState } from '../ui/origin-definition.js';
 import { state } from '../ui/app-state.js';
@@ -77,6 +78,7 @@ export const PLANE_METADATA_KEYS = [
     'meshObjects',
     'planePlacements',
     'planeOrigin',
+    'cageOutlines',
 ];
 
 /**
@@ -91,6 +93,12 @@ export const PLANE_METADATA_KEYS = [
  */
 export function writePlaneMetadata(lucid, session) {
     if (!lucid || !session) return lucid;
+
+    // Session-scoped 2D like the placements, but tied to no plane node, so it
+    // is written whatever the plane model holds (`pose/cage-outlines.js`).
+    var outlines = serializeCageOutlines(session.cageOutlines);
+    if (outlines) lucid.cageOutlines = outlines;
+
     var model = planeState.model;
     if (!model) return lucid;
 
@@ -137,6 +145,7 @@ export function writePlaneMetadata(lucid, session) {
 export function readPlaneMetadata(session, lucid) {
     if (!session) return session;
     var src = (lucid && typeof lucid === 'object') ? lucid : {};
+    readCageOutlineMetadata(session, src);
     var model = planeState.model;
     if (!model) return session;
 
@@ -164,6 +173,27 @@ export function readPlaneMetadata(session, lucid) {
         model.attachPlacements(placements);
     }
 
+    return session;
+}
+
+/**
+ * Read a session's cage outlines (`metadata.lucid.cageOutlines`).
+ *
+ * Part of `readPlaneMetadata`, and exported for the one loader that skips it:
+ * the single-SLP folder load refuses a file's PLANE 2D when its node IDs belong
+ * to another project (`planeMetadataConflict`), but an outline names no node,
+ * so it is always this session's own and is read regardless. Assigned
+ * unconditionally, so a session without outlines comes back with an empty set
+ * rather than with whatever it held before the load.
+ *
+ * @param {Object} session
+ * @param {*} lucid - the `metadata.lucid` dict from disk (may be absent)
+ * @returns {Object} session
+ */
+export function readCageOutlineMetadata(session, lucid) {
+    if (!session) return session;
+    var src = (lucid && typeof lucid === 'object') ? lucid : {};
+    session.cageOutlines = restoreCageOutlines(src.cageOutlines);
     return session;
 }
 

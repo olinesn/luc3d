@@ -174,6 +174,13 @@ try {
         activate(sessions[0], SPECS[0]);
         P.planeModel();
 
+        // A cage outline on session A only: session-scoped 2D like the
+        // placements (`cageOutlines`, pose/cage-outlines.js). Sub-pixel on
+        // purpose, so a rounding writer shows.
+        const CO = await import('/pose/cage-outlines.js');
+        sessions[0].cageOutlines = new CO.CageOutlineSet();
+        sessions[0].cageOutlines.addPolygon('a_cam0', [[10, 10], [200.5, 12.25], [190, 180], [15, 170.75]]);
+
         // Group the two planes into a 3D Mesh Object. This file's section 2
         // asserts EVERY key in PLANE_METADATA_KEYS is written, so the fixture
         // has to exercise each one — `meshObjects` included. The object's own
@@ -355,6 +362,7 @@ try {
         }
         res.before = snapshot();
         res.beforePlacements = { sessA: placementSnapshot(sessions[0]), sessB: placementSnapshot(sessions[1]) };
+        res.beforeOutlines = sessions.map(sess => CO.serializeCageOutlines(sess.cageOutlines));
 
         // =============================================================
         // 2. Save, then reopen through the real adapter
@@ -396,7 +404,8 @@ try {
             perSession.forEach((s, i) => PM.readPlaneMetadata(fresh[i], s.lucid));
             const snap = snapshot();
             const places = fresh.map(f => placementSnapshot(f));
-            return { snap, places, sessionNames: perSession.map(s => s.sessionName) };
+            const outlines = fresh.map(f => CO.serializeCageOutlines(f.cageOutlines));
+            return { snap, places, outlines, sessionNames: perSession.map(s => s.sessionName) };
         }
 
         // ---- (a) EAGER writer, session A ----
@@ -593,6 +602,8 @@ try {
     } else {
         check(false, 'session A placements came back');
     }
+    check(!!out.beforeOutlines[0] && out.eager && eq(out.eager.outlines[0], out.beforeOutlines[0]),
+        `the cage outline comes back exactly (got ${JSON.stringify(out.eager && out.eager.outlines[0])})`);
 
     // =====================================================================
     console.log('\n-- 6. an untouched project writes NO plane keys --');
@@ -627,6 +638,8 @@ try {
             `session B got only its own (got ${JSON.stringify(bViews)})`);
         check(eq(out.streaming.places[1], out.beforePlacements.sessB),
             'and session B\'s 2D is its own values, not session A\'s');
+        check(eq(out.streaming.outlines[0], out.beforeOutlines[0]) && out.streaming.outlines[1] === null,
+            'the cage outline is session A\'s alone through the streaming writer too');
     }
 
     // =====================================================================
