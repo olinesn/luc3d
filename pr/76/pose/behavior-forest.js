@@ -50,7 +50,7 @@
 //
 // Depends on: pose/behavior-features.js
 
-import { computeFeatureChunk, resolveFeatureName, TARGET_PREFIX } from './behavior-features.js?v=036c0d6552f3';
+import { computeFeatureChunk, resolveFeatureName, TARGET_PREFIX } from './behavior-features.js?v=a56f32351373';
 
 /** Bumped when a forest's meaning changes (codes, bins, the tree format). */
 export var FOREST_VERSION = 1;
