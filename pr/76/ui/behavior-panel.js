@@ -43,49 +43,49 @@
 //             ui/rendering.js, pose/behavior-ethogram.js, pose/behavior-labels.js,
 //             pose/behavior-predictions.js, import-export/save-load.js
 
-import { state } from './app-state.js?v=a56f32351373';
+import { state } from './app-state.js?v=5fbec1b4faad';
 import {
     behaviorUi, codeBehavior, focalAnimal, setFocalAnimal, sessionAnimals, animalColor, selectedBehaviorId,
     selectBehavior, pickBehaviorTarget, cancelPendingTarget, clearArmedRange, armedRange, registerBehaviorRepaint,
     requestBehaviorRepaint, setBehaviorNavigator, goToBehaviorFrame, BOUT_LEAD_IN_SECONDS,
     behaviorBoxesVisible, setBehaviorBoxesVisible, pairGlyph, openBehaviorTab, setReviewFocus,
-} from './behavior-coding.js?v=a56f32351373';
-import { toggleBehaviorMode, exitBehaviorMode, isBehaviorModeActive } from './behavior-mode.js?v=a56f32351373';
-import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-modal.js?v=a56f32351373';
-import { showBehaviorImportModal, showBehaviorExportModal } from './behavior-io-modal.js?v=a56f32351373';
-import { ABSENT_COLOR } from './behavior-timeline.js?v=a56f32351373';
-import { behaviorStripOn, setBehaviorStripOn, setupBehaviorStrip, updateBehaviorStripFrame } from './behavior-strip.js?v=a56f32351373';
+} from './behavior-coding.js?v=5fbec1b4faad';
+import { toggleBehaviorMode, exitBehaviorMode, isBehaviorModeActive } from './behavior-mode.js?v=5fbec1b4faad';
+import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-modal.js?v=5fbec1b4faad';
+import { showBehaviorImportModal, showBehaviorExportModal } from './behavior-io-modal.js?v=5fbec1b4faad';
+import { ABSENT_COLOR } from './behavior-timeline.js?v=5fbec1b4faad';
+import { behaviorStripOn, setBehaviorStripOn, setupBehaviorStrip, updateBehaviorStripFrame } from './behavior-strip.js?v=5fbec1b4faad';
 import {
     detectAllFrames, detectAllSessions, detectThisFrame, frameReadout, onFrameReadout, detectionEnv, detectionFps, setupBehaviorDetection,
-} from './behavior-detect.js?v=a56f32351373';
+} from './behavior-detect.js?v=5fbec1b4faad';
 import {
     classifierStatus, activeLearning, setActiveLearningBehavior, nextActiveItem, labelActiveItem, skipActiveItem,
     exportClassifiers, showImportClassifiers, fmt, setClassifierSessionSwitcher,
-} from './behavior-train.js?v=a56f32351373';
-import { showBehaviorTrainModal } from './behavior-train-modal.js?v=a56f32351373';
-import { onModelsChange, behaviorModels } from '../pose/behavior-classifier.js?v=a56f32351373';
-import { showBehaviorRulesModal } from './behavior-rules-modal.js?v=a56f32351373';
-import { behaviorConfirm } from './behavior-confirm.js?v=a56f32351373';
-import { renderStatesSection, setupBehaviorStates } from './behavior-states.js?v=a56f32351373';
-import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.js?v=a56f32351373';
-import { showBehaviorDiscoveryModal } from './behavior-discovery-modal.js?v=a56f32351373';
-import { setInfoTip } from './info-tip.js?v=a56f32351373';
-import { ICON_INFO } from './plane-definition.js?v=a56f32351373';
-import { isInfoPanelVisible } from './panel-visibility.js?v=a56f32351373';
-import { persistSectionStates } from './section-state.js?v=a56f32351373';
-import { setHandler } from './settings.js?v=a56f32351373';
-import { drawAllOverlays } from './rendering.js?v=a56f32351373';
-import { behaviors, behaviorById } from '../pose/behavior-ethogram.js?v=a56f32351373';
+} from './behavior-train.js?v=5fbec1b4faad';
+import { showBehaviorTrainModal } from './behavior-train-modal.js?v=5fbec1b4faad';
+import { onModelsChange, behaviorModels } from '../pose/behavior-classifier.js?v=5fbec1b4faad';
+import { showBehaviorRulesModal } from './behavior-rules-modal.js?v=5fbec1b4faad';
+import { behaviorConfirm } from './behavior-confirm.js?v=5fbec1b4faad';
+import { renderStatesSection, setupBehaviorStates } from './behavior-states.js?v=5fbec1b4faad';
+import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.js?v=5fbec1b4faad';
+import { showBehaviorDiscoveryModal } from './behavior-discovery-modal.js?v=5fbec1b4faad';
+import { setInfoTip } from './info-tip.js?v=5fbec1b4faad';
+import { ICON_INFO } from './plane-definition.js?v=5fbec1b4faad';
+import { isInfoPanelVisible } from './panel-visibility.js?v=5fbec1b4faad';
+import { persistSectionStates } from './section-state.js?v=5fbec1b4faad';
+import { setHandler } from './settings.js?v=5fbec1b4faad';
+import { drawAllOverlays } from './rendering.js?v=5fbec1b4faad';
+import { behaviors, behaviorById } from '../pose/behavior-ethogram.js?v=5fbec1b4faad';
 import {
     onBehaviorChange, listBouts, runningStates, activeAt, timeBudget, orphanedAnimals, reassignAnimal,
     deleteBout, editBout, setBehaviorCursor, canUndoBehaviorEdit, undoBehaviorEdit, isRunning, closeRunningAtCursor,
     cancelRunning, hasBehaviorData, toggleState,
-} from '../pose/behavior-labels.js?v=a56f32351373';
+} from '../pose/behavior-labels.js?v=5fbec1b4faad';
 import {
     reviewQueue, acceptPredictions, rejectPredictions, predictionStaleness, hasPredictions, clearBehaviorRuns,
     onPredictionsChange, behaviorRuns, behaviorRunOf, runStateLayer,
-} from '../pose/behavior-predictions.js?v=a56f32351373';
-import { markDirty, setStatus } from '../import-export/save-load.js?v=a56f32351373';
+} from '../pose/behavior-predictions.js?v=5fbec1b4faad';
+import { markDirty, setStatus } from '../import-export/save-load.js?v=5fbec1b4faad';
 
 var SECTIONS_KEY = 'lucid.behaviorSections';
 var MAX_LISTED_BOUTS = 500;

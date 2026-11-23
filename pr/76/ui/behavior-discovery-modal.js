@@ -12,17 +12,17 @@
 //             pose/behavior-discovery.js, pose/behavior-ethogram.js, pose/behavior-labels.js,
 //             pose/behavior-states.js, import-export/save-load.js
 
-import { state } from './app-state.js?v=a56f32351373';
-import { sessionAnimals } from './behavior-coding.js?v=a56f32351373';
-import { runDiscovery, isDiscovering, DEFAULT_DISCOVERY_LAYER, splitLayerName } from './behavior-discovery.js?v=a56f32351373';
-import { setInfoTip } from './info-tip.js?v=a56f32351373';
-import { ICON_INFO } from './plane-definition.js?v=a56f32351373';
-import { persistSectionState } from './section-state.js?v=a56f32351373';
-import { MAX_BINS, NEIGHBORS, CLUSTER_SHARE } from '../pose/behavior-discovery.js?v=a56f32351373';
-import { behaviors, behaviorById } from '../pose/behavior-ethogram.js?v=a56f32351373';
-import { listBouts } from '../pose/behavior-labels.js?v=a56f32351373';
-import { stateLayer, cleanLayerName } from '../pose/behavior-states.js?v=a56f32351373';
-import { setStatus } from '../import-export/save-load.js?v=a56f32351373';
+import { state } from './app-state.js?v=5fbec1b4faad';
+import { sessionAnimals } from './behavior-coding.js?v=5fbec1b4faad';
+import { runDiscovery, isDiscovering, DEFAULT_DISCOVERY_LAYER, splitLayerName } from './behavior-discovery.js?v=5fbec1b4faad';
+import { setInfoTip } from './info-tip.js?v=5fbec1b4faad';
+import { ICON_INFO } from './plane-definition.js?v=5fbec1b4faad';
+import { persistSectionState } from './section-state.js?v=5fbec1b4faad';
+import { MAX_BINS, NEIGHBORS, CLUSTER_SHARE } from '../pose/behavior-discovery.js?v=5fbec1b4faad';
+import { behaviors, behaviorById } from '../pose/behavior-ethogram.js?v=5fbec1b4faad';
+import { listBouts } from '../pose/behavior-labels.js?v=5fbec1b4faad';
+import { stateLayer, cleanLayerName } from '../pose/behavior-states.js?v=5fbec1b4faad';
+import { setStatus } from '../import-export/save-load.js?v=5fbec1b4faad';
 
 var INFO = 'Groups each animal\'s poses into clusters with no labels, as B-SOiD does: features in 100 ms bins, PCA, UMAP, ' +
     'HDBSCAN, then a forest per cluster labels every frame. A cluster counts only if a second layout finds it again and it happens ' +

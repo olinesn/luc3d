@@ -12,19 +12,19 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=a56f32351373';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=a56f32351373';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=a56f32351373';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=5fbec1b4faad';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=5fbec1b4faad';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=5fbec1b4faad';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=a56f32351373';
-import { isNewerSlpFormatError } from '../loading/slp-format-check.js?v=a56f32351373';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=a56f32351373';
-import { identityCatalogFinder, typedFileLabels, writeFileLabels } from './detection-labels.js?v=a56f32351373';
-import { writePlaneMetadata } from './plane-metadata.js?v=a56f32351373';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=a56f32351373';
-import { writeBehaviorSlpMetadata } from './behavior-metadata.js?v=a56f32351373';
-import { buildBehaviorEvents, fileEventsOf } from './behavior-events.js?v=a56f32351373';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=5fbec1b4faad';
+import { isNewerSlpFormatError } from '../loading/slp-format-check.js?v=5fbec1b4faad';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=5fbec1b4faad';
+import { identityCatalogFinder, typedFileLabels, writeFileLabels } from './detection-labels.js?v=5fbec1b4faad';
+import { writePlaneMetadata } from './plane-metadata.js?v=5fbec1b4faad';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=5fbec1b4faad';
+import { writeBehaviorSlpMetadata } from './behavior-metadata.js?v=5fbec1b4faad';
+import { buildBehaviorEvents, fileEventsOf } from './behavior-events.js?v=5fbec1b4faad';
 
 // ============================================
 // Generic file picker
@@ -2937,7 +2937,7 @@ export async function parseSlpViaSleapIO(file, onProgress, opts) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=a56f32351373', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=5fbec1b4faad', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
@@ -3096,7 +3096,7 @@ async function rawWorkerCanStandIn(file) {
     var h5;
     try {
         h5 = await window.SleapIO.openH5Worker(file, {
-            h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=a56f32351373', document.baseURI).href,
+            h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=5fbec1b4faad', document.baseURI).href,
         });
     } catch (e) {
         return false;

@@ -69,14 +69,14 @@
 import {
     FOREST_VERSION, DEFAULT_FOREST_PARAMS, binEdges, binColumn, finalizeForest, scoreBinnedRows, forestHash, mix32,
     classifierFeatureNames, featureRefs, missingFeatures, scoreForestsChunk, presentFrames,
-} from './behavior-forest.js?v=a56f32351373';
-import { planChunks, featurePadFrames, sliceChunkData, FEATURE_SPEC_VERSION } from './behavior-features.js?v=a56f32351373';
-import { scoresToBouts, secondsToFrames, framePrf, prCurve, boutPrf, exclusiveScores } from './behavior-postprocess.js?v=a56f32351373';
-import { runBehaviorChunks, runJob } from './behavior-pool.js?v=a56f32351373';
-import { behaviorById, exclusivePeers, behaviorPost } from './behavior-ethogram.js?v=a56f32351373';
-import { listBouts, boutIntervals, onBehaviorChange } from './behavior-labels.js?v=a56f32351373';
-import { behaviorRunOf, runThreshold } from './behavior-predictions.js?v=a56f32351373';
-import { POSE_CHECK_VERSION } from './behavior-tensor.js?v=a56f32351373';
+} from './behavior-forest.js?v=5fbec1b4faad';
+import { planChunks, featurePadFrames, sliceChunkData, FEATURE_SPEC_VERSION } from './behavior-features.js?v=5fbec1b4faad';
+import { scoresToBouts, secondsToFrames, framePrf, prCurve, boutPrf, exclusiveScores } from './behavior-postprocess.js?v=5fbec1b4faad';
+import { runBehaviorChunks, runJob } from './behavior-pool.js?v=5fbec1b4faad';
+import { behaviorById, exclusivePeers, behaviorPost } from './behavior-ethogram.js?v=5fbec1b4faad';
+import { listBouts, boutIntervals, onBehaviorChange } from './behavior-labels.js?v=5fbec1b4faad';
+import { behaviorRunOf, runThreshold } from './behavior-predictions.js?v=5fbec1b4faad';
+import { POSE_CHECK_VERSION } from './behavior-tensor.js?v=5fbec1b4faad';
 
 /** Frames and bouts each class needs before a behavior trains. */
 export var GATE_FRAMES = 20;

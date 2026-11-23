@@ -53,17 +53,17 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=a56f32351373';
-import { points3dNodeCount } from '../pose/pose-data.js?v=a56f32351373';
-import { headerVideoForOutsideFrames } from './outside-frames.js?v=a56f32351373';
-import { suggestionsForSave, suggestionsInFileOrder } from './kept-suggestions.js?v=a56f32351373';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=a56f32351373';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=a56f32351373';
-import { identityCatalogFinder, storeRowLabels, writeFileLabels } from './detection-labels.js?v=a56f32351373';
-import { writePlaneMetadata } from './plane-metadata.js?v=a56f32351373';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=a56f32351373';
-import { writeBehaviorSlpMetadata } from './behavior-metadata.js?v=a56f32351373';
-import { buildBehaviorEvents, keptVideoRecords } from './behavior-events.js?v=a56f32351373';
+import { _buildSioPoints } from './file-io.js?v=5fbec1b4faad';
+import { points3dNodeCount } from '../pose/pose-data.js?v=5fbec1b4faad';
+import { headerVideoForOutsideFrames } from './outside-frames.js?v=5fbec1b4faad';
+import { suggestionsForSave, suggestionsInFileOrder } from './kept-suggestions.js?v=5fbec1b4faad';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=5fbec1b4faad';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=5fbec1b4faad';
+import { identityCatalogFinder, storeRowLabels, writeFileLabels } from './detection-labels.js?v=5fbec1b4faad';
+import { writePlaneMetadata } from './plane-metadata.js?v=5fbec1b4faad';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=5fbec1b4faad';
+import { writeBehaviorSlpMetadata } from './behavior-metadata.js?v=5fbec1b4faad';
+import { buildBehaviorEvents, keptVideoRecords } from './behavior-events.js?v=5fbec1b4faad';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;

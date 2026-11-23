@@ -238,7 +238,11 @@ try {
     await page.waitForTimeout(200);
     const rz = await page.evaluate(() => window.__resizes);
     check(rz === 1, `one Timeline.resize() for the expand (${rz})`);
+    // A frame can be sampled between resetCounts() and the key press (on a
+    // slower machine, CI's): that leading 0 is the collapsed timeline from
+    // before the expand, not a height painted after it.
     seq = await paintedHeights();
+    if (seq[0] === 0) seq.shift();
     check(seq.every(h => near(h, smallH)), `no other height painted after the expand (${seq.join(' -> ')})`);
 
     // ---- 6. expand with nothing remembered: fits the rows ---------------------------------

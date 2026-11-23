@@ -25,11 +25,11 @@
 
 import {
     FOREST_VERSION, typedToBase64, base64ToTyped, forestHash, forestProblem,
-} from '../pose/behavior-forest.js?v=a56f32351373';
-import { FEATURE_SPEC_VERSION, WINDOW_SECONDS, BANDS } from '../pose/behavior-features.js?v=a56f32351373';
-import { POSE_CHECK_VERSION } from '../pose/behavior-tensor.js?v=a56f32351373';
-import { behaviorById, ingestEthogram } from '../pose/behavior-ethogram.js?v=a56f32351373';
-import { modelProblems } from '../pose/behavior-classifier.js?v=a56f32351373';
+} from '../pose/behavior-forest.js?v=5fbec1b4faad';
+import { FEATURE_SPEC_VERSION, WINDOW_SECONDS, BANDS } from '../pose/behavior-features.js?v=5fbec1b4faad';
+import { POSE_CHECK_VERSION } from '../pose/behavior-tensor.js?v=5fbec1b4faad';
+import { behaviorById, ingestEthogram } from '../pose/behavior-ethogram.js?v=5fbec1b4faad';
+import { modelProblems } from '../pose/behavior-classifier.js?v=5fbec1b4faad';
 
 /** The `format` field of a model file. */
 export var MODEL_FILE_FORMAT = 'lucid-behavior-model';

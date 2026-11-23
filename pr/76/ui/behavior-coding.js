@@ -24,14 +24,14 @@
 //             pose/behavior-labels.js, import-export/save-load.js,
 //             ui/id-switch-highlight.js (the node mask boxes share)
 
-import { state } from './app-state.js?v=a56f32351373';
-import { behaviorById } from '../pose/behavior-ethogram.js?v=a56f32351373';
+import { state } from './app-state.js?v=5fbec1b4faad';
+import { behaviorById } from '../pose/behavior-ethogram.js?v=5fbec1b4faad';
 import {
     labelRange, clearRange, toggleState, noteBehaviorFps, listBouts, activeAt, hasBehaviorData, runningStates,
-} from '../pose/behavior-labels.js?v=a56f32351373';
-import { setStatus } from '../import-export/save-load.js?v=a56f32351373';
-import { sessionFps } from './behavior-detect.js?v=a56f32351373';
-import { idSwitchBoxNodeMask } from './id-switch-highlight.js?v=a56f32351373';
+} from '../pose/behavior-labels.js?v=5fbec1b4faad';
+import { setStatus } from '../import-export/save-load.js?v=5fbec1b4faad';
+import { sessionFps } from './behavior-detect.js?v=5fbec1b4faad';
+import { idSwitchBoxNodeMask } from './id-switch-highlight.js?v=5fbec1b4faad';
 
 var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null, mode: false, review: null };
 
