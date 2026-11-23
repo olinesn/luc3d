@@ -1653,7 +1653,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
                 if (vOk) { const X = [V[qv], V[qv + 1], V[qv + 2]]; cands.push({ X: X, kind: 'volume', support: c.supportOf(X) }); }
                 return { locked: false, cands: cands };
             }, { allowDrop: useVol });   // without a volume a point is re-solved or kept, never dropped
-            skeletonInfo = { chainsRepaired: sk.chains, nodesResolved: sk.changed.subset || 0,
+            skeletonInfo = { chainsRepaired: sk.chains, chainsPartial: sk.partial, nodesResolved: sk.changed.subset || 0,
                 nodesFromSolve: sk.changed.plain || 0, nodesFromVolume: sk.changed.volume || 0, nodesDropped: sk.dropped };
         }
     }
