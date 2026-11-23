@@ -13,11 +13,11 @@
  *                    node name; the chains the skeleton check guards, e.g. the tail and the head)
  * Rows carry no identity: each Triangulate solve matches its group to the frame's rows by 3D distance.
  */
-import { initH5wasm, pickFiles } from './file-io.js?v=20102c35280e';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=20102c35280e';
-import { showLoading, hideLoading, setStatus } from './save-load.js?v=20102c35280e';
-import { state } from '../ui/app-state.js?v=20102c35280e';
-import { setSessionVolume, volumeNodeCoverage, volumeChains, getVolumeSettings } from '../pose/volume3d.js?v=20102c35280e';
+import { initH5wasm, pickFiles } from './file-io.js?v=e4b63c0b274f';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=e4b63c0b274f';
+import { showLoading, hideLoading, setStatus } from './save-load.js?v=e4b63c0b274f';
+import { state } from '../ui/app-state.js?v=e4b63c0b274f';
+import { setSessionVolume, volumeNodeCoverage, volumeChains, getVolumeSettings } from '../pose/volume3d.js?v=e4b63c0b274f';
 
 export const VOLUME3D_FORMAT = 'lucid-volume3d/1';
 

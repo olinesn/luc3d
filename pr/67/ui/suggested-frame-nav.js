@@ -11,12 +11,12 @@
 // Nothing here is saved: the suggestion last stepped to is remembered per session,
 // in memory only, so a step from a frame next to it carries on from it.
 
-import { state } from './app-state.js?v=20102c35280e';
-import { setStatus } from '../import-export/save-load.js?v=20102c35280e';
-import { suggestedFrameRows } from '../import-export/kept-suggestions.js?v=20102c35280e';
-import { suggestedFrameOrder, stepSuggestedFrame } from '../pose/suggested-frames.js?v=20102c35280e';
-import { formatFrameNumber } from './frame-readout.js?v=20102c35280e';
-import { setSeekbarSuggestedFrames } from './seekbar-markers.js?v=20102c35280e';
+import { state } from './app-state.js?v=e4b63c0b274f';
+import { setStatus } from '../import-export/save-load.js?v=e4b63c0b274f';
+import { suggestedFrameRows } from '../import-export/kept-suggestions.js?v=e4b63c0b274f';
+import { suggestedFrameOrder, stepSuggestedFrame } from '../pose/suggested-frames.js?v=e4b63c0b274f';
+import { formatFrameNumber } from './frame-readout.js?v=e4b63c0b274f';
+import { setSeekbarSuggestedFrames } from './seekbar-markers.js?v=e4b63c0b274f';
 
 var _lastStepped = new WeakMap();   // Session -> the suggested frame last stepped to
 

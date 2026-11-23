@@ -27,10 +27,10 @@
  *
  * Real Python sleap-io writes the files. Needs `uv` (skipped without it).
  *
- * Run: node tests/e2e/suggested-frame-nav.mjs   (spawns its own http.server; PORT= to move it)
+ * Run: node tests/e2e/suggested-frame-nav.mjs   (serves the app itself; PORT= to move it)
  */
-import { chromium } from 'playwright';
-import { spawn, spawnSync } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,7 +38,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8479);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const PY_SPEC = process.env.SLEAP_IO_SPEC || 'sleap-io==0.9.5';
 
 let fails = 0;
@@ -126,12 +127,11 @@ for (const name of ['camA', 'camB', 'camC', 'camD', 'outside']) fs.copyFileSync(
 for (const cam of ['camA', 'camB']) fs.copyFileSync(CLIP, path.join(tmp, 'withvideo', 'videos', cam + '.mp4'));
 const NONE = fs.readFileSync(path.join(tmp, 'none.slp'));
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 for (let i = 0; i < 60; i++) {
     try { if ((await fetch(`http://localhost:${PORT}/index.html`)).ok) break; } catch { /* not yet */ }
     await new Promise(r => setTimeout(r, 250));
 }
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 const stallGuard = setTimeout(() => {
     console.log('\nStuck: no check for 5 minutes');
     browser.close();

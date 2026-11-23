@@ -25,15 +25,16 @@
 // Circular imports (`plane-definition.js` imports this module back) are safe:
 // every use is inside a function body.
 
-import { state, interactionManager } from './app-state.js?v=20102c35280e';
-import { makeVideoToCanvasTransform } from './overlays.js?v=20102c35280e';
+import { state, interactionManager } from './app-state.js?v=e4b63c0b274f';
+import { makeVideoToCanvasTransform } from './overlays.js?v=e4b63c0b274f';
+import { overlayDrawSize } from './overlay-window.js?v=e4b63c0b274f';
 import {
     CageOutlineSet, OutlineTrace, nearestOutlineVertex, nearestOutlineEdge,
-} from '../pose/cage-outlines.js?v=20102c35280e';
-import { planeState, redraw } from './plane-definition.js?v=20102c35280e';
-import { planeVisibility } from './plane-visibility.js?v=20102c35280e';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=20102c35280e';
-import { isTextEntryTarget } from './keyboard-target.js?v=20102c35280e';
+} from '../pose/cage-outlines.js?v=e4b63c0b274f';
+import { planeState, redraw } from './plane-definition.js?v=e4b63c0b274f';
+import { planeVisibility } from './plane-visibility.js?v=e4b63c0b274f';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=e4b63c0b274f';
+import { isTextEntryTarget } from './keyboard-target.js?v=e4b63c0b274f';
 
 /** Outline colour: orange, apart from the plane palette's blues and greens. */
 export const OUTLINE_COLOR = '#ffa726';
@@ -82,10 +83,11 @@ function clampToView(viewName, x, y) {
 
 function fmt(n) { return Number(n).toLocaleString('en-US'); }
 
-/** The overlay canvas's drawing size (what `drawPlaneOverlays` maps onto). */
+/** The overlay's drawing size (what `drawPlaneOverlays` maps onto): the full
+ *  virtual canvas, which a windowed overlay canvas is drawn into through a
+ *  transform (`ui/overlay-window.js`). */
 function overlaySize(view) {
-    var c = view.overlayCanvas;
-    return { width: c ? c.width : 0, height: c ? c.height : 0 };
+    return overlayDrawSize(view);
 }
 
 /** Is a trace live on the active session? Drops a stale one (session switched). */

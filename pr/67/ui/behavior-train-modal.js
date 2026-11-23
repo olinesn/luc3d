@@ -19,17 +19,17 @@
 //             pose/behavior-ethogram.js, pose/behavior-classifier.js,
 //             import-export/save-load.js
 
-import { state } from './app-state.js?v=20102c35280e';
+import { state } from './app-state.js?v=e4b63c0b274f';
 import {
     classifierStatus, trainClassifiers, applyClassifierPost, exportClassifiers, showImportClassifiers, isTraining, fmt,
     lastTrainingReport, openSessionByName,
-} from './behavior-train.js?v=20102c35280e';
-import { detectAllFrames, detectionFps } from './behavior-detect.js?v=20102c35280e';
-import { setInfoTip } from './info-tip.js?v=20102c35280e';
-import { ICON_INFO } from './plane-definition.js?v=20102c35280e';
-import { behaviorById, behaviorPost } from '../pose/behavior-ethogram.js?v=20102c35280e';
-import { evaluateAt, topFeatures, onModelsChange, GATE_FRAMES, GATE_BOUTS } from '../pose/behavior-classifier.js?v=20102c35280e';
-import { setStatus } from '../import-export/save-load.js?v=20102c35280e';
+} from './behavior-train.js?v=e4b63c0b274f';
+import { detectAllFrames, detectionFps } from './behavior-detect.js?v=e4b63c0b274f';
+import { setInfoTip } from './info-tip.js?v=e4b63c0b274f';
+import { ICON_INFO } from './plane-definition.js?v=e4b63c0b274f';
+import { behaviorById, behaviorPost } from '../pose/behavior-ethogram.js?v=e4b63c0b274f';
+import { evaluateAt, topFeatures, onModelsChange, GATE_FRAMES, GATE_BOUTS } from '../pose/behavior-classifier.js?v=e4b63c0b274f';
+import { setStatus } from '../import-export/save-load.js?v=e4b63c0b274f';
 
 var INFO = {
     train: 'A classifier learns a behavior from the frames you labelled — present and "not"; unlabelled frames teach ' +
