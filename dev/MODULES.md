@@ -4578,6 +4578,28 @@ read and given back.
 `pose/placeholder-cameras.js`. **Imported by** `ui/threshold-examples-panel.js`.
 **Tests.** `tests/test-threshold-examples.mjs`.
 
+### pose/suggested-frames.js
+
+**Purpose.** The frames a `.slp`'s suggestions name, in the file's order, and where
+Previous / Next suggested frame (Opt+Shift+← / →, `ui/suggested-frame-nav.js`) lands.
+A file lists its suggestions in its own order (a relabel scan: rank 1 in every camera,
+then rank 2, ...), so stepping follows that order, not frame order. Import-free and
+DOM-free.
+
+**Key exports.**
+- `suggestedFrameOrder(rows, cameraNames)` — the frames of `rows` (`{camera, frameIdx}`
+  in the file's order, `suggestedFrameRows`) on any of the session's cameras, each once,
+  where it first appears. A row with no camera (a video no camera of the session reads)
+  or a frame that is not a 0-based integer is skipped.
+- `stepSuggestedFrame(frames, current, direction, lastFrame)` — `{index, frame}`, or
+  null without suggestions. On a suggested frame: its neighbour in the list. Off one:
+  from the suggestion last stepped to, as if just past it (Next → the one after it,
+  Previous → back to it); with none, both go to the first. At an end `frame` is null and
+  `index` is that end.
+
+**Imports.** None. **Imported by** `ui/suggested-frame-nav.js`.
+**Tests.** `tests/test-suggested-frames.mjs`, `tests/e2e/suggested-frame-nav.mjs`.
+
 ### pose/view-align.js
 
 **Purpose.** The math behind View ▸ **Align Views to References…**:
@@ -5791,7 +5813,7 @@ Every static checkbox in the panel uses the `.toggle-switch` markup.
 
 ---
 
-**Behavior labels.** `updateInfoPanel` also calls `refreshBehaviorPanel()` (ui/behavior-panel.js), which skips itself while the Behavior tab is hidden, and first of all `refreshBehaviorStrip()` (ui/behavior-strip.js), collapsed panel or not: a load does not notify, so this is how a reopened file's labels reach the strip.
+**Behavior labels.** `updateInfoPanel` also calls `refreshBehaviorPanel()` (ui/behavior-panel.js), which skips itself while the Behavior tab is hidden, and first of all `refreshBehaviorStrip()` (ui/behavior-strip.js), collapsed panel or not: a load does not notify, so this is how a reopened file's labels reach the strip. Right after it, `refreshSuggestedFrameMarks()` (ui/suggested-frame-nav.js) ticks the session's suggested frames on the seekbar, for the same reason (a no-op when they are the ones shown).
 
 ### ui/interaction.js
 
@@ -8984,12 +9006,16 @@ for a selection); `tests/e2e/mesh-object-export.mjs` (the two export buttons).
 ### ui/seekbar-markers.js
 
 **Purpose.** Possible-ID-switch ticks on the transport seekbar (`#seekbarMarks`
-inside `#seekbar`), for the active session's ID Switches results.
+inside `#seekbar`), for the active session's ID Switches results; and the suggested
+frames' faint ticks (`#seekbarSuggestionMarks`, a layer under them), for
+`ui/suggested-frame-nav.js`.
 
-**Key exports.** `installSeekbarMarkers(layerEl, totalFrames)`;
+**Key exports.** `installSeekbarMarkers(layerEl, totalFrames, suggestionLayerEl)`;
 `setSeekbarSwitchMarkers(markers, totalFrames)` (`[]` clears) /
-`getSeekbarSwitchMarkers()`; `setSeekbarMarkerFrames(totalFrames)` (re-lays the
-ticks out only when the frame count changed — called from `updateSeekbarVisual`);
+`getSeekbarSwitchMarkers()`; `setSeekbarSuggestedFrames(frames, totalFrames)` (`[]`
+clears; a no-op when the frames and the frame count are the ones shown) /
+`getSeekbarSuggestedFrames()`; `setSeekbarMarkerFrames(totalFrames)` (re-lays both
+layers out only when the frame count changed — called from `updateSeekbarVisual`);
 `seekbarMarkerAt(frac, widthPx, tolPx = 5)` (the tick nearest the cursor; a change
 point beats a repeat); `describeSwitchMarker(m)` (the tooltip text).
 
@@ -9002,12 +9028,51 @@ mousedown/drag handlers (`ui/ui-wiring.js`) snap to a tick within 5 px, and the
 seekbar tooltip names it ("Frame 18,105 · 05:01.733 — possible ID switch: id_1 ↔
 id_2 (size score -1415)").
 
+**Suggested frames.** A 2 x 7 px violet tick per frame just above the track, at the
+same mapping. They never snap a click or name themselves in the tooltip: a ranked file
+can suggest so many frames that most of the bar would snap. Rebuilt only when the
+frames or the frame count change, never per repaint.
+
 **Imports from project modules.** None.
 
-**Imported by.** `ui/ui-wiring.js`, `ui/id-switch-modal.js`.
+**Imported by.** `ui/ui-wiring.js`, `ui/id-switch-modal.js`, `ui/suggested-frame-nav.js`.
 
 **Coverage.** `tests/e2e/size-switch-check.mjs` (ticks drawn, none on the
-timeline, hover text, click snaps to the tick's frame, reviewed dimming).
+timeline, hover text, click snaps to the tick's frame, reviewed dimming);
+`tests/e2e/suggested-frame-nav.mjs` (the suggested frames' ticks, per session).
+
+### ui/suggested-frame-nav.js
+
+**Purpose.** Previous / Next suggested frame (Opt+Shift+← / →, `prevSuggestedFrame` /
+`nextSuggestedFrame` in `ACTION_CATALOG`): steps through the frames a `.slp`'s
+suggestions name, in the file's order, and keeps their ticks on the seekbar. A frame is
+suggested when any camera of the active session has a suggestion on it, eager or lazy
+session alike. The status line says "Suggestion k of n: frame F" (F as the frame readout
+shows it), or why it did not move ("No next suggestion: n of n is the last", "No
+suggested frames in this session"). A suggestion on a frame the session cannot show (at
+or past `state.totalFrames`: no video loaded for the session, or a shorter one) is named
+in a warning and not landed on, since a seek there would clamp to another frame; it
+still counts as the last stepped to. Nothing is saved: the suggestion last stepped to is
+remembered per session in memory (a `WeakMap`), so a step from a frame next to it
+carries on from it.
+
+**Key exports.**
+- `suggestedFramesOf(session)` — `suggestedFrameOrder(suggestedFrameRows(session),
+  its camera names)`.
+- `stepToSuggestedFrame(direction, goTo)` — the shortcut handlers' body (`goTo` is
+  `ui/ui-wiring.js`'s `jumpToFrame`); returns `{index, frame}` or null.
+- `refreshSuggestedFrameMarks()` — ticks the active session's frames
+  (`setSeekbarSuggestedFrames`); called from `updateInfoPanel` before its collapsed-panel
+  return, so a load, a session switch and a closed project all reach it.
+
+**Imports.** `./app-state.js`, `../import-export/save-load.js` (`setStatus`),
+`../import-export/kept-suggestions.js` (`suggestedFrameRows`),
+`../pose/suggested-frames.js`, `./frame-readout.js` (`formatFrameNumber`),
+`./seekbar-markers.js` (`setSeekbarSuggestedFrames`).
+
+**Imported by.** `ui/ui-wiring.js`, `ui/info-panel.js`.
+
+**Tests.** `tests/e2e/suggested-frame-nav.mjs`.
 
 ---
 
@@ -10148,7 +10213,10 @@ an instance — `moveInstance` (`Alt+Drag`) and `rotateInstance` (`Alt+Wheel`)
 shortcuts. So is
 `nativeResolution` (`Shift+0`, View ▸ Native Resolution): matched BY PHYSICAL
 KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
-`+` / `-` / `0`, since Shift+0 types `)` on a US layout.
+`+` / `-` / `0`, since Shift+0 types `)` on a US layout. `prevSuggestedFrame` /
+`nextSuggestedFrame` (`Alt+Shift+ArrowLeft` / `Alt+Shift+ArrowRight`, Navigation) are
+dispatched and rebindable, beside the reference-only `labeledFrame` (Opt+← / →); their
+handler is `ui/suggested-frame-nav.js`'s `stepToSuggestedFrame`.
 
 **Key exports.**
 - `getDefaultTriangulationMethod()` / `setDefaultTriangulationMethod(method)` —
@@ -11574,6 +11642,12 @@ environment file is too new, rather than triangulating from the readable cameras
   `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
   **Single-view ("solo") mode** below.
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
+- **Previous / Next suggested frame** (`Alt+Shift+ArrowLeft` / `Alt+Shift+ArrowRight`,
+  catalog-dispatched `prevSuggestedFrame` / `nextSuggestedFrame`) call
+  `stepToSuggestedFrame` (`ui/suggested-frame-nav.js`) with the private `jumpToFrame`,
+  which moves the timeline and seekbar on the same keystroke as the labeled-frame jump,
+  or draws the frame statically (`navigateToFrame`) in a video-less project. That
+  project's arrow handler steps no frame on those keys (`matchesBinding`).
 - View ▸ **Native Resolution (1:1)** (`menuNativeResolution`) and **`Shift+0`**
   (matched by `e.code === 'Digit0'` in the transport keydown handler, beside
   `+` / `-` / `0`, so only while real video is loaded) both call
@@ -11737,7 +11811,9 @@ time / frame readout, written by `updateSeekbarVisual`, the inline frame editor
 and the FPS pill),
 `seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
 `describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
-the scrub handlers and the tooltip snap to a tick within 5 px),
+the scrub handlers and the tooltip snap to a tick within 5 px; also handed
+`#seekbarSuggestionMarks`),
+`suggested-frame-nav.js` (`stepToSuggestedFrame`),
 `seekbar-ticks.js` (`installSeekbarTicks`, `refreshSeekbarTicks` — the time
 ruler under the seekbar; `updateSeekbarVisual` calls the refresh, a no-op
 unless the frame count or FPS changed),
@@ -15794,8 +15870,10 @@ what it still reads by position; File ▸ Add SLP adds its own there,
 ### import-export/kept-suggestions.js
 
 **Purpose.** A `.slp`'s suggestions (`suggestions_json`, SLEAP's frames to label next)
-through a save. LUC3D has no screen for them, so a save only leaves them alone: each on
-its own video and frame, in the file's order, its group as the file holds it. The
+through a save. LUC3D does not edit them: it steps through their frames (Previous / Next
+suggested frame, `suggestedFrameRows`, `ui/suggested-frame-nav.js`), and a save leaves
+them alone: each on its own video and frame, in the file's order, its group as the file
+holds it. The
 vendored `writeSuggestions` finds a suggestion's video in the header by object and writes
 -1 for one the header lacks, which Python reads as the LAST video: the wrong video, with
 no error. The header holds fresh objects, so a suggestion is never handed along as read.
@@ -15823,6 +15901,11 @@ no error. The header holds fresh objects, so a suggestion is never handed along 
   held them, a lazy session's first, in session order.
 - `moveKeptSuggestions(fromSession, toSession, cameraName)` — a video moved to another
   session takes its suggestions along.
+- `suggestedFrameRows(session)` — the session's suggestions as `{camera, frameIdx}`, in
+  the order a save writes them (a lazy session's reader's first, then the kept rows by
+  their file order), `camera` null for a video no camera reads. Read-only, and it skips
+  the video records a save builds. A lazy session's rows come from the same reader walk
+  as the save's (`forEachLazySuggestion`, private).
 
 Nothing is written to `metadata.lucid`, and a file with no suggestions saves
 byte-identically. Exports (per session, by camera) and the JSON project format have no

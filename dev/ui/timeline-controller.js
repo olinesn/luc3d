@@ -27,7 +27,7 @@
  * `app.js` — so this module can be safely bridged into the test runner.
  */
 
-import { timeline } from './app-state.js?v=eb57e551936a';
+import { timeline } from './app-state.js?v=81354533b96b';
 
 // ----------------------------------------------------------------------------
 // Module-level state

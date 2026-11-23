@@ -2,8 +2,10 @@
  * kept-suggestions.js — a `.slp`'s suggestions (`suggestions_json`, SLEAP's frames to
  * label next) through a save.
  *
- * LUC3D has no screen for them, so all a save has to do is leave them alone: each on
- * its own video and frame, in the file's order, its group as the file holds it.
+ * LUC3D does not edit them: it steps through their frames (Navigation ▸ Previous / Next
+ * suggested frame, `suggestedFrameRows`, `ui/suggested-frame-nav.js`) and a save leaves
+ * them alone: each on its own video and frame, in the file's order, its group as the
+ * file holds it.
  *
  * The trap is the video. The vendored `writeSuggestions` finds a suggestion's video in
  * the header by object and writes -1 for one the header lacks, which Python reads as
@@ -30,8 +32,8 @@
  * byte-identically (`tests/e2e/save-golden-digest.mjs`).
  */
 
-import { keptVideoOf, headerVideoOfKept } from './outside-frames.js?v=eb57e551936a';
-import { keptVideoRecords } from './behavior-events.js?v=eb57e551936a';
+import { keptVideoOf, headerVideoOfKept } from './outside-frames.js?v=81354533b96b';
+import { keptVideoRecords } from './behavior-events.js?v=81354533b96b';
 
 // Rows of one file sit on the sessions that read their videos. This puts them back in
 // the file's order at save, and rows of a file added later after them.
@@ -80,32 +82,21 @@ export function moveKeptSuggestions(fromSession, toSession, cameraName) {
 }
 
 /**
- * A lazy session's suggestions, from its reader's `Labels`, each with the camera whose
- * video it is on. The rule for a camera's video is the one `SioLazyLoader` reads the
- * camera by: the session's camera map on a project file; on a camera's own file, the
- * first video it lists with frames.
+ * A lazy session's suggestions, from its reader's `Labels`, in its order: calls
+ * `fn(sug, camera, labels)` for each, `camera` the one whose video it is on (null for
+ * none). The rule for a camera's video is the one `SioLazyLoader` reads the camera by:
+ * the session's camera map on a project file; on a camera's own file, the first video
+ * it lists with frames.
  */
-function lazySuggestionRows(session) {
+function forEachLazySuggestion(session, fn) {
     var loader = session.lazyLoader;
     // The worker-backed loader (a SLEAP analysis .h5) has none to keep.
-    if (!loader.labelsByCam) return [];
-    // A project file's store lists its videos as the file does, which is where this
-    // session's kept events come from. A per-camera store is another file: no events.
-    var eventRecords = loader._sharedStore ? keptVideoRecords(session) : new Map();
-    var rows = [];
-    function addRows(labels, cameraOfVideo) {
+    if (!loader || !loader.labelsByCam) return;
+    function visit(labels, cameraOfVideo) {
         var suggestions = (labels && labels.suggestions) || [];
         for (var i = 0; i < suggestions.length; i++) {
-            var sug = suggestions[i];
-            var camera = cameraOfVideo.get(sug.video);
-            var id = labels.videos.indexOf(sug.video);
-            rows.push({
-                camera: camera === undefined ? null : camera,
-                video: { id: id, record: sug.video, typed: sug.video, eventRecord: eventRecords.get(id) || null },
-                frameIdx: sug.frameIdx,
-                group: sug.metadata ? sug.metadata.group : null,
-                order: LAZY_ROW_ORDER,
-            });
+            var camera = cameraOfVideo.get(suggestions[i].video);
+            fn(suggestions[i], camera === undefined ? null : camera, labels);
         }
     }
     if (loader._sharedStore) {
@@ -115,16 +106,56 @@ function lazySuggestionRows(session) {
             var own = shared && loader.videoIdByCam ? (shared.videos || [])[loader.videoIdByCam.get(c.name)] : null;
             if (own) sharedCameras.set(own, c.name);
         });
-        addRows(shared, sharedCameras);
-        return rows;
+        visit(shared, sharedCameras);
+        return;
     }
     session.cameras.forEach(function (c) {
         var labels = loader.labelsByCam.get(c.name);
         if (!labels || !labels._lazyDataStore) return;
         var ownVideoId = loader._ownVideoByCam ? loader._ownVideoByCam.get(c.name) : undefined;
         var own = (labels.videos || [])[ownVideoId !== undefined ? labels._lazyDataStore.videoIndexFor(ownVideoId) : 0];
-        addRows(labels, new Map(own ? [[own, c.name]] : []));
+        visit(labels, new Map(own ? [[own, c.name]] : []));
     });
+}
+
+/** A lazy session's suggestions as rows for a save, each with the camera whose video it is on. */
+function lazySuggestionRows(session) {
+    var loader = session.lazyLoader;
+    if (!loader.labelsByCam) return [];
+    // A project file's store lists its videos as the file does, which is where this
+    // session's kept events come from. A per-camera store is another file: no events.
+    var eventRecords = loader._sharedStore ? keptVideoRecords(session) : new Map();
+    var rows = [];
+    forEachLazySuggestion(session, function (sug, camera, labels) {
+        var id = labels.videos.indexOf(sug.video);
+        rows.push({
+            camera: camera,
+            video: { id: id, record: sug.video, typed: sug.video, eventRecord: eventRecords.get(id) || null },
+            frameIdx: sug.frameIdx,
+            group: sug.metadata ? sug.metadata.group : null,
+            order: LAZY_ROW_ORDER,
+        });
+    });
+    return rows;
+}
+
+/**
+ * A session's suggestions as `{camera, frameIdx}`, in the order a save writes them
+ * (the file's order): a lazy session's reader's first, then the kept rows. For
+ * stepping through them (`pose/suggested-frames.js`, `ui/suggested-frame-nav.js`);
+ * reads only, and skips the video records a save needs.
+ *
+ * @param {Session} session
+ * @returns {Array<{camera: (string|null), frameIdx: number}>}
+ */
+export function suggestedFrameRows(session) {
+    var rows = [];
+    if (!session) return rows;
+    if (session.lazyLoader) {
+        forEachLazySuggestion(session, function (sug, camera) { rows.push({ camera: camera, frameIdx: sug.frameIdx }); });
+    }
+    var kept = (session.keptSuggestions || []).slice().sort(function (a, b) { return a.order - b.order; });
+    for (var i = 0; i < kept.length; i++) rows.push({ camera: kept[i].camera, frameIdx: kept[i].frameIdx });
     return rows;
 }
 
