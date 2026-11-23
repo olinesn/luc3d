@@ -23,19 +23,22 @@ import { resetPlaneState } from '../import-export/plane-metadata.js';
 import { resetBehaviorState } from '../import-export/behavior-metadata.js';
 import { behaviorTimelineRows, onTimelineRangeSelect } from '../ui/behavior-timeline.js';
 import { createDemoSession } from '../demo-data.js';
-import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js';
+import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData, toggleInfoPanel } from '../ui/ui-wiring.js';
+import { setupPanelRail } from '../ui/panel-rail.js';
+import { setupMemoryPanel } from '../ui/memory-panel.js';
+import { setupDemoEntry } from '../ui/demo-entry.js';
 import { installInfoTips } from '../ui/info-tip.js';
 import { installNodeTooltip } from '../ui/node-tooltip.js';
 import { refreshReadoutTotals } from '../ui/frame-readout.js';
 import { installTimelineShortcuts, setTimelineDisplayMode } from '../ui/timeline-controller.js';
-import { setupPanelTabs, setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js';
+import { setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js';
 import { setupRecordingInfo } from '../ui/recording-info.js';
 import {
     setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
 } from '../ui/plane-definition.js';
 import { setupSplitHandles } from '../ui/layout-controls.js';
 import { setupReferenceMeshes, syncReferenceMeshes3D } from '../ui/reference-meshes.js';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
+import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import {
     manualAssignState, getTotalUnlinkedCount, cleanupManualAssignment, startManualAssignment,
@@ -72,7 +75,8 @@ async function init() {
         installNodeTooltip();
         setupEmptyVideoController();
         setupUI();
-        setupPanelTabs();
+        setupPanelRail({ toggleInfoPanel });
+        setupMemoryPanel();
         setupSkeletonEditing();
         setupVideosTab();
         setupRecordingInfo();
@@ -90,6 +94,7 @@ async function init() {
 
         hideLoading();
         setStatus('Ready - load session via File menu', 'success');
+        setupDemoEntry();   // last: `?demo` starts loading the demo now
 
     } catch (err) {
         console.error('Initialization failed:', err);
@@ -115,6 +120,7 @@ function setupEmptyVideoController() {
                 drawAllOverlays(state.currentFrame);
             }, 200);
         },
+        onViewTransform: noteOverlayViewTransform,
     }));
 }
 

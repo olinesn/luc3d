@@ -27,6 +27,7 @@
 
 import { state, interactionManager } from './app-state.js';
 import { makeVideoToCanvasTransform } from './overlays.js';
+import { overlayDrawSize } from './overlay-window.js';
 import {
     CageOutlineSet, OutlineTrace, nearestOutlineVertex, nearestOutlineEdge,
 } from '../pose/cage-outlines.js';
@@ -82,10 +83,11 @@ function clampToView(viewName, x, y) {
 
 function fmt(n) { return Number(n).toLocaleString('en-US'); }
 
-/** The overlay canvas's drawing size (what `drawPlaneOverlays` maps onto). */
+/** The overlay's drawing size (what `drawPlaneOverlays` maps onto): the full
+ *  virtual canvas, which a windowed overlay canvas is drawn into through a
+ *  transform (`ui/overlay-window.js`). */
 function overlaySize(view) {
-    var c = view.overlayCanvas;
-    return { width: c ? c.width : 0, height: c ? c.height : 0 };
+    return overlayDrawSize(view);
 }
 
 /** Is a trace live on the active session? Drops a stale one (session switched). */
