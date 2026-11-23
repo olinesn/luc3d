@@ -4504,7 +4504,9 @@ the reprojection-threshold rule (`pose/skeleton-check.js` `checkChains`): a chai
 ranges gets the fewest point changes that make it plausible, each to a candidate from `subsetCandidates` — every
 pair of the cameras that see the point is triangulated, the cameras within `subsetPx` (12) of that point's
 reprojection form a group, each group of 2+ is re-solved (DLT) from its own detections, the `maxCandidates` (3)
-largest offered — or dropped (NaN). A point seen by 3+ cameras that all agree with it is locked. Candidates use
+largest offered — or, only with a matched volume, dropped (NaN; `checkChains`' `allowDrop`: without one nothing
+independent says a point is wrong, and July 13 frame 105,413 lost a right nose). A point seen by 3+ cameras that all
+agree with it is locked. Candidates use
 every detection, from a copy taken before the threshold rule. The result then carries `skeleton: {chainsRepaired,
 nodesResolved, nodesDropped}`; without the option it is exactly the old one (no `skeleton` key).
 **`triangulationSummary(result)`** — `{points3d, meanError,
@@ -4618,32 +4620,52 @@ find body parts whose 3D breaks the skeleton's usual bone lengths and repair onl
   fixed hash); fewer than `MIN_BONE_SAMPLES` (20) → the chain is skipped, with why. A steady bone gets exactly ±50 %;
   TTI–TailTip (short whenever the tail curls; 19 % of July 13's poses are under half its median) gets a wider lower
   bound and the same upper one.
-- **The repair** (`checkChains(points3d, chains, candidatesFor)`): the trigger `chainBadness` (bones with both ends
-  present, outside their ranges; a missing point is absent, not implausible); every combination of keep / a
-  candidate / drop per chain point (≤ 4,096); the result must be plausible (`chainRepairBadness` 0: judged bones
+- **The repair** (`checkChains(points3d, chains, candidatesFor, opts)`): the trigger `chainBadness` (bones with both
+  ends present, outside their ranges; a missing point is absent, not implausible); every combination of keep / a
+  candidate / drop per chain point (≤ 4,096; drop only while `opts.allowDrop` is not false — the core allows it
+  with a volume only); the result must be plausible (`chainRepairBadness` 0: judged bones
   inside their ranges and every kept point linked to an anchor through present bones, so a drop cannot cut a wrong
   piece loose); fewest changes, then fewest drops, then most support, then smallest move; none plausible = the chain
-  is left. A `locked` point is keep-only. **Never swap a whole chain**: one wrong point among right ones is the
-  common case (the volfuse study's July 13 frames 105,416 and 105,372, judged by eye).
+  is left, except its **out-of-reach points** (a chain of 2+ points): `chainReach(chain)` gives each point the
+  farthest it can be from its anchor (shortest path along the chain's bones, each at median × hi); a point beyond
+  that is impossible whatever its neighbours are, so it still takes an option within reach (a candidate, or a drop
+  where allowed), the one lowering `chainRepairBadness` most, everything else kept (`out.partial`; the core reports
+  it as `chainsPartial` and counts the chain as repaired). On SLAP's 22 proofread sessions with the tail linked in
+  order, this brought back 3 tail points up to 28,016 units off that a linked tail had left (the star's one-point
+  chains already fixed them). A one-point chain is judged by its one bone as before. A `locked` point is keep-only.
+  **Never swap a whole chain**: one wrong point among right ones is the common case (the volfuse study's July 13
+  frames 105,416 and 105,372, judged by eye).
 
-**Key exports.** `skeletonChains`, `measureBones`, `chainBadness`, `chainRepairBadness`, `checkChains`,
+**Key exports.** `skeletonChains`, `measureBones`, `chainBadness`, `chainRepairBadness`, `chainReach`, `checkChains`,
 `SKELETON_CHECK_DEFAULTS`, `MIN_BONE_SAMPLES`.
 
 **Imports.** None. **Imported by** `pose/triangulation-core.js`, `pose/skeleton-check-run.js`. Tests:
 `tests/test-skeleton-check.mjs` (chains of a star, a chain-shaped and a hub-less skeleton; ranges; the repair; the
 solve on SLAP's 8 cameras; real data `fixtures/skeleton-check-real.json`: 84 animal-frames of two DoublePoke clips,
-production 2D, no volume — every flagged chain repaired to plausible or left, no plausible chain touched),
-`tests/e2e/skeleton-check.mjs`.
+production 2D, no volume — every flagged chain repaired to plausible or left, no plausible chain touched;
+`fixtures/skeleton-check-slap-far.json`: the 3 SLAP animal-frames the out-of-reach rule repairs, against their
+proofread 3D), `tests/e2e/skeleton-check.mjs`.
 
 ---
 
 ### pose/skeleton-check-run.js
 
 **Purpose.** The project side of the skeleton check: the browser-local setting (`localStorage.lucidSkeletonCheck`,
-`enabled`, off by default; never in the `.slp`), the session skeleton's chains named by their nodes
-(`sessionSkeletonChains`, cached per skeleton), their bones measured on every group's stored 3D in the session
+`enabled`, off by default, and `chains`, the custom parts as text; never in the `.slp`), the session skeleton's
+chains named by their nodes (`sessionSkeletonChains(session, text?)`, cached per skeleton and parts text), their
+bones measured on every group's stored 3D in the session
 (`session.instanceGroups`, never evicted, so a lazy project is measured whole; cached until
 `invalidateSkeletonCheck`), and which groups a pass re-solves.
+- **Custom parts** (built from node tiles in Settings ▸ Triangulation Wizard ▸ Skeleton check,
+  `ui/skeleton-chain-editor.js`), stored as text: one part per line, node names in order along the body.
+  `parseChainText` splits them (lines or `;`, names by `,` or `→`); `resolveChainText(names, text)` matches names
+  (exactly, else ignoring case when only one node does) → `{ paths, problems }`, leaving out a part with an unknown
+  name, a repeated node or a single node; `checkLinks(edges, paths)` keeps the skeleton's links except those between
+  two nodes of one part and adds each part's consecutive pairs (direction does not matter). The chains come from those
+  links, so a star skeleton's tail in order is judged bone by bone, not by each point's distance from TTI (and a whole
+  spine, Nose to TailTip, makes Neck+Trunk a chain between the Head and TTI). A custom part's chain is named in the
+  part's order and marked `custom`; the chains array carries `problems`, and `skeletonCheckForRun`'s `skipped` lists
+  them too.
 - `skeletonCheckForRun(session)` → `options.skeleton` or null (off, no skeleton, no chain, nothing measurable).
 - Where it runs (`pose/triangulation.js`): This frame (`triangulateCurrentFrame`) and Range
   (`triangulateMultiFrameInstances`, `_triangulateGroupStep`) inline with the bones measured from the 3D already
@@ -4657,10 +4679,12 @@ production 2D, no volume — every flagged chain repaired to plausible or left, 
   3D instead of re-solving it without the check; a re-solve without the check clears it. A dropped point is saved
   as missing 3D.
 
-**Key exports.** `getSkeletonCheckSettings`, `setSkeletonCheckSettings`, `sessionSkeletonChains`,
-`invalidateSkeletonCheck`, `skeletonCheckForRun`, `groupNeedsSkeletonCheck`, `framesNeedingSkeletonCheck`.
+**Key exports.** `getSkeletonCheckSettings`, `setSkeletonCheckSettings`, `parseChainText`, `resolveChainText`,
+`checkLinks`, `sessionSkeletonChains`, `invalidateSkeletonCheck`, `skeletonCheckForRun`, `groupNeedsSkeletonCheck`,
+`framesNeedingSkeletonCheck`.
 
-**Imports.** `./skeleton-check.js`. **Imported by** `pose/triangulation.js`, `ui/skeleton-check-field.js`. Tests:
+**Imports.** `./skeleton-check.js`. **Imported by** `pose/triangulation.js`, `ui/skeleton-check-field.js`,
+`ui/settings-modal.js`, `ui/skeleton-chain-editor.js`. Tests:
 `tests/test-skeleton-check.mjs`, `tests/e2e/skeleton-check.mjs`.
 
 ---
@@ -8278,12 +8302,33 @@ may have changed). Not in Defining Plane Mode's toolbar lock: a setting, not an 
 **Imports.** `./app-state.js`, `../pose/volume3d.js`, `../import-export/save-load.js` (`setStatus`).
 **Imported by** `ui/ui-wiring.js`. Test: `tests/e2e/volume-fusion.mjs`.
 
+### ui/skeleton-chain-editor.js
+
+**Purpose.** Settings ▸ Triangulation Wizard ▸ Skeleton check's node-tile editor for the check's custom parts
+(`pose/skeleton-check-run.js`, `settings.chains`). A bank holds a tile per skeleton node; each part is a row of tiles
+in order along the body. A tile dragged from the bank into a row is a copy (the bank keeps it), placed before the tile
+it is dropped on or at the row's end; dragged within a row it moves, into another row it moves there (a row already
+holding that node refuses it), onto "New part" it starts a part, back onto the bank it comes out. Without dragging, a
+click (or Enter, Space) on a bank tile adds it to the end of the selected part (a row's number selects it; "New part"
+starts one), and a tile's × takes it out. Every control is a `<button>`: the Settings modal stops keydown in the
+capture phase, so nothing here listens for keys. A stored name the skeleton lacks shows as a warning tile
+(`.sk-chain-tile-unknown`), never dropped silently. HTML5 drag and drop, with the dragged tile kept in a closure
+(`dragging`), since `dataTransfer` cannot be read during dragover.
+
+**Key exports.** `buildSkeletonChainEditor({ nodes, text, onChange })` → `{ el, getText() }`; the pure, DOM-free model:
+`textToParts`, `partsToText`, `dropTile(parts, from, to)`, `appendTile(parts, name, part)`, `removeTile(parts, part,
+index)` (an emptied part goes).
+
+**Imports.** `../pose/skeleton-check-run.js` (`parseChainText`). **Imported by** `ui/settings-modal.js`. Tests:
+`tests/test-skeleton-chain-editor.mjs` (the model, Node), `tests/e2e/skeleton-check.mjs` §7 (dragging in the page).
+
 ### ui/skeleton-check-field.js
 
 **Purpose.** The Triangulate menu's **Skeleton check** checkbox (`#tbSkeletonCheck`), below Reprojection error:
 edits `pose/skeleton-check-run.js`'s browser-local `enabled` (off by default), which every Triangulate run reads
-when it starts. Its tooltip explains the check and names the session skeleton's parts, refreshed when the menu
-opens. Not in Defining Plane Mode's toolbar lock: a setting, not an action.
+when it starts. Its tooltip explains the check and names the parts it judges (custom ones marked "(custom)", and any
+custom part it left out), refreshed when the menu opens. Not in Defining Plane Mode's toolbar lock: a setting, not an
+action.
 
 **Key exports.** `wireSkeletonCheckField()`.
 
@@ -11523,6 +11568,14 @@ The same panel's footer also says what will be used (`.settings-tri-readout`): t
 reprojection error threshold, from `working`, so it holds wherever the panel is scrolled and follows
 an edit made on the Tracking Wizard. A value not yet applied is lit, with what it was (`paintFooter`).
 
+**Skeleton check's custom parts.** Below the methods figure, a "Skeleton check" section (`buildSection`) holds the
+node-tile editor (`buildSkeletonChainEditor`, `ui/skeleton-chain-editor.js`) for the custom parts Triangulate's
+skeleton check judges. Below it, the parts the check would judge with them
+(`sessionSkeletonChains(activeSession, working.skeletonChains)`, custom ones marked) and each part it leaves out
+(`.settings-chains-problem`). The parts are `working.skeletonChains` (the setting's text), stored by Apply through
+`setSkeletonCheckSettings({ chains })` like every other edit; the check is still turned on in the Triangulate menu.
+Test: `tests/e2e/skeleton-check.mjs` §7.
+
 **The threshold card's examples.** It builds `buildThresholdExamples`
 (`ui/threshold-examples-panel.js`), hands it to the figure as `opts.examples`, starts it
 when the Triangulation Wizard panel is first shown, re-solves it when a Camera Views
@@ -11631,7 +11684,9 @@ background shortcuts from firing while it is open, and is removed on teardown.
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
 for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
 `./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply);
-`./track-setup-modal.js` (`NODE_WEIGHT_TIP`, a leaf).
+`./track-setup-modal.js` (`NODE_WEIGHT_TIP`, a leaf); `../pose/skeleton-check-run.js`
+(`getSkeletonCheckSettings`, `setSkeletonCheckSettings`, `sessionSkeletonChains`: the skeleton check's custom
+parts); `./skeleton-chain-editor.js` (`buildSkeletonChainEditor`).
 
 **Imported by.** `ui/ui-wiring.js`.
 

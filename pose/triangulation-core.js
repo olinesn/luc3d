@@ -1883,9 +1883,10 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     // Skeleton check (pose/skeleton-check.js): a chain whose bones break their usual lengths gets the fewest point
     // changes that make it plausible. Each point may take a re-solve from a group of cameras that agree; with a
     // matched volume also the volume's point or the plain solve's (ungated, through the same threshold rule: what an
-    // unfused Triangulate gives); or be dropped. A point that never changes: without a volume, one every camera agrees
-    // on; with one, one the plain solve and the volume put within `chainAgreeMm` of each other. With a volume its own
-    // chains (by name, from its file) are checked instead of the skeleton's.
+    // unfused Triangulate gives); and, only with a volume, be dropped (without one nothing independent says a point
+    // is wrong: July 13 frame 105,413 lost a right nose). A point that never changes: without a volume, one every
+    // camera agrees on; with one, one the plain solve and the volume put within `chainAgreeMm` of each other. With a
+    // volume its own chains (by name, from its file) are checked instead of the skeleton's.
     let skeletonInfo = null;
     if (wantCheck) {
         const useVol = !!(volume && volAnimal >= 0);
@@ -1916,8 +1917,8 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
                 if (pOk) { const X = [P[q], P[q + 1], P[q + 2]]; cands.push({ X: X, kind: 'plain', support: c.supportOf(X) }); }
                 if (vOk) { const X = [V[qv], V[qv + 1], V[qv + 2]]; cands.push({ X: X, kind: 'volume', support: c.supportOf(X) }); }
                 return { locked: false, cands: cands };
-            });
-            skeletonInfo = { chainsRepaired: sk.chains, nodesResolved: sk.changed.subset || 0,
+            }, { allowDrop: useVol });   // without a volume a point is re-solved or kept, never dropped
+            skeletonInfo = { chainsRepaired: sk.chains, chainsPartial: sk.partial, nodesResolved: sk.changed.subset || 0,
                 nodesFromSolve: sk.changed.plain || 0, nodesFromVolume: sk.changed.volume || 0, nodesDropped: sk.dropped };
         }
     }
