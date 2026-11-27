@@ -23,11 +23,15 @@
  *      { type: 'finish' }                              → { type: 'done', bytes }
  * Any failure → { type: 'error', message } (the file is dropped).
  *
- * Imports h5wasm by relative path: a worker has no import map.
+ * Imports h5wasm by relative path: a worker has no import map. Its calls throw when
+ * HDF5 says one failed (`loading/h5-status-guard.js`), so a write that didn't finish
+ * fails the camera's file instead of handing back a file with wrong rows.
  */
 import * as h5 from '../lib/h5wasm/hdf5_hl.js';
+import { guardH5Status } from '../loading/h5-status-guard.js';
 
 let file = null;
+let guarded = false;
 let path = null;
 const carries = new Map();   // table name → { buf, rows, written, cols, chunkRows }
 
@@ -79,6 +83,7 @@ self.onmessage = async (ev) => {
     try {
         if (m.type === 'open') {
             await h5.ready;
+            if (!guarded) { guardH5Status(h5); guarded = true; }
             try { h5.FS.mkdir('/work'); } catch (e) { /* exists */ }
             path = '/work/camera.slp';
             h5.FS.writeFile(path, new Uint8Array(m.shell));

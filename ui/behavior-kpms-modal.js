@@ -23,7 +23,7 @@
 // Depends on: ui/app-state.js, ui/behavior-coding.js, ui/behavior-detect.js,
 //             ui/behavior-io-modal.js, ui/loading-overlay.js, pose/behavior-states.js,
 //             pose/behavior-tensor.js, pose/behavior-ethogram.js, import-export/kpms-io.js,
-//             import-export/save-load.js, loading/cold-read-guard.js
+//             import-export/save-load.js, import-export/file-io.js, loading/cold-read-guard.js
 
 import { state } from './app-state.js';
 import { sessionAnimals, armedRange, openBehaviorTab } from './behavior-coding.js';
@@ -38,6 +38,7 @@ import {
     parseKpmsManifest, readResultsH5, parseResultsCsv, recordingOfCsv, parseSyllableNames, matchRecordings,
 } from '../import-export/kpms-io.js';
 import { setStatus } from '../import-export/save-load.js';
+import { initH5wasm } from '../import-export/file-io.js';
 import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 
 var PREFS_KEY = 'lucid.kpmsExport';
@@ -398,13 +399,6 @@ async function readText(entry) {
     return new TextDecoder('utf-8').decode(new Uint8Array(await readBlobArrayBuffer(f)));
 }
 
-/** h5wasm, ready (the vendored IIFE's global). */
-async function h5wasmModule() {
-    if (typeof h5wasm === 'undefined') throw new Error('h5wasm is not loaded');
-    await h5wasm.ready;
-    return h5wasm;
-}
-
 /**
  * Read one source's syllables.
  * @returns {Promise<{recordings: Array<{name, syllables: Int32Array}>, skipped: string[]}>}
@@ -416,7 +410,7 @@ async function readSource(src) {
         showLoading('Reading ' + f.name + ' (' + n(Math.round(f.size / 1048576)) + ' MB)…', { title: title });
         await yieldToPaint();
         var bytes = new Uint8Array(await readBlobArrayBuffer(f));
-        var h5 = await h5wasmModule();
+        var h5 = await initH5wasm();
         var path = '/kpms-results-' + Date.now() + '.h5';
         h5.FS.writeFile(path, bytes);
         bytes = null;
