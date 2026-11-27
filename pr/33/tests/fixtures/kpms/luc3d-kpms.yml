@@ -1,0 +1,69 @@
+# Poses exported by LUC3D for keypoint-MoSeq.
+#
+# One table per session and animal, named <session>__<animal>.csv, in
+# anipose's 3D layout (load_keypoints(..., 'anipose')).
+# Coordinates: the floor frame (z = height above the floor; keypoint-MoSeq aligns headings about z), in mm.
+# Score: 1 where LUC3D has the node, 0 where it does not or the tracking is clearly broken.
+#
+# The settings below are keypoint-MoSeq's (pass them to kpms.setup_project);
+# `recordings` tells LUC3D where each table came from, to read the results back.
+# `calls` is the keypoint-MoSeq run, to copy into Python.
+luc3d_kpms: 1
+format: "anipose"
+dims: 3
+units: "mm"
+coordinates: "floor"
+fps: 30
+bodyparts: ["nose", "head", "ear_L", "ear_R", "spine", "tail_base", "tail_tip"]
+use_bodyparts: ["nose", "head", "ear_L", "ear_R", "spine", "tail_base"]
+anterior_bodyparts: ["nose"]
+posterior_bodyparts: ["tail_base"]
+skeleton: [["nose", "head"], ["head", "ear_L"], ["head", "ear_R"], ["head", "spine"], ["spine", "tail_base"], ["tail_base", "tail_tip"]]
+recordings:
+  "synth__id_1": {"session": "synth", "animal": "id_1", "first_frame": 0, "frames": 300}
+  "synth__id_2": {"session": "synth", "animal": "id_2", "first_frame": 0, "frames": 300}
+calls: |
+  # keypoint-MoSeq, step by step (https://keypoint-moseq.readthedocs.io). Run it
+  # in a Python environment with keypoint-MoSeq installed, from the folder
+  # this file is in. Fitting takes a while: try a few iterations first.
+  import os, yaml, numpy as np
+  import matplotlib
+  matplotlib.use('Agg')   # plots go to files, no windows (a script would wait on each); delete in Jupyter
+  import keypoint_moseq as kpms
+
+  folder = '.'   # the folder LUC3D exported to
+  luc3d = yaml.safe_load(open(os.path.join(folder, 'luc3d-kpms.yml')))
+  project_dir = os.path.join(folder, 'kpms_project')
+  config = lambda: kpms.load_config(project_dir)
+  if not os.path.exists(os.path.join(project_dir, 'config.yml')):
+      kpms.setup_project(project_dir, **{k: luc3d[k] for k in (
+          'bodyparts', 'use_bodyparts', 'anterior_bodyparts', 'posterior_bodyparts', 'skeleton', 'fps')})
+
+  coordinates, confidences, bodyparts = kpms.load_keypoints(os.path.join(folder, '*.csv'), luc3d['format'])
+  coordinates, confidences = kpms.outlier_removal(coordinates, confidences, project_dir, overwrite=True, **config())
+  data, metadata = kpms.format_data(coordinates, confidences, **config())
+
+  pca = kpms.fit_pca(**data, **config())
+  kpms.save_pca(pca, project_dir)
+  latent_dim = int(np.searchsorted(np.cumsum(pca.explained_variance_ratio_), 0.9) + 1)   # 90% of the variance
+  kpms.update_config(project_dir, latent_dim=latent_dim, sigmasq_loc=kpms.estimate_sigmasq_loc(
+      data['Y'], data['mask'], filter_size=int(luc3d['fps'])))
+
+  # kappa sets how long syllables last: aim for a median of about 0.4 s (12 frames
+  # at 30 fps). Raise kappa for longer syllables, lower it for shorter
+  # ones; the full model needs a kappa 10-100x lower than the AR-HMM.
+  AR_ITERS, FULL_ITERS = 50, 500
+  KAPPA_AR, KAPPA_FULL = 1e6, 1e4
+  model = kpms.init_model(data, pca=pca, **config())
+  model = kpms.update_hypparams(model, kappa=KAPPA_AR)
+  model, model_name = kpms.fit_model(model, data, metadata, project_dir, ar_only=True, num_iters=AR_ITERS)
+  model, data, metadata, current_iter = kpms.load_checkpoint(project_dir, model_name, iteration=AR_ITERS)
+  model = kpms.update_hypparams(model, kappa=KAPPA_FULL)
+  model = kpms.fit_model(model, data, metadata, project_dir, model_name, ar_only=False,
+                         start_iter=current_iter, num_iters=current_iter + FULL_ITERS)[0]
+
+  kpms.reindex_syllables_in_checkpoint(project_dir, model_name)   # syllable 0 = the most used
+  model, data, metadata, current_iter = kpms.load_checkpoint(project_dir, model_name)
+  results = kpms.extract_results(model, metadata, project_dir, model_name)
+  kpms.save_results_as_csv(results, project_dir, model_name)
+  # Then in LUC3D: Behavior > Import keypoint-MoSeq Results..., and choose this folder.
