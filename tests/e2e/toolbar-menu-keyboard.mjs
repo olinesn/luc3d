@@ -23,22 +23,22 @@
  *
  * Run: node tests/e2e/toolbar-menu-keyboard.mjs     (BROWSER=firefox|webkit to switch)
  */
-import { chromium, firefox, webkit } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
+import { firefox, webkit } from 'playwright';
+const chromium = { launch: launchBrowser };   // the harness's Chromium (CDN cache, LUC3D_E2E_CHANNEL)
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8347);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const browserName = process.env.BROWSER || 'chromium';
 const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab';
 const BACK_TAB = browserName === 'webkit' ? 'Alt+Shift+Tab' : 'Shift+Tab';
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 let browser;
 try {
