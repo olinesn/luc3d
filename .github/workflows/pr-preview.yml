@@ -16,6 +16,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # The comment asks for the repository's GitHub Pages address (a fork's own).
+  pages: read
 
 concurrency:
   group: pr-preview-${{ github.event.number }}
@@ -57,29 +59,68 @@ jobs:
           force: false
           attempt-limit: 5
 
+      # The comment's links. talmolab/luc3d's previews are on luc3d.sleap.ai,
+      # with its main/stable/latest/dev channels to compare against. Any other
+      # repository (a fork) deploys to its OWN gh-pages, served from its own
+      # GitHub Pages address, and has no channels (its gh-pages holds only pr/):
+      # luc3d.sleap.ai/pr/<n>/ there is another repository's PR, or nothing.
+      # Written to a file outside the checkout, so the deploy above never copies it.
+      - name: Write the preview comment
+        id: comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.number }}
+          SHA: ${{ github.sha }}
+        run: |
+          note=""
+          if [ "$REPO" = "talmolab/luc3d" ]; then
+            site="https://luc3d.sleap.ai/"
+          else
+            # no Pages: gh exits non-zero (and prints the 404 body, so never keep its output)
+            site=$(gh api "repos/$REPO/pages" --jq '.html_url' 2>/dev/null) || site=""
+            if [ -z "$site" ]; then
+              owner=$(printf '%s' "${REPO%%/*}" | tr '[:upper:]' '[:lower:]')
+              site="https://${owner}.github.io/${REPO#*/}/"
+              note="GitHub Pages is not turned on for $REPO, so these links will not open until it is (Settings > Pages > Deploy from a branch: \`gh-pages\`, root)."
+            fi
+          fi
+          case "$site" in */) ;; *) site="$site/" ;; esac
+          preview="${site}pr/${PR_NUMBER}/"
+          file="$RUNNER_TEMP/preview-comment.md"
+          {
+            echo "## Preview Deployment"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Preview URL** | ${preview} |"
+            echo "| **Test suite** | ${preview}tests/test-runner.html |"
+            echo "| **Commit** | ${SHA} |"
+            echo
+            if [ -n "$note" ]; then
+              echo "$note"
+              echo
+            fi
+            if [ "$REPO" = "talmolab/luc3d" ]; then
+              echo 'Compare against the other channels (see `README.md`):'
+              echo
+              echo "| | |"
+              echo "|---|---|"
+              echo "| **main** | ${site} — the live site |"
+              echo "| **stable** | ${site}stable/ — alias, redirects to main |"
+              echo "| **latest** | ${site}latest/ — newest release, pre-releases included |"
+              echo "| **dev** | ${site}dev/ — tip of \`main\` |"
+              echo
+            fi
+            echo "_This preview will be removed when the PR is closed._"
+          } > "$file"
+          echo "path=$file" >> "$GITHUB_OUTPUT"
+
       - name: Comment on PR
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: pr-preview
-          message: |
-            ## Preview Deployment
-
-            | | |
-            |---|---|
-            | **Preview URL** | https://luc3d.sleap.ai/pr/${{ github.event.number }}/ |
-            | **Test suite** | https://luc3d.sleap.ai/pr/${{ github.event.number }}/tests/test-runner.html |
-            | **Commit** | ${{ github.sha }} |
-
-            Compare against the other channels (see `README.md`):
-
-            | | |
-            |---|---|
-            | **main** | https://luc3d.sleap.ai/ — the live site |
-            | **stable** | https://luc3d.sleap.ai/stable/ — alias, redirects to main |
-            | **latest** | https://luc3d.sleap.ai/latest/ — newest release, pre-releases included |
-            | **dev** | https://luc3d.sleap.ai/dev/ — tip of `main` |
-
-            _This preview will be removed when the PR is closed._
+          path: ${{ steps.comment.outputs.path }}
 
   cleanup:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
