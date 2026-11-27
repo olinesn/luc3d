@@ -34,9 +34,8 @@
  *
  * Run: node tests/e2e/slp-damaged-chunk.mjs   (starts its own server, on a free port)
  */
-import { chromium } from 'playwright';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
-import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,17 +52,8 @@ const check = (c, m, extra) => {
     if (!c) fails++;
 };
 
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
-    '.json': 'application/json', '.wasm': 'application/wasm', '.mp4': 'video/mp4', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml' };
-const server = http.createServer((req, res) => {
-    const u = new URL(req.url, 'http://x');
-    const p = path.join(repoRoot, decodeURIComponent(u.pathname));
-    if (!p.startsWith(repoRoot) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
-    fs.createReadStream(p).pipe(res);
-});
-await new Promise(r => server.listen(0, '127.0.0.1', r));
-const ORIGIN = `http://127.0.0.1:${server.address().port}`;
+const server = await startServer(repoRoot);
+const ORIGIN = server.url;
 
 /** A project whose every table overflows the writer's staging buffer, so every table is gzipped. */
 const FRAMES = 8300;
@@ -186,7 +176,8 @@ async function openPage() {
             for (const n of names) {
                 const ds = f.get(n);
                 const v = ds.value;
-                out[n] = { filters: (ds.filters || []).map(x => x.id), rows: ds.shape[0], b64: window.__b64(new Uint8Array(v.buffer, v.byteOffset, v.byteLength)) };
+                out[n] = { filters: (ds.filters || []).map(x => x.id), rows: ds.shape[0], cols: ds.shape[1] || 1, bpe: v.BYTES_PER_ELEMENT || 1,
+                    b64: window.__b64(new Uint8Array(v.buffer, v.byteOffset, v.byteLength)) };
             }
             f.close(); h5.FS.unlink(p);
             return out;
@@ -270,7 +261,7 @@ const readWith = (buf, options = {}, name) => guarded(async () => {
 const saysDamaged = (message, table) => new RegExp(`Could not read (the \\S+ attribute of )?/?${table ? table.replace('/', '\\/') : '\\S+'} from the file\\. Part of it may be damaged\\.`).test(message || '');
 
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     context = await browser.newContext({ acceptDownloads: false });
     await openPage();
 
@@ -282,9 +273,19 @@ try {
     const tables = await page.evaluate(([b, n]) => window.__tables(b, n), [project.toString('base64'), TABLES]);
     for (const t of TABLES) check(tables[t].filters.includes(1), `${t}: ${tables[t].rows.toLocaleString('en-US')} rows, gzipped`, tables[t].filters);
 
-    // Whose chunk is each zlib stream: its first bytes are somewhere in that table's.
+    // Whose chunk is each zlib stream: its first bytes are somewhere in that table's,
+    // row by row (whole-row chunks) or column by column (one-column chunks, the
+    // `(column chunks)` patch: a chunk is a run of one column).
     const raw = Object.fromEntries(TABLES.map(t => [t, Buffer.from(tables[t].b64, 'base64')]));
-    const chunks = zlibStreams(project).map(c => ({ ...c, table: TABLES.find(t => raw[t].indexOf(c.inflated.subarray(0, 64)) >= 0) }));
+    const byColumn = Object.fromEntries(TABLES.map(t => {
+        const { rows, cols, bpe } = tables[t], rowMajor = raw[t], out = Buffer.alloc(rowMajor.length);
+        for (let c = 0, o = 0; c < cols; c++) for (let r = 0; r < rows; r++, o += bpe) rowMajor.copy(out, o, (r * cols + c) * bpe, (r * cols + c + 1) * bpe);
+        return [t, out];
+    }));
+    const chunks = zlibStreams(project).map(c => {
+        const head = c.inflated.subarray(0, 64);
+        return { ...c, table: TABLES.find(t => raw[t].indexOf(head) >= 0 || byColumn[t].indexOf(head) >= 0) };
+    });
     const byTable = {};
     for (const c of chunks) (byTable[c.table] = byTable[c.table] || []).push(c);
     check(!byTable.undefined && TABLES.every(t => byTable[t] && byTable[t].length >= 1),

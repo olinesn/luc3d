@@ -25,9 +25,8 @@
  *
  * Run: node tests/e2e/slp-failed-write.mjs   (starts its own server, on a free port)
  */
-import { chromium } from 'playwright';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
-import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,24 +41,15 @@ const check = (c, m, extra) => {
     if (!c) fails++;
 };
 
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
-    '.json': 'application/json', '.wasm': 'application/wasm', '.mp4': 'video/mp4', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml' };
-const server = http.createServer((req, res) => {
-    const u = new URL(req.url, 'http://x');
-    const p = path.join(repoRoot, decodeURIComponent(u.pathname));
-    if (!p.startsWith(repoRoot) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
-    fs.createReadStream(p).pipe(res);
-});
-await new Promise(r => server.listen(0, '127.0.0.1', r));
-const ORIGIN = `http://127.0.0.1:${server.address().port}`;
+const server = await startServer(repoRoot);
+const ORIGIN = server.url;
 
 const FAILED_WRITE = /^Could not finish writing the file: HDF5 reported a failed write/;
 const ROUTES = ['saveSlpToBytes', 'saveSlpToBytes, a lazy Labels', 'openSlpWriter, close', 'openSlpWriter, writeToSink', 'saveAnalysisH5ToBytes'];
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const context = await browser.newContext({ acceptDownloads: false });
     const page = await context.newPage();
     const pageErrors = [];
