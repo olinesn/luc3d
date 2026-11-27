@@ -77,10 +77,26 @@ function flipped(bytes, chunk) {
     for (let i = chunk.offset + 2; i < chunk.offset + chunk.length; i++) copy[i] ^= 0xff;
     return copy;
 }
+/**
+ * One byte of the chunk flipped, where it damages the data: from the middle on, the first
+ * byte whose flip zlib itself refuses. Not every flip does. In a small, very regular chunk
+ * (2.3 KB inflating to 512 KB) many bits change nothing that inflate uses, and the stream
+ * still gives the same bytes under the same checksum, so the reader rightly opens it.
+ */
 function oneByteFlipped(bytes, chunk) {
-    const copy = Buffer.from(bytes);
-    copy[chunk.offset + (chunk.length >> 1)] ^= 0x40;
-    return copy;
+    const stream = Buffer.from(bytes.subarray(chunk.offset, chunk.offset + chunk.length));
+    for (let k = 0; k < chunk.length - 2; k++) {
+        const at = 2 + (((chunk.length >> 1) - 2 + k) % (chunk.length - 2));
+        stream[at] ^= 0x40;
+        let refused = false;
+        try { inflateSync(stream); } catch { refused = true; }
+        stream[at] ^= 0x40;
+        if (!refused) continue;
+        const copy = Buffer.from(bytes);
+        copy[chunk.offset + at] ^= 0x40;
+        return copy;
+    }
+    throw new Error(`no one-byte flip of the chunk at ${chunk.offset} damages it`);
 }
 function zeroed(bytes, chunk) {
     const copy = Buffer.from(bytes);
