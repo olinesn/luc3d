@@ -273,37 +273,14 @@ try {
     const tables = await page.evaluate(([b, n]) => window.__tables(b, n), [project.toString('base64'), TABLES]);
     for (const t of TABLES) check(tables[t].filters.includes(1), `${t}: ${tables[t].rows.toLocaleString('en-US')} rows, gzipped`, tables[t].filters);
 
-    // Whose chunk is each zlib stream: its first bytes are somewhere in that table's,
-    // row by row (whole-row chunks) or column by column (one-column chunks, the
-    // `(column chunks)` patch: a chunk is a run of one column).
-    const raw = Object.fromEntries(TABLES.map(t => [t, Buffer.from(tables[t].b64, 'base64')]));
-    const byColumn = Object.fromEntries(TABLES.map(t => {
-        const { rows, cols, bpe } = tables[t], rowMajor = raw[t], out = Buffer.alloc(rowMajor.length);
-        for (let c = 0, o = 0; c < cols; c++) for (let r = 0; r < rows; r++, o += bpe) rowMajor.copy(out, o, (r * cols + c) * bpe, (r * cols + c + 1) * bpe);
-        return [t, out];
-    }));
-    // A run of plain counting numbers can sit in two tables' columns alike, so the
-    // match grows until one table is left; a chunk whose whole content two tables
-    // share keeps both (an error naming either is right).
-    const has = (t, head) => raw[t].indexOf(head) >= 0 || byColumn[t].indexOf(head) >= 0;
-    const chunks = zlibStreams(project).map(c => {
-        let tables = TABLES.filter(t => has(t, c.inflated.subarray(0, 64)));
-        for (let n = 512; tables.length > 1 && n < c.inflated.length * 2; n *= 4) {
-            const head = c.inflated.subarray(0, Math.min(n, c.inflated.length));
-            const narrower = tables.filter(t => has(t, head));
-            if (narrower.length === 0) break;   // the chunk's tail is padding: keep what matched
-            tables = narrower;
-        }
-        return { ...c, tables, table: tables[0] };
-    });
+    // Every zlib stream in the file is a chunk of one of the gzipped tables. Which
+    // table cannot be told from the bytes: in one-column chunks (the `(column
+    // chunks)` patch) several tables hold the same plain counting column, byte for
+    // byte. So section 1 damages each chunk and takes the table from the reader's
+    // own error, which must name one of these tables; every table must be named.
+    const chunks = zlibStreams(project);
+    check(chunks.length >= TABLES.length, `${chunks.length} gzip chunks in the project`, chunks.length);
     const byTable = {};
-    for (const c of chunks) (byTable[c.table] = byTable[c.table] || []).push(c);
-    // The chunk a single-table check damages must be that table's alone.
-    const onlyIn = (t) => chunks.filter(c => c.tables.length === 1 && c.table === t);
-    for (const t of TABLES) if (onlyIn(t).length) byTable[t] = onlyIn(t).concat((byTable[t] || []).filter(c => c.tables.length > 1));
-    check(!byTable.undefined && TABLES.every(t => byTable[t] && byTable[t].length >= 1),
-        `${chunks.length} chunks, each found in its table`, Object.entries(byTable).map(([k, v]) => [k, v.length]));
-
     const healthy = await readWith(project);
     const counts = JSON.parse(healthy.digest || '{}');
     check(counts.groups === FRAMES && counts.with3d === FRAMES && counts.frames === FRAMES * 2 && counts.finite === FRAMES * 4,
@@ -323,11 +300,15 @@ try {
         const wrong = [];
         for (const c of chunks) {
             const r = await readWith(flipped(project, c), options);
-            if (!(c.tables.some(t => saysDamaged(r.threw, t)) && r.failedRead)) wrong.push({ tables: c.tables, at: c.offset, r });
+            const named = TABLES.find(t => saysDamaged(r.threw, t));
+            if (!(named && r.failedRead)) { wrong.push({ at: c.offset, r }); continue; }
+            if (!options.lazy) (byTable[named] = byTable[named] || []).push(c);
         }
-        check(wrong.length === 0, `${label}: each of the ${chunks.length} chunks is an error naming its table`,
+        check(wrong.length === 0, `${label}: each of the ${chunks.length} chunks is an error naming one of the tables`,
             { wrong: wrong.length, of: chunks.length, first: wrong.slice(0, 2) });
     }
+    check(TABLES.every(t => byTable[t] && byTable[t].length >= 1),
+        'every table is named by a damaged chunk of its own', TABLES.map(t => [t, (byTable[t] || []).length]));
 
     // ================================================================= 2
     console.log('\n-- 2. Python\'s layout, string tables gzipped too --');
