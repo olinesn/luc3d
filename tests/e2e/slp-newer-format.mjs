@@ -30,10 +30,9 @@
  *     file that is not HDF5 still gets its own error, and a big 2.x file still
  *     replaces the open project through the lazy route.
  *
- * Run: node tests/e2e/slp-newer-format.mjs   (spawns its own http.server; PORT=…)
+ * Run: node tests/e2e/slp-newer-format.mjs   (serves the app itself; PORT=…)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,7 +40,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8391);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const VIDEO = path.join(repoRoot, 'tests', 'fixtures', 'barcode-60', 'barcode-60.mp4');
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-newer-format-'));
 
@@ -51,12 +51,10 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 const refusalFor = (name, version = '3.0') => `${name} uses SLP format ${version}, which is newer than this version of LUC3D supports (max 2.x). Update LUC3D to read it, or re-save the file from Python sleap-io with \`legacy_format=True\`.`;
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1'], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 let browser;
 try {
-    browser = await chromium.launch({ headless: true });
+    browser = await launchBrowser({ headless: true });
 
     /** A fresh app with the helpers below, so one section's state can't reach the next. */
     async function freshPage() {
