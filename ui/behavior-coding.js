@@ -32,6 +32,7 @@ import {
 import { setStatus } from '../import-export/save-load.js';
 import { sessionFps } from './behavior-detect.js';
 import { idSwitchBoxNodeMask } from './id-switch-highlight.js';
+import { showPanelTab } from './panel-rail.js';
 
 var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null, mode: false, review: null };
 
@@ -41,8 +42,8 @@ export function behaviorUi() {
 }
 
 // ----------------------------------------------------------------------------
-// Repaint bus: the panel, the timeline rows, the overlays and the mode bar
-// each register one repainter; requests within a frame coalesce.
+// Repaint bus: the panel, the timeline rows, the overlays, the mode bar and the
+// bouts strip each register one repainter; requests within a frame coalesce.
 // ----------------------------------------------------------------------------
 
 var _repainters = [];
@@ -88,15 +89,12 @@ export function goToBehaviorFrame(frame) {
 /** Seconds of lead-in when a bout is opened from the list, as an ID-switch row lands. */
 export var BOUT_LEAD_IN_SECONDS = 1;
 
-/** Show the Behavior tab (opening the info panel if it is collapsed). */
+/**
+ * Show the Behavior panel: open and expand its section, showing the info panel
+ * if it is hidden (`showPanelTab`, never a rail click, which folds an expanded panel).
+ */
 export function openBehaviorTab() {
-    var wrap = document.getElementById('infoPanelWrapper');
-    if (wrap && wrap.classList.contains('collapsed')) {
-        var t = document.getElementById('infoPanelToggleBtn');
-        if (t) t.click();
-    }
-    var tab = document.querySelector('.panel-tab[data-tab="tabBehavior"]');
-    if (tab && !tab.classList.contains('active')) tab.click();
+    showPanelTab('tabBehavior');
 }
 
 // ----------------------------------------------------------------------------
