@@ -1379,13 +1379,8 @@ export async function quickSave(previousFile) {
     } catch (err) {
         state.isSaving = false;
         hideLoading();
-        // `writable` (if it got that far) already has an open swap file —
-        // abort() discards it WITHOUT touching the original file at
-        // `state.slpFileHandle`, unlike close(), which would overwrite it
-        // with zero bytes.
-        if (typeof writable !== 'undefined' && writable && typeof writable.abort === 'function') {
-            try { await writable.abort(); } catch (e) { /* best effort */ }
-        }
+        // The write (if it got that far) was aborted in `writeProjectToHandle`,
+        // which leaves the file at `state.slpFileHandle` as it was.
         if (err && err.name === 'SaveCancelledError') {
             setStatus('Save cancelled', 'warning');
             return;
@@ -1397,8 +1392,8 @@ export async function quickSave(previousFile) {
 
 /**
  * Build the project file and write it to `handle`; returns the bytes written.
- * Shared by Save and Save Compact Copy. On a cancelled save the swap file is
- * discarded (abort), never closed: close() would overwrite the file at `handle`
+ * Shared by Save and Save Compact Copy. On a failed or cancelled save the swap file
+ * is discarded (abort), never closed: close() would overwrite the file at `handle`
  * with a partial or empty one. Rethrows, for the caller's status.
  */
 async function writeProjectToHandle(handle, title) {
@@ -1446,7 +1441,9 @@ async function writeProjectToHandle(handle, title) {
             bytesWritten = bytes.byteLength;
         }
     } catch (err) {
-        if (err && err.name === 'SaveCancelledError' && typeof writable.abort === 'function') {
+        // Any failure, not only a cancel: abort() discards the swap file and leaves the
+        // file at `handle` as it was. Left open, the swap file stays behind.
+        if (typeof writable.abort === 'function') {
             try { await writable.abort(); } catch (e) { /* best effort */ }
         }
         throw err;
