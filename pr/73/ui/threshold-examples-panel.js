@@ -44,12 +44,12 @@ import {
     solveExample3d,
     solveFrame3d,
     EXAMPLE_MIN_CAMERAS,
-} from '../pose/threshold-examples.js?v=0092bb4af2d8';
-import { state } from './app-state.js?v=0092bb4af2d8';
-import { formatFrameNumber } from './frame-readout.js?v=0092bb4af2d8';
-import { desaturateColor, drawSkeleton, getGroupColor } from './overlays.js?v=0092bb4af2d8';
-import { getVisibilitySettings } from './rendering.js?v=0092bb4af2d8';
-import { build3dView } from './threshold-examples-3d.js?v=0092bb4af2d8';
+} from '../pose/threshold-examples.js?v=f94785f30c13';
+import { state } from './app-state.js?v=f94785f30c13';
+import { formatFrameNumber } from './frame-readout.js?v=f94785f30c13';
+import { desaturateColor, drawSkeleton, getGroupColor, symmetryEdgesFor } from './overlays.js?v=f94785f30c13';
+import { getVisibilitySettings } from './rendering.js?v=f94785f30c13';
+import { build3dView } from './threshold-examples-3d.js?v=f94785f30c13';
 
 /** Small tiles shown, at most. */
 export const SMALL_TILES = 4;
@@ -128,11 +128,13 @@ export function cropSide(solved, names) {
 }
 
 /** The live views' Predictions style for an animal of colour `base` (`drawFrameOverlays`' section 3), at `sizeScale`. */
-function predictionStyle(base, sizeScale) {
-    let o = null;
-    try { o = getVisibilitySettings().predictedOpts; } catch (e) { /* controls not on the page */ }
-    o = o || {};
+function predictionStyle(base, sizeScale, skeleton) {
+    let vis = null;
+    try { vis = getVisibilitySettings(); } catch (e) { /* controls not on the page */ }
+    const o = (vis && vis.predictedOpts) || {};
     return {
+        symmetryEdges: vis && vis.showSymmetryEdges && skeleton ? symmetryEdgesFor(skeleton) : null,
+        symmetryLineWidth: ((vis && vis.symmetryEdgeWeight) || 1) * sizeScale,
         color: desaturateColor(base, 0.2),
         edgeColor: desaturateColor(base, 0.4),
         alpha: 0.85,
@@ -323,7 +325,7 @@ export function buildThresholdExamples(opts) {
         if (entry && entry.crop) ctx.drawImage(entry.crop, 0, 0, size, size);
         // Sizes are the views' on-screen ones, less in a small tile.
         const shown = canvas.clientWidth > 0 ? size / canvas.clientWidth : 2;
-        const style = predictionStyle(view.colors.get(name), shown * (size === TILE_PX ? 0.6 : 1));
+        const style = predictionStyle(view.colors.get(name), shown * (size === TILE_PX ? 0.6 : 1), session.skeleton);
         drawMarks(ctx, size, view.solved, name, view.boxes.get(name), threshold, session.skeleton, style);
     }
 

@@ -24,14 +24,15 @@
 //             pose/behavior-labels.js, import-export/save-load.js,
 //             ui/id-switch-highlight.js (the node mask boxes share)
 
-import { state } from './app-state.js?v=0092bb4af2d8';
-import { behaviorById } from '../pose/behavior-ethogram.js?v=0092bb4af2d8';
+import { state } from './app-state.js?v=f94785f30c13';
+import { behaviorById } from '../pose/behavior-ethogram.js?v=f94785f30c13';
 import {
     labelRange, clearRange, toggleState, noteBehaviorFps, listBouts, activeAt, hasBehaviorData, runningStates,
-} from '../pose/behavior-labels.js?v=0092bb4af2d8';
-import { setStatus } from '../import-export/save-load.js?v=0092bb4af2d8';
-import { sessionFps } from './behavior-detect.js?v=0092bb4af2d8';
-import { idSwitchBoxNodeMask } from './id-switch-highlight.js?v=0092bb4af2d8';
+} from '../pose/behavior-labels.js?v=f94785f30c13';
+import { setStatus } from '../import-export/save-load.js?v=f94785f30c13';
+import { sessionFps } from './behavior-detect.js?v=f94785f30c13';
+import { idSwitchBoxNodeMask } from './id-switch-highlight.js?v=f94785f30c13';
+import { showPanelTab } from './panel-rail.js?v=f94785f30c13';
 
 var ui = { focal: null, selected: null, rangeIn: null, rangeOut: null, pending: null, mode: false, review: null };
 
@@ -88,15 +89,12 @@ export function goToBehaviorFrame(frame) {
 /** Seconds of lead-in when a bout is opened from the list, as an ID-switch row lands. */
 export var BOUT_LEAD_IN_SECONDS = 1;
 
-/** Show the Behavior tab (opening the info panel if it is collapsed). */
+/**
+ * Show the Behavior panel: open and expand its section, showing the info panel
+ * if it is hidden (`showPanelTab`, never a rail click, which folds an expanded panel).
+ */
 export function openBehaviorTab() {
-    var wrap = document.getElementById('infoPanelWrapper');
-    if (wrap && wrap.classList.contains('collapsed')) {
-        var t = document.getElementById('infoPanelToggleBtn');
-        if (t) t.click();
-    }
-    var tab = document.querySelector('.panel-tab[data-tab="tabBehavior"]');
-    if (tab && !tab.classList.contains('active')) tab.click();
+    showPanelTab('tabBehavior');
 }
 
 // ----------------------------------------------------------------------------

@@ -28,24 +28,25 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=0092bb4af2d8';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=0092bb4af2d8';
-import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=0092bb4af2d8';
+} from './app-state.js?v=f94785f30c13';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=f94785f30c13';
+import { setPageProject } from './page-title.js?v=f94785f30c13';
+import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=f94785f30c13';
 import {
     triangulateAndReproject, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod, triangulationSettingsKey,
-} from '../pose/triangulation.js?v=0092bb4af2d8';
+} from '../pose/triangulation.js?v=f94785f30c13';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=0092bb4af2d8';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel, closeEmbeddedFrames } from '../loading/video.js?v=0092bb4af2d8';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=0092bb4af2d8';
-import { moveKeptSuggestions } from '../import-export/kept-suggestions.js?v=0092bb4af2d8';
-import { moveKeptCameraPoses } from '../import-export/outside-frames.js?v=0092bb4af2d8';
+} from '../loading/session-loader.js?v=f94785f30c13';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel, closeEmbeddedFrames } from '../loading/video.js?v=f94785f30c13';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=f94785f30c13';
+import { moveKeptSuggestions } from '../import-export/kept-suggestions.js?v=f94785f30c13';
+import { moveKeptCameraPoses } from '../import-export/outside-frames.js?v=f94785f30c13';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -53,23 +54,23 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=0092bb4af2d8';
+} from './video-filters.js?v=f94785f30c13';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=0092bb4af2d8';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=f94785f30c13';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=0092bb4af2d8';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=0092bb4af2d8';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=0092bb4af2d8';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=0092bb4af2d8';
+import { setSoloView } from './ui-wiring.js?v=f94785f30c13';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=f94785f30c13';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=f94785f30c13';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=f94785f30c13';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=0092bb4af2d8';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=0092bb4af2d8';
+import { setup3DViewport } from '../pose/initialization.js?v=f94785f30c13';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=f94785f30c13';
 
 // ============================================
 // Dockview Pane Manager
@@ -691,7 +692,19 @@ function renderDuplicatePanels() {
 
         if (panelOverlay && primaryView.overlayCanvas && panelOverlay !== primaryView.overlayCanvas) {
             var octx = panelOverlay.getContext('2d');
-            try { octx.drawImage(primaryView.overlayCanvas, 0, 0, panelOverlay.width, panelOverlay.height); }
+            // A zoomed-in primary overlay is a window onto the full canvas
+            // (`ui/overlay-window.js`): copy it to the same place in the mirror.
+            var plan = primaryView._overlayPlan;
+            try {
+                if (plan && plan.windowed) {
+                    var kx = panelOverlay.width / plan.boxW, ky = panelOverlay.height / plan.boxH;
+                    octx.clearRect(0, 0, panelOverlay.width, panelOverlay.height);
+                    octx.drawImage(primaryView.overlayCanvas, plan.cssLeft * kx, plan.cssTop * ky,
+                        plan.cssW * kx, plan.cssH * ky);
+                } else {
+                    octx.drawImage(primaryView.overlayCanvas, 0, 0, panelOverlay.width, panelOverlay.height);
+                }
+            }
             catch (e) { /* canvas not ready */ }
         }
     }
@@ -1705,7 +1718,10 @@ export function removeSession(idx) {
     if (state.sessions.length === 0) {
         // Last session removed — full reset to fresh state
         state.session = null;
+        setPageProject(null);
         state.activeSessionIdx = 0;
+        // Nothing left of the project: a new one must not Save over its file.
+        state.slpFileHandle = null;
         state.triangulationResults = new Map();
         state.views = [];
         closeEmbeddedFrames(state);

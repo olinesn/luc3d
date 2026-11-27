@@ -16,7 +16,7 @@
  * means (`chainBoneMedians`), with the +-50 % range the volfuse study validated. A chain with a node the file or
  * the skeleton lacks, or a bone measured on too few rows, is left out. No chains = the skeleton's are checked.
  */
-import { mapVolumeNodes, chainBoneMedians, VOLUME_DEFAULTS } from './volume-fusion.js?v=0092bb4af2d8';
+import { mapVolumeNodes, chainBoneMedians, VOLUME_DEFAULTS } from './volume-fusion.js?v=f94785f30c13';
 
 const STORAGE_KEY = 'lucidVolumeFusion';
 const DEFAULT_SETTINGS = Object.freeze({

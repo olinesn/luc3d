@@ -13,9 +13,9 @@
 //
 // Depends on: ui/app-state.js, pose/behavior-labels.js, pose/behavior-states.js
 
-import { state } from './app-state.js?v=0092bb4af2d8';
-import { hasBehaviorData, listBouts } from '../pose/behavior-labels.js?v=0092bb4af2d8';
-import { hasStates, stateLayers } from '../pose/behavior-states.js?v=0092bb4af2d8';
+import { state } from './app-state.js?v=f94785f30c13';
+import { hasBehaviorData, listBouts } from '../pose/behavior-labels.js?v=f94785f30c13';
+import { hasStates, stateLayers } from '../pose/behavior-states.js?v=f94785f30c13';
 
 function n(x) { return Number(x || 0).toLocaleString('en-US'); }
 

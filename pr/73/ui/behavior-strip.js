@@ -29,23 +29,23 @@
 //             ui/plane-definition.js (`ICON_INFO`), pose/behavior-ethogram.js,
 //             pose/behavior-labels.js, import-export/save-load.js
 
-import { state } from './app-state.js?v=0092bb4af2d8';
+import { state } from './app-state.js?v=f94785f30c13';
 import {
     behaviorUi, registerBehaviorRepaint, requestBehaviorRepaint, sessionAnimals, animalColor, focalAnimal, pairGlyph,
-} from './behavior-coding.js?v=0092bb4af2d8';
-import { detectionFps } from './behavior-detect.js?v=0092bb4af2d8';
+} from './behavior-coding.js?v=f94785f30c13';
+import { detectionFps } from './behavior-detect.js?v=f94785f30c13';
 import {
     DEFAULT_HALF_SECONDS, LANE_HEIGHT_PX, MAX_VISIBLE_LANES, MIN_BAR_PX, RULER_HEIGHT_PX, STRIP_ZOOM_STEPS,
     boutAt, filmBars, filmHolds, filmOutside, filmRect, filmSourceX, filmTicks, formatStripWindow, frameAtX,
     normalizeHalfSeconds, runningBarWidth, stripFilm, stripHoverText, stripLanes, stripScale, stripWanted,
     xOfFrame, zoomedHalfSeconds,
-} from './behavior-strip-model.js?v=0092bb4af2d8';
-import { ABSENT_COLOR, onTimelineRangeSelect } from './behavior-timeline.js?v=0092bb4af2d8';
-import { setInfoTip } from './info-tip.js?v=0092bb4af2d8';
-import { ICON_INFO } from './plane-definition.js?v=0092bb4af2d8';
-import { behaviors } from '../pose/behavior-ethogram.js?v=0092bb4af2d8';
-import { hasBehaviorData, listBouts, runningStates } from '../pose/behavior-labels.js?v=0092bb4af2d8';
-import { setStatus } from '../import-export/save-load.js?v=0092bb4af2d8';
+} from './behavior-strip-model.js?v=f94785f30c13';
+import { ABSENT_COLOR, onTimelineRangeSelect } from './behavior-timeline.js?v=f94785f30c13';
+import { setInfoTip } from './info-tip.js?v=f94785f30c13';
+import { ICON_INFO } from './plane-definition.js?v=f94785f30c13';
+import { behaviors } from '../pose/behavior-ethogram.js?v=f94785f30c13';
+import { hasBehaviorData, listBouts, runningStates } from '../pose/behavior-labels.js?v=f94785f30c13';
+import { setStatus } from '../import-export/save-load.js?v=f94785f30c13';
 
 var ON_KEY = 'lucid.behaviorStrip';
 var WINDOW_KEY = 'lucid.behaviorStripWindow';
