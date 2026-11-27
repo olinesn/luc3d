@@ -48,12 +48,11 @@
  *
  * Needs ffmpeg (libx264); skipped with a note if absent. A few minutes, most of it part
  * 8 waiting for Chromium to give up.
- * Run: node tests/e2e/video-file-gone.mjs   (starts its own server, on a free port)
+ * Run: node tests/e2e/video-file-gone.mjs   (serves the app with the e2e harness, on a free port)
  */
-import { chromium } from 'playwright';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,17 +91,8 @@ function writeRecording(name) {
     return { dir, video: path.join(dir, 'Camera1', '0.mp4') };
 }
 
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
-    '.json': 'application/json', '.wasm': 'application/wasm', '.mp4': 'video/mp4', '.png': 'image/png', '.svg': 'image/svg+xml' };
-const server = http.createServer((req, res) => {
-    const u = new URL(req.url, 'http://x');
-    const p = path.join(repoRoot, decodeURIComponent(u.pathname));
-    if (!p.startsWith(repoRoot) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
-    fs.createReadStream(p).pipe(res);
-});
-await new Promise(r => server.listen(0, '127.0.0.1', r));
-const ORIGIN = `http://127.0.0.1:${server.address().port}`;
+const server = await startServer(repoRoot);
+const ORIGIN = server.url;
 
 const hide = (f) => fs.renameSync(f, f + '.away');
 const show = (f) => fs.renameSync(f + '.away', f);
@@ -110,7 +100,7 @@ const slowest = (rows) => Math.max(...rows.map(r => r.ms));
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
 
