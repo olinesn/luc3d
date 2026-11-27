@@ -74,6 +74,7 @@
   "lazy-reemit-compressed.mjs": 10.3,
   "lazy-reopen-group-identities.mjs": 9.6,
   "lazy-save-keeps-suggestions.mjs": 0.5,
+  "lazy-session-stays-saveable.mjs": 18.0,
   "lazy-trackless-null.mjs": 3.1,
   "lazy-trail-window.mjs": 2.7,
   "load-export-move-bounded-derived-state.mjs": 13,
