@@ -1,0 +1,35 @@
+umap-js — UMAP in JavaScript, by Andy Coenen / Google PAIR.
+
+Version:  1.4.0
+Source:   https://www.npmjs.com/package/umap-js  (npm: umap-js@1.4.0, file lib/umap-js.js)
+          integrity sha512-xxpviF9wUO6Nxrx+C58SoDgea+h2PnVaRPKDelWv0HotmY6BeWeh0kAPJoumfqUkzUvowGsYfMbnsWI0b9do+A==
+Why here: Behavior ▸ Discover Behaviors… (pose/behavior-discovery.js) lays out its bins with
+          UMAP, in the browser and offline. Committed, not loaded from a CDN. It loads only
+          in the discovery worker (or dynamically on the inline path), never at startup.
+
+What changed: umap-js.esm.js is the package's UMD bundle with ONLY its wrapper replaced, so a
+          module worker and a Node test can import it (the wrapper reads `this`, undefined at the
+          top of an ES module). Every line of code inside is as it came. To remake it:
+            npm pack umap-js@1.4.0 && tar xzf umap-js-1.4.0.tgz
+            node scripts/revendor-umap-js.mjs package/lib/umap-js.js lib/umap-js/umap-js.esm.js
+          The bundle carries ml-levenberg-marquardt, ml-matrix, ml-array-max, ml-array-min,
+          ml-array-rescale and is-any-array inside it (umap-js fits its a/b curve with them).
+
+What LUCID replaces from outside (pose/behavior-umap.js, a subclass; the file here stays as is):
+  - the fuzzy graph: umap-js's SparseMatrix keeps a Map with a "row:col" string key and an object
+    per entry. Measured 1.75 GB of heap at 10,000 points × 60 neighbours, so 30,000 would pass the
+    renderer's 4 GB cap. `fuzzyGraph` builds the same values in the same order in typed arrays
+    (tests/test-behavior-discovery.mjs §3 compares them with umap-js's own).
+  - the search graph, which only `transform` reads: skipped.
+  - the nearest neighbours: exact, in parallel (pose/behavior-discovery-core.js `knnRows`), handed
+    in through umap-js's public `setPrecomputedKNN`.
+  - the start positions: the first principal components, or a random linear view of the data for
+    the second layout (through `getEmbedding`), scaled to ±10. umap-js's own random positions can
+    tear a real cluster in two.
+These reach into methods the TypeScript marks private (`fuzzySimplicialSet`, `makeSearchGraph`,
+`makeSearchFns`, `smoothKNNDistance`, `knnDistances`), so on a bump run tests/test-behavior-discovery.mjs
+first: §3 fails if any of them moved.
+
+Licence:  the package's LICENSE file is Apache-2.0, as is every source header, although its
+          package.json says MIT; the Apache text is what ships here. umap.ts also carries Leland
+          McInnes's BSD-3-Clause notice (it is a port of umap-learn). See lib/LICENSES.txt.
