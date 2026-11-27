@@ -31,6 +31,7 @@ import {
     matchAnimals, describeNode, formatPx, baseName, frameRegion, CAUSE_LABELS, CAUSE_TEXT, SPLITS, MATCH_STATUS_TEXT,
 } from '../pose/model-check.js';
 import { setModelCheckHighlight, updateModelCheckHighlight } from './model-check-highlight.js';
+import { showPanelTab } from './panel-rail.js';
 
 var FILTER_KEY = 'modelCheckFilter';
 var _check = null;   // {fileName, loadedAt, rows, skipped, camMatch: Map, byFrame: Map, current, sessions}
@@ -324,12 +325,9 @@ export function closeModelCheck() {
 
 // ---- the tab ----------------------------------------------------------------------
 
-/** Show the right panel (if hidden) on the Model Check tab. */
+/** Open the Model Check panel on the right-edge rail (`showPanelTab` opens the side panel too). */
 export function openModelCheckPanel() {
-    var wrap = document.getElementById('infoPanelWrapper');
-    if (wrap && wrap.classList.contains('collapsed')) { var t = document.getElementById('infoPanelToggleBtn'); if (t) t.click(); }
-    var tab = document.querySelector('.panel-tab[data-tab="tabModelCheck"]');
-    if (tab) tab.click();
+    showPanelTab('tabModelCheck');
 }
 
 function time12(d) {

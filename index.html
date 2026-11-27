@@ -5,13 +5,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- "LUC3D", or "<project> - LUC3D" once one is open (ui/page-title.js). -->
     <title>LUC3D</title>
-    <!-- Cut from docs/assets/luc3d-logo.png (the tile without its outer glow),
-         resampled premultiplied so transparent pixels stay RGB-zero. Relative,
-         like every other URL here, so they resolve under every deploy channel. -->
+    <meta name="description" content="LUC3D (Label Unification and Correspondence in 3D): multi-view pose annotation in the browser.">
+    <meta name="theme-color" content="#131719">
+    <!-- Made by scripts/make_icons.py from docs/assets/luc3d-logo.webp (the
+         tile without its outer glow, resampled premultiplied so transparent
+         pixels stay RGB-zero). Relative, like every other URL here, so they
+         resolve under every deploy channel. -->
+    <link rel="icon" href="icons/favicon.ico" sizes="48x48">
     <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
     <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+    <link rel="manifest" href="icons/site.webmanifest">
+    <!-- Link previews. Crawlers need an absolute image URL, so this one points
+         at the root channel (the newest full release) from every channel. -->
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="LUC3D">
+    <meta property="og:title" content="LUC3D">
+    <meta property="og:description" content="Label Unification and Correspondence in 3D: multi-view pose annotation in the browser.">
+    <meta property="og:image" content="https://luc3d.sleap.ai/icons/og-image.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The LUC3D logo, a wireframe cube, beside the name LUC3D">
+    <meta name="twitter:card" content="summary_large_image">
     <!-- The build this copy is: empty here, filled in the DEPLOYED copy by
          scripts/stamp-version.mjs and shown beside Settings by ui/version-label.js. -->
     <meta name="lucid-release" content="">
@@ -91,7 +108,9 @@
                     <div class="menu-dropdown-item" id="menuNewProject">New Project</div>
                     <div class="menu-dropdown-item" id="menuSaveProject">Save<span style="float:right;opacity:0.5;font-size:11px;">Ctrl+S</span></div>
                     <div class="menu-dropdown-item" id="menuSaveAs">Save As...</div>
+                    <div class="menu-dropdown-item" id="menuSaveCompact" title="A smaller copy, with predicted keypoints and 3D rounded: asks first and explains what is lost">Save Compact Copy...</div>
                     <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
+                    <div class="menu-dropdown-item" id="menuOpenDemo" title="15 s of two mice filmed by 8 cameras (SLAP-2M), downloaded from Hugging Face (24 MB)">Open Demo</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSessionFolderWizard">Session Folder Wizard...</div>
                     <div class="menu-dropdown-item" id="menuLoadSessionFolder">Load Single Session Folder</div>
@@ -102,6 +121,7 @@
                     <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
                     <div class="menu-dropdown-item" id="menuLoadModelCheck"
                         title="Step through the animals a model misread: the scan.json written by scripts/sleap_explain_error.py --sweep">Load Model Check…</div>
+                    <div class="menu-dropdown-item" id="menuLoadVolume3d" title="A volumetric model's 3D (a .vol3d.h5 from scripts/export_volume3d.py) for this session: Triangulate fuses it with the 2D (Triangulate ▸ Fuse with volume)">Load Volume 3D (H5)...</div>
                     <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSaveSkeleton">Save Skeleton (JSON)</div>
@@ -309,6 +329,17 @@
                             <input type="number" id="tbNumAnimals" min="1" step="1" inputmode="numeric"
                                 placeholder="auto" autocomplete="off" aria-label="Number of animals">
                         </label>
+                        <!-- Which identity Track All gives the tail marks (pose/tail-mark.js).
+                             Wired in ui/tail-mark-field.js. -->
+                        <label class="tri-dropdown-setting" title="After Track All, read dark marks on the tails in every camera and keep each animal on its identity from start to end: for two animals, the one with marks on id_0 or id_1; for more, each identity's number of bands (Bands per id…). Saved with the project.">
+                            <span class="tri-dropdown-setting-label">Tail marks</span>
+                            <select id="tbTailMarks" aria-label="Which identity has the tail marks">
+                                <option value="">Off</option>
+                                <option value="id_0">id_0</option>
+                                <option value="id_1">id_1</option>
+                                <option value="bands">Bands per id…</option>
+                            </select>
+                        </label>
                         <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
                             title="Settings ▸ Tracking Wizard">Settings…</button>
                     </div>
@@ -337,6 +368,18 @@
                             <input type="number" id="tbReprojThreshold" min="0" max="640" step="1" inputmode="decimal"
                                 placeholder="off" autocomplete="off" aria-label="Reprojection error threshold (px)">
                         </label>
+                        <!-- Fuse the session's volumetric-model 3D (File ▸ Load Volume 3D) into every
+                             Triangulate. Greyed out without one. Wired in ui/volume-fusion-field.js. -->
+                        <label class="tri-dropdown-setting" title="Fuse with volume: load a volumetric model's output first (File ▸ Load Volume 3D).">
+                            <span class="tri-dropdown-setting-label">Fuse with volume</span>
+                            <input type="checkbox" id="tbVolumeFusion" aria-label="Fuse with volume">
+                        </label>
+                        <!-- Triangulate's skeleton check (browser-local, off by default).
+                             Wired in ui/ui-wiring.js (wireSkeletonCheckField, ui/skeleton-check-field.js). -->
+                        <label class="tri-dropdown-setting">
+                            <span class="tri-dropdown-setting-label">Skeleton check</span>
+                            <input type="checkbox" id="tbSkeletonCheck" aria-label="Skeleton check">
+                        </label>
                         <button class="tri-dropdown-item" id="tbTriangulateSettings" data-scope="settings" role="menuitem"
                             title="Settings ▸ Triangulation Wizard">Settings…</button>
                     </div>
@@ -361,8 +404,17 @@
                         <button class="tri-dropdown-item" id="tbSmoothToggle" data-scope="toggle" role="menuitem"
                             title="Remove temporal smoothing: put back the 3D from before smoothing, on every frame" disabled>Remove smoothing</button>
                         <div class="tri-dropdown-sep"></div>
+                        <!-- Settings ▸ Temporal Smoothing's Method, one or the other (smoothingMethod:
+                             1 adaptive, the default; 0 median + Gaussian). Wired in ui/ui-wiring.js (wireSmoothMethodRadios). -->
+                        <div class="tri-dropdown-setting" role="radiogroup" aria-label="Smoothing method">
+                            <span class="tri-dropdown-setting-label">Method</span>
+                            <span class="tri-dropdown-setting-control">
+                                <label title="Adaptive (the default): each node's window grows while its 3D stays within the gate, judged by each point's views; no window crosses a jump or a gap"><input type="radio" name="tbSmoothMethod" value="1"> Adaptive</label>
+                                <label title="Median + Gaussian: a median, then a Gaussian, over the windows set in Settings"><input type="radio" name="tbSmoothMethod" value="0"> Median + Gaussian</label>
+                            </span>
+                        </div>
                         <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
-                            title="Settings ▸ Temporal Smoothing: the median and Gaussian windows">Settings…</button>
+                            title="Settings ▸ Temporal Smoothing: the method, its windows or its gate">Settings…</button>
                     </div>
                 </div>
                 <!-- Inside the proofreading group so it stays on this side of
@@ -474,6 +526,8 @@
                         <div class="dock-empty-icon">&#128249;</div>
                         <div id="dockEmptyText">Drag and Drop videos</div>
                         <div id="dockEmptySubtext" style="font-size:11px;margin-top:4px;color:var(--text-muted);">Drag from the view strip or double-click to add</div>
+                        <button class="dock-demo-btn" id="dockDemoBtn" type="button"
+                            title="15 s of two mice filmed by 8 cameras (SLAP-2M), downloaded from Hugging Face (24 MB)">No data? Open the demo</button>
                     </div>
                 </div>
             </div>
@@ -514,18 +568,9 @@
             <!-- Info Panel wrapper (toggle button + panel) -->
             <div class="info-panel-wrapper" id="infoPanelWrapper">
                 <div class="info-panel" id="infoPanel">
-                <!-- Tab bar -->
-                <div class="panel-tabs">
-                    <button class="panel-tab active" data-tab="tabInstances">Instances</button>
-                    <button class="panel-tab" data-tab="tabVisibility">Visibility</button>
-                    <button class="panel-tab" data-tab="tabIdSwitches">ID Switches</button>
-                    <button class="panel-tab" data-tab="tabModelCheck">Model Check</button>
-                    <button class="panel-tab" data-tab="tabVideos">Videos</button>
-                    <button class="panel-tab" data-tab="tabCameras">Cameras</button>
-                    <button class="panel-tab" data-tab="tabSkeleton">Skeleton</button>
-                    <button class="panel-tab" data-tab="tabSession">Session</button>
-                    <button class="panel-tab" data-tab="tabBehavior">Behavior</button>
-                </div>
+                <!-- Each panel below becomes a collapsible section at setup,
+                     opened / folded / closed from the icon rail at the window's
+                     right edge (#panelRail, ui/panel-rail.js). -->
 
                 <!-- ==================== Instances Tab ==================== -->
                 <div class="panel-tab-content active" id="tabInstances">
@@ -634,17 +679,19 @@
                     <div class="vis-line-style-row">
                         <span>Pre-ID Edge</span>
                         <div class="line-style-options" id="visUserPreLineStyle" data-value="solid">
-                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="wedge" title="Wedge: wide at the edge's first node, pointing at its second (SLEAP's Edge Style &gt; Wedge)"><svg width="28" height="12"><polygon points="3,2 25,6 3,10" fill="currentColor" fill-opacity="0.5" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></button>
                         </div>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Post-ID Edge</span>
                         <div class="line-style-options" id="visUserPostLineStyle" data-value="solid">
-                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="wedge" title="Wedge: wide at the edge's first node, pointing at its second (SLEAP's Edge Style &gt; Wedge)"><svg width="28" height="12"><polygon points="3,2 25,6 3,10" fill="currentColor" fill-opacity="0.5" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></button>
                         </div>
                     </div>
                     <h3>Predictions</h3>
@@ -675,17 +722,19 @@
                     <div class="vis-line-style-row">
                         <span>Pre-ID Edge</span>
                         <div class="line-style-options" id="visPredPreLineStyle" data-value="dotted">
-                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="wedge" title="Wedge: wide at the edge's first node, pointing at its second (SLEAP's Edge Style &gt; Wedge)"><svg width="28" height="12"><polygon points="3,2 25,6 3,10" fill="currentColor" fill-opacity="0.5" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></button>
                         </div>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Post-ID Edge</span>
                         <div class="line-style-options" id="visPredPostLineStyle" data-value="dotted">
-                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="wedge" title="Wedge: wide at the edge's first node, pointing at its second (SLEAP's Edge Style &gt; Wedge)"><svg width="28" height="12"><polygon points="3,2 25,6 3,10" fill="currentColor" fill-opacity="0.5" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></button>
                         </div>
                     </div>
                     <h3>Reprojections</h3>
@@ -731,9 +780,10 @@
                     <div class="vis-line-style-row">
                         <span>Edge Style</span>
                         <div class="line-style-options" id="visReprojLineStyle" data-value="solid">
-                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="wedge" title="Wedge: wide at the edge's first node, pointing at its second (SLEAP's Edge Style &gt; Wedge)"><svg width="28" height="12"><polygon points="3,2 25,6 3,10" fill="currentColor" fill-opacity="0.5" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></button>
                         </div>
                     </div>
                     <div class="vis-line-style-row">
@@ -742,6 +792,7 @@
                             <button class="line-style-btn active" data-style="white" title="White">White</button>
                             <button class="line-style-btn" data-style="black" title="Black">Black</button>
                             <button class="line-style-btn" data-style="track" title="Track Color">Track</button>
+                            <button class="line-style-btn" data-style="dark" title="Darker than the track color, the same shade as Dark node trails">Dark</button>
                         </div>
                     </div>
                     <h3>Unlinked Instances</h3>
@@ -751,6 +802,19 @@
                             <input type="checkbox" id="visUnlinkedBadge" checked>
                             <span class="slider"></span>
                         </label>
+                    </div>
+                    <h3>Symmetrical Nodes</h3>
+                    <div class="vis-slider-row">
+                        <span title="Draw a thin grey line between each left/right pair of nodes, found from their names: Ear_L and Ear_R, Shoulder_left and Shoulder_right, EarL and EarR. Applies to all instance types, in the 2D views.">Symmetry Edges</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visSymmetryEdges">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Weight</span>
+                        <input type="range" id="visSymmetryEdgeWeight" min="1" max="10" value="1" step="1">
+                        <span class="vis-val" id="visSymmetryEdgeWeightVal">1</span>
                     </div>
                     <!-- Planes. The planes the user annotated are scene geometry
                          and are drawn in EVERY mode, so these four say which of
@@ -1162,8 +1226,13 @@
                     </details>
                 </div>
 
+                <!-- ==================== Memory Tab ====================
+                     The page's JavaScript heap over time. Built and sampled by
+                     ui/memory-panel.js, only while this section is on screen. -->
+                <div class="panel-tab-content" id="tabMemory"></div>
+
                 <!-- ==================== Define Plane Panel ====================
-                     Shown INSTEAD of the tab bar + tab contents while Defining
+                     Shown INSTEAD of the tab contents (rail icons disabled) while Defining
                      Plane Mode is active (View ▸ Define Planes). Populated by
                      ui/plane-definition.js.
 
@@ -1533,6 +1602,10 @@
                 <div class="instance-list" id="instanceList" style="display:none;"></div>
             </div>
             </div><!-- end info-panel-wrapper -->
+
+            <!-- Right-edge icon rail: shows / hides each info-panel panel
+                 (sleap-app's sidebar rail). Built by ui/panel-rail.js. -->
+            <nav class="panel-rail" id="panelRail" aria-label="Panels"></nav>
         </div>
 
         <!-- Timeline resize handle -->
@@ -1602,6 +1675,8 @@
                 </div>
                 <!-- Time ruler under the track (ui/seekbar-ticks.js) -->
                 <div class="seekbar-ruler" id="seekbarRuler" aria-hidden="true"></div>
+                <!-- Suggested frames' faint ticks, under the ID-switch ones (ui/seekbar-markers.js) -->
+                <div class="seekbar-suggestion-marks" id="seekbarSuggestionMarks" aria-hidden="true"></div>
                 <!-- Possible-ID-switch ticks (ui/seekbar-markers.js) -->
                 <div class="seekbar-marks" id="seekbarMarks"></div>
                 <!-- Hover line at the frame a click would land on (ui/seekbar-tooltip.js):

@@ -174,7 +174,7 @@ try {
     await (await chooser).setFiles(SCAN_PATH);
     await page.waitForFunction(() => /Model check:/.test(document.getElementById('statusText').textContent), null, { timeout: 10000 });
     check(/42 of 44 rows matched to the project, 2 not; 6 misread animals/.test(await status()), 'status line reports matched and not', await status());
-    check(await page.evaluate(() => document.querySelector('.panel-tab[data-tab="tabModelCheck"]').classList.contains('active')), 'the Model Check tab opens');
+    check(await page.evaluate(async () => (await import('/ui/panel-rail.js')).isPanelOnScreen('tabModelCheck')), 'the Model Check panel opens');
     let text = await panelText();
     check(/Matched 42 of 44 rows to the project \(8 cameras by video file name\)/.test(text), 'the tab says how the cameras matched', text.slice(0, 400));
     check(await page.evaluate(() => /Camera0_mid.*2 rows: no camera named Camera0_mid and no video named Camera0_mid\.mp4/

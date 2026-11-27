@@ -71,7 +71,7 @@ import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.
 import { showBehaviorDiscoveryModal } from './behavior-discovery-modal.js';
 import { setInfoTip } from './info-tip.js';
 import { ICON_INFO } from './plane-definition.js';
-import { isInfoPanelVisible } from './panel-visibility.js';
+import { isPanelOnScreen, onPanelRailChange } from './panel-rail.js';
 import { persistSectionStates } from './section-state.js';
 import { setHandler } from './settings.js';
 import { drawAllOverlays } from './rendering.js';
@@ -118,10 +118,9 @@ function openBehaviorTabSection() {
     if (sec && !sec.open) sec.open = true;
 }
 
-/** Is the Behavior tab on screen? */
+/** Is the Behavior panel on screen (open, expanded, the info panel shown; ui/panel-rail.js)? */
 function tabVisible() {
-    var tab = document.getElementById('tabBehavior');
-    return !!(tab && tab.classList.contains('active') && isInfoPanelVisible());
+    return isPanelOnScreen('tabBehavior');
 }
 
 // ----------------------------------------------------------------------------
@@ -879,8 +878,14 @@ export function setupBehaviorUi(deps) {
     if (cinfo) { cinfo.innerHTML = ICON_INFO; setInfoTip(cinfo, CLASSIFIERS_INFO); }
     setupBehaviorDetection({ openSettings: showBehaviorRulesModal });
     setupBehaviorStates();
-    var tabBtn = document.querySelector('.panel-tab[data-tab="tabBehavior"]');
-    if (tabBtn) tabBtn.addEventListener('click', function () { setTimeout(refreshBehaviorPanel, 0); });
+    // Coming on screen (the rail opened or expanded it, or the info panel was shown): repaint
+    // what changed while it was off screen.
+    var wasOnScreen = tabVisible();
+    onPanelRailChange(function () {
+        var on = tabVisible();
+        if (on && !wasOnScreen) setTimeout(refreshBehaviorPanel, 0);
+        wasOnScreen = on;
+    });
 
     // Every label edit: the project is dirty, and everything that shows labels repaints.
     onBehaviorChange(function () {
