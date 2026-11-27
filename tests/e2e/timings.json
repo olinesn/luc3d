@@ -193,6 +193,7 @@
   "track-all-turns-on-trails.mjs": 2.8,
   "track-all-worker.mjs": 13.6,
   "track-auto-size-switch-check.mjs": 4.2,
+  "track-dialogs-keyboard.mjs": 45.0,
   "track-frame-range.mjs": 5,
   "track-marks-dirty.mjs": 4.1,
   "track-reassign-carries-forward.mjs": 3.2,
@@ -226,6 +227,7 @@
   "view-legend-pane-chrome.mjs": 1.6,
   "visibility-settings-roundtrip.mjs": 6,
   "volume-fusion.mjs": 1.8,
+  "zoom-badge-keyboard.mjs": 9.9,
   "zoom-overlay-budget.mjs": 5.8,
   "zoom-survives-pane-rebuild.mjs": 7.7
  }
