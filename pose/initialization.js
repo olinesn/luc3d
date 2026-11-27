@@ -29,6 +29,7 @@ import { setupMemoryPanel } from '../ui/memory-panel.js';
 import { setupDemoEntry } from '../ui/demo-entry.js';
 import { installInfoTips } from '../ui/info-tip.js';
 import { installNodeTooltip } from '../ui/node-tooltip.js';
+import { installVideoReadStatus } from '../ui/video-read-status.js';
 import { refreshReadoutTotals } from '../ui/frame-readout.js';
 import { installTimelineShortcuts, setTimelineDisplayMode } from '../ui/timeline-controller.js';
 import { setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js';
@@ -72,6 +73,7 @@ async function init() {
         // re-wire them (and cannot forget to).
         installInfoTips();
         installNodeTooltip();
+        installVideoReadStatus();
         setupEmptyVideoController();
         setupUI();
         setupPanelRail({ toggleInfoPanel });

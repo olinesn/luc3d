@@ -221,6 +221,7 @@
   "video-codec-notice.mjs": 4.7,
   "video-cold-read.mjs": 7.5,
   "video-encode-streaming.mjs": 1.2,
+  "video-file-gone.mjs": 86.4,
   "video-select-prompt-cancel.mjs": 8.1,
   "videos-panel-buttons.mjs": 10.7,
   "view-legend-pane-chrome.mjs": 1.6,
