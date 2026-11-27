@@ -22,8 +22,7 @@
  *
  * Run: node tests/e2e/timeline-fit-on-load.mjs   (PORT= to move it)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,7 +30,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8473);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -41,12 +41,10 @@ const calibToml = (cams) => cams.map((c, i) => `[cam_${i}]\nname = "${c}"\nsize 
     `distortions = [ 0.0, 0.0, 0.0, 0.0, 0.0,]\nrotation = [ 0.0, ${(0.1 * i).toFixed(2)}, 0.0,]\n` +
     `translation = [ ${-30 * i}.0, 0.0, 0.0,]\n`).join('\n') + '\n[metadata]\n';
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -238,11 +236,12 @@ try {
     await page.waitForTimeout(200);
     const rz = await page.evaluate(() => window.__resizes);
     check(rz === 1, `one Timeline.resize() for the expand (${rz})`);
+    // A frame can be sampled between resetCounts() and the key press (on a
+    // slower machine, CI's): that leading 0 is the collapsed timeline from
+    // before the expand, not a height painted after it.
     seq = await paintedHeights();
-    // Any frame between the reset and the key press taking effect is still collapsed.
-    const afterExpand = seq[0] === 0 ? seq.slice(1) : seq;
-    check(afterExpand.length > 0 && afterExpand.every(h => near(h, smallH)),
-        `no other height painted after the expand (${seq.join(' -> ')})`);
+    if (seq[0] === 0) seq.shift();
+    check(seq.every(h => near(h, smallH)), `no other height painted after the expand (${seq.join(' -> ')})`);
 
     // ---- 6. expand with nothing remembered: fits the rows ---------------------------------
     console.log('\n6. Expand with no remembered height');

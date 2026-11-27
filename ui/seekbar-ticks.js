@@ -57,7 +57,39 @@ export const MAX_MINOR_PER_MAJOR = 6;
 export const DEFAULT_CHAR_PX = 6.6;
 
 /** Decimals a label needs for a step: none from one second up, else one (the steps are tenths). */
-function stepDecimals(step) { return step >= 1 ? 0 : 1; }
+export function stepDecimals(step) { return step >= 1 ? 0 : 1; }
+
+/**
+ * The ticks' steps for a time axis (also the bouts strip's, ui/behavior-strip-model.js):
+ * the major step is the smallest nice step whose labels clear each other, the
+ * minor one the smallest that divides it into at most `MAX_MINOR_PER_MAJOR`
+ * parts and is still `MIN_MINOR_SPACING_PX` apart. Never shorter than a frame.
+ *
+ * @param {number} pxPerSec
+ * @param {number} frameSec  one frame, in seconds
+ * @param {(step: number) => number} labelPx  width of the widest label at a major step
+ * @returns {{step: number, minorStep: number}} 0 where no step fits
+ */
+export function chooseTickSteps(pxPerSec, frameSec, labelPx) {
+    var EPS = 1e-9;
+    var step = 0;
+    for (var i = 0; i < TICK_STEPS.length; i++) {
+        var s = TICK_STEPS[i];
+        if (s < frameSec - EPS) continue;
+        var need = Math.max(MIN_LABEL_SPACING_PX, LABEL_SPACING_WIDTHS * labelPx(s));
+        if (s * pxPerSec >= need) { step = s; break; }
+    }
+    var minorStep = 0;
+    for (var j = 0; step && j < TICK_STEPS.length; j++) {
+        var m = TICK_STEPS[j];
+        if (m >= step) break;
+        if (m < frameSec - EPS) continue;
+        var ratio = step / m;
+        if (Math.abs(ratio - Math.round(ratio)) > 1e-6 || Math.round(ratio) > MAX_MINOR_PER_MAJOR) continue;
+        if (m * pxPerSec >= MIN_MINOR_SPACING_PX) { minorStep = m; break; }
+    }
+    return { step: step, minorStep: minorStep };
+}
 
 /**
  * A tick label: `mm:ss`, or `h:mm:ss` from one hour up, with `decimals`
@@ -123,24 +155,9 @@ export function seekbarTimeTicks(totalFrames, fps, widthPx, opts) {
     var count = function (step) { return Math.floor(endSec / step + EPS); };   // ticks after 0
     var labelPx = function (step) { return formatTickLabel(count(step) * step, stepDecimals(step)).length * charPx; };
 
-    var step = 0;
-    for (var i = 0; i < TICK_STEPS.length; i++) {
-        var s = TICK_STEPS[i];
-        if (s < frameSec - EPS) continue;
-        var need = Math.max(MIN_LABEL_SPACING_PX, LABEL_SPACING_WIDTHS * labelPx(s));
-        if (s * pxPerSec >= need) { step = s; break; }
-    }
+    var steps = chooseTickSteps(pxPerSec, frameSec, labelPx);
+    var step = steps.step, minorStep = steps.minorStep;
     if (!step) return none;   // even a day per label would crowd them
-
-    var minorStep = 0;
-    for (var j = 0; j < TICK_STEPS.length; j++) {
-        var m = TICK_STEPS[j];
-        if (m >= step) break;
-        if (m < frameSec - EPS) continue;
-        var ratio = step / m;
-        if (Math.abs(ratio - Math.round(ratio)) > 1e-6 || Math.round(ratio) > MAX_MINOR_PER_MAJOR) continue;
-        if (m * pxPerSec >= MIN_MINOR_SPACING_PX) { minorStep = m; break; }
-    }
 
     var dec = stepDecimals(step);
     // Two labels' centres must be this far apart — the rule the step was

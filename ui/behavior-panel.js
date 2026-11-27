@@ -54,6 +54,7 @@ import { toggleBehaviorMode, exitBehaviorMode, isBehaviorModeActive } from './be
 import { showEthogramModal, showMarkReviewedModal } from './behavior-ethogram-modal.js';
 import { showBehaviorImportModal, showBehaviorExportModal } from './behavior-io-modal.js';
 import { ABSENT_COLOR } from './behavior-timeline.js';
+import { behaviorStripOn, setBehaviorStripOn, setupBehaviorStrip, updateBehaviorStripFrame } from './behavior-strip.js';
 import {
     detectAllFrames, detectAllSessions, detectThisFrame, frameReadout, onFrameReadout, detectionEnv, detectionFps, setupBehaviorDetection,
 } from './behavior-detect.js';
@@ -70,7 +71,7 @@ import { showKpmsExportModal, showKpmsImportModal } from './behavior-kpms-modal.
 import { showBehaviorDiscoveryModal } from './behavior-discovery-modal.js';
 import { setInfoTip } from './info-tip.js';
 import { ICON_INFO } from './plane-definition.js';
-import { isInfoPanelVisible } from './panel-visibility.js';
+import { isPanelOnScreen, onPanelRailChange } from './panel-rail.js';
 import { persistSectionStates } from './section-state.js';
 import { setHandler } from './settings.js';
 import { drawAllOverlays } from './rendering.js';
@@ -117,10 +118,9 @@ function openBehaviorTabSection() {
     if (sec && !sec.open) sec.open = true;
 }
 
-/** Is the Behavior tab on screen? */
+/** Is the Behavior panel on screen (open, expanded, the info panel shown; ui/panel-rail.js)? */
 function tabVisible() {
-    var tab = document.getElementById('tabBehavior');
-    return !!(tab && tab.classList.contains('active') && isInfoPanelVisible());
+    return isPanelOnScreen('tabBehavior');
 }
 
 // ----------------------------------------------------------------------------
@@ -205,6 +205,8 @@ function renderCoding(session, disabled) {
         '<button class="panel-btn" data-act="reviewed" title="Turn the unlabelled frames of a range into &quot;not&quot; labels">Mark reviewed…</button>' +
         '<label title="Box the animals engaged in each behavior in the videos, labelled (this browser only)"><input type="checkbox" data-act="on-video"' +
         (behaviorBoxesVisible() ? ' checked' : '') + '> On video</label>' +
+        '<label title="Show the bouts around the playhead under the videos (this browser only)"><input type="checkbox" data-act="strip"' +
+        (behaviorStripOn() ? ' checked' : '') + '> Bouts strip</label>' +
         '</div>';
     host.innerHTML = html;
     updateCodingNow(state.currentFrame);
@@ -588,7 +590,8 @@ function renderClassifiers(session) {
         '<th title="Its classifier, and the cross-validated F1 on frames">Predicted by</th></tr></thead><tbody>';
     rows.forEach(function (r) {
         var b = r.behavior, m = r.model;
-        var labels = r.gate.length ? '<span class="behavior-short" title="' + esc(r.gate.join('; ')) + '">' + n(r.counts.present.bouts) + ' / ' +
+        var short = r.gate.concat(r.unreviewed.length ? [r.unreviewed.join(', ') + ': labelled present with no "not" frames'] : []);
+        var labels = short.length ? '<span class="behavior-short" title="' + esc(short.join('; ')) + '">' + n(r.counts.present.bouts) + ' / ' +
             n(r.counts.absent.bouts) + ' · needs more</span>' : n(r.counts.present.bouts) + ' / ' + n(r.counts.absent.bouts);
         var cv = m && m.cv;
         var by = m ? (m.imported ? 'imported' : 'classifier') + (cv && cv.frame ? ' · F1 ' + fmt(cv.frame.f1) : '') : (b.detector ? 'its detector' : '–');
@@ -721,6 +724,7 @@ function wireCoding(host) {
     host.addEventListener('change', function (e) {
         if (e.target.dataset.act === 'timeline-behavior') selectBehavior(e.target.value || null);
         else if (e.target.dataset.act === 'on-video') setBehaviorBoxesVisible(e.target.checked);
+        else if (e.target.dataset.act === 'strip') setBehaviorStripOn(e.target.checked);
     });
 }
 
@@ -812,6 +816,7 @@ var _lastSession = null;
 
 export function updateBehaviorFrame(frame) {
     var session = state.session;
+    updateBehaviorStripFrame(frame);        // the strip over the seekbar (no-op while it is off)
     // A session switch ends the running states of the session left, where its
     // playhead last was (switchSession itself stays free of feature hooks).
     if (_lastSession && _lastSession !== session) closeRunningAtCursor(_lastSession);
@@ -829,6 +834,7 @@ export function updateBehaviorFrame(frame) {
 export function setupBehaviorUi(deps) {
     deps = deps || {};
     setBehaviorNavigator(deps.navigate);
+    setupBehaviorStrip({ seek: deps.seekKeepingPlayback, pause: deps.pausePlayback });
     setClassifierSessionSwitcher(deps.switchSession);
     var closeMenus = deps.closeMenus || function () {};
     var on = function (id, fn) {
@@ -872,8 +878,14 @@ export function setupBehaviorUi(deps) {
     if (cinfo) { cinfo.innerHTML = ICON_INFO; setInfoTip(cinfo, CLASSIFIERS_INFO); }
     setupBehaviorDetection({ openSettings: showBehaviorRulesModal });
     setupBehaviorStates();
-    var tabBtn = document.querySelector('.panel-tab[data-tab="tabBehavior"]');
-    if (tabBtn) tabBtn.addEventListener('click', function () { setTimeout(refreshBehaviorPanel, 0); });
+    // Coming on screen (the rail opened or expanded it, or the info panel was shown): repaint
+    // what changed while it was off screen.
+    var wasOnScreen = tabVisible();
+    onPanelRailChange(function () {
+        var on = tabVisible();
+        if (on && !wasOnScreen) setTimeout(refreshBehaviorPanel, 0);
+        wasOnScreen = on;
+    });
 
     // Every label edit: the project is dirty, and everything that shows labels repaints.
     onBehaviorChange(function () {
