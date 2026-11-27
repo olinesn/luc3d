@@ -462,7 +462,9 @@ const LAYOUTS = {
     no_map: { byFile: true, videos: ['camA.mp4', 'camB.mp4', 'third.mp4'] },
     same_name: { videos: ['rec/cam0/0.mp4', 'rec/cam1/0.mp4', 'rec/other/0.mp4'] },
 };
-const firstSessionOnly = { folder: true, rawFolder: true };
+// The folder loader opens the first session and keeps the others whole, unless the raw
+// worker read the file: then only their poses stay.
+const firstSessionOnly = { rawFolder: true };
 /** The copy of a layout a route reads: see "raw_" in the Python above. */
 const sourceFor = (name, route) => (route.startsWith('raw') ? 'raw_' + name : name);
 
@@ -853,12 +855,13 @@ try {
             expectSave(await save(again), `images inside, ${name}, reopened and saved`, want);
             await again.close();
         }
-        // The loader opens the first session only. The others' videos have poses, and images
-        // a save does not copy, so the suggestions and the poses share a placeholder's entry.
+        // The loader opens the first session only and keeps the others whole, so their
+        // cameras still name their videos. Those videos have poses, and images a save does
+        // not copy, so the suggestions and the poses share one entry.
         const page = await open('folder', readFile('images_two_sessions'));
         const first = await save(page);
         const want = {
-            suggestions: ['file:unknown_video_3.mp4|8|3', 'file:unknown_video_2.mp4|7|2', 'cam:south|6|1', 'cam:north|5|0'],
+            suggestions: ['cam:west|8|3', 'cam:east|7|2', 'cam:south|6|1', 'cam:north|5|0'],
             onlyOnce: true,
         };
         expectSave(first, 'images inside, the first session of two, save 1', want);

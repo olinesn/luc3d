@@ -84,7 +84,7 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from './plane-metadata.js';
 import { readBehaviorMetadata, resetBehaviorState } from './behavior-metadata.js';
 import { sessionEventScope } from './behavior-events.js';
 
@@ -1209,6 +1209,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         var lastSessionHas3d = false;
         // Video indices some session reads; frames on any other are kept aside below.
         var claimedVideos = new Set();
+        var planeConflictSessions = [];   // sessions whose planes are not the project's
         // Who reads each of them, for the poses on another skeleton (kept aside too).
         var videoReaders = new Map();
         // Each session with its cameras' videos, for its suggestions below.
@@ -1379,8 +1380,17 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         readBehaviorMetadata(session, earlyVisibility, slpData.behaviorEvents,
             sessionEventScope(slpData.sessions, slpData.videos.length, slpSessIdx));
         // Define Planes state — pool/planes/origin from the first session that
-        // carries them, this session's per-view 2D onto this session.
-        readPlaneMetadata(session, earlyVisibility);
+        // carries them, this session's per-view 2D onto this session. A session
+        // with other planes (one a save kept whole from a file added to this
+        // project) names other nodes by the same ids: its 2D would land on them.
+        var sessPlaneConflict = planeMetadataConflict(earlyVisibility);
+        if (sessPlaneConflict) {
+            console.warn('[load-slp] not reading the plane state of session "' + sessName + '" — ' + sessPlaneConflict);
+            session.planePlacements = new Map();
+            planeConflictSessions.push(sessName);
+        } else {
+            readPlaneMetadata(session, earlyVisibility);
+        }
 
         // Populate FrameGroups from worker's frames array (yield every 20K for UI)
         var BATCH = 20000;
@@ -2011,6 +2021,9 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         });
         var outsideNote = outsideFramesNote(keptOutsideCounts(state.sessions));
         if (outsideNote) loadWarn.push(outsideNote);
+        if (planeConflictSessions.length) {
+            loadWarn.push('the planes of ' + planeConflictSessions.join(', ') + ' are not this project\'s, so they are not open and a save replaces them');
+        }
         // Videos that matched no camera (a session whose load failed is gone).
         unboundVideoWarn.forEach(function (u) {
             if (state.sessions.indexOf(u.session) < 0) return;
