@@ -69,6 +69,7 @@
   "lazy-embedded-calibration.mjs": 2.6,
   "lazy-frame-rematerialize-duplicate.mjs": 2.6,
   "lazy-hydrate-visibility.mjs": 3.1,
+  "lazy-keeps-other-sessions.mjs": 100.0,
   "lazy-open-plain-slp.mjs": 28.8,
   "lazy-playback-eviction.mjs": 2.4,
   "lazy-reemit-compressed.mjs": 10.3,
