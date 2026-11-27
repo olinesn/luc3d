@@ -10,10 +10,10 @@
  *
  * Needs `uv` for Python (skipped without it).
  *
- * Run: node tests/e2e/track-all-camera-other-skeleton.mjs   (spawns its own http.server; PORT= to move it)
+ * Run: node tests/e2e/track-all-camera-other-skeleton.mjs   (serves the app with the e2e harness, on a free port)
  */
-import { chromium } from 'playwright';
-import { spawn, spawnSync } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,7 +22,6 @@ import { answerTrackSetup } from './fixtures/track-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8471);
 const PY_SPEC = process.env.SLEAP_IO_SPEC || 'sleap-io==0.9.5';
 const NF = 12;
 
@@ -75,12 +74,9 @@ if (spawnSync('uv', ['--version'], { encoding: 'utf8' }).status !== 0) {
 }
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'track-all-camera-other-skeleton-'));
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-for (let i = 0; i < 60; i++) {
-    try { if ((await fetch(`http://localhost:${PORT}/index.html`)).ok) break; } catch { /* not yet */ }
-    await new Promise(r => setTimeout(r, 250));
-}
-const browser = await chromium.launch();
+const server = await startServer(repoRoot);
+const PORT = server.port;
+const browser = await launchBrowser();
 const stallGuard = setTimeout(() => {
     console.log('\nStuck: no check for 10 minutes');
     browser.close();
@@ -244,7 +240,7 @@ try {
     }
 } finally {
     await browser.close();
-    server.kill();
+    server.close();
     fs.rmSync(tmp, { recursive: true, force: true });
 }
 console.log(fails ? `\n${fails} check(s) FAILED` : '\nAll checks passed');
