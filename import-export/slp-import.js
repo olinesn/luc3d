@@ -4,6 +4,7 @@
 // - handleAddSlp: additive merge of an SLP into the current session
 // - handleLoadPoints3dH5: overlay reprojected 3D points from an H5 file
 
+import { withCompactNote, compactRoundingOf } from './compact-save.js';
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
@@ -30,13 +31,16 @@ import {
     setVideoController,
 } from '../ui/app-state.js';
 import {
-    autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
+    autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder, folderPickerStartFor,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
     adoptCampyRecording,
 } from '../loading/session-loader.js';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js';
+import { setPageProject } from '../ui/page-title.js';
+import {
+    preferNonCalibrationVideos, assignFolderVideos, isFolderPick, isVideoFileName,
+} from '../loading/video-file-pick.js';
 import {
     campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
 } from '../loading/campy-session.js';
@@ -130,25 +134,6 @@ function openEmbeddedFrames(slpFile) {
         frameWorker.onerror = function (err) {
             fail('Frame worker failed: ' + (err.message || 'unknown'));
         };
-    });
-}
-
-/**
- * Give a file's videos a camera each, for a file with no sessions: each camera, one
- * per video in list order, has its list position added when an earlier one has its
- * name. Every video with no source file is named after the `.slp`, and campy names
- * every video `0.mp4`. Two videos on one camera would put both's poses on it, and
- * leave one with no view.
- *
- * @param {Camera[]} cameras
- * @param {Object} videoIdxToCameraName - list position to camera name
- */
-function makeCameraNamesUnique(cameras, videoIdxToCameraName) {
-    cameras.forEach(function (camera, listIdx) {
-        var taken = cameras.slice(0, listIdx).some(function (c) { return c.name === camera.name; });
-        if (!taken) return;
-        camera.name = camera.name + '_' + listIdx;
-        videoIdxToCameraName[listIdx] = camera.name;
     });
 }
 
@@ -647,6 +632,50 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  * @param {{onProgress?:(msg:string)=>void, batch?:number, yieldMs?:number, fileIdentities?:Array, identityOf?:function(Object):number}} [opts]
  * @returns {Promise<{restoredGroups:number, restoredWith3d:number, movedGroups:Array}>}
  */
+/**
+ * The lazy store behind `labels`, when a group member can be read from its row
+ * exactly as `labels.frameAt(lfIdx)` would build it: a lazy `Labels` whose
+ * frames are all in the store and none materialized yet (a fresh reopen).
+ * Otherwise null, and members resolve through `instanceByCamera`.
+ */
+function lazyMemberStore(labels) {
+    var list = labels && labels._lazyFrameList;
+    var store = labels && labels._lazyDataStore;
+    if (!list || !store || list.store !== store || list.cache.size > 0 ||
+        (list._supplementary && list._supplementary.length > 0)) return null;
+    if (typeof labels.frameAt !== 'function' || typeof store.videoIndexFor !== 'function') return null;
+    if (!store.framesData || !store.instancesData || !store.framesData.instance_id_start) return null;
+    return store;
+}
+
+/**
+ * A group's members as `[camera, info]` pairs, in `refs` order, read from the
+ * store's rows the way `LazyDataStore.materializeFrame` reads them: `info` is
+ * `{ isPredicted, track, score }` (`instance_type` != 0; `tracks[track]` when
+ * the id is >= 0, else null; the `score` column, used for predictions only). A
+ * ref whose frame has no video or whose instance is past the frame's end is
+ * left out, as `instanceByCamera` leaves it out.
+ */
+function storeMembers(store, refs) {
+    var fd = store.framesData, id = store.instancesData;
+    var nFrames = store.frameCount;
+    var out = [];
+    for (var entry of refs) {
+        var lfIdx = entry[1][0], instIdx = entry[1][1];
+        if (!(lfIdx >= 0 && lfIdx < nFrames)) continue;
+        if (!store.videos[store.videoIndexFor(Number(fd.video ? fd.video[lfIdx] : 0))]) continue;
+        var row = Number(fd.instance_id_start[lfIdx]) + instIdx;
+        if (!(instIdx >= 0 && row < Number(fd.instance_id_end[lfIdx]))) continue;
+        var trackId = Number(id.track ? id.track[row] : -1);
+        out.push([entry[0], {
+            isPredicted: Number(id.instance_type ? id.instance_type[row] : 0) !== 0,
+            track: trackId >= 0 ? store.tracks[trackId] : null,
+            score: Number(id.score ? id.score[row] : 0),
+        }]);
+    }
+    return out;
+}
+
 export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
     opts = opts || {};
     // A file with no recording session has nothing to restore.
@@ -670,6 +699,11 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
     // O(tracks) × 1.25M members ≈ billions of comparisons.
     var trackIdxByName = new Map();
     for (var _tn = 0; _tn < session.tracks.length; _tn++) trackIdxByName.set(session.tracks[_tn], _tn);
+    // Members read from the lazy store's rows (`storeMemberInfo`) instead of
+    // through `typedIG.instanceByCamera`, which materializes every grouped
+    // frame's typed instances, points and all, only for each member's type,
+    // track and score (1.2 s and most of the load's GC on an 8-camera project).
+    var memberStore = lazyMemberStore(opts.labels);
 
     var fgKeys = Array.from(typedSession.frameGroups.keys());
     for (var fki = 0; fki < fgKeys.length; fki++) {
@@ -699,8 +733,10 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
 
             var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
             var refs = typedIG._instanceRefsByCamera || null;
+            var members = (memberStore && refs && !typedIG._instanceByCamera)
+                ? storeMembers(memberStore, refs) : null;
 
-            for (var camEntry of typedIG.instanceByCamera) {
+            for (var camEntry of (members || typedIG.instanceByCamera)) {
                 var typedCam = camEntry[0];
                 var typedInst = camEntry[1];
                 var igCamName = (typedCam && typedCam.name) || '';
@@ -719,7 +755,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 var points = lazyPlaceholderXY(numNodes);
 
                 var instMeta = instanceMetaMap[igCamName] || {};
-                var _isPred = PredI ? (typedInst instanceof PredI)
+                var _isPred = members ? typedInst.isPredicted : PredI ? (typedInst instanceof PredI)
                     : (typedInst && typedInst.pointScores !== undefined);
                 var _tName = (typedInst && typedInst.track && typedInst.track.name != null) ? typedInst.track.name : null;
                 var _derivedTrackIdx = (_tName != null && trackIdxByName.has(_tName)) ? trackIdxByName.get(_tName) : null;
@@ -1023,15 +1059,17 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
 }
 
 /**
- * Open a `.slp` (or analysis `.h5`) as the project.
+ * Open a `.slp` (or analysis `.h5`) as the project, replacing the open one.
  *
  * @param {File} slpFile
+ * @param {?FileSystemFileHandle} [fileHandle]  its handle, File ▸ Save's target
+ *   from then on; without one Save asks where to write.
  * @returns {Promise<false|undefined>} `false` when the file did not open and the
  *   project is as it was (cancelled, refused as too new or for a group across
  *   skeletons, unreadable), so a caller holding a save handle for this file knows
  *   not to keep it.
  */
-export async function handleLoadSlpFile(slpFile) {
+export async function handleLoadSlpFile(slpFile, fileHandle) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
@@ -1114,6 +1152,9 @@ export async function handleLoadSlpFile(slpFile) {
         state.views = [];
         state.videoFiles = [];
         state.sessions = [];
+        // Save writes back to THIS file, never the replaced project's.
+        state.slpFileHandle = fileHandle || null;
+        setPageProject(slpFile.name);
         // Plane state is project-scoped and lives on a module singleton, so
         // it does NOT go away with `state.sessions`. `readPlaneMetadata`
         // only restores into an EMPTY model, so without this the previous
@@ -1178,6 +1219,8 @@ export async function handleLoadSlpFile(slpFile) {
         var videoReaders = new Map();
         // Each session with its cameras' videos, for its suggestions below.
         var openedSessions = [];
+        // Picked videos that matched no camera, per session, for the status.
+        var unboundVideoWarn = [];
         for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
         showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
         await new Promise(function (r) { setTimeout(r, 0); });
@@ -1234,7 +1277,6 @@ export async function handleLoadSlpFile(slpFile) {
                     [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
                 videoIdxToCameraName[dvi] = dNames[dvi];
             }
-            makeCameraNamesUnique(cameras, videoIdxToCameraName);
         }
 
         // Use per-session skeleton/tracks from lucid metadata if available,
@@ -1555,13 +1597,13 @@ export async function handleLoadSlpFile(slpFile) {
                 videoFiles = slpParentFilesMap.get(currentSessName);
             } else if (slpParentFilesMap) {
                 // Parent dir was picked but this session wasn't matched — prompt individually
-                videoFiles = await forceVideoSelectionWithFolder(refInfo, currentSessName);
+                videoFiles = await forceVideoSelectionWithFolder(refInfo, currentSessName, { startIn: folderPickerStartFor(slpFile) });
                 if (videoFiles && videoFiles.parentResult) videoFiles = [];
             } else {
                 // Offer parent directory option on first prompt
                 var slpPromptResult = await forceVideoSelectionWithFolder(
                     refInfo, currentSessName,
-                    numSlpSessions > 1 ? { allSessionNames: slpAllSessionNames } : null
+                    { allSessionNames: numSlpSessions > 1 ? slpAllSessionNames : null, startIn: folderPickerStartFor(slpFile) }
                 );
 
                 if (slpPromptResult && slpPromptResult.parentResult) {
@@ -1594,6 +1636,25 @@ export async function handleLoadSlpFile(slpFile) {
                 });
                 var cameraNames = cameras.map(function (c) { return c.name; });
 
+                // A campy recording folder (session.json,
+                // `loading/campy-session.js`): read it BEFORE any video is
+                // picked for a camera, and put campy's own video for each
+                // camera first. Both picks below take the first of equally
+                // good candidates, and a camera folder can hold another
+                // video beside campy's 0.mp4: read afterwards, the order the
+                // browser listed the folder in decided which one loaded.
+                var slpCampy = await adoptCampyRecording(session, videoFiles,
+                    { calibrationNames: cameraNames });
+                if (slpCampy) {
+                    var campyOwnFiles = new Set();
+                    slpCampy.cameras.forEach(function (c) {
+                        var own = campyVideoFile(slpCampy, c, vidFiles);
+                        if (own) campyOwnFiles.add(own);
+                    });
+                    vidFiles = vidFiles.filter(function (f) { return campyOwnFiles.has(f); })
+                        .concat(vidFiles.filter(function (f) { return !campyOwnFiles.has(f); }));
+                }
+
                 // The camera a picked video belongs to: parent directory, then
                 // exact stem, then the filename the SLP references for that
                 // camera. Hoisted out of the post-load assignment loop so the
@@ -1621,6 +1682,32 @@ export async function handleLoadSlpFile(slpFile) {
                     return null;
                 };
 
+                // A picked folder holds more than this session's videos (the
+                // side cameras of the same recording), and campy names every
+                // camera's video 0.mp4, which the referenced-name rule above
+                // would bind to the first camera. So a folder's videos are
+                // placed by `assignFolderVideos` instead: one per camera, by
+                // folder or a name that tells the cameras apart; any other
+                // video is left out before it is decoded. A folder with ONE
+                // video keeps the rules above (and the one-camera fallback
+                // below): nothing shares its name.
+                if (isFolderPick(vidFiles) && vidFiles.length > 1) {
+                    var slpRefPathByCam = new Map();
+                    for (var srpi in videoIdxToCameraName) {
+                        var srpCam = videoIdxToCameraName[srpi];
+                        var srpMeta = slpData.videos[srpi];
+                        if (!srpCam || !srpMeta || slpRefPathByCam.has(srpCam)) continue;
+                        slpRefPathByCam.set(srpCam, srpMeta.sourceFilename || srpMeta.filename || '');
+                    }
+                    var slpFolder = assignFolderVideos(vidFiles, cameraNames, slpRefPathByCam);
+                    if (slpFolder.unused.length) {
+                        console.log('[load-slp] folder videos on no camera of this session, not loaded: ' +
+                            slpFolder.unused.map(function (f) { return f.webkitRelativePath || f.name; }).join(', '));
+                    }
+                    vidFiles = slpFolder.assigned;
+                    slpMatchCam = function (vFile) { return slpFolder.cameraOf.get(vFile) || null; };
+                }
+
                 // A `-calibration` stem loses to a plainly-named video of the
                 // SAME camera, but still loads when it is that camera's only
                 // candidate (#199). Applied before the decoders open so a
@@ -1632,12 +1719,9 @@ export async function handleLoadSlpFile(slpFile) {
                     vidFiles = _slpPref.kept;
                 }
 
-                // A campy recording folder (session.json,
-                // `loading/campy-session.js`): its frame rate and details go
-                // on the session; a camera whose campy video was picked loads
-                // only that video; the views follow campy's camera order.
-                var slpCampy = await adoptCampyRecording(session, videoFiles,
-                    { calibrationNames: cameraNames });
+                // The campy recording read above: its frame rate and details
+                // are on the session; a camera whose campy video was picked
+                // loads only that video; the views follow campy's camera order.
                 if (slpCampy) {
                     var campyOwnByCam = new Map();
                     slpCampy.cameras.forEach(function (c) {
@@ -1772,6 +1856,32 @@ export async function handleLoadSlpFile(slpFile) {
 
                 autoAssignVideosToCameras();
 
+                // One camera and one picked video that no rule above matched:
+                // the video is that camera's whatever it is called (a renamed
+                // copy or export of the file the SLP references). Runs after
+                // every name rule, so it only decides what they left open.
+                var sessVfs = state.videoFiles.filter(function (o) { return o.sessionIdx === slpSessIdx; });
+                if (cameras.length === 1 && vidFiles.length === 1 && sessVfs.length === 1
+                        && !sessVfs[0].assignedCamera) {
+                    sessVfs[0].assignedCamera = cameras[0].name;
+                    console.log('[load-slp] video "' + sessVfs[0].file.name + '" matches no camera by name; ' +
+                        'bound to the session\'s only camera "' + cameras[0].name + '"');
+                }
+                // Any other picked video that matched no camera gets no view.
+                // Say so on the final status, with the cameras left without one.
+                var unboundNames = sessVfs.filter(function (o) { return !o.assignedCamera; })
+                    .map(function (o) { return o.file.name; });
+                if (unboundNames.length) {
+                    var camsNoVideo = cameraNames.filter(function (cn) {
+                        return !sessVfs.some(function (o) { return o.assignedCamera === cn; });
+                    });
+                    var unboundText = (unboundNames.length > 1 ? 'videos ' : 'video ') +
+                        unboundNames.join(', ') + ' matched no camera, not loaded' +
+                        (camsNoVideo.length ? '; no video for ' + camsNoVideo.join(', ') : '');
+                    console.warn('[load-slp] ' + unboundText);
+                    unboundVideoWarn.push({ session: session, text: unboundText });
+                }
+
                 // Don't create views yet — wait until after session loop
                 // so we only create views for the active session
             }
@@ -1899,16 +2009,24 @@ export async function handleLoadSlpFile(slpFile) {
         if (state.session) statusParts.push(state.session.numFrames.toLocaleString('en-US') + ' labeled frames');
         if (state.views.length > 0) statusParts.push(state.views.length + ' views');
         // A campy recording's warnings (status, cameras), per session.
-        var campyWarn = [];
+        var loadWarn = [];
         state.sessions.forEach(function (cs) {
             campyRecordingWarnings(cs.campyRecording).forEach(function (w) {
-                campyWarn.push(state.sessions.length > 1 ? cs.name + ': ' + w : w);
+                loadWarn.push(state.sessions.length > 1 ? cs.name + ': ' + w : w);
             });
         });
         var outsideNote = outsideFramesNote(keptOutsideCounts(state.sessions));
-        if (outsideNote) campyWarn.push(outsideNote);
-        setStatus('SLP loaded (' + statusParts.join(', ') + ')'
-            + (campyWarn.length ? ' — ' + campyWarn.join('; ') : ''), campyWarn.length ? 'warning' : 'success');
+        if (outsideNote) loadWarn.push(outsideNote);
+        // Videos that matched no camera (a session whose load failed is gone).
+        unboundVideoWarn.forEach(function (u) {
+            if (state.sessions.indexOf(u.session) < 0) return;
+            loadWarn.push(state.sessions.length > 1 ? u.session.name + ': ' + u.text : u.text);
+        });
+        // A compact copy (import-export/compact-save.js) says it holds rounded values.
+        var loadedStatus = withCompactNote('SLP loaded (' + statusParts.join(', ') + ')'
+            + (loadWarn.length ? ' — ' + loadWarn.join('; ') : ''), loadWarn.length ? 'warning' : 'success',
+            state.sessions.find(function (cs) { return compactRoundingOf(cs.fileProvenance); }) || null);
+        setStatus(loadedStatus.message, loadedStatus.kind);
 
         // One skeleton per project: a multi-session .slp otherwise carries a
         // per-session skeleton each. Prompt for a single unifying skeleton file,
@@ -2049,7 +2167,6 @@ export async function handleAddSlp() {
                     [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
                 videoIdxToCameraName[dvi] = dNames[dvi];
             }
-            makeCameraNamesUnique(cameras, videoIdxToCameraName);
         }
 
         // A store row with no track has none: a lazy add does not invent a first one.
@@ -2274,8 +2391,38 @@ export async function handleAddSlp() {
             console.log('[add-slp] SLP references videos:', addSlpVideoRefs);
 
             // Ask for the video files; [] = the user continued without video.
+            // Each camera's video can sit in its own camera folder, so a whole
+            // recording folder is offered too.
             var addVideoFiles = await forceVideoSelection(addRefInfo,
-                { title: 'SLP loaded — now select the video file(s)' });
+                { title: 'SLP loaded — now select the video file(s)', folder: true });
+
+            // A picked folder holds more than this file's videos (the side
+            // cameras of the same recording, campy's manifests), and campy
+            // names every camera's video 0.mp4: only a video placed on one of
+            // the file's cameras by its folder or name loads, and nothing is
+            // bound by elimination (`assignFolderVideos`).
+            // A folder with ONE video keeps the name rules below.
+            var addFolderCam = null;
+            var addRefPathByCam = new Map();
+            if (isFolderPick(addVideoFiles)) {
+                addVideoFiles = addVideoFiles.filter(function (f) { return isVideoFileName(f.name); });
+            }
+            if (isFolderPick(addVideoFiles) && addVideoFiles.length > 1) {
+                for (var arp = 0; arp < slpData.videos.length; arp++) {
+                    var arpCam = videoIdxToCameraName[arp];
+                    var arpMeta = slpData.videos[arp];
+                    if (!arpCam || !arpMeta || addRefPathByCam.has(arpCam)) continue;
+                    addRefPathByCam.set(arpCam, arpMeta.sourceFilename || arpMeta.filename || '');
+                }
+                var addFolder = assignFolderVideos(addVideoFiles,
+                    cameras.map(function (c) { return c.name; }), addRefPathByCam);
+                if (addFolder.unused.length) {
+                    console.log('[add-slp] folder videos on no camera of this file, not loaded: ' +
+                        addFolder.unused.map(function (f) { return f.webkitRelativePath || f.name; }).join(', '));
+                }
+                addFolderCam = addFolder.cameraOf;
+                addVideoFiles = addFolder.assigned;
+            }
 
             if (addVideoFiles.length > 0) {
                 for (var amvi = 0; amvi < addVideoFiles.length; amvi++) {
@@ -2286,11 +2433,16 @@ export async function handleAddSlp() {
                         var amvDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
                         await amvDec.init(amvFile);
 
-                        // Match to SLP video reference by filename
-                        var amvCam = null;
+                        // Match to SLP video reference by filename (a folder
+                        // pick's videos are already placed, above)
+                        var amvCam = addFolderCam ? addFolderCam.get(amvFile) : null;
                         var amvMatchedVideoPath = null;
+                        if (amvCam) {
+                            var amvRefPath = addRefPathByCam.get(amvCam);
+                            if (amvRefPath && amvRefPath !== '.') amvMatchedVideoPath = amvRefPath;
+                        }
                         var amvStemLower = amvStem.toLowerCase();
-                        for (var arvi = 0; arvi < addSlpVideoRefs.length; arvi++) {
+                        for (var arvi = 0; !amvCam && arvi < addSlpVideoRefs.length; arvi++) {
                             var aRefName = addSlpVideoRefs[arvi];
                             if (!aRefName) continue;
                             var aRefStem = aRefName.replace(/\.[^.]+$/, '').toLowerCase();

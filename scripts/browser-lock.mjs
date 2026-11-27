@@ -31,6 +31,20 @@
  *
  * Waits up to LUCID_BROWSER_LOCK_WAIT_MIN minutes (default 60), then fails with
  * exit code 75. Stdlib only.
+ *
+ * The machine's rig lock comes first. On a machine with campy's bench/rig.py
+ * installed (RIG_ROOT, default ~/sleap-bench: the lab's test machines, and the
+ * Mac), which runs any test or benchmark one at a time, a headed run takes the
+ * rig BEFORE this lock: `rig.py hold <owner> browser-<label> <this pid>`, which
+ * waits for the rig and for the machine to be quiet, then holds it until this
+ * process ends (release() frees only the browser lock) and writes
+ * browser-<label>.rig.log (RIG_LOGDIR, default RIG_ROOT/logs) ending RIG_CLEAN or
+ * RIG_CONTAMINATED. Inside the rig's current job (under `rig.sh run`, or a guarded
+ * script) it doesn't wait for the rig its own job holds. Afterwards RIG_JOB names
+ * the held job, so a `rig.sh run` started from here runs at once. Rig first, then
+ * this lock, never the other way: a run holding this lock that then waits for the
+ * rig would deadlock with a rig holder waiting for this lock. RIG_OWNER names who
+ * runs it (default browser-lock); LUCID_BROWSER_LOCK_RIG=0 skips the rig.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -89,10 +103,89 @@ function refocusClaude() {
     try { spawnSync('osascript', ['-e', 'tell application "Claude" to activate'], { stdio: 'ignore', timeout: 5000 }); } catch (e) { /* not fatal */ }
 }
 
+// ------------------------------------------------------------------ the rig lock
+export const RIG_ROOT = process.env.RIG_ROOT || path.join(os.homedir(), 'sleap-bench');
+const RIG_PY = path.join(RIG_ROOT, 'rig.py');
+
+/** What the rig's lock file says (RIG_BUSY on Linux and macOS, gpu.lock on Windows), '' if neither. */
+function rigLockText() {
+    for (const name of ['RIG_BUSY', 'gpu.lock']) {
+        try { const t = fs.readFileSync(path.join(RIG_ROOT, name), 'utf8'); if (t.trim()) return t; } catch (e) { /* none */ }
+    }
+    return '';
+}
+
+/** This process runs inside the job that holds the rig (as rig_guard.sh tells). */
+function insideRigJob() {
+    const job = process.env.RIG_JOB;
+    return !!job && rigLockText().includes(`job=${job} `);
+}
+
+/**
+ * Take the machine's rig (see the header) for this process, unless there is none
+ * or this process already runs in its job. Resolves once `rig.py hold` says it
+ * holds it; then RIG_JOB names the held job. A rig.py that fails is reported and
+ * skipped (the browser lock still works); not getting the rig by `deadline`
+ * throws BROWSER_LOCK_TIMEOUT.
+ */
+function takeRig({ label, log, deadline, maxWait }) {
+    if (process.env.LUCID_BROWSER_LOCK_RIG === '0' || !fs.existsSync(RIG_PY) || insideRigJob()) return Promise.resolve();
+    const owner = process.env.RIG_OWNER || 'browser-lock';
+    const tag = ('browser-' + label).replace(/[^\w.+-]+/g, '_').slice(0, 80);
+    const logDir = process.env.RIG_LOGDIR || path.join(RIG_ROOT, 'logs');
+    try { fs.mkdirSync(logDir, { recursive: true }); } catch (e) { /* rig.py says so */ }
+    const python = process.env.RIG_PYTHON || (process.platform === 'win32' ? 'python' : '/usr/bin/python3');
+    // In a session of its own: a Ctrl-C meant for this run must not end the hold before the run has ended
+    const child = spawn(python, [RIG_PY, 'hold', '--log-dir', logDir, owner, tag, String(process.pid)],
+        { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    log(`[browser-lock] taking the rig first (${RIG_ROOT}; ${owner} ${tag}; log ${path.join(logDir, tag + '.rig.log')})`);
+    return new Promise((resolve, reject) => {
+        let out = '', err = '', done = false;
+        const finish = (e) => {
+            if (done) return;
+            done = true;
+            clearInterval(timer);
+            if (e && e.code !== 'BROWSER_LOCK_TIMEOUT') {
+                log(`${e.message}; going on without the rig`);
+                return resolve();
+            }
+            if (e) return reject(e);
+            // held: stop reading (rig.py goes on logging to its file), and let this process exit without waiting for it
+            child.stdout.destroy();
+            child.stderr.destroy();
+            child.unref();
+            const m = rigLockText().match(/\bjob=(\S+)/);
+            if (m) process.env.RIG_JOB = m[1];
+            resolve();
+        };
+        child.stdout.on('data', (d) => {
+            out += d;
+            let i;
+            while ((i = out.indexOf('\n')) >= 0) {
+                const line = out.slice(0, i).trimEnd();
+                out = out.slice(i + 1);
+                if (/ rig held by /.test(line)) { log(`[browser-lock] rig held: ${line.replace(/^\S+ /, '')}`); return finish(); }
+                if (line.trim()) log(`[browser-lock] rig: ${line}`);
+            }
+        });
+        child.stderr.on('data', (d) => { err += d; });
+        child.on('error', (e) => finish(new Error(`[browser-lock] can't run ${python} ${RIG_PY}: ${e.message}`)));
+        child.on('exit', (code) => finish(new Error(`[browser-lock] rig.py hold ended (exit ${code}) before it held the rig${err.trim() ? ': ' + err.trim().split('\n').pop() : ''}`)));
+        const timer = setInterval(() => {
+            if (Date.now() <= deadline) return;
+            try { process.kill(-child.pid, 'SIGTERM'); } catch (e) { try { child.kill('SIGTERM'); } catch (e2) { /* gone */ } }
+            const e = new Error(`[browser-lock] gave up after ${(maxWait / 60000).toFixed(0)} min waiting for the rig: ${rigLockText().trim() || 'see rig.py status'}`);
+            e.code = 'BROWSER_LOCK_TIMEOUT';
+            finish(e);
+        }, 1000);
+    });
+}
+
 /**
  * Wait for and take the lock. Resolves to an async `release()` (idempotent;
  * also run on exit and on SIGINT/SIGTERM/SIGHUP). If an ancestor process holds
- * it (LUCID_BROWSER_LOCK_HELD), resolves at once to a no-op.
+ * it (LUCID_BROWSER_LOCK_HELD), resolves at once to a no-op. Takes the machine's
+ * rig lock first where there is one (see the header).
  */
 export async function acquireBrowserLock({ label, log = (m) => console.error(m), waitMin } = {}) {
     const held = process.env[HELD_ENV];
@@ -103,6 +196,7 @@ export async function acquireBrowserLock({ label, log = (m) => console.error(m),
     label = label || path.basename(process.argv[1] || 'run');
     const maxWait = (waitMin != null ? waitMin : Number(process.env.LUCID_BROWSER_LOCK_WAIT_MIN || 60)) * 60000;
     const t0 = Date.now();
+    await takeRig({ label, log, deadline: t0 + maxWait, maxWait });
     let told = 0;
     for (;;) {
         try {
