@@ -26,8 +26,9 @@
  *     sends every other row to the unlinked pool. Group members are never
  *     lost: they live in `session.instanceGroups`, which is never evicted, and
  *     come back as the SAME objects. Unlinked instances are rebuilt from the
- *     store, so each must still equal its row, occlusion included. Anything
- *     else — a user instance
+ *     store, so each must still equal its row, occlusion included. A pose the
+ *     session does not show (`describeStoreFrame`'s `hidden`) is never hydrated,
+ *     so it is not expected here. Anything else — a user instance
  *     (the streaming save reads its edit overlay from resident frames, see
  *     `buildSessionRefGraph`), an edited/backed-up/nulled instance, a deleted or
  *     added row, a track changed only in memory, a trackless instance carrying
@@ -109,6 +110,7 @@ function instanceBlocker(inst, desc, seen, numNodes, refs) {
     if (inst.nulledNodes && inst.nulledNodes.size > 0) return 'modified';
     var k = inst._rawInstIndex;
     if (typeof k !== 'number' || !(k >= 0 && k < desc.count) || k !== Math.floor(k)) return 'row';
+    if (desc.hidden && desc.hidden[k]) return 'row';
     if (seen[k]) return 'row';
     seen[k] = 1;
     if (numNodes > 0 && inst.numNodes !== numNodes) return 'skeleton';
@@ -161,8 +163,9 @@ export function frameEvictionBlocker(session, frameIdx, fg, refs) {
         var desc = loader.describeStoreFrame(cam, frameIdx);
         if (!desc) return 'camera';
         // With the per-row uniqueness below, equal counts make resident
-        // instances and store rows a bijection: no row deleted, none added.
-        if (linked.length + unlinked.length !== desc.count) return 'count';
+        // instances and store rows a bijection: no row deleted, none added. A
+        // pose the session does not show is in the store and is never resident.
+        if (linked.length + unlinked.length !== desc.count - (desc.nHidden || 0)) return 'count';
         if (desc.count === 0) continue;
         var seen = new Uint8Array(desc.count);
         var numNodes = (loader.numNodesByCam && loader.numNodesByCam.get(cam)) || 0;
@@ -380,6 +383,7 @@ export function member2dReleaseBlocker(m, desc, numNodes, refs) {
     var k = m._rawInstIndex;
     if (typeof k !== 'number' || !(k >= 0 && k < desc.count) || k !== Math.floor(k)) return 'row';
     if (desc.predicted[k] !== 1) return 'row';
+    if (desc.hidden && desc.hidden[k]) return 'row';
     if (!(numNodes > 0) || m.numNodes !== numNodes) return 'skeleton';
     if (!occlusionMatchesRow(m, desc, k)) return 'occlusion';
     return null;

@@ -13,14 +13,19 @@
  *    per session and `Instance` stores 2D by node index, so reading such a pose would
  *    put its values under the session's node names and drop its extra nodes. Each
  *    stays on its own skeleton, with its own nodes. One on a camera's own video stays
- *    on that video, in the camera's frame. A group linking such a pose cannot be
- *    held, so that load refuses (`groupsAcrossSkeletonsRefusal`).
+ *    on that video, in the camera's frame. On the eager path a group linking such a
+ *    pose cannot be held, so that load refuses (`groupsAcrossSkeletonsRefusal`).
  *
  * The lazy path keeps both where they already are, in its columnar store:
  * `buildSessionRefGraph` gives each such video and skeleton a place in the header,
  * and `SioLazyLoader.remapTracksFromIdentity` keeps their track names when the
- * session's track list changes. File ▸ Add SLP puts its own there too
- * (`SioLazyLoader.commitAddedRows`, loading/lazy-store-rows.js).
+ * session's track list changes. Kind 2 is flagged row by row
+ * (loading/poses-not-shown.js), so nothing reads it by position and an edit beside it
+ * does not touch it. A group linking such a pose stays whole on
+ * `session.outsideGroups`, with its poses flagged too (`keepGroupAside`), so a lazy
+ * load has nothing to refuse.
+ * File ▸ Add SLP puts its own there too (`SioLazyLoader.commitAddedRows`,
+ * loading/lazy-store-rows.js).
  *
  * The eager path has no store, so this module holds them for it, on
  * `session.outsideFrames`:
@@ -44,9 +49,10 @@
  * byte-identically (`tests/e2e/save-golden-digest.mjs`).
  */
 
-import { Instance } from '../pose/pose-data.js';
+import { Instance, pooledPoints3d } from '../pose/pose-data.js';
 import { keptVideoRecords } from './behavior-events.js';
 import { makePooledSioInstances } from './file-io.js';
+import { shownSkeletonEntry } from '../loading/poses-not-shown.js';
 import { identityCatalogFinder, writeFileLabels } from './detection-labels.js';
 
 function newHeaderVideo(SIO, filename, shape) {
@@ -115,10 +121,6 @@ export function fileSkeletons(slpData) {
     return slpData.skeletons;
 }
 
-function edgeKeys(edges) {
-    return (edges || []).map(function (e) { return e[0] + '-' + e[1]; }).sort().join(',');
-}
-
 /**
  * The videos a file's session reads: its camera map's, else one per camera in order
  * (`videosClaimedBy`), else all of them for a file with no session.
@@ -144,22 +146,12 @@ function videosOfFileSession(slpData, sessionIdx) {
  * @returns {{name: string, nodes: string[], edges: number[][], frames: Array}}
  */
 export function sessionSkeletonEntry(slpData, sessionIdx) {
-    var entries = fileSkeletons(slpData);
-    if (entries.length === 1) return entries[0];
     var sess = slpData.sessions && slpData.sessions[sessionIdx];
-    var record = sess && sess.metadata && sess.metadata.lucid && sess.metadata.lucid.skeleton;
-    if (record && record.nodes) {
-        var names = JSON.stringify(record.nodes.map(function (n) { return typeof n === 'string' ? n : (n.name || ''); }));
-        var sameNodes = entries.filter(function (e) { return JSON.stringify(e.nodes) === names; });
-        var sameEdges = sameNodes.filter(function (e) { return edgeKeys(e.edges) === edgeKeys(record.edges); });
-        if (sameEdges.length > 0) return sameEdges[0];
-        if (sameNodes.length > 0) return sameNodes[0];
-    }
-    var videos = videosOfFileSession(slpData, sessionIdx);
-    for (var i = 0; i < entries.length; i++) {
-        if (entries[i].frames.some(function (f) { return videos.has(f.videoIdx); })) return entries[i];
-    }
-    return entries[0];
+    var videos = null;
+    return shownSkeletonEntry(fileSkeletons(slpData), sess && sess.metadata && sess.metadata.lucid && sess.metadata.lucid.skeleton, function (entry) {
+        if (!videos) videos = videosOfFileSession(slpData, sessionIdx);
+        return entry.frames.some(function (f) { return videos.has(f.videoIdx); });
+    });
 }
 
 /**
@@ -203,6 +195,65 @@ export function groupsAcrossSkeletonsRefusal(slpData, nSessions) {
     if (groups === 0) return null;
     return 'Not opened: ' + groups.toLocaleString('en-US') + (groups === 1 ? ' group' : ' groups') +
         ' in this file ' + (groups === 1 ? 'links' : 'link') + ' poses on different skeletons, and LUC3D shows one skeleton per session.';
+}
+
+/**
+ * Lazy load: does this group of the file link a pose the session does not show?
+ *
+ * @param {Object} typedIG - sleap-io.js `InstanceGroup`, its refs as read
+ * @param {SioLazyLoader} loader
+ * @returns {boolean}
+ */
+export function groupLinksPoseNotShown(typedIG, loader) {
+    var refs = typedIG._instanceRefsByCamera;
+    if (!refs || !loader || typeof loader.isPoseNotShown !== 'function') return false;
+    for (var entry of refs) {
+        if (loader.isPoseNotShown(entry[1][0], entry[1][1])) return true;
+    }
+    return false;
+}
+
+/**
+ * Lazy load: set one of the file's groups aside whole, on `session.outsideGroups`.
+ * `Instance` stores 2D by the session's node index, so its member on another skeleton
+ * cannot be shown, and leaving that member out would change the group on the next save.
+ * So none of its poses is shown or edited, on any skeleton, and the save writes the
+ * group back as it was, its 3D included.
+ *
+ * Each member is held by its store frame row and its position in that frame, the two
+ * numbers a file's group refers to it by; a delete keeps the position right
+ * (`shiftOutsideGroupMembers`).
+ *
+ * @param {Session} session
+ * @param {number} frameIdx
+ * @param {Object} typedIG - sleap-io.js `InstanceGroup`, its refs as read
+ * @param {SioLazyLoader} loader
+ */
+export function keepGroupAside(session, frameIdx, typedIG, loader) {
+    var members = new Map();
+    for (var entry of typedIG._instanceRefsByCamera) {
+        var row = entry[1][0], offset = entry[1][1];
+        members.set(entry[0].name, { row: row, offset: offset });
+        loader.setPoseNotShown(row, offset);
+    }
+    var instance3d = typedIG.instance3d;
+    // Flat, and in the slab pool, like a shown group's: one ArrayBuffer per group is what full GCs sweep.
+    if (instance3d && instance3d.points) instance3d.points = pooledPoints3d(instance3d.points);
+    if (!session.outsideGroups) session.outsideGroups = new Map();
+    if (!session.outsideGroups.has(frameIdx)) session.outsideGroups.set(frameIdx, []);
+    session.outsideGroups.get(frameIdx).push({
+        members: members, instance3d: instance3d, identity: typedIG.identity,
+        score: typedIG.score, metadata: typedIG.metadata,
+    });
+}
+
+/** How many groups `session.outsideGroups` holds. */
+export function outsideGroupCount(session) {
+    var n = 0;
+    if (session && session.outsideGroups) {
+        for (var groups of session.outsideGroups.values()) n += groups.length;
+    }
+    return n;
 }
 
 function emptyOutsideFrames() {
@@ -647,6 +698,9 @@ function lazyOutsideFramesForSave(SIO, session, loader) {
     var headerVideoOf = new Map();
     var trackByName = new Map();
     var labeledFrames = [];
+    function noteTrack(inst) {
+        if (inst.track && !trackByName.has(inst.track.name)) trackByName.set(inst.track.name, inst.track);
+    }
     loader.forEachOutsideRow(function (store, row, id) {
         var lf = store.materializeFrame(row);
         if (!lf) return;
@@ -656,12 +710,24 @@ function lazyOutsideFramesForSave(SIO, session, loader) {
             var record = records.get(store.videos.indexOf(lf.video));
             if (record) listedVideos.set(record, headerVideo);
         }
-        lf.instances.forEach(function (inst) {
-            if (inst.track && !trackByName.has(inst.track.name)) trackByName.set(inst.track.name, inst.track);
-        });
+        lf.instances.forEach(noteTrack);
         labeledFrames.push(new SIO.LabeledFrame({ video: headerVideoOf.get(lf.video), frameIdx: lf.frameIdx, instances: lf.instances }));
     });
-    if (labeledFrames.length === 0) return null;
+    // This writer has only the resident frames of a lazy camera, so the poses the session
+    // does not show come from the store. Read here, for their tracks; they join their
+    // camera's frames once the session's Labels exist.
+    var notShown = [];
+    session.cameras.forEach(function (cam, camIdx) {
+        var rowMap = loader.frameRowByCam.get(cam.name);
+        if (!rowMap) return;
+        for (var [frameIdx, row] of rowMap) {
+            loader.posesNotShownAt(cam.name, frameIdx).forEach(function (pose) {
+                noteTrack(pose.inst);
+                notShown.push({ camName: cam.name, camIdx: camIdx, frameIdx: frameIdx, row: row, pose: pose });
+            });
+        }
+    });
+    if (labeledFrames.length === 0 && notShown.length === 0) return null;
     return {
         videos: Array.from(headerVideoOf.values()), tracks: Array.from(trackByName.values()), listedVideos: listedVideos,
         placedVideos: headerVideoOf,
@@ -672,9 +738,73 @@ function lazyOutsideFramesForSave(SIO, session, loader) {
                     if (inst.identity) inst.identity = findIdentity(inst.identity);
                 });
             });
+            placeLazyPosesNotShown(SIO, session, loader, labels, notShown, labeledFrames, findIdentity);
             return labeledFrames;
         },
     };
+}
+
+/**
+ * Put a lazy session's poses not shown into their cameras' frames (one row per video and
+ * frame, a new one when `labels` has none there), each on its own skeleton, and rebuild
+ * its kept groups on them. A member of a kept group on the session's skeleton goes on
+ * `labels`' copy of it.
+ */
+function placeLazyPosesNotShown(SIO, session, loader, labels, notShown, labeledFrames, findIdentity) {
+    var frameAt = new Map();    // video -> (frameIdx -> LabeledFrame)
+    function frameFor(video, frameIdx) {
+        if (!frameAt.has(video)) frameAt.set(video, new Map());
+        var lf = frameAt.get(video).get(frameIdx);
+        if (!lf) {
+            lf = new SIO.LabeledFrame({ video: video, frameIdx: frameIdx, instances: [] });
+            frameAt.get(video).set(frameIdx, lf);
+            labeledFrames.push(lf);
+        }
+        return lf;
+    }
+    labels.labeledFrames.forEach(function (lf) {
+        if (!frameAt.has(lf.video)) frameAt.set(lf.video, new Map());
+        frameAt.get(lf.video).set(lf.frameIdx, lf);
+    });
+    var placed = new Map();     // "camera:row:offset" -> { inst, lf }
+    notShown.forEach(function (at) {
+        var inst = at.pose.inst;
+        var camLabels = loader.labelsByCam.get(at.camName);
+        var otherIds = loader.otherSkeletonIds(camLabels);
+        if (!otherIds || !otherIds.has((camLabels._lazyDataStore.skeletons || []).indexOf(inst.skeleton))) inst.skeleton = labels.skeletons[0];
+        if (inst.identity) inst.identity = findIdentity(inst.identity);
+        var lf = frameFor(labels.videos[at.camIdx], at.frameIdx);
+        lf.instances.push(inst);
+        placed.set(at.camName + ':' + at.row + ':' + at.pose.offset, { inst: inst, lf: lf });
+    });
+    var sioSession = labels.sessions && labels.sessions[0];
+    if (!session.outsideGroups || !sioSession) return;
+    var sioCamOf = new Map();
+    sioSession.cameraGroup.cameras.forEach(function (c) { sioCamOf.set(c.name, c); });
+    for (var [groupFrame, groups] of session.outsideGroups) {
+        for (var g = 0; g < groups.length; g++) {
+            var instanceByCamera = new Map();
+            var lfByCamera = new Map();
+            for (var [memberCam, member] of groups[g].members) {
+                var sioCam = sioCamOf.get(memberCam);
+                var at = placed.get(memberCam + ':' + member.row + ':' + member.offset);
+                if (!sioCam || !at) continue;
+                instanceByCamera.set(sioCam, at.inst);
+                lfByCamera.set(sioCam, at.lf);
+            }
+            if (instanceByCamera.size === 0) continue;
+            var sioFrameGroup = sioSession.frameGroups.get(groupFrame);
+            if (!sioFrameGroup) {
+                sioFrameGroup = new SIO.FrameGroup({ frameIdx: groupFrame, instanceGroups: [], labeledFrameByCamera: new Map() });
+                sioSession.frameGroups.set(groupFrame, sioFrameGroup);
+            }
+            for (var [lfCam, memberLf] of lfByCamera) sioFrameGroup.labeledFrameByCamera.set(lfCam, memberLf);
+            sioFrameGroup.instanceGroups.push(new SIO.InstanceGroup({
+                instanceByCamera: instanceByCamera, instance3d: groups[g].instance3d,
+                identity: groups[g].identity ? findIdentity(groups[g].identity) : undefined, score: groups[g].score, metadata: groups[g].metadata,
+            }));
+        }
+    }
 }
 
 /**
@@ -682,8 +812,9 @@ function lazyOutsideFramesForSave(SIO, session, loader) {
  * screen, and what a save does with it. Empty when there is nothing to say.
  *
  * @param {{frames: number, videos: number, cameraPoses: (number|undefined),
- *   cameraSkeletons: (string[]|undefined)}} counts - frames and videos outside the
- *   opened sessions; poses on a camera's video kept for being on another skeleton
+ *   cameraSkeletons: (string[]|undefined), groups: (number|undefined)}} counts - frames
+ *   and videos outside the opened sessions; poses on a camera's video kept for being on
+ *   another skeleton; groups kept aside for linking one (`keepGroupAside`)
  * @param {number} [fileSessions] - sessions in the file, for a loader that opens only
  *   the first
  * @returns {string}
@@ -705,6 +836,12 @@ export function outsideFramesNote(counts, fileSessions) {
         notes.push(counts.cameraPoses.toLocaleString('en-US') + (one ? ' pose' : ' poses') + ' on a camera\'s video ' +
             (one ? 'is' : 'are') + ' on another skeleton' + (named ? ' (' + named + ')' : '') + ' and ' + (one ? 'is' : 'are') +
             ' not shown; saving keeps ' + (one ? 'it' : 'them') + ' on that skeleton.');
+    }
+    if (counts.groups) {
+        var oneGroup = counts.groups === 1;
+        notes.push(counts.groups.toLocaleString('en-US') + (oneGroup ? ' group' : ' groups') + ' with poses on another skeleton ' +
+            (oneGroup ? 'is' : 'are') + ' not shown, nor are the poses ' + (oneGroup ? 'it links' : 'they link') +
+            '; saving keeps ' + (oneGroup ? 'it' : 'them') + '.');
     }
     return notes.join(' ');
 }
