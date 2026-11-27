@@ -282,12 +282,25 @@ try {
         for (let c = 0, o = 0; c < cols; c++) for (let r = 0; r < rows; r++, o += bpe) rowMajor.copy(out, o, (r * cols + c) * bpe, (r * cols + c + 1) * bpe);
         return [t, out];
     }));
+    // A run of plain counting numbers can sit in two tables' columns alike, so the
+    // match grows until one table is left; a chunk whose whole content two tables
+    // share keeps both (an error naming either is right).
+    const has = (t, head) => raw[t].indexOf(head) >= 0 || byColumn[t].indexOf(head) >= 0;
     const chunks = zlibStreams(project).map(c => {
-        const head = c.inflated.subarray(0, 64);
-        return { ...c, table: TABLES.find(t => raw[t].indexOf(head) >= 0 || byColumn[t].indexOf(head) >= 0) };
+        let tables = TABLES.filter(t => has(t, c.inflated.subarray(0, 64)));
+        for (let n = 512; tables.length > 1 && n < c.inflated.length * 2; n *= 4) {
+            const head = c.inflated.subarray(0, Math.min(n, c.inflated.length));
+            const narrower = tables.filter(t => has(t, head));
+            if (narrower.length === 0) break;   // the chunk's tail is padding: keep what matched
+            tables = narrower;
+        }
+        return { ...c, tables, table: tables[0] };
     });
     const byTable = {};
     for (const c of chunks) (byTable[c.table] = byTable[c.table] || []).push(c);
+    // The chunk a single-table check damages must be that table's alone.
+    const onlyIn = (t) => chunks.filter(c => c.tables.length === 1 && c.table === t);
+    for (const t of TABLES) if (onlyIn(t).length) byTable[t] = onlyIn(t).concat((byTable[t] || []).filter(c => c.tables.length > 1));
     check(!byTable.undefined && TABLES.every(t => byTable[t] && byTable[t].length >= 1),
         `${chunks.length} chunks, each found in its table`, Object.entries(byTable).map(([k, v]) => [k, v.length]));
 
@@ -310,7 +323,7 @@ try {
         const wrong = [];
         for (const c of chunks) {
             const r = await readWith(flipped(project, c), options);
-            if (!(saysDamaged(r.threw, c.table) && r.failedRead)) wrong.push({ table: c.table, at: c.offset, r });
+            if (!(c.tables.some(t => saysDamaged(r.threw, t)) && r.failedRead)) wrong.push({ tables: c.tables, at: c.offset, r });
         }
         check(wrong.length === 0, `${label}: each of the ${chunks.length} chunks is an error naming its table`,
             { wrong: wrong.length, of: chunks.length, first: wrong.slice(0, 2) });
