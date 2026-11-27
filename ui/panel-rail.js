@@ -50,7 +50,7 @@ export const PANEL_RAIL_PANELS = [
     { tab: 'tabInstances', label: 'Instances', icon: 'users' },
     { tab: 'tabVisibility', label: 'Visibility', icon: 'eye' },
     { tab: 'tabIdSwitches', label: 'ID Switches', icon: 'arrow-left-right' },
-    { tab: 'tabModelCheck', label: 'Model Check', icon: 'scan-search' },
+    { tab: 'tabModelCheck', label: 'Misreads', icon: 'scan-search' },   // a model check's misread animals; 'Model Check' is wider than the rail's 132 px
     { tab: 'tabVideos', label: 'Videos', icon: 'film' },
     { tab: 'tabCameras', label: 'Cameras', icon: 'camera' },
     { tab: 'tabSkeleton', label: 'Skeleton', icon: 'bone' },

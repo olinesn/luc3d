@@ -10797,7 +10797,7 @@ with a row selected).
 
 **Purpose.** File ▸ **Load Model Check…** and the right panel's **Model Check**
 panel (`#tabModelCheck` / `#modelCheckPanel`, on the right-edge rail after ID
-Switches; `openModelCheckPanel` opens it with `showPanelTab`): the animals a
+Switches as **Misreads**, since "Model Check" is wider than the rail's labels; `openModelCheckPanel` opens it with `showPanelTab`): the animals a
 model misread, from a `scan.json` (`pose/model-check.js`), to step through while
 proofreading.
 
@@ -15040,7 +15040,7 @@ closes both.
 ### ui/panel-rail.js
 
 **Purpose.** The right-edge icon rail and the stack of collapsible panel
-sections it drives (Instances, Visibility, ID Switches, Model Check, Videos, Cameras,
+sections it drives (Instances, Visibility, ID Switches, Misreads (the Model Check panel), Videos, Cameras,
 Skeleton, Session, Behavior, Memory); it also shows/hides the info panel. It replaced the
 horizontal tab bar. Modelled on sleap-app's sidebar
 (`src/components/layout/AppShell.tsx` `Sidebar`; rules in `appStore.ts`
@@ -15126,7 +15126,7 @@ release sleap-app uses through `lucide-react`; ISC, notice in the file header
 and `lib/LICENSES.txt`). sleap-app's glyph wherever the panel matches:
 Instances = Users, Visibility = Eye (sleap-app's View panel), Videos = Film,
 Skeleton = Bone, Behavior = Tags. Others: ID Switches = ArrowLeftRight (two opposing arrows),
-Model Check = ScanSearch, Cameras = Camera, Session = FolderTree, Memory = MemoryStick, plus PanelRightClose / PanelRightOpen
+Misreads (Model Check) = ScanSearch, Cameras = Camera, Session = FolderTree, Memory = MemoryStick, plus PanelRightClose / PanelRightOpen
 and the section headers' ChevronDown / ChevronRight / X (sleap-app's).
 Inline strings: no fetch, so offline mode and the version stamp are unaffected.
 

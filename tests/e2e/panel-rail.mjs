@@ -47,7 +47,7 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 
 const EXPECTED = [
     ['tabInstances', 'Instances'], ['tabVisibility', 'Visibility'], ['tabIdSwitches', 'ID Switches'],
-    ['tabModelCheck', 'Model Check'], ['tabVideos', 'Videos'], ['tabCameras', 'Cameras'], ['tabSkeleton', 'Skeleton'], ['tabSession', 'Session'],
+    ['tabModelCheck', 'Misreads'], ['tabVideos', 'Videos'], ['tabCameras', 'Cameras'], ['tabSkeleton', 'Skeleton'], ['tabSession', 'Session'],
     ['tabBehavior', 'Behavior'], ['tabMemory', 'Memory'],
 ];
 // First path of the Lucide glyph each panel must show. Instances/Visibility/
