@@ -46,7 +46,7 @@
 
 import { Instance } from '../pose/pose-data.js';
 import { keptVideoRecords } from './behavior-events.js';
-import { makePooledSioInstances } from './file-io.js';
+import { makePooledSioInstances } from './slp-labels-build.js';   // DOM-free (was file-io.js)
 import { identityCatalogFinder, writeFileLabels } from './detection-labels.js';
 
 function newHeaderVideo(SIO, filename, shape) {
@@ -378,7 +378,7 @@ export function noteVideoReaders(readers, session, entry, claimedVideos, videoId
 export function keepOtherSkeletonFrames(slpData, readers, fallback, fallbackEntry) {
     var entries = fileSkeletons(slpData);
     if (entries.length <= 1) return;
-    var SIO = window.SleapIO;
+    var SIO = globalThis.SleapIO;   // the page's window.SleapIO (no page: the CLI sets it)
     var trackByName = new Map();
     function trackOf(trackIdx) {
         // `null >= 0` is true in JS.
@@ -564,7 +564,7 @@ export function keepOutsideColumnarFrames(session, slpData, own, camName) {
  *   `labels.identities`.
  */
 export function outsideFramesForSave(session) {
-    var SIO = window.SleapIO;
+    var SIO = globalThis.SleapIO;   // the page's window.SleapIO (no page: the CLI sets it)
     // A lazy session on this path (a project mixing lazy and eager sessions): its
     // store holds them, and the eager writer would otherwise leave them behind.
     var loader = session.lazyLoader;

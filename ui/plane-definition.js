@@ -245,51 +245,10 @@ export {
 // Private drag MIME. See the module note above — must NOT be `text/plain`.
 export const PLANE_DRAG_MIME = 'application/x-lucid-plane-skeleton';
 
-export const planeState = {
-    /** @type {boolean} True while Defining Plane Mode is active. */
-    active: false,
-    /**
-     * @type {PlaneModel} The whole plane annotation state: the global node
-     * pool, the planes, and the per-view 2D. Project-scoped (app-session
-     * memory) except the 2D, which is re-attached per session by
-     * `planeModel()`.
-     */
-    model: new PlaneModel(),
-    /** @type {number|null} `PlaneSkeleton.id` the editor is editing. */
-    selectedPlaneId: null,
-    /**
-     * @type {number} Node radius in canvas px, SHARED by every plane. One
-     * value rather than per-plane: these are reference geometry you size
-     * once for legibility against your video, not per-plane styling.
-     */
-    nodeSize: 5,
-    /** @type {number} Edge stroke width in canvas px, shared by every plane. */
-    edgeWidth: 2,
-    /**
-     * @type {number} Plane-corner sphere size in the 3D scene, shared by every
-     * plane. Separate from `nodeSize` (canvas px) because the two live in
-     * unrelated units, and separate from the viewport's `skeletonNodeSize` so
-     * sizing plane corners for legibility never resizes pose nodes.
-     */
-    nodeSize3d: 4,
-    /**
-     * @type {number|null} The pool node id the panel has SELECTED, ringed in
-     * the 3D view. Transient — a way to find one corner among nine, cleared by
-     * the next click anywhere else, so it is neither saved nor remembered.
-     * Separate from `expandedNodes`: opening a node's coordinates is a request
-     * to READ something, selecting it is a request to be SHOWN where it is.
-     */
-    selectedNodeId: null,
-    /** @type {Set<number>} Plane ids whose placement list is expanded. */
-    expanded: new Set(),
-    /**
-     * @type {Set<number>} Pool node ids whose coordinate panel is open. Not
-     * persisted — which rows you left open is a property of looking at the
-     * panel, not of the project, and restoring nine open nodes on load would
-     * hand back the clutter the collapsed list exists to remove.
-     */
-    expandedNodes: new Set(),
-};
+// The plane state object lives in ./plane-state.js (DOM-free, so
+// import-export/plane-metadata.js reads it without the page); re-exported here.
+import { planeState } from './plane-state.js';
+export { planeState };
 
 /**
  * The plane model, with its 2D bound to the ACTIVE session.

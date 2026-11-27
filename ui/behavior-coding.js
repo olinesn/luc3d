@@ -46,12 +46,17 @@ export function behaviorUi() {
 // bouts strip each register one repainter; requests within a frame coalesce.
 // ----------------------------------------------------------------------------
 
-var _repainters = [];
+// The repainters, on a hoisted function: a module that registers while it loads
+// (ui/behavior-timeline.js does) can run before this one's body when an import
+// cycle reaches it first, and a `var` list would not exist yet.
+function repainters() {
+    return repainters.list || (repainters.list = []);
+}
 var _pendingInfo = null;
 
 /** Register a repainter: `fn(info)` where info merges every request since the last paint. */
 export function registerBehaviorRepaint(fn) {
-    if (typeof fn === 'function') _repainters.push(fn);
+    if (typeof fn === 'function') repainters().push(fn);
 }
 
 /**
@@ -64,8 +69,9 @@ export function requestBehaviorRepaint(info) {
     if (!first) return;
     var run = function () {
         var i = _pendingInfo; _pendingInfo = null;
-        for (var k = 0; k < _repainters.length; k++) {
-            try { _repainters[k](i || {}); } catch (e) { console.error('[behavior] repaint failed', e); }
+        var list = repainters();
+        for (var k = 0; k < list.length; k++) {
+            try { list[k](i || {}); } catch (e) { console.error('[behavior] repaint failed', e); }
         }
     };
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run); else run();

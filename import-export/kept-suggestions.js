@@ -174,7 +174,7 @@ export function suggestedFrameRows(session) {
  *   entry, the session's suggestions, for `suggestionsInFileOrder`
  */
 export function suggestionsForSave(session, listed) {
-    var SIO = window.SleapIO;
+    var SIO = globalThis.SleapIO;   // the page's window.SleapIO (no page: the CLI sets it)
     var rows = (session.lazyLoader ? lazySuggestionRows(session) : []).concat(session.keptSuggestions || []);
     var cameraNames = new Set(session.cameras.map(function (c) { return c.name; }));
     rows.forEach(function (row) {

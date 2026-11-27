@@ -97,6 +97,51 @@ function samePair(a, b) {
     return (a.nameA === b.nameA && a.nameB === b.nameB) || (a.nameA === b.nameB && a.nameB === b.nameA);
 }
 
+/** True when at least one tracked frame has a 3D skeleton with an identity: what either check reads. */
+export function hasTrackedIdentities(session) {
+    if (!session || !session.instanceGroups || !(session.identities || []).length) return false;
+    for (var groups of session.instanceGroups.values()) {
+        for (var i = 0; i < groups.length; i++) if (groups[i].points3d && groups[i].identityId >= 0) return true;
+    }
+    return false;
+}
+
+/** The tab's rows: change points (plus repeats when `withRepeats`); a "Both" pair appears once, on its size row. */
+export function idSwitchRows(st, withRepeats) {
+    var rows = [];
+    ['size', 'image'].forEach(function (c) {
+        var r = st.results[c];
+        if (!(r && r.ok)) return;
+        (withRepeats ? idSwitchMarkers(r) : idSwitchPrimary(r)).forEach(function (m) { if (!(c === 'image' && m.agree)) rows.push(m); });
+    });
+    return rows.sort(function (a, b) { return a.frame - b.frame; });
+}
+
+/**
+ * Keep a run's check results on the session (`session._idSwitch`), as the ID Switches tab and the
+ * `.slp` read them: each check that ran (`ok`) replaces its own earlier results, one that did not keeps
+ * them. Fixes become part of the identities the run analysed, so they can no longer be undone from its
+ * rows (the swaps themselves stay); ticks on rows the run still lists are kept. The caller marks the
+ * project dirty. Used by Track All's automatic check and Tracks ▸ Check ID Switches
+ * (ui/id-switch-modal.js) and by the command line (cli/track.mjs).
+ * @param {object} session
+ * @param {{size?: object, image?: object}} results  check results, by cue
+ * @param {?function} [navigate]  the viewer's frame navigation, kept for the tab's rows
+ * @returns {string[]} the cues whose results were kept
+ */
+export function recordIdSwitchResults(session, results, navigate) {
+    var ran = ['size', 'image'].filter(function (c) { return results[c] && results[c].ok; });
+    if (!ran.length) return ran;
+    var st = session._idSwitch || (session._idSwitch = { results: {}, reviewed: new Set(), fixes: [], showRepeats: false, current: null });
+    ran.forEach(function (c) { st.results[c] = results[c]; });
+    st.fixes = [];
+    if (navigate) st.navigate = navigate;
+    linkIdSwitchResults(st.results);
+    var live = new Set(idSwitchRows(st, true).map(idSwitchRowKey));
+    st.reviewed.forEach(function (k) { if (!live.has(k)) st.reviewed.delete(k); });
+    return ran;
+}
+
 /**
  * The other edge of a change point's swapped stretch, as a frame (the last close
  * frame of that encounter) or null for the session's end (onset) / start ('end').

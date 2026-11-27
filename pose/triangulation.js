@@ -50,7 +50,6 @@ import {
     cameraDepth,
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
     invert3x3, triangulateAndReproject, reprojectStoredPoints3d, __triangulationKernelsForTest,
-    setTriangulationSettingsHooks,
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
@@ -67,9 +66,16 @@ export {
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
 };
-// The core reads these two settings through hooks (it cannot import ui/settings.js
-// and stay worker-loadable).
-setTriangulationSettingsHooks({ isCameraTracked, getTrackingThreshold });
+// Triangulate All's per-group step, identity grouping and eager sweep
+// (DOM-free, shared with the command-line LUCID). Importing it also registers
+// the settings hooks the solver core reads.
+import {
+    triangulationSettingsKey, ensureGroupsFromIdentities,
+    triangulateGroupStep as _triangulateGroupStep, prepareGroupStep as _prepareGroupStep,
+    applyGroupStep as _applyGroupStep, framesToTriangulate, dropGroupsDerivedReprojections,
+    triangulateFramesEager, findEquivalentPriorGroup, adoptPrior3d, sweepResidentFrames,
+} from './triangulate-all-core.js';
+export { triangulationSettingsKey, ensureGroupsFromIdentities, findEquivalentPriorGroup, adoptPrior3d };
 
 /**
  * Compute mean Euclidean distance between two sets of 2D keypoints.
@@ -2089,131 +2095,8 @@ export function resolveTriangulationMethod(group) {
     return getDefaultTriangulationMethod() === 'ba' ? 'ba' : 'dlt';
 }
 
-// One shared string per distinct key: a project stores one reference per group.
-const _settingsKeys = new Map();
 
-/**
- * Names the settings a solve reads besides its method and 2D input: the
- * reprojection error threshold and the cameras included in tracking. Stored on a
- * group when it is solved (`solveSettings`) and compared by `adoptPrior3d`.
- *
- * @param {Array<{name: string}>} cameras - the session's cameras
- * @returns {string}
- */
-export function triangulationSettingsKey(cameras) {
-    var key = (getTrackingThreshold('reprojErrorThreshold') || 0) + '|' +
-        JSON.stringify(cameras.filter(function (c) { return isCameraTracked(c.name); }).map(function (c) { return c.name; }));
-    var shared = _settingsKeys.get(key);
-    if (shared) return shared;
-    _settingsKeys.set(key, key);
-    return key;
-}
 
-/**
- * Find the group in `priorGroups` that is the SAME group as `group` — i.e. its
- * membership is identical, camera for camera, by Instance object identity.
- *
- * The regrouping sweeps (`groupByIdentityAndTriangulateAll`,
- * `groupByTrackAndTriangulateAll`) delete a frame's `instanceGroups` and build
- * fresh `InstanceGroup` objects around the SAME `Instance` objects. The fresh
- * object carries no `points3d` and no `triangulationMethod`, so without this
- * lookup a regroup cannot tell "I just rebuilt the identical group, its existing
- * 3D is still exactly right" from "this is a genuinely new grouping". It used to
- * assume the latter for every group and re-solve with DLT — silently replacing
- * a whole project's BA 3D, and with it what gets saved/exported.
- *
- * Identical membership means identical 2D input, so the prior 3D is still the
- * correct solution: nothing to recompute. (2D edits cannot hide here — moving or
- * nulling a node already routes through `reTriangulateGroup`, which refreshes
- * the group's 3D at edit time, preserving its method.)
- *
- * @param {InstanceGroup[]|null} priorGroups
- * @param {InstanceGroup} group
- * @returns {InstanceGroup|null}
- */
-export function findEquivalentPriorGroup(priorGroups, group) {
-    if (!priorGroups || !priorGroups.length || !group) return null;
-    for (var i = 0; i < priorGroups.length; i++) {
-        var prior = priorGroups[i];
-        if (!prior || prior === group) continue;
-        if (prior.instances.size !== group.instances.size) continue;
-        var same = true;
-        for (var [cn, inst] of group.instances) {
-            if (prior.instances.get(cn) !== inst) { same = false; break; }
-        }
-        if (same) return prior;
-    }
-    return null;
-}
-
-/**
- * Adopt `prior`'s already-valid 3D onto `group` instead of re-solving it —
- * but ONLY when doing so is a genuine no-op with respect to `method`.
- *
- * Only call with a `prior` from `findEquivalentPriorGroup` (identical
- * membership). Adoption requires BOTH:
- *   * identical membership (the caller's job) — so the 2D input is unchanged; and
- *   * `prior.triangulationMethod === method` — so the stored 3D already IS the
- *     solution this operation was asked to produce.
- *
- * The method check is load-bearing, not defensive. The grouping sweeps are
- * GOVERNED by the requested method (the Settings default, or an explicit pick):
- * with Bundle Adjustment selected, "Group by Track / Group by ID & Triangulate
- * All" must leave BA 3D on every group — including groups that already had
- * perfectly good DLT 3D with unchanged membership. Adopting on membership alone
- * would silently keep that DLT solution and make the setting a no-op for exactly
- * the groups a user is most likely to have. Conversely a DLT re-run over a
- * DLT-solved project adopts everything and solves nothing, which is the free fast
- * path this exists for.
- *
- * Copies `points3d`, `triangulationMethod` and `usedCameras`.
- *
- * `reprojections` is deliberately NOT copied. It is pure derived state, and
- * leaving it empty is what lets `ui/rendering.js`'s lazy fill regenerate both it
- * AND `state.triangulationResults` for the displayed frame using the adopted
- * `triangulationMethod` — so the reported error matches the adopted 3D. Copying
- * it would instead SUPPRESS that fill (its condition is "has points3d but no
- * reprojections"), leaving the Info Panel with no results to show. Same reason
- * the memory-bounded sweeps drop it; `points3d` is what save/export reads.
- *
- * Smoothed 3D (`isPoints3dSmoothed`) is never adopted: it is the filter's
- * output, not the method's solution, and re-triangulating undoes the pass.
- *
- * `triangulationMethod` IS persisted (per-group
- * `metadata.lucid.triangulationMethod`, written by both SLP writers and restored
- * by the importer), so this check still works on a REOPENED project. It was not,
- * originally: a reopened project had 3D with an undefined method, so nothing could
- * ever be adopted and `ui/rendering.js`'s fill reported DLT's error for BA points.
- *
- * The settings that feed the solve must also still be the ones it ran under
- * (`settingsKey`, see `triangulationSettingsKey`), or a changed reprojection error
- * threshold or camera choice would do nothing on a re-run. They are not saved, so
- * 3D read from a file never matches and is re-solved.
- *
- * @param {InstanceGroup} group
- * @param {InstanceGroup|null} prior
- * @param {'ba'|'dlt'} method - the method this operation is required to produce
- * @param {string} settingsKey - `triangulationSettingsKey` for this run
- * @returns {boolean} true if 3D was adopted and `group` needs no triangulation
- */
-export function adoptPrior3d(group, prior, method, settingsKey) {
-    if (!group || !prior) return false;
-    if (!someValidPoint3d(prior.points3d)) return false;
-    // Only adopt a solution produced by the method being asked for. An undefined
-    // prior method is NOT assumed to be DLT: it is unknown, so it never matches
-    // and the group is re-solved rather than trusted.
-    var want = (method === 'ba') ? 'ba' : 'dlt';
-    if (prior.triangulationMethod !== want) return false;
-    // Smoothed 3D (pose/temporal-smoothing.js) is not what the solve produces
-    // either: re-triangulating is how a user undoes the pass.
-    if (isPoints3dSmoothed(prior.points3d)) return false;
-    if (prior.solveSettings !== settingsKey) return false;
-    group.points3d = prior.points3d;
-    group.triangulationMethod = want;
-    group.solveSettings = settingsKey;
-    if (prior.usedCameras && prior.usedCameras.size) group.usedCameras = prior.usedCameras;
-    return true;
-}
 
 /**
  * Re-triangulate a single instance group if it was previously triangulated.
@@ -2293,107 +2176,6 @@ export function reTriangulateGroup(instanceGroup) {
     }
 }
 
-/**
- * Ensure a frame has InstanceGroups, auto-creating them from the per-frame
- * identity assignments when none exist yet. This is the state right after
- * "Track All", which assigns identities per-frame but does NOT group:
- * instances sharing an identity across >=2 cameras form a group; instances
- * explicitly marked "no identity" stay in the unlinked/ungrouped pool. No-op
- * (returns the existing list) when the frame already has groups or the session
- * has no identities. Both triangulateCurrentFrame and triangulateAllFrames use
- * this so each works directly after Track All (without it, Triangulate All
- * found no groups and never populated the 3D viewer).
- * @param {Session} session
- * @param {number} frameIdx
- * @returns {InstanceGroup[]} the frame's group list (possibly empty)
- */
-export function ensureGroupsFromIdentities(session, frameIdx) {
-    var frameGroupsList = session.instanceGroups.get(frameIdx);
-    if (frameGroupsList && frameGroupsList.length > 0) return frameGroupsList;
-    if (session.identities.length === 0) return frameGroupsList || [];
-    var fg = session.getFrameGroup(frameIdx);
-    if (!fg) return frameGroupsList || [];
-
-    var idBuckets = {};
-    var allInstancesByCam = {};
-
-    // Collect from grouped instances
-    for (var [_cn, _insts] of fg.instances) {
-        for (var _i = 0; _i < _insts.length; _i++) {
-            var _inst = _insts[_i];
-            if (!allInstancesByCam[_cn]) allInstancesByCam[_cn] = [];
-            allInstancesByCam[_cn].push(_inst);
-            var _idId = session.getIdentityIdForTrack(_cn, _inst.trackIdx, frameIdx);
-            if (_idId == null) continue;
-            if (!idBuckets[_idId]) idBuckets[_idId] = {};
-            if (!idBuckets[_idId][_cn]) idBuckets[_idId][_cn] = _inst;
-        }
-    }
-    // Collect from unlinked instances
-    for (var [_cn2, _ulList] of fg.unlinkedInstances) {
-        for (var _u = 0; _u < _ulList.length; _u++) {
-            var _ulInst = _ulList[_u].instance;
-            if (!allInstancesByCam[_cn2]) allInstancesByCam[_cn2] = [];
-            allInstancesByCam[_cn2].push(_ulInst);
-            // Unlinked rows take the UNLINKED resolver: a trackless one keeps
-            // its identity on the instance, not in the trackIdx-keyed map
-            // (luc3d #201). Asking by track would silently drop exactly the
-            // instances an ungroup produced, so a regroup-by-identity could not
-            // put back what the ungroup took apart.
-            var _idId2 = session.getIdentityIdForUnlinkedInstance
-                ? session.getIdentityIdForUnlinkedInstance(_cn2, _ulInst, frameIdx)
-                : session.getIdentityIdForTrack(_cn2, _ulInst.trackIdx, frameIdx);
-            if (_idId2 == null) continue;
-            if (!idBuckets[_idId2]) idBuckets[_idId2] = {};
-            if (!idBuckets[_idId2][_cn2]) idBuckets[_idId2][_cn2] = _ulInst;
-        }
-    }
-
-    // Nothing groupable on this frame (no identity shared across >=2 cameras)
-    // → leave it untouched. Important when sweeping ALL frames so frames with
-    // no cross-view identity aren't needlessly reorganized.
-    var hasGroupable = false;
-    for (var _bk in idBuckets) {
-        if (Object.keys(idBuckets[_bk]).length >= 2) { hasGroupable = true; break; }
-    }
-    if (!hasGroupable) return frameGroupsList || [];
-
-    // Clear and re-add instances. Grouping is by identity, so an instance the
-    // tracker explicitly marked as "no identity" (-1) cannot belong to a group
-    // — it stays in the unlinked/ungrouped pool. Everything else is re-added as
-    // linked so the identity buckets below can form their groups.
-    session.instanceGroups.delete(frameIdx);
-    for (var _cn3 in allInstancesByCam) fg.instances.set(_cn3, []);
-    for (var _cn4 of fg.unlinkedInstances.keys()) fg.unlinkedInstances.set(_cn4, []);
-    for (var _cn5 in allInstancesByCam) {
-        for (var _ai = 0; _ai < allInstancesByCam[_cn5].length; _ai++) {
-            var _reInst = allInstancesByCam[_cn5][_ai];
-            if (session.isExplicitNoIdentity &&
-                session.isExplicitNoIdentity(_cn5, _reInst.trackIdx, frameIdx)) {
-                fg.addUnlinkedInstance(_cn5, new UnlinkedInstance(_reInst, _cn5));
-            } else {
-                fg.addInstance(_cn5, _reInst);
-            }
-        }
-    }
-
-    // Create InstanceGroups from identity buckets (>=2 cameras only).
-    for (var _idStr in idBuckets) {
-        var _identityId = parseInt(_idStr);
-        var _bucket = idBuckets[_idStr];
-        var _camNames = Object.keys(_bucket);
-        if (_camNames.length < 2) continue;
-        var _group = new InstanceGroup(Date.now() + _identityId, _identityId);
-        for (var _ci = 0; _ci < _camNames.length; _ci++) {
-            _group.addInstance(_camNames[_ci], _bucket[_camNames[_ci]]);
-        }
-        if (!session.instanceGroups.has(frameIdx)) {
-            session.instanceGroups.set(frameIdx, []);
-        }
-        session.instanceGroups.get(frameIdx).push(_group);
-    }
-    return session.instanceGroups.get(frameIdx) || [];
-}
 
 /**
  * On-demand triangulation for the current frame's selected instance group.
@@ -2648,85 +2430,6 @@ async function _encourageGC(totalMB) {
     await new Promise(function (r) { setTimeout(r, 50); });
 }
 
-/**
- * Shared per-group step for both Triangulate All paths: fix up camera-name
- * mismatches, require >=2 views carrying usable 2D, then triangulate.
- *
- * Returns `null` when the group cannot be triangulated (fewer than 2 usable
- * views) — callers must leave such a group's existing `points3d` ALONE rather
- * than clearing it.
- *
- * @returns {{result: Object, groupCameras: Array}|null}
- */
-function _triangulateGroupStep(group, cameras, method, volume, skeletonCheck) {
-    var prep = _prepareGroupStep(group, cameras);
-    if (!prep) return null;
-    var result = triangulateAndReproject(group, prep.groupCameras,
-        { method: method, volume: volume || undefined, skeleton: skeletonCheck || undefined });
-    _applyGroupStep(group, prep, result);
-    return { result: result, groupCameras: prep.groupCameras };
-}
-
-/**
- * The part of `_triangulateGroupStep` that must run on the main thread BEFORE
- * the solve: camera-name fix-ups, the >=2-usable-views gate, and the camera
- * list. Also captures `usedCameras` now — it depends only on the instances,
- * not on the solve — so a parallel solve (`pose/triangulation-pool.js`) can
- * apply its result after a lazy window has been released.
- *
- * @returns {{groupCameras: Array, usedCameras: Set<string>, settingsKey: string}|null}
- */
-function _prepareGroupStep(group, cameras) {
-    // Resolve camera name mismatches
-    var groupKeys = group.cameraNames;
-    for (var ki = 0; ki < groupKeys.length; ki++) {
-        var gk = groupKeys[ki];
-        if (!cameras.some(function (c) { return c.name === gk; })) {
-            var gkLower = gk.toLowerCase();
-            for (var ci = 0; ci < cameras.length; ci++) {
-                var camLower = cameras[ci].name.toLowerCase();
-                if (gkLower === camLower || gkLower.indexOf(camLower) >= 0 || camLower.indexOf(gkLower) >= 0) {
-                    if (!group.getInstance(cameras[ci].name)) {
-                        var mvInst = group.getInstance(gk);
-                        group.instances.delete(gk);
-                        group.instances.set(cameras[ci].name, mvInst);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    var viewsWithLabels = 0;
-    for (var cj = 0; cj < cameras.length; cj++) {
-        var inst2 = group.getInstance(cameras[cj].name);
-        if (inst2 && inst2.hasAnyUsablePoint()) viewsWithLabels++;
-    }
-    if (viewsWithLabels < 2) return null;
-
-    var groupCamNames = group.cameraNames;
-    var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
-    var usedCameras = new Set();
-    for (var ck = 0; ck < groupCameras.length; ck++) {
-        var camInst = group.getInstance(groupCameras[ck].name);
-        if (camInst && camInst.hasAnyPoint()) usedCameras.add(groupCameras[ck].name);
-    }
-    return { groupCameras: groupCameras, usedCameras: usedCameras, settingsKey: triangulationSettingsKey(cameras) };
-}
-
-/** Store a solve's result on the group (the tail of `_triangulateGroupStep`). */
-function _applyGroupStep(group, prep, result) {
-    group.triangulationMethod = result.method;
-    // In memory: this group's 3D came from a solve fused with a volume (pose/volume3d.js), so the display
-    // reprojects it instead of re-solving it without the volume (ui/rendering.js's reprojection fill).
-    group.volumeFused = !!(result && result.volume);
-    group.solveSettings = prep.settingsKey;
-    group.points3d = pooledPoints3d(result.points3d);   // one slab, not one ArrayBuffer per group
-    group.usedCameras = prep.usedCameras;
-    // In memory only: the display reprojects a repaired group's stored 3D instead of re-solving it without the
-    // check (ui/rendering.js's fill). A re-solve without the check clears it.
-    group.skeletonRepaired = !!(result && result.skeleton && result.skeleton.chainsRepaired > 0);
-}
 
 /**
  * THE memory-bounded frame sweep. Hydrate a window of lazy frames → run
@@ -2945,27 +2648,9 @@ async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
             else if (opts.onStatus) opts.onStatus(msg);
         });
     }
-    var lo = opts.start != null ? opts.start : -Infinity;
-    var hi = opts.end != null ? opts.end : Infinity;
-    // Union of both data maps, for the same reason the windowed branch checks
-    // both (see `_hasFrameData`): a 3D-only frame has an `instanceGroups` entry
-    // and no `FrameGroup`, and must still be visited.
-    var idxSet = new Set(session.frameGroups.keys());
-    for (var [igIdx] of session.instanceGroups) idxSet.add(igIdx);
-    var idxs = (opts.frames ? opts.frames.filter(function (k) { return idxSet.has(k); }) : Array.from(idxSet))
-        .filter(function (k) { return k >= lo && k <= hi; })
-        .sort(function (a, b) { return a - b; });
-    for (var j = 0; j < idxs.length; j++) {
-        var fg2 = session.frameGroups.get(idxs[j]);
-        await onFrame(idxs[j], fg2);
-        processed++;
-        if (pacer.due()) {
-            if (opts.onProgress) await opts.onProgress(processed, idxs.length);
-            await pacer.yield();
-        }
-    }
-    if (opts.onProgress) await opts.onProgress(processed, idxs.length);
-    return processed;
+    // The resident frames, in order (pose/triangulate-all-core.js, shared with
+    // the command-line LUCID).
+    return await sweepResidentFrames(session, onFrame, { start: opts.start, end: opts.end, frames: opts.frames, onProgress: opts.onProgress, pacer: pacer });
 }
 
 /**
@@ -3041,13 +2726,7 @@ function showSolverCpu(solver) {
  */
 export function dropAllDerivedTriangulationState(session) {
     state.triangulationResults.clear();
-    for (var [, clrGroups] of session.instanceGroups) {
-        for (var cgi = 0; cgi < clrGroups.length; cgi++) {
-            var cg = clrGroups[cgi];
-            cg.reprojections = null;
-            if (cg.reprojectedInstances && cg.reprojectedInstances.size) cg.reprojectedInstances.clear();
-        }
-    }
+    dropGroupsDerivedReprojections(session);
 }
 
 /**
@@ -3246,10 +2925,7 @@ export async function triangulateAllFrames(method) {
     // identities below (ensureGroupsFromIdentities), so this works directly
     // after Track All — which assigns identities but does not group. (Union of
     // already-grouped frames and frame-group frames; the latter is a superset.)
-    var frameIdxSet = {};
-    for (var [fIdx] of state.session.instanceGroups) frameIdxSet[fIdx] = true;
-    for (var [fIdx2] of state.session.frameGroups) frameIdxSet[fIdx2] = true;
-    var frameIndices = Object.keys(frameIdxSet).map(Number).sort(function (a, b) { return a - b; });
+    var frameIndices = framesToTriangulate(state.session);
     if (frameIndices.length === 0) {
         setStatus('No frames to triangulate', 'warning');
         return;
@@ -3266,94 +2942,55 @@ export async function triangulateAllFrames(method) {
     // Paint the 0% overlay before the first chunk starts.
     await yieldToPaint();
     var pacer = createProgressPacer();
-    var totalGroups = 0;
-    var errSum = 0, errN = 0;
-    var framesApplied = 0;
-    var triangulatedFrames = [];
 
     // Solve on a worker pool (pose/triangulation-pool.js): the main thread
     // prepares each group (camera fix-ups, >=2-usable-views gate) and applies
     // each result; the solves run in parallel with bit-identical results.
-    // Callbacks run in submission order, so every store below happens in the
+    // Callbacks run in submission order, so every store happens in the
     // same order as the old inline loop. Frame count is the size proxy for the
     // inline-vs-pool decision (every frame here has >= 1 group).
     var solver = createGroupSolver(cameras, { method: method, summaryOnly: true, expectedGroups: frameIndices.length });
     showSolverCpu(solver);
 
-    // Per-group apply: the old loop body after `_triangulateGroupStep`.
-    //
-    // Only the 3D (and the error stats) is kept, as in the windowed sweep. This
-    // path used to keep every group's reprojections and every frame's
-    // per-camera errors in `state.triangulationResults`, "safe because this
-    // path handles projects small enough to be fully resident" — but resident
-    // is not small: on a 17-camera, 34-node, 36,000-frame project that was
-    // ~52 KB per group, +1.9 GB of the renderer's ~4 GB JS heap with one
-    // animal, and with three the renderer ran out of memory 55% of the way
-    // through. The draw path derives a frame's reprojections from its stored 3D
-    // when the frame is shown (`ui/rendering.js`'s reprojection fill), in
-    // 0.1-0.2 ms, and keeps them for a bounded number of frames.
-    function applyGroupResult(group, prep, frameState, result) {
-        _applyGroupStep(group, prep, result);
-        group.markClean();
-        totalGroups++;
-        frameState.any = true;
-        if (result.meanError != null) {
-            errSum += result.meanError;
-            errN++;
-        }
-    }
-    function submitFrame(frameIdx, frameGroupsList) {
-        var frameState = { any: false };
-        for (var gi = 0; gi < frameGroupsList.length; gi++) {
-            var group = frameGroupsList[gi];
-            // Camera-name fixup + >=2-usable-view gate, shared with the windowed
-            // sweep via `_prepareGroupStep` so the two paths cannot drift.
-            var prep = _prepareGroupStep(group, cameras);
-            if (!prep) continue;
-            solver.submit(group, prep.groupCameras,
-                applyGroupResult.bind(null, group, prep, frameState), volumeForFrame(state.session, frameIdx));
-        }
-        solver.mark(function () {
-            if (frameState.any) {
-                triangulatedFrames.push(frameIdx);
-                // Marked as the frame lands, not in one walk at the end (run-state.js).
-                markTriangulatedGroups(state.session.instanceGroups.get(frameIdx));
-            }
-        });
-    }
-
-    try {
-        for (var fi = 0; fi < frameIndices.length; fi++) {
-            var frameIdx = frameIndices[fi];
-            // Auto-create groups from identities when needed (e.g. after Track All).
-            var frameGroupsList = ensureGroupsFromIdentities(state.session, frameIdx);
-            if (frameGroupsList && frameGroupsList.length > 0) submitFrame(frameIdx, frameGroupsList);
-            solver.mark(function () { framesApplied++; });
-
-            // Report + yield on a clock (see createProgressPacer), not every N
-            // frames. Progress counts APPLIED frames, so the bar tracks results.
-            if (pacer.due()) {
-                showLoadingProgress('Triangulating', framesApplied, frameIndices.length,
-                    stageOpts(methodLabel + ' · ' + totalGroups.toLocaleString() + ' groups' +
-                        (solver.parallel ? ' · ' + solver.workers + ' workers' : '')));
-                await pacer.yield();
-            }
-            await solver.throttle();
-        }
+    // The sweep itself is pose/triangulate-all-core.js `triangulateFramesEager`
+    // (shared with the command-line LUCID). Only the 3D (and the error stats) is
+    // kept, as in the windowed sweep. This path used to keep every group's
+    // reprojections and every frame's per-camera errors in
+    // `state.triangulationResults`, "safe because this path handles projects
+    // small enough to be fully resident" — but resident is not small: on a
+    // 17-camera, 34-node, 36,000-frame project that was ~52 KB per group, +1.9 GB
+    // of the renderer's ~4 GB JS heap with one animal, and with three the
+    // renderer ran out of memory 55% of the way through. The draw path derives a
+    // frame's reprojections from its stored 3D when the frame is shown
+    // (`ui/rendering.js`'s reprojection fill), in 0.1-0.2 ms, and keeps them for
+    // a bounded number of frames.
+    var swept = await triangulateFramesEager(state.session, cameras, frameIndices, solver, {
+        volumeFor: function (frameIdx) { return volumeForFrame(state.session, frameIdx); },
+        // Marked as the frame lands, not in one walk at the end (run-state.js).
+        onFrameTriangulated: function (frameIdx) { markTriangulatedGroups(state.session.instanceGroups.get(frameIdx)); },
+        // Report + yield on a clock (see createProgressPacer), not every N
+        // frames. Progress counts APPLIED frames, so the bar tracks results.
+        afterFrame: function (st) {
+            if (!pacer.due()) return;
+            showLoadingProgress('Triangulating', st.framesApplied, frameIndices.length,
+                stageOpts(methodLabel + ' · ' + st.totalGroups.toLocaleString() + ' groups' +
+                    (solver.parallel ? ' · ' + solver.workers + ' workers' : '')));
+            return pacer.yield();
+        },
         // Keep the bar moving while the last in-flight batches finish.
-        var finishing = solver.finish();
-        var finished = false;
-        finishing.then(function () { finished = true; }, function () { finished = true; });
-        while (!finished) {
-            showLoadingProgress('Triangulating', framesApplied, frameIndices.length,
-                stageOpts(methodLabel + ' · ' + totalGroups.toLocaleString() + ' groups'));
-            await Promise.race([finishing, new Promise(function (r) { setTimeout(r, 250); })]);
-        }
-        await finishing;
-    } catch (e) {
-        solver.cancel();
-        throw e;
-    }
+        awaitFinish: async function (finishing, st) {
+            var finished = false;
+            finishing.then(function () { finished = true; }, function () { finished = true; });
+            while (!finished) {
+                showLoadingProgress('Triangulating', st.framesApplied, frameIndices.length,
+                    stageOpts(methodLabel + ' · ' + st.totalGroups.toLocaleString() + ' groups'));
+                await Promise.race([finishing, new Promise(function (r) { setTimeout(r, 250); })]);
+            }
+            await finishing;
+        },
+    });
+    var totalGroups = swept.totalGroups, errSum = swept.errSum, errN = swept.errN;
+    var triangulatedFrames = swept.triangulatedFrames;
     showLoadingProgress('Triangulating', frameIndices.length, frameIndices.length,
         stageOpts(methodLabel + ' · ' + totalGroups.toLocaleString() + ' groups'));
     var allCheck = await skeletonCheckPass(state.session, cameras, method);

@@ -18,6 +18,9 @@
  *     the fixed pair and rows outside alone, follows keys, and is an involution.
  *  5. The fixes and the links survive `serializeIdSwitchReview` →
  *     `ingestIdSwitchReview`, and garbage is ignored.
+ *  6. `recordIdSwitchResults` (Track All's check, Tracks ▸ Check ID Switches and
+ *     the command line): a check that ran replaces its own results only, one that
+ *     did not keeps them, fixes are dropped, ticks on rows still listed are kept.
  *
  * Run: node tests/test-id-switch-fix.mjs
  */
@@ -206,6 +209,32 @@ console.log('5. serialize / ingest');
     ok(!('fixes' in none), 'no fixes key when nothing was fixed');
     payload.fixes.push('junk', [1, 2], ['k', '', 'a', 'b', 9, 3]);
     ok(RV.ingestIdSwitchReview({}, payload)._idSwitch.fixes.length === 1, 'malformed fixes are ignored');
+}
+
+// ---- 6. keeping a run's results ---------------------------------------------------------------
+console.log('6. recordIdSwitchResults');
+{
+    const session = {};
+    ok(RV.recordIdSwitchResults(session, { size: { ok: false, reason: 'too short' } }).length === 0 && !session._idSwitch,
+        'nothing ran: nothing is kept, and no checklist is made');
+    const first = resultOf(encounters(6, [2, 4])), image = Object.assign(resultOf(encounters(6, [])), { fps: 30 });
+    let ran = RV.recordIdSwitchResults(session, { size: first, image: image }, 'nav');
+    const st = session._idSwitch;
+    ok(ran.join(',') === 'size,image' && st.results.size === first && st.results.image === image && st.navigate === 'nav',
+        'both results are kept, with the navigator');
+    ok(first.flags.every(m => m.cue === 'size'), 'their rows are tagged with their check (linkIdSwitchResults)');
+    st.reviewed.add('size:300:a:b'); st.reviewed.add('size:500:a:b');
+    st.fixes.push({ key: 'size:300:a:b' });
+    const again = resultOf(encounters(6, [4]));                    // the same check again: only contact 500 changes now
+    ran = RV.recordIdSwitchResults(session, { size: again, image: { ok: false, reason: 'cancelled' } });
+    ok(ran.join(',') === 'size' && st.results.size === again && st.results.image === image,
+        'a re-run replaces its own check\'s results; a check that did not run keeps its own');
+    ok(st.fixes.length === 0, 'fixes are dropped (they are now part of the identities the run read)');
+    ok(st.reviewed.has('size:500:a:b') && !st.reviewed.has('size:300:a:b'), 'a tick on a row still listed stays; one on a row gone is dropped');
+    ok(RV.idSwitchRows(st, false).map(RV.idSwitchRowKey).join(' ') === 'size:500:a:b', 'idSwitchRows lists the run\'s change points');
+    ok(RV.hasTrackedIdentities({ identities: [{ id: 0 }], instanceGroups: new Map([[0, [{ points3d: [1], identityId: 0 }]]]) }) &&
+        !RV.hasTrackedIdentities({ identities: [{ id: 0 }], instanceGroups: new Map([[0, [{ points3d: null, identityId: 0 }]]]) }),
+        'hasTrackedIdentities: a group with 3D and an identity');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
