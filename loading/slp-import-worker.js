@@ -14,7 +14,7 @@
  *
  * Messages OUT:
  *   { type: 'progress', message: string }
- *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions, provenance } }
+ *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions, suggestions, provenance } }
  *   { type: 'metadata', data: { skeleton, trackNames, nodeNames, nFrames, nTracks, nNodes, videos } }
  *   { type: 'frameData', frameIdx, requestId, instances }
  *   { type: 'framesData', startIdx, endIdx, requestId, frames }
@@ -207,10 +207,6 @@ async function parseSlp(file) {
         }
 
         // --- Skeleton ---
-        // IMPORTANT: metadataJson.nodes is the GLOBAL node list (arbitrary order).
-        // skeletons[0].nodes defines the SKELETON ordering via id fields.
-        // Points in the HDF5 dataset are stored in skeleton order.
-        // We must reorder node names and remap edge indices to skeleton order.
         var nodes = [];
         var edges = [];
         var skelName = 'skeleton';
@@ -221,60 +217,24 @@ async function parseSlp(file) {
             globalNodes = metadataJson.nodes.map(function (n) { return n.name || n; });
         }
 
+        // A pose goes with the skeleton it is on. A duplicate (same nodes in the same
+        // order, same edges and symmetries) shares its twin's entry: its points line up.
+        var skelEntries = [];
+        var entryOfSkeletonId = [];
         if (metadataJson.skeletons && metadataJson.skeletons.length > 0) {
-            var skel = metadataJson.skeletons[0];
-            skelName = (skel.graph && skel.graph.name) || skel.name || 'skeleton';
-
-            // Build global-ID → skeleton-position map from skeleton's node ordering
-            // skel.nodes[i].id = global node ID at skeleton position i
-            var idToPos = {};
-            var hasIdMapping = skel.nodes && skel.nodes.length > 0
-                && skel.nodes[0] && typeof skel.nodes[0].id === 'number';
-
-            if (hasIdMapping) {
-                for (var ni = 0; ni < skel.nodes.length; ni++) {
-                    idToPos[skel.nodes[ni].id] = ni;
-                }
-                // Reorder node names to match skeleton ordering
-                nodes = [];
-                for (var ni2 = 0; ni2 < skel.nodes.length; ni2++) {
-                    var gid = skel.nodes[ni2].id;
-                    nodes.push(gid < globalNodes.length ? globalNodes[gid] : 'node_' + ni2);
-                }
-            } else {
-                // No id mapping, use global order directly
-                nodes = globalNodes;
+            for (var ski = 0; ski < metadataJson.skeletons.length; ski++) {
+                var skelRecord = readSkeletonRecord(metadataJson.skeletons[ski], globalNodes);
+                var skelEntry = skelEntries.find(function (e) { return sameSkeleton(e, skelRecord); });
+                if (!skelEntry) { skelEntry = skelRecord; skelEntries.push(skelEntry); }
+                entryOfSkeletonId[ski] = skelEntry;
             }
-
-            // Extract edges, remapping from global IDs to skeleton positions
-            if (skel.links) {
-                for (var li = 0; li < skel.links.length; li++) {
-                    var link = skel.links[li];
-                    if (typeof link.source === 'number' && typeof link.target === 'number') {
-                        // Skip symmetry edges (type 2), keep regular edges (type 1)
-                        var isSymmetry = false;
-                        if (link.type) {
-                            var typeVal = link.type['py/tuple'];
-                            if (!typeVal && link.type['py/reduce']) {
-                                var ra = link.type['py/reduce'];
-                                if (Array.isArray(ra) && ra.length >= 2) typeVal = ra[1]['py/tuple'];
-                            }
-                            if (typeVal && typeVal[0] === 2) isSymmetry = true;
-                        }
-                        if (!isSymmetry) {
-                            // Remap from global node IDs to skeleton positions
-                            var srcPos = hasIdMapping ? idToPos[link.source] : link.source;
-                            var dstPos = hasIdMapping ? idToPos[link.target] : link.target;
-                            if (srcPos !== undefined && dstPos !== undefined) {
-                                edges.push([srcPos, dstPos]);
-                            }
-                        }
-                    }
-                }
-            }
+            nodes = skelEntries[0].nodes;
+            edges = skelEntries[0].edges;
+            skelName = skelEntries[0].name;
         } else {
             nodes = globalNodes;
         }
+        var manySkeletons = skelEntries.length > 1;
 
         progress('Skeleton: ' + nodes.length + ' nodes, ' + edges.length + ' edges');
 
@@ -341,6 +301,29 @@ async function parseSlp(file) {
         } catch (e) { /* no videos */ }
 
         progress('Videos: ' + videos.length);
+
+        // --- Suggestions (SLEAP's frames to label next) ---
+        // Not shown; a save keeps them (import-export/kept-suggestions.js). As the
+        // typed reader: `parseSuggestions`, and a row on no listed video is dropped.
+        var suggestions = [];
+        try {
+            var suggestionsDs = f.get('suggestions_json');
+            if (suggestionsDs && suggestionsDs.shape[0] > 0) {
+                var suggestionsVal = suggestionsDs.value;
+                for (var sgi = 0; sgi < suggestionsDs.shape[0]; sgi++) {
+                    try {
+                        var sg = JSON.parse(suggestionsVal[sgi]);
+                        var sgVideo = Number(sg.video != null ? sg.video : 0);
+                        if (!videos[sgVideo]) continue;
+                        suggestions.push({
+                            videoIdx: sgVideo,
+                            frameIdx: sg.frame_idx != null ? sg.frame_idx : (sg.frameIdx != null ? sg.frameIdx : 0),
+                            group: sg.group,
+                        });
+                    } catch (e2) { /* skip bad entry */ }
+                }
+            }
+        } catch (e) { /* no suggestions */ }
 
         // --- Frames dataset ---
         progress('Reading frames & instances...');
@@ -416,12 +399,32 @@ async function parseSlp(file) {
         }
 
         // --- Build frame array ---
+        // The entry a row's pose is on, the first skeleton's for a file with one.
+        var entryOfRow = manySkeletons && instancesData ? function (row) {
+            return entryOfSkeletonId[Number(instancesData.skeleton[row])] || skelEntries[0];
+        } : null;
+        if (entryOfRow) {
+            // An unused skeleton left at the head of the list must not hide every pose.
+            var firstUsedRank = skelEntries.length;
+            for (var ufr = 0; ufr < instancesData.instance_type.length && firstUsedRank > 0; ufr++) {
+                firstUsedRank = Math.min(firstUsedRank, skelEntries.indexOf(entryOfRow(ufr)));
+            }
+            if (firstUsedRank > 0 && firstUsedRank < skelEntries.length) {
+                skelEntries.unshift(skelEntries.splice(firstUsedRank, 1)[0]);
+                nodes = skelEntries[0].nodes;
+                edges = skelEntries[0].edges;
+                skelName = skelEntries[0].name;
+            }
+        }
         var numNodes = nodes.length;
         var frames = [];
         var columnar = null;
         if (wantColumnar) {
-            columnar = buildColumnarFrames(framesData, instancesData, pointsData, predPointsData, numNodes);
-        } else if (framesData && instancesData) {
+            columnar = buildColumnarFrames(framesData, instancesData, pointsData, predPointsData, numNodes,
+                entryOfRow ? function (row) { return entryOfRow(row) !== skelEntries[0]; } : null);
+        }
+        // With columnar on, this only collects the poses on other skeletons.
+        if ((!wantColumnar || entryOfRow) && framesData && instancesData) {
             for (var fi = 0; fi < framesData.frame_id.length; fi++) {
                 var frameIdx = Number(framesData.frame_idx[fi]);
                 var videoIdx = Number(framesData.video[fi]);
@@ -429,8 +432,13 @@ async function parseSlp(file) {
                 var instEnd = Number(framesData.instance_id_end[fi]);
 
                 var instances = [];
+                var otherInstances = null;   // Map: skeleton entry -> its poses on this frame
                 for (var ji = instStart; ji < instEnd; ji++) {
                     if (ji >= instancesData.instance_type.length) break;
+                    var rowEntry = entryOfRow ? entryOfRow(ji) : skelEntries[0];
+                    var onFirst = !entryOfRow || rowEntry === skelEntries[0];
+                    if (wantColumnar && onFirst) continue;
+                    var rowNodes = onFirst ? numNodes : rowEntry.nodes.length;
                     var instType = Number(instancesData.instance_type[ji]);
                     var trackIdx = Number(instancesData.track[ji]);
                     var score = Number(instancesData.score[ji]);
@@ -443,8 +451,8 @@ async function parseSlp(file) {
                     var points = [];
                     var occludedFlags = [];
                     // The model's per-node scores (a prediction's only).
-                    var ptScores = (instType === 1 && pts.score) ? new Float64Array(numNodes).fill(NaN) : null;
-                    for (var ki = ptStart; ki < ptEnd && ki < ptStart + numNodes; ki++) {
+                    var ptScores = (instType === 1 && pts.score) ? new Float64Array(rowNodes).fill(NaN) : null;
+                    for (var ki = ptStart; ki < ptEnd && ki < ptStart + rowNodes; ki++) {
                         if (ki >= pts.x.length) { points.push(null); occludedFlags.push(false); continue; }
                         var px = Number(pts.x[ki]);
                         var py = Number(pts.y[ki]);
@@ -458,20 +466,39 @@ async function parseSlp(file) {
                         }
                         if (ptScores) ptScores[ki - ptStart] = Number(pts.score[ki]);
                     }
-                    while (points.length < numNodes) { points.push(null); occludedFlags.push(false); }
+                    while (points.length < rowNodes) { points.push(null); occludedFlags.push(false); }
 
-                    instances.push({
+                    var instRecord = {
                         trackIdx: trackIdx,
                         score: score,
                         type: instType === 1 ? 'predicted' : 'user',
                         points: points,
                         occluded: occludedFlags,
                         pointScores: ptScores,
-                    });
+                    };
+                    if (onFirst) {
+                        instances.push(instRecord);
+                    } else {
+                        // What a save writes back besides the pose (outside-frames.js).
+                        var rowFrom = instancesData.from_predicted ? Number(instancesData.from_predicted[ji]) : -1;
+                        var rowTracking = instancesData.tracking_score ? Number(instancesData.tracking_score[ji]) : 0;
+                        instRecord.row = ji;
+                        instRecord.fromPredicted = rowFrom === rowFrom ? rowFrom : -1;
+                        instRecord.trackingScore = rowTracking === rowTracking ? rowTracking : 0;
+                        if (pts.complete) instRecord.complete = Array.prototype.slice.call(pts.complete, ptStart, ptStart + rowNodes).map(Boolean);
+                        if (!otherInstances) otherInstances = new Map();
+                        if (!otherInstances.has(rowEntry)) otherInstances.set(rowEntry, []);
+                        otherInstances.get(rowEntry).push(instRecord);
+                    }
                 }
 
                 if (instances.length > 0) {
                     frames.push({ frameIdx: frameIdx, videoIdx: videoIdx, instances: instances });
+                }
+                if (otherInstances) {
+                    otherInstances.forEach(function (list, entry) {
+                        (entry.frames || (entry.frames = [])).push({ frameIdx: frameIdx, videoIdx: videoIdx, instances: list });
+                    });
                 }
             }
         }
@@ -546,10 +573,18 @@ async function parseSlp(file) {
             videos: videos,
             sessions: sessionsArr,
             identities: identitiesArr,
+            suggestions: suggestions,
             // The file's provenance dict, kept through a save (import-export/slp-provenance.js).
             provenance: metadataJson.provenance || null,
             hasDetectionLabels: hasDetectionLabels,
         };
+        if (manySkeletons) {
+            // Every skeleton's poses; `skeletons[0]` is `skeleton` + `frames`
+            // (import-export/outside-frames.js says who reads the rest).
+            skelEntries.forEach(function (e) { if (!e.frames) e.frames = []; });
+            skelEntries[0].frames = frames;
+            resultData.skeletons = skelEntries;
+        }
         if (columnar) {
             resultData.columnar = columnar;
             // Transfer, don't clone: the buffers move to the main thread for free.
@@ -573,6 +608,93 @@ async function parseSlp(file) {
         }
         postMessage({ type: 'error', message: parseErrorText(err) });
     }
+}
+
+// --- Skeletons ---
+
+/**
+ * One entry of `metadata.skeletons`, in skeleton order.
+ *
+ * IMPORTANT: metadata's `nodes` is the GLOBAL node list (arbitrary order);
+ * `skel.nodes[i].id` is the global ID of the node at skeleton position i, and points
+ * in the HDF5 dataset are stored in skeleton order. So node names are reordered and
+ * edge indices remapped to skeleton order.
+ *
+ * @returns {{name: string, nodes: string[], edges: number[][], symmetries: number[][]}}
+ */
+function readSkeletonRecord(skel, globalNodes) {
+    var nodes;
+    var edges = [];
+    var symmetries = [];
+    var seenSymmetries = new Set();
+
+    // Build global-ID → skeleton-position map from skeleton's node ordering
+    var idToPos = {};
+    var hasIdMapping = skel.nodes && skel.nodes.length > 0
+        && skel.nodes[0] && typeof skel.nodes[0].id === 'number';
+
+    if (hasIdMapping) {
+        for (var ni = 0; ni < skel.nodes.length; ni++) {
+            idToPos[skel.nodes[ni].id] = ni;
+        }
+        // Reorder node names to match skeleton ordering
+        nodes = [];
+        for (var ni2 = 0; ni2 < skel.nodes.length; ni2++) {
+            var gid = skel.nodes[ni2].id;
+            nodes.push(gid < globalNodes.length ? globalNodes[gid] : 'node_' + ni2);
+        }
+    } else {
+        // No id mapping, use global order directly
+        nodes = globalNodes;
+    }
+
+    // Extract edges, remapping from global IDs to skeleton positions
+    if (skel.links) {
+        for (var li = 0; li < skel.links.length; li++) {
+            var link = skel.links[li];
+            if (typeof link.source === 'number' && typeof link.target === 'number') {
+                // Symmetry edges are type 2, regular edges type 1
+                var isSymmetry = false;
+                if (link.type) {
+                    var typeVal = link.type['py/tuple'];
+                    if (!typeVal && link.type['py/reduce']) {
+                        var ra = link.type['py/reduce'];
+                        if (Array.isArray(ra) && ra.length >= 2) typeVal = ra[1]['py/tuple'];
+                    }
+                    if (typeVal && typeVal[0] === 2) isSymmetry = true;
+                }
+                // Remap from global node IDs to skeleton positions
+                var srcPos = hasIdMapping ? idToPos[link.source] : link.source;
+                var dstPos = hasIdMapping ? idToPos[link.target] : link.target;
+                if (srcPos !== undefined && dstPos !== undefined) {
+                    if (!isSymmetry) {
+                        edges.push([srcPos, dstPos]);
+                    } else {
+                        // Listed once per direction.
+                        var symKey = Math.min(srcPos, dstPos) + '-' + Math.max(srcPos, dstPos);
+                        if (!seenSymmetries.has(symKey)) {
+                            seenSymmetries.add(symKey);
+                            symmetries.push([srcPos, dstPos]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return { name: (skel.graph && skel.graph.name) || skel.name || 'skeleton', nodes: nodes, edges: edges, symmetries: symmetries };
+}
+
+/** Same nodes in the same order, same edges and symmetries; the name does not count. */
+function sameSkeleton(a, b) {
+    if (a.nodes.length !== b.nodes.length) return false;
+    for (var i = 0; i < a.nodes.length; i++) if (a.nodes[i] !== b.nodes[i]) return false;
+    function pairKeys(pairs, unordered) {
+        return pairs.map(function (p) {
+            return unordered ? Math.min(p[0], p[1]) + '-' + Math.max(p[0], p[1]) : p[0] + '-' + p[1];
+        }).sort().join(',');
+    }
+    return pairKeys(a.edges, false) === pairKeys(b.edges, false)
+        && pairKeys(a.symmetries, true) === pairKeys(b.symmetries, true);
 }
 
 // --- Analysis H5 parsing ---
@@ -1092,8 +1214,10 @@ function closeLazy() {
  * most of what remained of a "Load Single Session Folder" once the compound
  * reads were fixed (~2 s of ~5 s on HardFight_1kModels). These buffers are
  * TRANSFERRED (zero-copy) instead.
+ *
+ * `skipRow(row)`, when given, leaves out a row (a pose on another skeleton).
  */
-function buildColumnarFrames(framesData, instancesData, pointsData, predPointsData, numNodes) {
+function buildColumnarFrames(framesData, instancesData, pointsData, predPointsData, numNodes, skipRow) {
     var nRows = (framesData && instancesData) ? framesData.frame_id.length : 0;
     var nInstRows = instancesData ? instancesData.instance_type.length : 0;
     // Upper bounds; trimmed (copied) to the real counts at the end.
@@ -1118,6 +1242,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
         var first = nI;
         for (var ji = instStart; ji < instEnd; ji++) {
             if (ji >= nInstRows) break;
+            if (skipRow && skipRow(ji)) continue;
             var instType = Number(instancesData.instance_type[ji]);
             var pts = instType === 1 ? (predPointsData || pointsData) : pointsData;
             if (!pts) continue;

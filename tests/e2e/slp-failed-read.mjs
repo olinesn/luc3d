@@ -41,7 +41,7 @@
  *
  * Run: node tests/e2e/slp-failed-read.mjs   (starts its own server, on a free port)
  */
-import { chromium } from 'playwright';
+import { launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -151,7 +151,7 @@ FileReaderSync.prototype.readAsArrayBuffer = function (blob) {
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const context = await browser.newContext({ acceptDownloads: false });
     const page = await context.newPage();
     const pageErrors = [];
@@ -540,7 +540,10 @@ for (var i = 0; i < early.length; i++) self.onmessage(early[i]);`
 
     // Lazy: the previous project is released before the read (as it always was), so nothing
     // is left open, but nothing half-read opens either.
-    for (const [type, p] of [[M, 'frames'], [V, 'frames'], [V, 'points'], [V, 'videos_json'], [V, 'session_data/frame_groups'], [V, 'session_data/points_3d'], [V, 'sessions_json']]) {
+    // A reopen reads /session_data on the read pool (`lucidReadSessionDataPooled`, the
+    // column reads patch): a group table there is read in row blocks the worker splits
+    // into columns (`lucidReadRowColumns`), not by `getDatasetValue`.
+    for (const [type, p] of [[M, 'frames'], [V, 'frames'], [V, 'points'], [V, 'videos_json'], ['lucidReadRowColumns', 'session_data/frame_groups'], [V, 'session_data/points_3d'], [V, 'sessions_json']]) {
         const r = await openInApp('lazy', files.project, { request: { type, path: p }, hiccup: true }, 'lazy.slp');
         check(r.done === true && /^Lazy reopen error/.test(r.status) && looksLikeAFailedRead(r.status) && r.session === null,
             `File ▸ Open (large project), failed read of ${p}: says so, nothing half-read opens`, { status: r.status, session: r.session, groups: r.groups });

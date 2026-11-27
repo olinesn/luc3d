@@ -5,7 +5,8 @@
  * window focus, so their playback measurements were invalid).
  *
  * Everything here runs against a private lock path (LUCID_BROWSER_LOCK) with
- * the Claude-refocus off, so it never touches the real lock or the screen.
+ * the Claude-refocus off, and a private rig folder (RIG_ROOT), so it never
+ * touches the real locks or the screen.
  * ESM, so `tests/run-mjs-tests.mjs` picks it up.
  */
 import fs from 'node:fs';
@@ -20,6 +21,8 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-browser-lock-test-'));
 const LOCK = path.join(tmp, 'browser.lock');
 process.env.LUCID_BROWSER_LOCK = LOCK;
 process.env.LUCID_BROWSER_LOCK_REFOCUS = '0';
+process.env.RIG_ROOT = path.join(tmp, 'no-rig');  // no rig.py there: the rig is skipped (§10 gives it one)
+for (const name of ['RIG_JOB', 'RIG_OWNER', 'RIG_LOGDIR', 'RIG_PYTHON', 'LUCID_BROWSER_LOCK_RIG', 'LUCID_BROWSER_LOCK_HELD']) delete process.env[name];
 const env = { ...process.env };
 const { acquireBrowserLock } = await import(LOCK_JS);
 
@@ -131,6 +134,60 @@ const deadPid = () => { const r = spawnSync(process.execPath, ['-e', 'process.st
     p.kill('SIGTERM');
     const code = await new Promise((r) => p.on('exit', (c, s) => r(c != null ? c : s)));
     check(held && !fs.existsSync(LOCK), `SIGTERM frees the lock (exit ${code})`);
+}
+
+// 10. with a rig on the machine (campy's rig.py in RIG_ROOT) the rig is taken first, by `rig.py hold` on the
+// run's pid; not inside the rig's own job, not with LUCID_BROWSER_LOCK_RIG=0, and a rig.py that fails is skipped
+if (spawnSync('python3', ['-c', '0']).status === 0) {
+    const root = path.join(tmp, 'rig');
+    fs.mkdirSync(root);
+    const calls = path.join(root, 'calls');
+    // a stand-in for rig.py hold: waits a moment, holds (RIG_BUSY names the job, as rig.py's does), then frees the
+    // rig once the held pid has ended
+    fs.writeFileSync(path.join(root, 'rig.py'), [
+        'import os, sys, time',
+        'root = os.environ["RIG_ROOT"]',
+        'a = sys.argv[1:]',
+        'open(os.path.join(root, "calls"), "a").write(" ".join(a) + "\\n")',
+        'if os.environ.get("FAKE_RIG_FAIL"): sys.exit("rig.py: broken")',
+        'owner, tag, pid = a[-3], a[-2], int(a[-1])',
+        'print("rig busy: someone else since 12:00; waiting...", flush=True)',
+        'time.sleep(0.5)',
+        'open(os.path.join(root, "RIG_BUSY"), "w").write("%s %s since now rigpid=%d job=hold-%d pid=%d pidstart=0 (held for a running pid)\\n" % (owner, tag, os.getpid(), pid, pid))',
+        'print("12:00:01 rig held by %s for %s (running pid %d): node" % (owner, tag, pid), flush=True)',
+        'while True:',
+        '    try: os.kill(pid, 0)',
+        '    except OSError: break',
+        '    time.sleep(0.1)',
+        'open(os.path.join(root, "RIG_BUSY"), "w").write("")',
+        'open(os.path.join(root, "calls"), "a").write("released %d\\n" % pid)',
+    ].join('\n'));
+    const rigEnv = { RIG_ROOT: root, RIG_PYTHON: 'python3', RIG_OWNER: 'tester' };
+    const callLines = () => (fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean) : []);
+    const t = Date.now();
+    const r = await cli(['--label=rig run', '--', ...nodeCmd('console.log("job=" + process.env.RIG_JOB)')], rigEnv);
+    check(r.code === 0 && Date.now() - t >= 500, `the run waited for the rig (exit ${r.code}, ${Date.now() - t} ms)`);
+    check(/^hold --log-dir \S+ tester browser-rig_run \d+$/.test(callLines()[0] || ''), `rig.py hold on the run's pid, owner RIG_OWNER (${callLines()[0]})`);
+    check(/\[browser-lock\] rig: rig busy: someone else/.test(r.stderr) && /\[browser-lock\] rig held: rig held by tester/.test(r.stderr),
+        'what rig.py says while waiting, and that it holds the rig, is passed on');
+    check(new RegExp(`^job=hold-${r.pid}$`, 'm').test(r.stdout), `the command runs in the held job: RIG_JOB (${r.stdout.trim()})`);
+    for (let i = 0; i < 50 && !callLines().some((l) => l.startsWith('released')); i++) await sleep(100);
+    check(callLines().includes(`released ${r.pid}`) && !fs.existsSync(LOCK), 'the rig is freed once the run has ended, and the browser lock too');
+
+    // inside the rig's job (rig.sh run, a guarded script): no second hold
+    fs.writeFileSync(path.join(root, 'RIG_BUSY'), 'someone t since now rigpid=1 job=outer-1 pid=2 pidstart=0\n');
+    const before = callLines().length;
+    const inside = await cli(['--', ...nodeCmd('0')], { ...rigEnv, RIG_JOB: 'outer-1' });
+    const off = await cli(['--', ...nodeCmd('0')], { ...rigEnv, LUCID_BROWSER_LOCK_RIG: '0' });
+    fs.writeFileSync(path.join(root, 'RIG_BUSY'), '');
+    check(inside.code === 0 && off.code === 0 && callLines().length === before, 'inside the rig\'s job, or with LUCID_BROWSER_LOCK_RIG=0, the rig is not taken again');
+
+    // a rig.py that fails: said, and the browser lock still works
+    const broken = await cli(['--', ...nodeCmd('0')], { ...rigEnv, FAKE_RIG_FAIL: '1' });
+    check(broken.code === 0 && /rig\.py hold ended \(exit 1\) before it held the rig: rig\.py: broken; going on without the rig/.test(broken.stderr),
+        `a failing rig.py is reported and skipped (${broken.stderr.split('\n').find((l) => /rig\.py hold ended/.test(l))})`);
+} else {
+    console.log('  SKIP §10: no python3 for the stand-in rig.py');
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
