@@ -203,7 +203,7 @@ for (const [copy, guard] of WRITE_COPIES) {
                 `${f} uses the global h5wasm: go through initH5wasm (import-export/file-io.js)`);
         }
     }
-    assert.strictEqual(importers, 2, 'the raw worker and the frame worker');
+    assert.strictEqual(importers, 3, 'the raw worker, the frame worker and By Cam\'s write worker');
 }
 
 console.log('test-h5-status-guard: all passed');
