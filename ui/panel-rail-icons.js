@@ -50,6 +50,10 @@ export const RAIL_ICONS = {
     tags: '<path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/>' +
         '<path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/>' +
         '<circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/>',
+    // Model Check (no sleap-app counterpart): a scan frame round a magnifier
+    'scan-search': '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/>' +
+        '<path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>' +
+        '<circle cx="12" cy="12" r="3"/><path d="m16 16-1.9-1.9"/>',
     // Memory (no sleap-app counterpart): a RAM module
     'memory-stick': '<path d="M12 12v-2"/><path d="M12 18v-2"/><path d="M16 12v-2"/>' +
         '<path d="M16 18v-2"/><path d="M2 11h1.5"/><path d="M20 18v-2"/>' +

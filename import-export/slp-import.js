@@ -9,7 +9,7 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
-    markPoints3dFromFile,
+    markPoints3dFromFile, tagFileRow, adoptFileRow,
 } from '../pose/pose-data.js';
 import {
     getInstanceGroupsForFrame, ensureLazyFrameData,
@@ -174,6 +174,20 @@ function embeddedFrameToOpenOn(frameIndices, decoders) {
 }
 
 /**
+ * The pass-1 HAND-LABELLED instance at `points` among `list` (it carries the
+ * file row, pose-data.js `tagFileRow`), for the group member that replaces it.
+ * Looked up apart from the duplicate the caller removes, which may be a
+ * prediction at the same points (a SLEAP file can hold both).
+ */
+function fileRowSource(list, points) {
+    if (!list) return null;
+    for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i]._fileRow != null && instanceMatchesPoints(list[i], points)) return list[i];
+    }
+    return null;
+}
+
+/**
  * Reconstruct InstanceGroups (and their member Instances) for one session from
  * its saved `frame_group_dicts` — the lucid grouping metadata carried in
  * `sessions_json`. Mutates `session` (adds FrameGroups + InstanceGroups, removes
@@ -310,6 +324,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 // color. Remove the matching pass-1 duplicate
                 // before adding the metadata-driven replacement.
                 var _dupCamInsts = fg3.instances.get(igCamName);
+                adoptFileRow(inst, fileRowSource(_dupCamInsts, points));
                 if (_dupCamInsts && _dupCamInsts.length > 0) {
                     for (var _dpi = 0; _dpi < _dupCamInsts.length; _dpi++) {
                         if (instanceMatchesPoints(_dupCamInsts[_dpi], points)) {
@@ -537,6 +552,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 // Remove the matching pass-1 raw-SLP duplicate for this
                 // frame/cam (same rationale as reconstructInstanceGroupsFromDicts).
                 var _dupCamInsts = fg3.instances.get(igCamName);
+                adoptFileRow(inst, fileRowSource(_dupCamInsts, points));
                 if (_dupCamInsts && _dupCamInsts.length > 0) {
                     for (var _dpi = 0; _dpi < _dupCamInsts.length; _dpi++) {
                         if (instanceMatchesPoints(_dupCamInsts[_dpi], points)) {
@@ -1431,6 +1447,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
                 // restored.
                 var _nn = nulledNodesFromOcclusion(instData.points, instData.occluded, inst.type);
                 if (_nn) inst.nulledNodes = _nn;
+                tagFileRow(inst, ii2);
                 fg.addInstance(camName, inst);
             }
             if (fi > 0 && fi % BATCH === 0) {

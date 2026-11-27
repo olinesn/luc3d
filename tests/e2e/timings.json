@@ -85,6 +85,7 @@
   "mesh-membership-highlight.mjs": 2.7,
   "mesh-object-export.mjs": 2.6,
   "mesh-object-roundtrip.mjs": 2.1,
+  "model-check-review.mjs": 9.0,
   "move-video-lazy-members.mjs": 4.1,
   "multi-session-calibration-notice.mjs": 2.5,
   "multi-session-save-store-edits.mjs": 6.5,
