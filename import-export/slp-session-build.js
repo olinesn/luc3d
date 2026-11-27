@@ -515,6 +515,50 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  * @param {{onProgress?:(msg:string)=>void, batch?:number, yieldMs?:number, fileIdentities?:Array, identityOf?:function(Object):number}} [opts]
  * @returns {Promise<{restoredGroups:number, restoredWith3d:number, movedGroups:Array}>}
  */
+/**
+ * The lazy store behind `labels`, when a group member can be read from its row
+ * exactly as `labels.frameAt(lfIdx)` would build it: a lazy `Labels` whose
+ * frames are all in the store and none materialized yet (a fresh reopen).
+ * Otherwise null, and members resolve through `instanceByCamera`.
+ */
+function lazyMemberStore(labels) {
+    var list = labels && labels._lazyFrameList;
+    var store = labels && labels._lazyDataStore;
+    if (!list || !store || list.store !== store || list.cache.size > 0 ||
+        (list._supplementary && list._supplementary.length > 0)) return null;
+    if (typeof labels.frameAt !== 'function' || typeof store.videoIndexFor !== 'function') return null;
+    if (!store.framesData || !store.instancesData || !store.framesData.instance_id_start) return null;
+    return store;
+}
+
+/**
+ * A group's members as `[camera, info]` pairs, in `refs` order, read from the
+ * store's rows the way `LazyDataStore.materializeFrame` reads them: `info` is
+ * `{ isPredicted, track, score }` (`instance_type` != 0; `tracks[track]` when
+ * the id is >= 0, else null; the `score` column, used for predictions only). A
+ * ref whose frame has no video or whose instance is past the frame's end is
+ * left out, as `instanceByCamera` leaves it out.
+ */
+function storeMembers(store, refs) {
+    var fd = store.framesData, id = store.instancesData;
+    var nFrames = store.frameCount;
+    var out = [];
+    for (var entry of refs) {
+        var lfIdx = entry[1][0], instIdx = entry[1][1];
+        if (!(lfIdx >= 0 && lfIdx < nFrames)) continue;
+        if (!store.videos[store.videoIndexFor(Number(fd.video ? fd.video[lfIdx] : 0))]) continue;
+        var row = Number(fd.instance_id_start[lfIdx]) + instIdx;
+        if (!(instIdx >= 0 && row < Number(fd.instance_id_end[lfIdx]))) continue;
+        var trackId = Number(id.track ? id.track[row] : -1);
+        out.push([entry[0], {
+            isPredicted: Number(id.instance_type ? id.instance_type[row] : 0) !== 0,
+            track: trackId >= 0 ? store.tracks[trackId] : null,
+            score: Number(id.score ? id.score[row] : 0),
+        }]);
+    }
+    return out;
+}
+
 export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
     opts = opts || {};
     // A file with no recording session has nothing to restore.
@@ -538,6 +582,11 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
     // O(tracks) × 1.25M members ≈ billions of comparisons.
     var trackIdxByName = new Map();
     for (var _tn = 0; _tn < session.tracks.length; _tn++) trackIdxByName.set(session.tracks[_tn], _tn);
+    // Members read from the lazy store's rows (`storeMemberInfo`) instead of
+    // through `typedIG.instanceByCamera`, which materializes every grouped
+    // frame's typed instances, points and all, only for each member's type,
+    // track and score (1.2 s and most of the load's GC on an 8-camera project).
+    var memberStore = lazyMemberStore(opts.labels);
 
     var fgKeys = Array.from(typedSession.frameGroups.keys());
     for (var fki = 0; fki < fgKeys.length; fki++) {
@@ -561,8 +610,10 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
 
             var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
             var refs = typedIG._instanceRefsByCamera || null;
+            var members = (memberStore && refs && !typedIG._instanceByCamera)
+                ? storeMembers(memberStore, refs) : null;
 
-            for (var camEntry of typedIG.instanceByCamera) {
+            for (var camEntry of (members || typedIG.instanceByCamera)) {
                 var typedCam = camEntry[0];
                 var typedInst = camEntry[1];
                 var igCamName = (typedCam && typedCam.name) || '';
@@ -581,7 +632,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 var points = lazyPlaceholderXY(numNodes);
 
                 var instMeta = instanceMetaMap[igCamName] || {};
-                var _isPred = PredI ? (typedInst instanceof PredI)
+                var _isPred = members ? typedInst.isPredicted : PredI ? (typedInst instanceof PredI)
                     : (typedInst && typedInst.pointScores !== undefined);
                 var _tName = (typedInst && typedInst.track && typedInst.track.name != null) ? typedInst.track.name : null;
                 var _derivedTrackIdx = (_tName != null && trackIdxByName.has(_tName)) ? trackIdxByName.get(_tName) : null;
@@ -882,24 +933,6 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
     return { hasSessionData: hasSessionData };
 }
 
-/**
- * Give a file's videos a camera each, for a file with no sessions: each camera, one
- * per video in list order, has its list position added when an earlier one has its
- * name. Every video with no source file is named after the `.slp`, and campy names
- * every video `0.mp4`. Two videos on one camera would put both's poses on it, and
- * leave one with no view.
- *
- * @param {Camera[]} cameras
- * @param {Object} videoIdxToCameraName - list position to camera name
- */
-export function makeCameraNamesUnique(cameras, videoIdxToCameraName) {
-    cameras.forEach(function (camera, listIdx) {
-        var taken = cameras.slice(0, listIdx).some(function (c) { return c.name === camera.name; });
-        if (!taken) return;
-        camera.name = camera.name + '_' + listIdx;
-        videoIdxToCameraName[listIdx] = camera.name;
-    });
-}
 
 
 /**
@@ -983,7 +1016,6 @@ export async function buildSessionFromSlpData(slpData, slpSessIdx, skeleton, opt
                 [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
             videoIdxToCameraName[dvi] = dNames[dvi];
         }
-        makeCameraNamesUnique(cameras, videoIdxToCameraName);
     }
 
     // Use per-session skeleton/tracks from lucid metadata if available,

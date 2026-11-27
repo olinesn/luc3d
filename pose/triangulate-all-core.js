@@ -156,12 +156,16 @@ export function ensureGroupsFromIdentities(session, frameIdx) {
  * views) — callers must leave such a group's existing `points3d` ALONE rather
  * than clearing it.
  *
+ * `volume` (pose/volume3d.js `volumeForFrame`) and `skeletonCheck` (the skeleton
+ * check's settings) are optional: without them the solve is the plain one.
+ *
  * @returns {{result: Object, groupCameras: Array}|null}
  */
-export function triangulateGroupStep(group, cameras, method) {
+export function triangulateGroupStep(group, cameras, method, volume, skeletonCheck) {
     var prep = prepareGroupStep(group, cameras);
     if (!prep) return null;
-    var result = triangulateAndReproject(group, prep.groupCameras, { method: method });
+    var result = triangulateAndReproject(group, prep.groupCameras,
+        { method: method, volume: volume || undefined, skeleton: skeletonCheck || undefined });
     applyGroupStep(group, prep, result);
     return { result: result, groupCameras: prep.groupCameras };
 }
@@ -216,9 +220,15 @@ export function prepareGroupStep(group, cameras) {
 /** Store a solve's result on the group (the tail of `triangulateGroupStep`). */
 export function applyGroupStep(group, prep, result) {
     group.triangulationMethod = result.method;
+    // In memory: this group's 3D came from a solve fused with a volume (pose/volume3d.js), so the display
+    // reprojects it instead of re-solving it without the volume (ui/rendering.js's reprojection fill).
+    group.volumeFused = !!(result && result.volume);
     group.solveSettings = prep.settingsKey;
     group.points3d = pooledPoints3d(result.points3d);   // one slab, not one ArrayBuffer per group
     group.usedCameras = prep.usedCameras;
+    // In memory only: the display reprojects a repaired group's stored 3D instead of re-solving it without the
+    // check (ui/rendering.js's fill). A re-solve without the check clears it.
+    group.skeletonRepaired = !!(result && result.skeleton && result.skeleton.chainsRepaired > 0);
 }
 
 
@@ -265,6 +275,10 @@ export function dropGroupsDerivedReprojections(session) {
  * submitted and before the solver is throttled — the app paints its progress
  * card there. `hooks.awaitFinish(finishing, stats)` waits for the solver's
  * last batches (the app keeps its bar moving meanwhile); default: await it.
+ * `hooks.volumeFor(frameIdx)` gives a frame's volume for its solves (the app:
+ * pose/volume3d.js `volumeForFrame`), and `hooks.onFrameTriangulated(frameIdx)`
+ * runs once a frame's results have landed (the app marks them for the blue
+ * Triangulate button, pose/run-state.js). Both optional.
  * On a throw the solver is cancelled and the error rethrown.
  *
  * @returns {Promise<{totalGroups:number, errSum:number, errN:number,
@@ -294,10 +308,14 @@ export async function triangulateFramesEager(session, cameras, frameIndices, sol
             var prep = prepareGroupStep(group, cameras);
             if (!prep) continue;
             solver.submit(group, prep.groupCameras,
-                applyGroupResult.bind(null, group, prep, frameState));
+                applyGroupResult.bind(null, group, prep, frameState),
+                hooks.volumeFor ? hooks.volumeFor(frameIdx) : undefined);
         }
         solver.mark(function () {
-            if (frameState.any) stats.triangulatedFrames.push(frameIdx);
+            if (frameState.any) {
+                stats.triangulatedFrames.push(frameIdx);
+                if (hooks.onFrameTriangulated) hooks.onFrameTriangulated(frameIdx);
+            }
         });
     }
 
@@ -433,7 +451,8 @@ export function adoptPrior3d(group, prior, method, settingsKey) {
  * (may be async; `frameGroup` is undefined for a 3D-only frame). This is the
  * fully resident branch of pose/triangulation.js `sweepLazyFrameWindows`.
  *
- * `opts.start` / `opts.end` (inclusive) restrict it to a range. With
+ * `opts.start` / `opts.end` (inclusive) restrict it to a range, and
+ * `opts.frames` (frame numbers) to those frames. With
  * `opts.pacer` (ui/loading-overlay.js `createProgressPacer`) it reports
  * `opts.onProgress(done, total)` and yields on the pacer's clock; it always
  * reports once at the end.
@@ -450,7 +469,7 @@ export async function sweepResidentFrames(session, onFrame, opts) {
     // and no `FrameGroup`, and must still be visited.
     var idxSet = new Set(session.frameGroups.keys());
     for (var [igIdx] of session.instanceGroups) idxSet.add(igIdx);
-    var idxs = Array.from(idxSet)
+    var idxs = (opts.frames ? opts.frames.filter(function (k) { return idxSet.has(k); }) : Array.from(idxSet))
         .filter(function (k) { return k >= lo && k <= hi; })
         .sort(function (a, b) { return a - b; });
     for (var j = 0; j < idxs.length; j++) {
