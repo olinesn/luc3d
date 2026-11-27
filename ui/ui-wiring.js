@@ -26,12 +26,12 @@ import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance
          someValidPoint3d } from '../pose/pose-data.js';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
-         resolveTriangulationMethod } from '../pose/triangulation.js';
+         resolveTriangulationMethod, frameHasGroupedUserInstances } from '../pose/triangulation.js';
 import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js';
 import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
-         setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
+         setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
          populateTimelineVisibility } from './info-panel.js';
 import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js';
@@ -44,6 +44,7 @@ import { renameStateAnimal } from '../pose/behavior-states.js';
 import { renameDiscoveryAnimal } from '../pose/behavior-discovery.js';
 import { behaviors } from '../pose/behavior-ethogram.js';
 import { setupBehaviorUi, updateBehaviorFrame } from './behavior-panel.js';
+import { refreshBehaviorStrip } from './behavior-strip.js';
 import { detectAllFrames, detectThisFrame } from './behavior-detect.js';
 import { showBehaviorRulesModal } from './behavior-rules-modal.js';
 import { confirmRetrackWithBehaviorLabels } from './behavior-confirm.js';
@@ -52,7 +53,7 @@ import { togglePlaneMode, syncPlanes3D } from './plane-definition.js';
 // The Visibility panel's `Planes` section — the four ids, named from the one
 // module that reads them so this file cannot drift from it.
 import { PLANE_VIS_IDS } from './plane-visibility.js';
-import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
+import { newProject, markDirty, clearDirty, quickSave, saveAs, saveCompactCopy, saveProjectSlp, saveProject,
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
 import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
@@ -60,13 +61,18 @@ import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, p
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
          loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js';
 import { OnDemandVideoDecoder, VideoController, hasEmbeddedVideos } from '../loading/video.js';
+import { loadDemoProject } from '../loading/demo-project.js';
 
 // Pass 3i-1: tracker functions moved out of app.js.
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
 // The toolbar's Animals field, beside Track Frame / Track All.
 import { wireAnimalCountField } from './animal-count-field.js';
+import { wireTailMarkField } from './tail-mark-field.js';
 import { wireReprojThresholdField } from './reproj-threshold-field.js';
+import { wireSkeletonCheckField } from './skeleton-check-field.js';
 import { wireToolbarMenuKeys, returnFocusTo } from './toolbar-menu-keys.js';
+import { wireVolumeFusionField } from './volume-fusion-field.js';
+import { handleLoadVolume3d } from '../import-export/volume3d-file.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -76,20 +82,22 @@ import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
          formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames,
          setTrailSeconds, onTrailSecondsChange } from './trail-presets.js';
-import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor } from './overlays.js';
+import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor, symmetryEdgesFor } from './overlays.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
 import { installSeekbarPreview } from './seekbar-preview.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
+import { stepToSuggestedFrame } from './suggested-frame-nav.js';
 import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
 import { getDefaultTriangulationMethod, setDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler,
-         dispatchEvent, getActions, formatBinding, getSmoothingParams } from './settings.js';
+         dispatchEvent, matchesBinding, getActions, formatBinding, getSmoothingParams, setSmoothingParams,
+         onSmoothingParamsChange } from './settings.js';
 // luc3d #134: post-triangulation temporal smoothing of the 3D tracks.
 import { smoothSessionAsync, smoothFrame, unsmoothSession, resolveSmoothingParams, hasSmoothed3d,
-    removeSmoothing, restoreSmoothing } from '../pose/temporal-smoothing.js';
+    removeSmoothing, restoreSmoothing, describeSmoothingConfig, SMOOTH_METHOD_ADAPTIVE } from '../pose/temporal-smoothing.js';
 import { syncSmoothingButton, noteSmoothingScope } from './smoothing-button.js';
 import { smoothingRunOf } from '../import-export/smoothing-metadata.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from './loading-overlay.js';
@@ -131,6 +139,15 @@ import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
 } from './track-identity-ops.js';
 import { setSessionRotation } from './video-filters.js';
+
+/**
+ * The handle File ▸ Save may write back to for a file opened with
+ * `showOpenFilePicker`: an `.slp` only (Save writes `.slp` bytes, so never over
+ * a `.json` or an analysis `.h5`), else null.
+ */
+function saveTargetHandle(handle, file) {
+    return file && /\.slp$/i.test(file.name) ? handle : null;
+}
 
 // ============================================
 // Rename Track / Identity modal
@@ -689,8 +706,15 @@ function showCustomDeleteModal() {
         }
 
         markDirty();
-        for (var f = 0; f < res.touchedFrames.length; f++) updateTimelineForFrame(res.touchedFrames[f]);
-        if (timeline) timeline.refreshTracks(session, { cap: true });
+        // Each frame's "modified" tick, then ONE rebuild of the track rows (a
+        // rebuild walks every group of the project; updateTimelineForFrame per
+        // touched frame would do it once per frame).
+        if (timeline) {
+            for (var f = 0; f < res.touchedFrames.length; f++) {
+                timeline.setFrameModified(res.touchedFrames[f], frameHasGroupedUserInstances(res.touchedFrames[f]));
+            }
+            timeline.refreshTracks(session, { cap: true });
+        }
         if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
@@ -908,7 +932,8 @@ export function setupMenus() {
     // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
     setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
     // Behavior labelling: the Behavior menu, toolbar button, tab and mode.
-    setupBehaviorUi({ closeMenus: closeMenus, navigate: navigateToFrame, switchSession: switchSession });
+    setupBehaviorUi({ closeMenus: closeMenus, navigate: navigateToFrame, switchSession: switchSession,
+                      seekKeepingPlayback: seekKeepingPlayback, pausePlayback: pausePlayback });
     setTrackSummaryNavigator(navigateToFrame);   // the Track All summary's Identities samples and maps
     // After the tab fixes (or un-fixes) a switch, repaint everything that shows identities.
     setIdSwitchRefresher(function () {
@@ -1569,6 +1594,11 @@ export function setupMenus() {
         saveAs();
     });
 
+    document.getElementById('menuSaveCompact').addEventListener('click', function () {
+        closeMenus();
+        saveCompactCopy();
+    });
+
     document.getElementById('menuLoadProject').addEventListener('click', async function () {
         closeMenus();
         if (window.showOpenFilePicker) {
@@ -1584,13 +1614,10 @@ export function setupMenus() {
                 });
                 if (handles.length === 0) { setStatus('No file selected', 'warning'); return; }
                 var file = await handles[0].getFile();
-                // Only once it has opened: Save writes to this handle, so a file that
-                // did not open (refused as too new, say) would be overwritten with
-                // whatever project is open.
-                var opened = await handleLoadProject(file);
-                if (opened !== false && file.name.endsWith('.slp')) {
-                    state.slpFileHandle = handles[0];
-                }
+                // The loader adopts the handle (File ▸ Save's target) only once it
+                // replaces the open project: a cancelled load keeps the old one.
+                // Awaited, so the embedded-images check below sees the new project.
+                await handleLoadProject(file, saveTargetHandle(handles[0], file));
             } catch (e) {
                 if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
                 handleLoadProject();
@@ -1601,6 +1628,11 @@ export function setupMenus() {
         } else {
             handleLoadProject();
         }
+    });
+
+    document.getElementById('menuOpenDemo').addEventListener('click', function () {
+        closeMenus();
+        loadDemoProject();
     });
 
     document.getElementById('menuSessionFolderWizard').addEventListener('click', function () {
@@ -1649,9 +1681,7 @@ export function setupMenus() {
                     });
                     if (handles.length === 0) { setStatus('No file selected', 'warning'); return; }
                     var file = await handles[0].getFile();
-                    // Only once it has opened: see the same step in menuLoadProject.
-                    var opened = await handleLoadSlpFile(file);
-                    if (opened !== false) state.slpFileHandle = handles[0];
+                    await handleLoadSlpFile(file, saveTargetHandle(handles[0], file));   // awaited: see menuLoadProject
                 } catch (e) {
                     if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
                     // Fallback to input picker
@@ -1671,6 +1701,11 @@ export function setupMenus() {
     document.getElementById('menuLoadPoints3dH5').addEventListener('click', function () {
         closeMenus();
         handleLoadPoints3dH5();
+    });
+
+    document.getElementById('menuLoadVolume3d').addEventListener('click', function () {
+        closeMenus();
+        handleLoadVolume3d();
     });
 
     document.getElementById('menuLoadSkeletonMenu').addEventListener('click', function () {
@@ -1879,6 +1914,33 @@ function toggleNoVideoPlayback() {
     startNoVideoPlayback();
 }
 
+// A lazy project hydrates the frames ahead before playing again, as Play does.
+function prepareResume(frame) {
+    if (state.session && state.session.lazyLoader) {
+        return batchLoadLazyFrames(frame, LAZY_PLAYBACK_AHEAD);
+    }
+}
+
+// One click on the seekbar's scale: the video stays playing or paused, as it
+// was (the seekbar's own press and release do the same). For the bouts strip.
+function seekKeepingPlayback(frame) {
+    var resume = state.isPlaying || !!(videoController && videoController.resumePending);
+    if (!hasRealVideo()) {
+        if (state.isPlaying) stopNoVideoPlayback();
+        navigateToFrame(frame);
+        if (resume) startNoVideoPlayback();
+        return;
+    }
+    updateSeekbarVisual(frame);
+    videoController.scrubToFrame(frame);
+    if (resume) videoController.resumeAfterScrub(prepareResume);
+}
+
+function pausePlayback() {
+    if (!hasRealVideo()) { if (state.isPlaying) stopNoVideoPlayback(); return; }
+    if (state.isPlaying || videoController.resumePending) videoController.stopPlayback();
+}
+
 // --- Instance copy / paste (Cmd/Ctrl+C / Cmd/Ctrl+V) -------------------------
 // Copy the selected UserInstance in the focused view to the in-app clipboard as
 // a skeleton-agnostic, name-keyed snapshot. Works on either a grouped selection
@@ -2011,7 +2073,8 @@ export function setupUI() {
             var m = seekbarMarkerAt(frac, rect.width);
             return m ? m.frame : frameAtFraction(frac);
         };
-        installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames);
+        installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames,
+            document.getElementById('seekbarSuggestionMarks'));
         // The time ruler under the bar (ui/seekbar-ticks.js).
         installSeekbarTicks(document.getElementById('seekbarRuler'), {
             getTotalFrames: function () { return state.totalFrames; },
@@ -2095,12 +2158,7 @@ export function setupUI() {
                 if (resumeOnRelease) {
                     resumeOnRelease = false;
                     if (!hasRealVideo()) startNoVideoPlayback();
-                    else if (videoController) videoController.resumeAfterScrub(function (frame) {
-                        // A lazy project hydrates the frames ahead first, as Play does.
-                        if (state.session && state.session.lazyLoader) {
-                            return batchLoadLazyFrames(frame, LAZY_PLAYBACK_AHEAD);
-                        }
-                    });
+                    else if (videoController) videoController.resumeAfterScrub(prepareResume);
                 }
             }
         });
@@ -2250,7 +2308,9 @@ export function setupUI() {
         if (!hasRealVideo()) {
             // Video-less project (skeleton + imported 3D points): support frame
             // stepping + play/pause over the points3d duration even though
-            // there's no decoder.
+            // there's no decoder. The suggested-frame keys (Opt+Shift+← / →) are
+            // the catalog dispatcher's: not a frame step too.
+            if (matchesBinding('prevSuggestedFrame', e) || matchesBinding('nextSuggestedFrame', e)) return;
             switch (e.key) {
                 case 'ArrowRight': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.currentFrame + 1); break;
                 case 'ArrowLeft': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.currentFrame - 1); break;
@@ -2419,6 +2479,9 @@ export function setupUI() {
     // has unwinding to do (Set Origin Mode, the angle dialog, the toolbar lock)
     // and a second entry point would be a second place to forget it.
     setHandler('definePlanes', function () { togglePlaneMode(); });
+    // A .slp's suggestions, in the file's order (ui/suggested-frame-nav.js).
+    setHandler('prevSuggestedFrame', function () { stepToSuggestedFrame(-1, jumpToFrame); });
+    setHandler('nextSuggestedFrame', function () { stepToSuggestedFrame(1, jumpToFrame); });
 
     // Single dispatcher for catalog-driven shortcuts. Runs before the structural
     // handlers below; if a catalog action matches it consumes the event.
@@ -2570,6 +2633,22 @@ export function setupUI() {
     setupVisSlider('visReprojBrightness', 'visReprojBrightnessVal', 'pct');
     setupVisSlider('visReprojLabelSize', 'visReprojLabelSizeVal');
     setupVisSlider('visReprojLabelAlpha', 'visReprojLabelAlphaVal', 'float');
+    setupVisSlider('visSymmetryEdgeWeight', 'visSymmetryEdgeWeightVal');
+
+    // Symmetry edges come from the node names, so a skeleton without left/right
+    // names draws nothing: say so, or the toggle looks broken.
+    var symmetryToggle = document.getElementById('visSymmetryEdges');
+    if (symmetryToggle) {
+        symmetryToggle.addEventListener('change', function() {
+            drawAllOverlays(state.currentFrame);
+            if (!symmetryToggle.checked || !state.session || !state.session.skeleton) return;
+            var nPairs = symmetryEdgesFor(state.session.skeleton).length;
+            setStatus(nPairs > 0
+                ? 'Symmetry edges: ' + nPairs.toLocaleString('en-US') + (nPairs === 1 ? ' pair' : ' pairs')
+                : 'Symmetry edges: no left/right node pairs to add in this skeleton',
+                nPairs > 0 ? 'info' : 'warning');
+        });
+    }
 
     // Checkbox toggles. `visUnlinkedBadge` only changes what is PAINTED — it
     // cannot hide the instance a selection points at, so the deselect sweep below
@@ -2660,9 +2739,10 @@ export function setupUI() {
         'visReprojBrightness', 'visReprojLabelSize', 'visReprojLabelAlpha',
         'vis3dLabelSize', 'vis3dSphereSize', 'vis3dPyramidLength',
         'vis3dNodeSize', 'vis3dEdgeWeight', 'vis3dBrightness',
+        'visSymmetryEdgeWeight',
     ];
     var visCheckIds = ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
-        'visUnlinkedBadge',
+        'visUnlinkedBadge', 'visSymmetryEdges',
         'vis3dLabelShow', 'vis3dSphereShow', 'vis3dPyramidShow',
         'vis3dNodeShow', 'vis3dEdgeShow'].concat(planeVisCheckIds);
     var visStyleIds = [
@@ -2960,8 +3040,10 @@ export function setupUI() {
     // current settings in the removed run's scope (`restoreSmoothing`).
     //
     // Touches only `points3d` on the already-resident `session.instanceGroups`
-    // — no 2D hydration, no lazy sweep. On the main thread; All frames runs in
-    // steps (`smoothSessionAsync`) with the shared progress card.
+    // — no 2D hydration, no lazy sweep (the adaptive method reads the members'
+    // 2D for its covariances: resident, or straight from a lazy store). On the
+    // main thread; All frames runs in steps (`smoothSessionAsync`) with the
+    // shared progress card.
     var smoothingRunning = false;
     async function runTemporalSmoothing(currentFrameOnly, toggle) {
         var session = state.session;
@@ -3012,7 +3094,9 @@ export function setupUI() {
             // smoothed there is nothing to do, so point at the settings.
             stats = unsmoothSession(session, { writeFrames: writeFrames });
             if (stats.frames === 0) {
-                setStatus('Temporal smoothing is off — set a median or Gaussian window in Settings ▸ Temporal Smoothing');
+                setStatus(cfg.method === SMOOTH_METHOD_ADAPTIVE
+                    ? 'Temporal smoothing is off — set a longest half-window above 0 in Settings ▸ Temporal Smoothing'
+                    : 'Temporal smoothing is off — set a median or Gaussian window in Settings ▸ Temporal Smoothing');
                 showSettingsModal('smoothing');
                 syncSmoothingButton();
                 return;
@@ -3020,23 +3104,27 @@ export function setupUI() {
             summary = 'Removed temporal smoothing from ' + stats.frames.toLocaleString('en-US') + ' pose' +
                 (stats.frames === 1 ? '' : 's');
         } else {
-            var parts = [];
-            if (cfg.medianWindow) parts.push('median ' + cfg.medianWindow);
-            if (cfg.gaussianWindow) parts.push('Gaussian ' + cfg.gaussianWindow);
+            var described = describeSmoothingConfig(cfg);
             // Each run filters the 3D from before ANY smoothing
             // (`unsmoothedPoints3d`), so it replaces the last run, never stacks.
             // All frames shows the progress card at once and paints it before
             // the pass holds the thread. This frame reads a few dozen frames
             // (well under a millisecond), so it shows no card.
             if (frameList) {
-                stats = { frames: 0, tracks: 0 };
+                stats = { frames: 0, tracks: 0, points: 0, windowSum: 0, fallbackPoints: 0 };
                 frameList.forEach(function (fi) {
                     var r = smoothFrame(session, params, fi);
                     stats.frames += r.frames;
                     stats.tracks = Math.max(stats.tracks, r.tracks);
+                    if (r.points) {
+                        stats.points += r.points;
+                        stats.windowSum += r.meanWindow * r.points;
+                        stats.fallbackPoints += r.fallbackPoints;
+                    }
                 });
+                if (stats.points) stats.meanWindow = stats.windowSum / stats.points;
             } else {
-                var title = { title: 'Temporal Smoothing', unit: 'poses', detail: parts.join(' + ') };
+                var title = { title: 'Temporal Smoothing', unit: 'poses', detail: described };
                 smoothingRunning = true;
                 try {
                     showLoadingProgress('Smoothing', 0, 1, title);
@@ -3063,9 +3151,19 @@ export function setupUI() {
             }
             noteSmoothingScope(session, frameList ? 'frame' : 'all', cfg);
             // `frames` counts groups written: one pose per animal per frame.
+            // The adaptive method also says how long its windows came out, and
+            // how many points had too few views and took their node's sigma.
+            var windowNote = '';
+            if (cfg.method === SMOOTH_METHOD_ADAPTIVE && stats.points) {
+                windowNote = '; mean window ' + stats.meanWindow.toFixed(1) + ' frames' +
+                    (stats.fallbackPoints
+                        ? ', ' + stats.fallbackPoints.toLocaleString('en-US') + ' of ' + stats.points.toLocaleString('en-US') +
+                          ' points weighed by their node\'s spread (under 2 views)'
+                        : '');
+            }
             summary = 'Smoothed ' + stats.frames.toLocaleString('en-US') + ' pose' + (stats.frames === 1 ? '' : 's') +
                 ' across ' + stats.tracks.toLocaleString('en-US') + ' track' + (stats.tracks === 1 ? '' : 's') +
-                ' (' + parts.join(' + ') + ')' +
+                ' (' + described + windowNote + ')' +
                 (resmooth ? ' — recomputed, since the settings or 3D changed after Remove smoothing' : '');
         }
 
@@ -3166,6 +3264,26 @@ export function setupUI() {
         settings: function () { showSettingsModal('triangulation'); },
     });
 
+    // The Smooth menu's Method radios show and set Settings ▸ Temporal
+    // Smoothing's Method (`smoothingMethod`), the one setting behind them, and
+    // follow its Apply.
+    function wireSmoothMethodRadios() {
+        var radios = document.querySelectorAll('#smoothingDropdown input[name="tbSmoothMethod"]');
+        function sync() {
+            var m = getSmoothingParams().smoothingMethod === 1 ? '1' : '0';
+            radios.forEach(function (r) { r.checked = r.value === m; });
+        }
+        radios.forEach(function (r) {
+            r.addEventListener('change', function () {
+                if (!r.checked) return;
+                setSmoothingParams(Object.assign(getSmoothingParams(), { smoothingMethod: Number(r.value) }));
+            });
+        });
+        sync();
+        onSmoothingParamsChange(sync);
+    }
+    wireSmoothMethodRadios();
+
     // Temporal Smoothing; its blue state is `syncSmoothingButton`
     // (ui/smoothing-button.js).
     wireActionMenu('smoothingDropdown', {
@@ -3197,8 +3315,11 @@ export function setupUI() {
     });
 
     wireAnimalCountField();
+    wireTailMarkField();
     wireReprojThresholdField();
+    wireSkeletonCheckField();
     wireToolbarMenuKeys();
+    wireVolumeFusionField();
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
@@ -3725,6 +3846,16 @@ export function seekToLabeledFrame(direction) {
     }
 }
 
+// A frame far from this one, from a key (suggested frames): like the labeled-frame
+// jump, the timeline and seekbar move on the same keystroke; a video-less
+// project draws the frame statically.
+function jumpToFrame(target) {
+    if (!hasRealVideo() || !videoController) { navigateToFrame(target); return; }
+    if (timeline) timeline.setCurrentFrame(target);
+    updateSeekbarVisual(target);
+    videoController.scrubToFrame(target);
+}
+
 // ============================================
 // Editable Frame Number / FPS Pill / Speed Control IIFEs
 // (Pass 3i-4: moved from app.js)
@@ -3811,6 +3942,7 @@ export function seekToLabeledFrame(direction) {
             }
             fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
             refreshReadoutTotals();   // the times are frame / fps
+            refreshBehaviorStrip();   // and so is the strip's window
             if (state.trailSeconds > 0) drawAllOverlays(state.currentFrame);   // trail frames are seconds × fps
         }
 

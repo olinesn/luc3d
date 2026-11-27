@@ -41,11 +41,11 @@
  * what it negates), a prediction with framewise scores, an event with no animal.
  * Real Python sleap-io reads the last saves when `uv` is here (skipped without it).
  *
- * Run: node tests/e2e/behavior-events-outside-session.mjs   (spawns its own http.server; PORT= to move it)
+ * Run: node tests/e2e/behavior-events-outside-session.mjs   (serves the app itself; PORT= to move it)
  *      SECTIONS=G,I runs only those sections
  */
-import { chromium } from 'playwright';
-import { spawn, spawnSync } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -53,7 +53,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8461);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const PY_SPEC = process.env.SLEAP_IO_SPEC || 'sleap-io==0.9.5';
 const SECTIONS = process.env.SECTIONS ? process.env.SECTIONS.split(',') : null;
 const runs = (section) => !SECTIONS || SECTIONS.includes(section);
@@ -198,7 +199,6 @@ async function getBytes(page, name) {
     return Buffer.from(b64, 'base64');
 }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 let browser;
 const pageErrors = [];
 
@@ -768,8 +768,7 @@ print(json.dumps({
 }
 
 try {
-    await new Promise(r => setTimeout(r, 1200));
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const finalSaves = {};
     if (runs('A')) {
         for (const loader of Object.keys(LOADERS)) {

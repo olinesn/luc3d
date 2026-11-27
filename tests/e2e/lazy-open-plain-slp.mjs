@@ -42,8 +42,7 @@
  *
  * Run: node tests/e2e/lazy-open-plain-slp.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -51,7 +50,8 @@ import os from 'node:os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8249);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FRAMES = Number(process.env.FRAMES || 2400);
 
 let fails = 0;
@@ -60,8 +60,6 @@ const check = (c, m, extra) => {
     if (!c) fails++;
 };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lazy-plain-'));
 const fixture = (name) => path.join(fixtureDir, name + '.slp');
@@ -69,7 +67,7 @@ const VIDEOS = ['barcode-60', 'fragmented-60', 'bframes-test'];
 
 let browser;
 try {
-    browser = await chromium.launch({ headless: true });
+    browser = await launchBrowser({ headless: true });
     const page = await browser.newPage();
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -602,8 +600,11 @@ try {
 
     r = await load('twoskel', 'route');
     const twoSkel = await summary();
-    check(twoSkel && !twoSkel.lazy && twoSkel.total === 2, 'two skeletons: the eager path, both instances', twoSkel);
+    check(twoSkel && !twoSkel.lazy && twoSkel.total === 1, 'two skeletons: the eager path, showing the pose on the session\'s skeleton', twoSkel);
     check(/in full, not on demand: it does not have exactly one skeleton/.test(r.status), 'the status says so', r.status);
+    check(/1 pose on a camera's video is on another skeleton \("other"\)/.test(r.status), 'and that the other pose is not shown', r.status);
+    const twoSave = await page.evaluate(async () => (await window.__posesOf(await window.__saveBytes())).lines);
+    check(twoSave.length === 2 && twoSave.some(l => /\|500,500,v.* 502,502,v/.test(l)), 'a save keeps both, the other with all its nodes', twoSave);
 
     // When the eager path itself fails, its error stands.
     await page.evaluate(() => {

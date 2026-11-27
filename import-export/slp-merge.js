@@ -105,6 +105,22 @@ export function videosClaimedBy(videoIdxToCameraName, nCameras) {
     return claimed;
 }
 
+/**
+ * `videoIdxToCameraName`, with the cameras `videosClaimedBy` reads by their own index
+ * when it maps no video.
+ *
+ * @param {Object<string, string>} videoIdxToCameraName
+ * @param {Array<{name: string}>} cameras
+ * @returns {Object<string, string>}
+ */
+export function cameraOfClaimedVideos(videoIdxToCameraName, cameras) {
+    var cameraOf = {};
+    videosClaimedBy(videoIdxToCameraName, cameras.length).forEach(function (id) {
+        cameraOf[id] = videoIdxToCameraName[id] || cameras[id].name;
+    });
+    return cameraOf;
+}
+
 export function mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap) {
     var affectedFrames = new Set();
     var claimedVideos = videosClaimedBy(videoIdxToCameraName, cameras.length);

@@ -27,28 +27,28 @@
  *  8. Mutual behaviors: made in the editor, started from one animal and
  *     stopped from the other, stored once per pair, listed and drawn for both,
  *     labelled "↔".
+ *  9. Mark Range Reviewed starts with every animal ticked; an unticked animal
+ *     stays unlabelled.
  *
- * Run: node tests/e2e/behavior-labelling.mjs   (spawns its own http.server; PORT= to move it)
+ * Run: node tests/e2e/behavior-labelling.mjs   (serves the app itself; PORT= to move it)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8194);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -107,8 +107,8 @@ try {
     await page.keyboard.press('Meta+Shift+L');
     check(await page.evaluate(async () => (await import('/ui/behavior-mode.js')).isBehaviorModeActive()), 'Mod+Shift+L enters the mode');
     check(await page.isVisible('#behaviorModeBar'), 'the mode bar shows');
-    check(await page.evaluate(() => document.querySelector('.panel-tab[data-tab="tabBehavior"]').classList.contains('active')),
-        'the Behavior tab opens');
+    check(await page.evaluate(async () => (await import('/ui/panel-rail.js')).isPanelOnScreen('tabBehavior')),
+        'the Behavior panel opens');
     const reprojBefore = await page.isChecked('#visReprojections');
     await goTo(100);
     await page.keyboard.press('r');
@@ -338,6 +338,26 @@ try {
     check(eq(mu.lists, [1, 1]), 'it is listed for both animals');
     check(eq(mu.rows, [true, true, false]), `and drawn on both animals' timeline rows, not others' (${JSON.stringify(mu.rows)})`);
     check(eq(mu.label, ['sniff · Alice ↔ id_2']), `its video box reads "↔" (${JSON.stringify(mu.label)})`);
+
+    console.log('\n-- 9. Mark Range Reviewed --');
+    const openReviewed = async () => {
+        await page.click('[data-menu="behavior"]');
+        await page.click('#menuBehaviorReviewed');
+        await page.waitForSelector('.behavior-reviewed-modal');
+    };
+    await openReviewed();
+    const ticks = await page.evaluate(() => Array.from(document.querySelectorAll('.behavior-reviewed-modal [data-animal]')).map(c => [c.dataset.animal, c.checked]));
+    check(ticks.length === 3 && ticks.every(t => t[1]), `it starts with every animal ticked, not only the selected one (${JSON.stringify(ticks)})`);
+    await page.keyboard.press('Escape');
+    check(!(await page.isVisible('.behavior-reviewed-modal')), 'Esc closes it');
+    await openReviewed();
+    const left = ticks[2][0], marked = [ticks[0][0], ticks[1][0]];
+    await page.uncheck(`.behavior-reviewed-modal [data-animal="${left}"]`);
+    await page.fill('#behaviorRevFrom', '1901');
+    await page.fill('#behaviorRevTo', '1950');
+    await page.click('#behaviorRevApply');
+    const nots = (await bouts({ behaviorId: 'b1', present: false })).filter(b => b[3] === 1900 && b[4] === 1949).map(b => b[1]).sort();
+    check(eq(nots, marked.slice().sort()), `the range goes "not" for the ticked animals only (${JSON.stringify(nots)}, not ${left})`);
 
     check(errs.length === 0, `no page errors (${errs.join(' | ').slice(0, 300)})`);
     console.log(fails === 0 ? '\nPASS' : `\nFAIL — ${fails} check(s)`);
