@@ -18,7 +18,7 @@
 //             loading/cold-read-guard.js
 
 import { state } from './app-state.js';
-import { sessionAnimals, focalAnimal, armedRange, requestBehaviorRepaint } from './behavior-coding.js';
+import { sessionAnimals, armedRange, requestBehaviorRepaint } from './behavior-coding.js';
 import { confirmRemoveBehavior, confirmMakeMutual } from './behavior-confirm.js';
 import {
     behaviors, addBehavior, updateBehavior, removeBehavior, moveBehavior, serializeEthogram, ingestEthogram,
@@ -248,16 +248,15 @@ export function showMarkReviewedModal() {
     var range = armedRange();
     var last = Math.max(0, (session.numFrames || state.totalFrames || 1) - 1);
     var from = range ? range.start : 0, to = range ? range.end : last;
-    var focal = focalAnimal(session);
     var dlg = openOverlay('behavior-reviewed-modal',
         '<h3>Mark range reviewed</h3>' +
         '<p class="behavior-ed-lead">Frames in the range that carry no label for a behavior become <b>"not" that behavior</b>. ' +
-        'Labels already there are kept.</p>' +
+        'Labels already there are kept. Untick any animal you did not watch.</p>' +
         '<div class="behavior-rev-range"><label>Frames <input type="number" id="behaviorRevFrom" min="1" max="' + (last + 1) + '" value="' + (from + 1) + '"></label>' +
         '<label>to <input type="number" id="behaviorRevTo" min="1" max="' + (last + 1) + '" value="' + (to + 1) + '"></label>' +
         '<button id="behaviorRevAll">Whole session</button></div>' +
         '<div class="behavior-rev-cols"><fieldset><legend>Animals</legend>' + animals.map(function (a) {
-            return '<label><input type="checkbox" data-animal="' + esc(a) + '"' + (a === focal ? ' checked' : '') + '> ' + esc(a) + '</label>';
+            return '<label><input type="checkbox" data-animal="' + esc(a) + '" checked> ' + esc(a) + '</label>';
         }).join('') + '</fieldset><fieldset><legend>Behaviors</legend>' + behaviors().map(function (b) {
             return '<label><input type="checkbox" data-behavior="' + esc(b.id) + '" checked> ' + esc(b.name) + '</label>';
         }).join('') + '</fieldset></div>' +

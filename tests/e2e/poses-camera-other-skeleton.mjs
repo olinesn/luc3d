@@ -350,7 +350,7 @@ async function openFolder(cameras, opts = {}) {
             };
         }
         if (throwOnTyped) window.SleapIO.readSlpStreaming = async () => { throw new Error('forced to the raw worker'); };
-        await loader.handleLoadSessionFolderPerCamera(list, !!folder && folder !== 'root' && window.__loadedOne,
+        await loader.handleLoadSessionFolderPerCamera(list, !!folder && folder !== 'root' && window.__loadedOne, null,
             declared ? { declaredSkeleton: new Skeleton(declared.name, declared.nodes, declared.edges) } : undefined);
         window.__loadedOne = true;
         return (document.getElementById('statusText') || {}).textContent;
